@@ -1,5 +1,7 @@
 #include "hook.h"
 #include "overlay.h"
+#include "renderer.h"
+#include "config.h"
 #include <windows.h>
 #include <d3d9.h>
 #include <tlhelp32.h>
@@ -53,6 +55,7 @@ Patched* tableOf(IDirect3DDevice9* device) {
 
 void drawFrame(IDirect3DDevice9* device) {
     g_drewOnce = true;
+    Renderer::get().render(device, Config::get().settings);
     overlay::draw(device);
 }
 
@@ -72,9 +75,11 @@ HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const 
 
 HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
     Patched* table = tableOf(device);
+    Renderer::get().preReset();
     overlay::preReset();
     HRESULT hr = table ? table->reset(device, params) : D3DERR_INVALIDCALL;
     overlay::postReset();
+    Renderer::get().postReset();
     return hr;
 }
 

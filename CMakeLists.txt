@@ -34,6 +34,7 @@ add_library(tm_vibrant_shaders SHARED
   src/config.cpp
   src/hook.cpp
   src/overlay.cpp
+  src/renderer.cpp
 
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -41,6 +42,11 @@ add_library(tm_vibrant_shaders SHARED
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+)
+
+target_link_libraries(tm_vibrant_shaders PRIVATE
+  d3d9
+  d3dcompiler
 )
 
 target_include_directories(tm_vibrant_shaders PRIVATE

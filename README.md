@@ -1,129 +1,149 @@
-# 🏎️ TM Vibrant Shaders
+# TM Vibrant Shaders
 
-> **Minecraft-inspiriertes Shaderpack & TMModloader-Plugin für TrackMania Nations Forever & United Forever**  
-> Bringt den visuellen Look von **Sildur's Vibrant Shaders**, **BSL Shaders** und **IterationT** direkt auf die Rennstrecke!
+Direct3D 9 post-processing shader runtime and preset suite for TrackMania Nations Forever and TrackMania United Forever, inspired by Minecraft shaderpacks (Sildur's Vibrant, BSL, and IterationT).
 
-[![Platform](https://img.shields.io/badge/Platform-TrackMania%20Forever-blue.svg)](https://tomashu.dev/software/tmloader/)
-[![ModLoader](https://img.shields.io/badge/TMModloader-Supported-brightgreen.svg)](https://tomashu.dev/software/tmloader/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+Packaged as a native plugin for the [TrackMania ModLoader](https://tomashu.dev/software/tmloader/) and compatible with ReShade.
 
 ---
 
-## ✨ Was ist TM Vibrant Shaders?
+## Features
 
-In Minecraft gehören Shader wie **Sildur's Vibrant**, **BSL** und **IterationT** zu den beliebtesten Grafik-Upgrades: warmes Sonnenlicht, spektakuläre volumetrische Lichtstrahlen (God Rays), weicher Bloom, anamorphotische Lens-Flare-Streifen und stimmungsvoller Horizont-Dunst.
-
-**TM Vibrant Shaders** bringt genau diese Ästhetik nach **TrackMania Nations Forever (TMNF)** und **TrackMania United Forever (TMUF)**:
-
-- ☀️ **Volumetrische God Rays / Sun Rays (`TM_SunRays.fx`):**  
-  Sonnenstrahlen, die durch Stadionüberdachungen, Loopings und Bäume brechen – mit Tiefenpuffer-Verdeckung.
-- 🎨 **Filmisches Color Grading & ACES Tonemapping (`TM_VibrantColor.fx`):**  
-  Satte Stadion-Grünflächen, strahlend blaue Himmel und warmes Sonnenlicht (Sildurs & BSL-Farbprofil) ohne Ausbrennen von hellen Bereichen.
-- ✨ **Cinematic Bloom & Anamorphic Flares (`TM_CinematicBloom.fx`):**  
-  Weicher Glow um Lichtquellen und die ikonischen horizontalen Flare-Streifen von *IterationT* bei Stadionflutlichtern und Rücklichtern.
-- 🌫️ **Atmosphärischer Tiefennebel (`TM_AtmosphericFog.fx`):**  
-  Volumetrischer Distanzdunst und Sonnenstreuung für realistische Weitsicht wie in Minecraft.
-- 🏁 **Contact Shading & Micro-AO (`TM_DepthShading.fx`):**  
-  Tiefenkontrast und Kontaktschatten an Streckenblöcken, Kurven und am Fahrzeugchassis.
+- **Direct3D 9 Pipeline Integration:** Intercepts backbuffer rendering directly in `EndScene` with zero external dependencies.
+- **Tone Mapping & Color Grading:** ACES Filmic tone mapping, color temperature shifts, and selective hue saturation targeting sky and foliage.
+- **Volumetric Sun Rays:** Real-time screen-space crepuscular light shafts with decay falloff and adjustable density.
+- **Bloom & Anamorphic Flares:** Multi-tap bloom combined with horizontal anamorphic flare streaks inspired by IterationT.
+- **In-Game Overlay:** Integrated Dear ImGui overlay for live parameter tuning and real-time preset switching.
+- **ReShade FX Suite:** Standalone `.fx` shaders and `.ini` presets included for use with standard ReShade installations.
 
 ---
 
-## 🎮 Presets / Profile
+## Presets
 
-| Preset | Stil | Merkmale |
+| Preset | Description | Key Characteristics |
 |---|---|---|
-| **Sildur's Vibrant** | 🌞 Warm, intensiv & lebendig | Kräftiges Sonnenlicht, leuchtendes Gras, cyanblauer Himmel, intensive God Rays. |
-| **BSL Clean** | 🌿 Modern, filmisch & balanciert | ACES Tonemapping, dezente Strahlen, stimmungsvoller Distanzdunst, tiefer Schattenkontrast. |
-| **IterationT** | 🎬 Filmreif & spektakulär | Horizontale anamorphe Lens Flares, intensiver weicher Bloom, hoher Kontrast. |
-| **Custom** | 🛠️ Eigene Anpassung | Alle Parameter live im In-Game-Menü über Regler einstellbar. |
+| **Sildur's Vibrant** | High-energy, warm presentation | Warm sunlight tint, saturated foliage/sky, high god-ray intensity. |
+| **BSL Clean** | Balanced, neutral grading | ACES filmic rolloff, subdued haze, controlled highlight bloom. |
+| **IterationT Cinematic** | High dynamic range aesthetic | Wide horizontal anamorphic flares, elevated bloom, filmic contrast. |
+| **Custom** | Manual parameter control | User-configurable values for all pipeline stages. |
 
 ---
 
-## 🚀 Schnelle Installation (TMModloader)
+## Requirements
 
-Genau wie beim [100% TMX + Bingo Plugin](https://github.com/cheatoskar/100-TMX-Bingo-Plugin) ist dieses Projekt direkt für den **TrackMania ModLoader** strukturiert!
+- TrackMania Nations Forever (TMNF) or TrackMania United Forever (TMUF)
+- [TrackMania ModLoader](https://tomashu.dev/software/tmloader/) with `CoreMod` installed
+- Windows 10 or Windows 11 (32-bit execution environment)
 
-### 1. Automatische Installation mit PowerShell
-Führe im Projektordner einfach folgenden Befehl aus:
+---
+
+## Installation
+
+### Method 1: TrackMania ModLoader (Recommended)
+
+1. Open PowerShell in the project root directory and execute:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install-modloader.ps1
+   ```
+2. The script populates the product database at:
+   ```
+   %LOCALAPPDATA%\TMLoader\database\TmForever\products\TM Vibrant Shaders\1.0.0\
+   ```
+3. Open the **TrackMania ModLoader** application.
+4. Check **TM Vibrant Shaders** in your active profile mod list.
+5. Launch the game.
+
+### Method 2: Manual Installation
+
+1. Copy the `TM Vibrant Shaders` folder into:
+   ```
+   %LOCALAPPDATA%\TMLoader\database\TmForever\products\
+   ```
+2. Ensure `TMVibrantShaders.dll`, `description.yaml`, and the `Shaders/` and `Presets/` directories are present inside version `1.0.0/`.
+3. Select the mod in the ModLoader interface.
+
+### Method 3: Standalone ReShade
+
+If running without the ModLoader:
+1. Install [ReShade](https://reshade.me/) targeting `TmForever.exe` (Direct3D 9).
+2. Copy the files in `Shaders/` to `reshade-shaders/Shaders/`.
+3. Copy the `.ini` files in `Presets/` to the game root directory.
+4. Select the desired preset through the ReShade interface (`Home` key by default).
+
+---
+
+## Keybindings
+
+- **`F8`**: Toggle in-game configuration menu.
+- **`F7`**: Quick toggle shader pipeline on / off (A/B comparison).
+
+---
+
+## Technical Notes
+
+- **Antialiasing Configuration:** In the TrackMania launcher (`TmForeverLauncher.exe`), under *Configure* -> *Advanced*, set hardware Multisampling Antialiasing (MSAA) to *None*. Certain Direct3D 9 graphics drivers lock the depth stencil buffer when hardware MSAA is active, which impedes depth-assisted post-processing effects.
+- **Runtime Dependencies:** The plugin binary (`TMVibrantShaders.dll`) is compiled with the static Microsoft Visual C++ runtime library (`/MT`), requiring no additional redistributable packages on the target system.
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- Visual Studio 2022 with C++ Build Tools
+- Windows 10/11 SDK (includes `d3dcompiler.lib`)
+- CMake 3.21 or newer
+
+### Build Instructions
 
 ```powershell
+# Generate 32-bit build files
+cmake -B build -A Win32
+
+# Compile Release binary
+cmake --build build --config Release
+
+# Deploy to local ModLoader installation
 powershell -ExecutionPolicy Bypass -File .\install-modloader.ps1
 ```
 
-Das Skript richtet automatisch die Mod-Struktur in deinem ModLoader-Verzeichnis ein:
-`%LOCALAPPDATA%\TMLoader\database\TmForever\products\TM Vibrant Shaders\1.0.0\`
-
-### 2. Im ModLoader aktivieren
-1. Öffne den **TrackMania ModLoader (TMLoader)**.
-2. Setze in deiner Profil-Liste ein Häkchen bei **TM Vibrant Shaders**.
-3. Starte TrackMania Forever!
-
-### 3. Tastenbelegung im Spiel
-- **`[F8]`**: In-Game-Shader-Menü öffnen/schließen (Presets wählen, Regler verschieben).
-- **`[F7]`**: Shader schnell ein-/ausschalten (A/B-Vergleich).
+The output DLL and ASI binaries are written to `build/Release/`.
 
 ---
 
-## 📁 Projektstruktur
+## Project Structure
 
 ```
 TrackMania-Vibrant-Shaders/
-├── CMakeLists.txt                # CMake Build-Konfiguration (Win32 / D3D9)
-├── description.yaml              # Root TMModloader Produkt-Metadaten
-├── install-modloader.ps1         # 1-Klick Installer für den TrackMania ModLoader
-├── LICENSE                       # MIT Lizenz
-├── README.md                     # Projektdokumentation
-├── src/                          # C++ ModLoader Plugin Quellcode
-│   ├── dllmain.cpp               # Mod-Einstiegspunkt & D3D9 Boot-Thread
-│   ├── hook.h / hook.cpp         # Direct3D 9 VTable & IAT Hooking
-│   ├── overlay.h / overlay.cpp   # In-Game ImGui Menü (F8)
-│   ├── config.h / config.cpp     # Preset-Verwaltung & Konfiguration
-│   └── version.h.in              # Versionsvorlage
-├── Shaders/                      # ReShade FX Shaders
-│   ├── ReShade.fxh               # D3D9 / ReShade Header
-│   ├── TM_VibrantColor.fx        # Sildurs / BSL Farbgrading & ACES
-│   ├── TM_SunRays.fx             # Volumetrische God Rays
-│   ├── TM_CinematicBloom.fx      # Bloom & IterationT Anamorphic Flares
-│   ├── TM_AtmosphericFog.fx      # Tiefenbasierter Distanznebel
-│   └── TM_DepthShading.fx        # Micro-AO & Streckenkontrast
-├── Presets/                      # Vorgefertigte Presets
-│   ├── TM_Sildurs_Vibrant.ini
+├── CMakeLists.txt              # CMake configuration for 32-bit D3D9 target
+├── description.yaml            # Product metadata for TrackMania ModLoader
+├── install-modloader.ps1       # Automated ModLoader installation script
+├── LICENSE                     # MIT License
+├── README.md                   # Technical documentation
+├── src/
+│   ├── config.h / .cpp         # Preset and parameter definitions
+│   ├── dllmain.cpp             # Entry point and initialization thread
+│   ├── hook.h / .cpp           # Direct3D 9 VTable and IAT detours
+│   ├── overlay.h / .cpp        # Dear ImGui interface implementation
+│   ├── renderer.h / .cpp       # Native Direct3D 9 post-processing pipeline
+│   └── version.h.in            # Version string configuration template
+├── Shaders/                    # ReShade FX shader sources
+│   ├── ReShade.fxh
+│   ├── TM_AtmosphericFog.fx
+│   ├── TM_CinematicBloom.fx
+│   ├── TM_DepthShading.fx
+│   ├── TM_SunRays.fx
+│   └── TM_VibrantColor.fx
+├── Presets/                    # Predefined shader configurations
 │   ├── TM_BSL_Clean.ini
-│   └── TM_IterationT_Cinematic.ini
+│   ├── TM_IterationT_Cinematic.ini
+│   └── TM_Sildurs_Vibrant.ini
 └── Docs/
-    ├── INSTALL_DE.md             # Ausführliche deutsche Anleitung
-    └── INSTALL_EN.md             # English Setup Guide
+    ├── INSTALL_DE.md
+    └── INSTALL_EN.md
 ```
 
 ---
 
-## 🔨 Selbst kompilieren
+## License
 
-Voraussetzungen:
-- Windows mit Visual Studio 2022 (C++ Build Tools)
-- CMake 3.21+
-
-```powershell
-# 1. Solution für 32-Bit (Win32) erzeugen:
-cmake -B build -A Win32
-
-# 2. Release-DLL kompilieren:
-cmake --build build --config Release
-
-# 3. Direkt in den TMModloader installieren:
-powershell -ExecutionPolicy Bypass -File .\install-modloader.ps1
-```
-
----
-
-## 💡 Grafik-Tipp für TrackMania Forever
-Für die volle Tiefenpuffer-Funktionalität (Tiefennebel & God-Ray-Verdeckung):
-- Im TrackMania Launcher unter **Konfigurieren -> Erweitert**:
-- **Antialiasing (MSAA)** im Launcher deaktivieren oder auf gering stellen, da DirectX 9 bei manchen MSAA-Treibern den Depth Buffer für Post-Processing sperrt. (Post-Processing AA wie FXAA/SMAA funktioniert immer).
-
----
-
-## 📜 Lizenz & Credits
-- **Autor:** cheatoskar
-- **Inspiriert von:** Sildur's Vibrant Shaders, BSL Shaders (Capt Tatsu), IterationT (Motschen)
-- **Lizenz:** MIT License
+This project is licensed under the [MIT License](LICENSE).
