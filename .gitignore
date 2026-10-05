@@ -1,0 +1,22 @@
+# Build directories
+build/
+bin/
+obj/
+*.dir/
+
+# Visual Studio & IDE
+.vs/
+*.user
+*.suo
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Release archives
+*.zip
+*.tar.gz
+
+# System
+Thumbs.db
+Desktop.ini
