@@ -102,73 +102,68 @@ void draw(IDirect3DDevice9* device) {
 
     if (Config::get().showOverlay) {
         ImGui::SetNextWindowSize(ImVec2(480, 540), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("TrackMania Vibrant Shaders (TMModloader)", &Config::get().showOverlay, ImGuiWindowFlags_NoCollapse)) {
+        if (ImGui::Begin("TM Vibrant Shaders", &Config::get().showOverlay, ImGuiWindowFlags_NoCollapse)) {
             
             ShaderSettings& s = Config::get().settings;
 
-            ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "Minecraft-Style Shaders for TrackMania Forever");
             ImGui::Checkbox("Enable Shaders (F7)", &s.enabled);
             ImGui::SameLine();
-            ImGui::TextDisabled("(Hotkeys: F8 Menu | F7 Toggle)");
+            ImGui::TextDisabled("| F8: Toggle Menu");
 
             ImGui::Separator();
-            ImGui::Text("Shaderpacks / Presets:");
+            ImGui::Text("Presets:");
 
-            if (ImGui::RadioButton("Sildur's Vibrant (Golden Sunlight & Saturated)", s.activePreset == Preset::SildursVibrant)) {
-                s.applyPreset(Preset::SildursVibrant);
+            if (ImGui::RadioButton("Stadium 2020 (PBR Clarity & Modern Tarmac)", s.activePreset == Preset::Stadium2020)) {
+                s.applyPreset(Preset::Stadium2020);
             }
-            if (ImGui::RadioButton("BSL Clean (Filmic ACES & Distance Haze)", s.activePreset == Preset::BSLClean)) {
-                s.applyPreset(Preset::BSLClean);
+            if (ImGui::RadioButton("Golden Hour (Warm Sunlight & Saturated)", s.activePreset == Preset::GoldenHour)) {
+                s.applyPreset(Preset::GoldenHour);
             }
-            if (ImGui::RadioButton("IterationT Cinematic (Anamorphic Flares & Bloom)", s.activePreset == Preset::IterationTCinematic)) {
-                s.applyPreset(Preset::IterationTCinematic);
+            if (ImGui::RadioButton("Clear Daylight (Neutral Contrast & Visibility)", s.activePreset == Preset::ClearDaylight)) {
+                s.applyPreset(Preset::ClearDaylight);
             }
-            if (ImGui::RadioButton("Custom / Manual Settings", s.activePreset == Preset::Custom)) {
+            if (ImGui::RadioButton("Grand Prix (Anamorphic Flares & Film Curve)", s.activePreset == Preset::GrandPrixCinematic)) {
+                s.applyPreset(Preset::GrandPrixCinematic);
+            }
+            if (ImGui::RadioButton("Custom (Manual Controls)", s.activePreset == Preset::Custom)) {
                 s.activePreset = Preset::Custom;
             }
 
             ImGui::Separator();
 
-            if (ImGui::CollapsingHeader("Color Grading & Tone Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Exposure", &s.exposure, 0.5f, 2.0f);
-                ImGui::SliderFloat("Contrast", &s.contrast, 0.5f, 2.0f);
-                ImGui::SliderFloat("Color Temperature (Warmth)", &s.colorTemp, -0.5f, 0.5f);
-                ImGui::SliderFloat("Vibrance", &s.vibrance, -0.5f, 1.0f);
-                ImGui::SliderFloat("Sky Blue Boost", &s.skyVibrance, 0.0f, 1.0f);
-                ImGui::SliderFloat("Foliage / Grass Boost", &s.foliageBoost, 0.0f, 1.0f);
+            if (ImGui::CollapsingHeader("Texture & Geometry (FidelityFX CAS & AO)", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("FidelityFX CAS Sharpness", &s.sharpness, 0.0f, 1.0f);
+                ImGui::SliderFloat("Contact Shading (Micro-AO)", &s.clarity, 0.0f, 1.0f);
+                ImGui::SliderFloat("Road Specular Sheen", &s.roadSheen, 0.0f, 1.0f);
+                ImGui::SliderFloat("Lens Vignette", &s.vignette, 0.0f, 0.6f);
             }
 
-            if (ImGui::CollapsingHeader("Volumetric God Rays (Light Shafts)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader("Color Grading & Tone Mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Exposure", &s.exposure, 0.7f, 1.4f);
+                ImGui::SliderFloat("Contrast", &s.contrast, 0.8f, 1.4f);
+                ImGui::SliderFloat("Saturation", &s.saturation, 0.7f, 1.5f);
+                ImGui::SliderFloat("Color Warmth", &s.warmth, -0.2f, 0.2f);
+                ImGui::SliderFloat("Sky Blue Boost", &s.skyBoost, 0.0f, 0.6f);
+                ImGui::SliderFloat("Foliage Boost", &s.foliageBoost, 0.0f, 0.6f);
+            }
+
+            if (ImGui::CollapsingHeader("Emissive Bloom & Lens Flares")) {
+                ImGui::Checkbox("Enable Bloom", &s.enableBloom);
+                if (s.enableBloom) {
+                    ImGui::SliderFloat("Bloom Intensity", &s.bloomIntensity, 0.0f, 1.5f);
+                    ImGui::SliderFloat("Bloom Threshold", &s.bloomThreshold, 0.70f, 0.98f);
+                }
+                ImGui::Checkbox("Enable Anamorphic Flares", &s.enableFlares);
+                if (s.enableFlares) {
+                    ImGui::SliderFloat("Flare Streak Intensity", &s.flareIntensity, 0.0f, 1.5f);
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Volumetric Sun Rays")) {
                 ImGui::Checkbox("Enable Sun Rays", &s.enableSunRays);
                 if (s.enableSunRays) {
-                    ImGui::SliderFloat("Ray Density", &s.rayDensity, 0.1f, 2.0f);
-                    ImGui::SliderFloat("Ray Falloff Decay", &s.rayDecay, 0.85f, 0.99f);
-                    ImGui::SliderFloat("Ray Exposure", &s.rayExposure, 0.2f, 3.0f);
-                    ImGui::ColorEdit3("Sun Ray Color", s.rayColor);
-                }
-            }
-
-            if (ImGui::CollapsingHeader("Cinematic Bloom & Anamorphic Flares", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Checkbox("Enable Bloom & Flares", &s.enableBloom);
-                if (s.enableBloom) {
-                    ImGui::SliderFloat("Bloom Intensity", &s.bloomIntensity, 0.0f, 2.5f);
-                    ImGui::SliderFloat("Anamorphic Flare Streaks", &s.anamorphicIntensity, 0.0f, 3.0f);
-                    ImGui::ColorEdit3("Flare Tint", s.flareTint);
-                }
-            }
-
-            if (ImGui::CollapsingHeader("Atmospheric Distance Fog")) {
-                ImGui::Checkbox("Enable Volumetric Fog", &s.enableFog);
-                if (s.enableFog) {
-                    ImGui::SliderFloat("Fog Density", &s.fogDensity, 0.0f, 2.0f);
-                    ImGui::SliderFloat("Sun In-Scattering", &s.sunScatterPower, 0.0f, 1.0f);
-                }
-            }
-
-            if (ImGui::CollapsingHeader("Ambient Occlusion / Depth Shading")) {
-                ImGui::Checkbox("Enable Depth Contact Shading", &s.enableDepthShading);
-                if (s.enableDepthShading) {
-                    ImGui::SliderFloat("Contact Shading Intensity", &s.aoIntensity, 0.0f, 2.0f);
+                    ImGui::SliderFloat("Ray Intensity", &s.sunRayIntensity, 0.0f, 0.5f);
+                    ImGui::SliderFloat("Ray Falloff Decay", &s.sunRayDecay, 0.85f, 0.99f);
                 }
             }
 

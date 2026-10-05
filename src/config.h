@@ -4,57 +4,45 @@
 namespace tmshaders {
 
 enum class Preset {
-    SildursVibrant,
-    BSLClean,
-    IterationTCinematic,
+    Stadium2020 = 0,
+    GoldenHour,
+    ClearDaylight,
+    GrandPrixCinematic,
     Custom
 };
 
 struct ShaderSettings {
     bool enabled = true;
-    Preset activePreset = Preset::SildursVibrant;
+    Preset activePreset = Preset::Stadium2020;
 
-    // TM_VibrantColor
-    float exposure = 1.10f;
-    float contrast = 1.18f;
-    float colorTemp = 0.12f;
-    float vibrance = 0.45f;
-    float skyVibrance = 0.32f;
-    float foliageBoost = 0.35f;
-    int tonemapMode = 1; // ACES
-    float sunTint[3] = {1.05f, 1.02f, 0.90f};
-    float shadowTint[3] = {0.94f, 0.96f, 1.02f};
+    // Color & Tonemap
+    float exposure = 1.00f;
+    float contrast = 1.06f;
+    float saturation = 1.05f;
+    float warmth = 0.00f;       // Subtle Kelvin shift (-0.5 to 0.5)
+    float skyBoost = 0.08f;
+    float foliageBoost = 0.10f;
 
-    // TM_SunRays
-    bool enableSunRays = true;
-    float sunPos[2] = {0.50f, 0.15f};
-    float rayDensity = 1.15f;
-    float rayDecay = 0.965f;
-    float rayWeight = 0.42f;
-    float rayExposure = 1.40f;
-    float rayColor[3] = {1.0f, 0.85f, 0.58f};
+    // Next-Gen Texture & Geometry
+    float sharpness = 0.70f;    // FidelityFX Contrast-Adaptive Sharpening
+    float clarity = 0.50f;      // Contact Shading & Micro-AO
+    float roadSheen = 0.35f;    // Tarmac Specular Sheen
+    float vignette = 0.15f;     // Lens Vignette
 
-    // TM_CinematicBloom
+    // Emissive Bloom
     bool enableBloom = true;
-    float bloomThreshold = 0.72f;
-    float bloomIntensity = 0.80f;
-    float bloomRadius = 2.6f;
-    float anamorphicIntensity = 0.35f;
-    float flareTint[3] = {0.85f, 0.90f, 1.00f};
+    float bloomIntensity = 0.25f;
+    float bloomThreshold = 0.88f;
 
-    // TM_AtmosphericFog
-    bool enableFog = true;
-    float fogDensity = 0.38f;
-    float fogStart = 0.10f;
-    float fogCurve = 1.8f;
-    float sunScatterPower = 0.50f;
-    float horizonColor[3] = {0.85f, 0.90f, 0.98f};
-    float sunFogColor[3] = {1.00f, 0.90f, 0.75f};
+    // Anamorphic Flares
+    bool enableFlares = false;
+    float flareIntensity = 0.0f;
 
-    // TM_DepthShading
-    bool enableDepthShading = true;
-    float aoIntensity = 0.60f;
-    float aoRadius = 2.5f;
+    // Volumetric Rays (bounded to sky)
+    bool enableSunRays = false;
+    float sunRayIntensity = 0.0f;
+    float sunRayDecay = 0.94f;
+    float sunPos[2] = {0.50f, 0.10f};
 
     void applyPreset(Preset preset);
 };

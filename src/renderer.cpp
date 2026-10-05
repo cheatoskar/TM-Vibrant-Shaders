@@ -10,29 +10,25 @@ namespace {
 const char* g_hlslShaderSource = R"(
 sampler2D sceneSampler : register(s0);
 
-// c0: (exposure, contrast, colorTemp, vibrance)
-float4 u_Param0 : register(c0);
-// c1: (skyVibrance, foliageBoost, tonemapMode, unused)
-float4 u_Param1 : register(c1);
-// c2: (sunTint.r, sunTint.g, sunTint.b, rayExposure)
-float4 u_Param2 : register(c2);
-// c3: (bloomIntensity, bloomThreshold, anamorphicIntensity, rayDecay)
-float4 u_Param3 : register(c3);
-// c4: (flareTint.r, flareTint.g, flareTint.b, rayDensity)
-float4 u_Param4 : register(c4);
-// c5: (sunPos.x, sunPos.y, rcpW, rcpH)
-float4 u_Param5 : register(c5);
+// c0: (exposure, contrast, saturation, sharpness)
+float4 u_ColorSettings : register(c0);
+// c1: (bloomIntensity, bloomThreshold, flareIntensity, vignette)
+float4 u_EffectSettings : register(c1);
+// c2: (sunRayIntensity, sunRayDecay, warmth, clarity)
+float4 u_LightSettings : register(c2);
+// c3: (skyBoost, foliageBoost, roadSheen, unused)
+float4 u_GradingSettings : register(c3);
+// c4: (sunPos.x, sunPos.y, rcpW, rcpH)
+float4 u_ScreenSettings : register(c4);
 
-float3 ACESFilm(float3 x)
+// Linear-space Filmic Tone Mapping (prevents clipping, rich rolloff)
+float3 FilmicToneMap(float3 col)
 {
-    float a = 2.51f;
-    float b = 0.03f;
-    float c = 2.43f;
-    float d = 0.59f;
-    float e = 0.14f;
-    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+    float3 x = max(0.0, col - 0.004);
+    return (x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06);
 }
 
+// RGB to HSV
 float3 RGBtoHSV(float3 c)
 {
     float4 K = float4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
@@ -43,6 +39,7 @@ float3 RGBtoHSV(float3 c)
     return float3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
 }
 
+// HSV to RGB
 float3 HSVtoRGB(float3 c)
 {
     float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
@@ -52,110 +49,168 @@ float3 HSVtoRGB(float3 c)
 
 float4 main(float2 texcoord : TEXCOORD0) : COLOR0
 {
-    float3 baseColor = tex2D(sceneSampler, texcoord).rgb;
+    float2 rcpSize = u_ScreenSettings.zw;
 
-    // 1. Exposure adjustment
-    float3 color = baseColor * u_Param0.x;
+    // 1. Sample Center & Neighbors for FidelityFX Contrast-Adaptive Sharpening (CAS)
+    float3 colC = tex2D(sceneSampler, texcoord).rgb;
+    float3 colT = tex2D(sceneSampler, texcoord + float2(0.0, -rcpSize.y)).rgb;
+    float3 colB = tex2D(sceneSampler, texcoord + float2(0.0,  rcpSize.y)).rgb;
+    float3 colL = tex2D(sceneSampler, texcoord + float2(-rcpSize.x, 0.0)).rgb;
+    float3 colR = tex2D(sceneSampler, texcoord + float2( rcpSize.x, 0.0)).rgb;
 
-    // 2. Color Temperature (Warm golden sunlight like Sildur's)
-    float temp = u_Param0.z;
-    float3 tempShift = float3(1.0 + temp * 0.45, 1.0 + temp * 0.12, 1.0 - temp * 0.45);
-    color *= tempShift;
+    // Convert to linear space for physically accurate lighting
+    float3 linC = pow(saturate(colC), 2.2);
+    float3 linT = pow(saturate(colT), 2.2);
+    float3 linB = pow(saturate(colB), 2.2);
+    float3 linL = pow(saturate(colL), 2.2);
+    float3 linR = pow(saturate(colR), 2.2);
 
-    // 3. Highlight / Shadow Split Toning
-    float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
-    float3 splitTone = lerp(float3(0.95, 0.97, 1.03), u_Param2.xyz, smoothstep(0.2, 0.8, luma));
-    color *= splitTone;
+    // FidelityFX CAS: compute local contrast and apply high-frequency detail boost
+    float sharpAmount = u_ColorSettings.w;
+    float3 minNeighbor = min(linC, min(min(linT, linB), min(linL, linR)));
+    float3 maxNeighbor = max(linC, max(max(linT, linB), max(linL, linR)));
+    float3 amp = saturate(min(minNeighbor, 2.0 - maxNeighbor) / max(maxNeighbor, 0.001));
+    float3 w = -sqrt(amp) * (sharpAmount * 0.18);
+    float3 color = (linC + (linT + linB + linL + linR) * w) / (1.0 + 4.0 * w);
+    color = max(0.0, color);
 
-    // 4. Selective Foliage & Sky Vibrance (BSL & Sildurs look)
-    float3 hsv = RGBtoHSV(color);
-    float skyMask = smoothstep(0.48, 0.58, hsv.x) * (1.0 - smoothstep(0.68, 0.76, hsv.x));
-    hsv.y += skyMask * u_Param1.x;
-
-    float foliageMask = smoothstep(0.18, 0.26, hsv.x) * (1.0 - smoothstep(0.42, 0.50, hsv.x));
-    hsv.y += foliageMask * u_Param1.y;
-
-    // Smart Vibrance
-    float maxCol = max(color.r, max(color.g, color.b));
-    float minCol = min(color.r, min(color.g, color.b));
-    float sat = maxCol - minCol;
-    hsv.y += (1.0 - sat) * u_Param0.w * 0.5;
-
-    color = HSVtoRGB(saturate(hsv));
-
-    // 5. ACES Filmic Tonemapping
-    color = ACESFilm(color);
-
-    // 6. Contrast S-Curve
-    float contrast = u_Param0.y;
-    color = saturate(color);
-    color = pow(color, contrast.xxx);
-    color = color * color * (3.0 - 2.0 * color);
-
-    // 7. Volumetric Sun Rays (Screen-Space Crepuscular Rays)
-    float rayExp = u_Param2.w;
-    if (rayExp > 0.01)
+    // 2. Contact Shading & Micro-AO (deepens crevices under tires, barriers, curb edges)
+    float clarity = u_LightSettings.w;
+    if (clarity > 0.01)
     {
-        float2 sunPos = u_Param5.xy;
-        float2 delta = (texcoord - sunPos) * (1.0 / 16.0) * u_Param4.w;
-        float2 rayUV = texcoord;
-        float3 rayAccum = 0.0;
-        float decay = 1.0;
-        float rayDecayVal = u_Param3.w;
-
-        for (int i = 0; i < 16; i++)
+        float lumaC = dot(linC, float3(0.2126, 0.7152, 0.0722));
+        float lumaAvg = (dot(linT, float3(0.2126, 0.7152, 0.0722)) +
+                         dot(linB, float3(0.2126, 0.7152, 0.0722)) +
+                         dot(linL, float3(0.2126, 0.7152, 0.0722)) +
+                         dot(linR, float3(0.2126, 0.7152, 0.0722))) * 0.25;
+        float crevice = lumaAvg - lumaC;
+        if (crevice > 0.002)
         {
-            rayUV -= delta;
-            float3 sampleCol = tex2D(sceneSampler, rayUV).rgb;
-            float sampleLuma = dot(sampleCol, float3(0.299, 0.587, 0.114));
-            float bright = saturate(sampleLuma - 0.70) * 3.33;
-            rayAccum += bright * u_Param2.xyz * decay;
-            decay *= rayDecayVal;
+            color *= (1.0 - saturate(crevice * 8.0) * clarity * 0.35);
         }
-        color += rayAccum * (rayExp * 0.05);
     }
 
-    // 8. Cinematic Bloom & Anamorphic Lens Flare Streaks (IterationT)
-    float bloomInt = u_Param3.x;
-    float anamorphicInt = u_Param3.z;
-    float bloomThresh = u_Param3.y;
-
-    if (bloomInt > 0.01 || anamorphicInt > 0.01)
+    // 3. Road Sheen (TM2020 Tarmac Specular Fresnel in lower screen half)
+    float roadSheen = u_GradingSettings.z;
+    if (roadSheen > 0.01 && texcoord.y > 0.40)
     {
-        float2 rcpSize = u_Param5.zw;
+        float grazing = pow(texcoord.y, 2.2) * (1.0 - abs(texcoord.x - 0.5) * 1.4);
+        float roadMask = smoothstep(0.40, 0.95, texcoord.y);
+        color += float3(0.03, 0.04, 0.06) * saturate(grazing) * roadMask * roadSheen;
+    }
+
+    // 4. White Balance / Warmth (Subtle Kelvin adjustment, NOT bleaching yellow)
+    float warmth = u_LightSettings.z;
+    float3 wb = float3(1.0 + warmth * 0.08, 1.0 + warmth * 0.02, 1.0 - warmth * 0.08);
+    color *= wb;
+
+    // 5. Exposure
+    color *= u_ColorSettings.x;
+
+    // 6. Selective Foliage & Sky Vibrance (preserves road concrete neutral)
+    float3 hsv = RGBtoHSV(pow(saturate(color), 1.0 / 2.2));
+    float skyMask = smoothstep(0.50, 0.58, hsv.x) * (1.0 - smoothstep(0.68, 0.76, hsv.x));
+    hsv.y += skyMask * u_GradingSettings.x; // Sky blue boost
+
+    float foliageMask = smoothstep(0.18, 0.26, hsv.x) * (1.0 - smoothstep(0.42, 0.50, hsv.x));
+    hsv.y += foliageMask * u_GradingSettings.y; // Grass boost
+
+    // Overall Saturation
+    float satMul = u_ColorSettings.z;
+    hsv.y = saturate(hsv.y * satMul);
+    color = pow(HSVtoRGB(hsv), 2.2);
+
+    // 7. Volumetric Sun Rays (Strictly bounded to sky; never bleaches road!)
+    float rayIntensity = u_LightSettings.x;
+    if (rayIntensity > 0.01)
+    {
+        // Only cast in upper portion of screen
+        float skyBound = saturate(1.0 - texcoord.y * 2.2);
+        if (skyBound > 0.01)
+        {
+            float2 sunPos = u_ScreenSettings.xy;
+            float2 delta = (texcoord - sunPos) * (1.0 / 16.0);
+            float2 rayUV = texcoord;
+            float3 rayAccum = 0.0;
+            float decay = 1.0;
+            float rayDecayVal = u_LightSettings.y;
+
+            for (int i = 0; i < 16; i++)
+            {
+                rayUV -= delta;
+                float3 sCol = pow(saturate(tex2D(sceneSampler, rayUV).rgb), 2.2);
+                float sLuma = dot(sCol, float3(0.2126, 0.7152, 0.0722));
+                float bright = max(0.0, sLuma - 0.75) * 2.5;
+                rayAccum += bright * float3(1.0, 0.94, 0.82) * decay;
+                decay *= rayDecayVal;
+            }
+            color += rayAccum * (rayIntensity * 0.06) * skyBound;
+        }
+    }
+
+    // 8. Emissive Bloom & Anamorphic Flares (Strict threshold on real lights only)
+    float bloomInt = u_EffectSettings.x;
+    float bloomThresh = u_EffectSettings.y;
+    float flareInt = u_EffectSettings.z;
+
+    if (bloomInt > 0.01 || flareInt > 0.01)
+    {
         float3 bloom = 0.0;
         float3 flare = 0.0;
 
-        float2 offsets[4] = {
-            float2( 2.5,  2.5) * rcpSize,
-            float2(-2.5,  2.5) * rcpSize,
-            float2( 2.5, -2.5) * rcpSize,
-            float2(-2.5, -2.5) * rcpSize
-        };
-        for (int b = 0; b < 4; b++)
+        // Multi-tap soft bloom on emissive highlights
+        if (bloomInt > 0.01)
         {
-            float3 sampleCol = tex2D(sceneSampler, texcoord + offsets[b]).rgb;
-            float sampleLuma = dot(sampleCol, float3(0.2126, 0.7152, 0.0722));
-            float bright = max(0.0, sampleLuma - bloomThresh);
-            bloom += sampleCol * bright;
+            float2 bOffsets[4] = {
+                float2( 3.0,  3.0) * rcpSize,
+                float2(-3.0,  3.0) * rcpSize,
+                float2( 3.0, -3.0) * rcpSize,
+                float2(-3.0, -3.0) * rcpSize
+            };
+            for (int b = 0; b < 4; b++)
+            {
+                float3 bCol = pow(saturate(tex2D(sceneSampler, texcoord + bOffsets[b]).rgb), 2.2);
+                float bLuma = dot(bCol, float3(0.2126, 0.7152, 0.0722));
+                float bright = max(0.0, bLuma - bloomThresh);
+                bloom += bCol * bright;
+            }
+            bloom *= 0.25 * bloomInt;
         }
-        bloom *= 0.25 * bloomInt;
 
-        if (anamorphicInt > 0.01)
+        // Horizontal Anamorphic Flare Streaks
+        if (flareInt > 0.01)
         {
             for (int f = -6; f <= 6; f++)
             {
-                float2 flareUV = texcoord + float2(float(f) * 12.0 * rcpSize.x, 0.0);
-                float3 sCol = tex2D(sceneSampler, flareUV).rgb;
-                float sLuma = dot(sCol, float3(0.2126, 0.7152, 0.0722));
-                float bVal = max(0.0, sLuma - (bloomThresh - 0.05));
-                float weight = 1.0 - abs(float(f)) / 7.0;
-                flare += sCol * bVal * weight;
+                float2 fUV = texcoord + float2(float(f) * 14.0 * rcpSize.x, 0.0);
+                float3 fCol = pow(saturate(tex2D(sceneSampler, fUV).rgb), 2.2);
+                float fLuma = dot(fCol, float3(0.2126, 0.7152, 0.0722));
+                float fBright = max(0.0, fLuma - (bloomThresh - 0.04));
+                float fWeight = 1.0 - abs(float(f)) / 7.0;
+                flare += fCol * fBright * fWeight;
             }
-            flare = (flare / 7.0) * anamorphicInt * u_Param4.xyz;
+            flare = (flare / 7.0) * flareInt * float3(0.5, 0.8, 1.0); // Cyan/blue anamorphic streak
         }
 
         color += bloom + flare;
+    }
+
+    // 9. Filmic Tone Mapping (Converts linear HDR back to compressed display range)
+    color = FilmicToneMap(color);
+
+    // 10. Contrast S-Curve in display space
+    float contrast = u_ColorSettings.y;
+    color = saturate(color);
+    color = pow(color, contrast.xxx);
+
+    // 11. Subtle Cinematic Vignette
+    float vigAmount = u_EffectSettings.w;
+    if (vigAmount > 0.01)
+    {
+        float2 vigUV = texcoord - 0.5;
+        float vigDist = dot(vigUV, vigUV);
+        float vig = saturate(1.0 - vigDist * vigAmount * 1.8);
+        color *= vig;
     }
 
     return float4(saturate(color), 1.0);
@@ -251,7 +306,6 @@ void Renderer::preReset() {
 }
 
 void Renderer::postReset() {
-    // Recreated on next frame
 }
 
 void Renderer::release() {
@@ -295,19 +349,22 @@ void Renderer::render(IDirect3DDevice9* device, const ShaderSettings& settings) 
     }
 
     // Set Shader Constants
-    float param0[4] = { settings.exposure, settings.contrast, settings.colorTemp, settings.vibrance };
-    float param1[4] = { settings.skyVibrance, settings.foliageBoost, static_cast<float>(settings.tonemapMode), 1.0f };
-    float param2[4] = { settings.sunTint[0], settings.sunTint[1], settings.sunTint[2], settings.enableSunRays ? settings.rayExposure : 0.0f };
-    float param3[4] = { settings.enableBloom ? settings.bloomIntensity : 0.0f, settings.bloomThreshold, settings.enableBloom ? settings.anamorphicIntensity : 0.0f, settings.rayDecay };
-    float param4[4] = { settings.flareTint[0], settings.flareTint[1], settings.flareTint[2], settings.rayDensity };
-    float param5[4] = { settings.sunPos[0], settings.sunPos[1], 1.0f / desc.Width, 1.0f / desc.Height };
+    // c0: (exposure, contrast, saturation, sharpness)
+    float param0[4] = { settings.exposure, settings.contrast, settings.saturation, settings.sharpness };
+    // c1: (bloomIntensity, bloomThreshold, flareIntensity, vignette)
+    float param1[4] = { settings.enableBloom ? settings.bloomIntensity : 0.0f, settings.bloomThreshold, settings.enableFlares ? settings.flareIntensity : 0.0f, settings.vignette };
+    // c2: (sunRayIntensity, sunRayDecay, warmth, clarity)
+    float param2[4] = { settings.enableSunRays ? settings.sunRayIntensity : 0.0f, settings.sunRayDecay, settings.warmth, settings.clarity };
+    // c3: (skyBoost, foliageBoost, roadSheen, unused)
+    float param3[4] = { settings.skyBoost, settings.foliageBoost, settings.roadSheen, 0.0f };
+    // c4: (sunPos.x, sunPos.y, rcpW, rcpH)
+    float param4[4] = { settings.sunPos[0], settings.sunPos[1], 1.0f / desc.Width, 1.0f / desc.Height };
 
     device->SetPixelShaderConstantF(0, param0, 1);
     device->SetPixelShaderConstantF(1, param1, 1);
     device->SetPixelShaderConstantF(2, param2, 1);
     device->SetPixelShaderConstantF(3, param3, 1);
     device->SetPixelShaderConstantF(4, param4, 1);
-    device->SetPixelShaderConstantF(5, param5, 1);
 
     // Setup rendering states
     device->SetRenderState(D3DRS_ZENABLE, FALSE);

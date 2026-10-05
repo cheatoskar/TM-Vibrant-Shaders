@@ -7,112 +7,108 @@ namespace tmshaders {
 void ShaderSettings::applyPreset(Preset preset) {
     activePreset = preset;
     switch (preset) {
-        case Preset::SildursVibrant:
-            exposure = 1.10f;
-            contrast = 1.18f;
-            colorTemp = 0.12f;
-            vibrance = 0.45f;
-            skyVibrance = 0.32f;
-            foliageBoost = 0.35f;
-            tonemapMode = 1;
-            sunTint[0] = 1.05f; sunTint[1] = 1.02f; sunTint[2] = 0.90f;
-            shadowTint[0] = 0.94f; shadowTint[1] = 0.96f; shadowTint[2] = 1.02f;
+        case Preset::Stadium2020:
+            // Modern, razor-sharp, natural daylight, deep contact shadows, clean road
+            exposure = 1.00f;
+            contrast = 1.06f;
+            saturation = 1.05f;
+            warmth = 0.00f; // Neutral white balance
+            skyBoost = 0.08f;
+            foliageBoost = 0.12f;
 
-            enableSunRays = true;
-            rayDensity = 1.15f;
-            rayDecay = 0.965f;
-            rayWeight = 0.42f;
-            rayExposure = 1.40f;
-            rayColor[0] = 1.00f; rayColor[1] = 0.85f; rayColor[2] = 0.58f;
+            sharpness = 0.70f;  // High FidelityFX CAS sharpness
+            clarity = 0.55f;    // Deep contact shadows on blocks & car
+            roadSheen = 0.35f;  // Tarmac specular
+            vignette = 0.15f;
 
             enableBloom = true;
-            bloomThreshold = 0.72f;
-            bloomIntensity = 0.80f;
-            bloomRadius = 2.6f;
-            anamorphicIntensity = 0.35f;
-            flareTint[0] = 0.85f; flareTint[1] = 0.90f; flareTint[2] = 1.00f;
+            bloomIntensity = 0.25f;
+            bloomThreshold = 0.88f; // Only genuine lights bloom
 
-            enableFog = true;
-            fogDensity = 0.38f;
-            fogStart = 0.10f;
-            fogCurve = 1.8f;
-            sunScatterPower = 0.50f;
+            enableFlares = false;
+            flareIntensity = 0.0f;
 
-            enableDepthShading = true;
-            aoIntensity = 0.60f;
-            aoRadius = 2.5f;
+            enableSunRays = false;
+            sunRayIntensity = 0.0f;
+            sunRayDecay = 0.94f;
             break;
 
-        case Preset::BSLClean:
-            exposure = 1.05f;
+        case Preset::GoldenHour:
+            // Warm afternoon sun, saturated grass and sky, controlled god rays
+            exposure = 1.02f;
+            contrast = 1.10f;
+            saturation = 1.20f;
+            warmth = 0.06f; // Gentle golden warmth, not blinding yellow
+            skyBoost = 0.25f;
+            foliageBoost = 0.25f;
+
+            sharpness = 0.50f;
+            clarity = 0.45f;
+            roadSheen = 0.30f;
+            vignette = 0.20f;
+
+            enableBloom = true;
+            bloomIntensity = 0.40f;
+            bloomThreshold = 0.84f;
+
+            enableFlares = false;
+            flareIntensity = 0.10f;
+
+            enableSunRays = true;
+            sunRayIntensity = 0.12f; // Soft, bounded to sky
+            sunRayDecay = 0.95f;
+            break;
+
+        case Preset::ClearDaylight:
+            // High contrast, crisp track clarity, competitive visibility
+            exposure = 0.98f;
             contrast = 1.12f;
-            colorTemp = 0.03f;
-            vibrance = 0.25f;
-            skyVibrance = 0.18f;
-            foliageBoost = 0.18f;
-            tonemapMode = 1;
-            sunTint[0] = 1.02f; sunTint[1] = 1.01f; sunTint[2] = 0.96f;
-            shadowTint[0] = 0.96f; shadowTint[1] = 0.98f; shadowTint[2] = 1.01f;
+            saturation = 1.10f;
+            warmth = -0.02f; // Cool, crisp daylight
+            skyBoost = 0.15f;
+            foliageBoost = 0.15f;
 
-            enableSunRays = true;
-            rayDensity = 0.85f;
-            rayDecay = 0.950f;
-            rayWeight = 0.28f;
-            rayExposure = 0.95f;
-            rayColor[0] = 1.00f; rayColor[1] = 0.92f; rayColor[2] = 0.80f;
+            sharpness = 0.80f; // Maximum edge sharpness
+            clarity = 0.60f;
+            roadSheen = 0.20f;
+            vignette = 0.10f;
 
             enableBloom = true;
-            bloomThreshold = 0.80f;
-            bloomIntensity = 0.45f;
-            bloomRadius = 1.8f;
-            anamorphicIntensity = 0.15f;
-            flareTint[0] = 0.80f; flareTint[1] = 0.88f; flareTint[2] = 1.00f;
+            bloomIntensity = 0.15f;
+            bloomThreshold = 0.90f;
 
-            enableFog = true;
-            fogDensity = 0.52f;
-            fogStart = 0.08f;
-            fogCurve = 2.0f;
-            sunScatterPower = 0.35f;
+            enableFlares = false;
+            flareIntensity = 0.0f;
 
-            enableDepthShading = true;
-            aoIntensity = 0.75f;
-            aoRadius = 2.8f;
+            enableSunRays = false;
+            sunRayIntensity = 0.0f;
+            sunRayDecay = 0.94f;
             break;
 
-        case Preset::IterationTCinematic:
-            exposure = 1.12f;
-            contrast = 1.24f;
-            colorTemp = 0.06f;
-            vibrance = 0.38f;
-            skyVibrance = 0.28f;
-            foliageBoost = 0.22f;
-            tonemapMode = 1;
-            sunTint[0] = 1.06f; sunTint[1] = 1.02f; sunTint[2] = 0.92f;
-            shadowTint[0] = 0.92f; shadowTint[1] = 0.95f; shadowTint[2] = 1.04f;
+        case Preset::GrandPrixCinematic:
+            // Dramatic film contrast, anamorphic flares on taillights & stadium floods
+            exposure = 1.00f;
+            contrast = 1.18f;
+            saturation = 1.12f;
+            warmth = 0.02f;
+            skyBoost = 0.15f;
+            foliageBoost = 0.12f;
 
-            enableSunRays = true;
-            rayDensity = 1.25f;
-            rayDecay = 0.970f;
-            rayWeight = 0.45f;
-            rayExposure = 1.50f;
-            rayColor[0] = 1.00f; rayColor[1] = 0.88f; rayColor[2] = 0.68f;
+            sharpness = 0.60f;
+            clarity = 0.50f;
+            roadSheen = 0.45f;
+            vignette = 0.30f;
 
             enableBloom = true;
-            bloomThreshold = 0.68f;
-            bloomIntensity = 0.95f;
-            bloomRadius = 3.0f;
-            anamorphicIntensity = 1.25f; // Signature IterationT flare
-            flareTint[0] = 0.65f; flareTint[1] = 0.85f; flareTint[2] = 1.00f;
+            bloomIntensity = 0.50f;
+            bloomThreshold = 0.82f;
 
-            enableFog = true;
-            fogDensity = 0.35f;
-            fogStart = 0.12f;
-            fogCurve = 1.6f;
-            sunScatterPower = 0.55f;
+            enableFlares = true;
+            flareIntensity = 0.65f; // Horizontal anamorphic streaks
 
-            enableDepthShading = true;
-            aoIntensity = 0.65f;
-            aoRadius = 2.6f;
+            enableSunRays = true;
+            sunRayIntensity = 0.10f;
+            sunRayDecay = 0.95f;
             break;
 
         case Preset::Custom:
@@ -132,12 +128,11 @@ void Config::load() {
             m_iniPath = std::wstring(path) + L"\\TrackMania\\Config\\tm_vibrant_shaders.ini";
         }
     }
-    // Set default preset
-    settings.applyPreset(Preset::SildursVibrant);
+    // Default to clean Stadium 2020 preset
+    settings.applyPreset(Preset::Stadium2020);
 }
 
 void Config::save() {
-    // Persist active settings if needed
 }
 
 } // namespace tmshaders
