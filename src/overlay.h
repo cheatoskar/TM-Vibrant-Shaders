@@ -4,13 +4,21 @@
 namespace tmshaders {
 namespace overlay {
 
-void init(IDirect3DDevice9* device);
+struct Status {
+    bool depthAvailable = false;
+    bool engineHooks = false;
+    bool sunKnown = false;
+    float sunDirection[3] = {};
+    const char* shaderError = nullptr;
+};
+
 void preReset();
 void postReset();
+void setStatus(const Status& status);
+// Draws the menu (F8) after the game's HUD. Must be called from Present.
 void draw(IDirect3DDevice9* device);
-void toggle();
-bool isVisible();
-LRESULT handleWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
+// Set when the user asks for a shader reload from the menu; cleared by the caller.
+bool consumeReloadRequest();
 
 } // namespace overlay
 } // namespace tmshaders

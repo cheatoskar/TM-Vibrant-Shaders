@@ -20,3 +20,9 @@ obj/
 # System
 Thumbs.db
 Desktop.ini
+
+# Release output
+dist/
+
+# Third-party reference images (not ours to redistribute)
+references/

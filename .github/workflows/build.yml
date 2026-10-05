@@ -1,0 +1,96 @@
+name: build
+
+# Every push builds the mod on a clean machine, which proves the repo contains everything
+# needed. A "v*" tag also publishes a GitHub release with the zip, the DLL and SHA-256 sums.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # the tag build creates the release
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tag is the version (v1.0.0-beta.1 -> 1.0.0-beta.1). A tag with a suffix is a
+      # pre-release. bash, so the -D flag reaches CMake unmangled.
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            echo "flag=-DTM_SHADERS_VERSION=$version" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            if [[ "$version" == *-* ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # TrackMania Forever is 32-bit, so everything is built for Win32.
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build -A Win32 ${{ steps.v.outputs.flag }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      # The configured version must be the one inside the shipped DLL.
+      - name: Verify version
+        shell: pwsh
+        run: |
+          $line = Select-String -Path build/tm_shaders_version.h -Pattern '^#define TM_SHADERS_VERSION_A "(.+)"$'
+          $want = $line.Matches[0].Groups[1].Value
+          Write-Host "configured version: '$want'"
+          if ($want -notmatch '^\d+\.\d+\.\d+') { Write-Host "::error::'$want' is not a version"; exit 1 }
+          $bytes = [System.IO.File]::ReadAllBytes("build/Release/TMVibrantShaders.dll")
+          if (-not [System.Text.Encoding]::ASCII.GetString($bytes).Contains($want)) {
+            Write-Host "::error::TMVibrantShaders.dll does not contain '$want'"; exit 1
+          }
+          Write-Host "OK - the DLL carries $want"
+
+      # dist/: TM-Vibrant-Shaders.zip, TMVibrantShaders.dll, SHA256SUMS.txt
+      - name: Package
+        run: cmake --build build --config Release --target release_zip
+
+      # Release notes: RELEASE_NOTES.md, then a SHA-256 table (where people actually look).
+      - name: Release notes
+        shell: pwsh
+        run: |
+          $body = @()
+          if (Test-Path RELEASE_NOTES.md) { $body += Get-Content RELEASE_NOTES.md -Encoding utf8; $body += "" }
+          $body += @("<details>", "<summary>SHA-256 checksums</summary>", "", "| File | SHA-256 |", "|---|---|")
+          foreach ($line in Get-Content dist/SHA256SUMS.txt) {
+            $h, $f = $line -split "  ", 2
+            $body += "| ``$f`` | ``$h`` |"
+          }
+          $body += @("", "Check a download in PowerShell: ``Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256``", "</details>")
+          $body | Set-Content -Encoding utf8 dist/release-notes.md
+          Get-Content dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TM-Vibrant-Shaders
+          path: dist/
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TM Vibrant Shaders ${{ steps.v.outputs.version }}
+          prerelease: ${{ steps.v.outputs.prerelease }}
+          files: |
+            dist/TM-Vibrant-Shaders.zip
+            dist/TMVibrantShaders.dll
+            dist/SHA256SUMS.txt
+          body_path: dist/release-notes.md
+          fail_on_unmatched_files: true
+          generate_release_notes: true

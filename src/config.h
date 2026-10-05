@@ -1,51 +1,47 @@
 #pragma once
+#include "settings.h"
 #include <string>
+#include <vector>
 
 namespace tmshaders {
 
-enum class Preset {
-    Stadium2020 = 0,
-    GoldenHour,
-    ClearDaylight,
-    GrandPrixCinematic,
-    Custom
+enum class Preset : int {
+    Vibrant = 0,     // Sildur's Vibrant style: saturated, warm sun, strong shafts
+    Cinematic,       // IterationT style: dense sunlit haze, deep shadows, film contrast
+    Balanced,        // BSL style: natural light, soft bloom, blue shadows
+    GoldenHour,      // procedural clear sky, low warm sun, long shafts, warm film look
+    Dreamy,          // soft pastel bloom, lifted shadows, pink/teal split toning
+    NeonNight,       // starry night: day-for-night grading, glowing neon and floodlights
+    EventHorizon,    // IterationT black hole over a dark, cold stadium
+    Aurora,          // aurora borealis night, green-teal grade
+    Competition,     // clarity first: AO + contact shadows, no haze or lens effects
+    Performance,     // lighter passes for weak GPUs
+    Custom,
+    Count
 };
 
-struct ShaderSettings {
-    bool enabled = true;
-    Preset activePreset = Preset::Stadium2020;
+const char* presetName(Preset preset);
+void applyPreset(Settings& settings, Preset preset);
 
-    // Color & Tonemap
-    float exposure = 1.00f;
-    float contrast = 1.06f;
-    float saturation = 1.05f;
-    float warmth = 0.00f;       // Subtle Kelvin shift (-0.5 to 0.5)
-    float skyBoost = 0.08f;
-    float foliageBoost = 0.10f;
+// Time of day of the loaded map, read from the colour of the game's sun light.
+enum class Mood : int { Unknown = -1, Day = 0, Dusk, Night, Count };
+const char* moodName(Mood mood);
+Mood classifyMood(const float sunColor[3]);
 
-    // Next-Gen Texture & Geometry
-    float sharpness = 0.70f;    // FidelityFX Contrast-Adaptive Sharpening
-    float clarity = 0.50f;      // Contact Shading & Micro-AO
-    float roadSheen = 0.35f;    // Tarmac Specular Sheen
-    float vignette = 0.15f;     // Lens Vignette
-
-    // Emissive Bloom
-    bool enableBloom = true;
-    float bloomIntensity = 0.25f;
-    float bloomThreshold = 0.88f;
-
-    // Anamorphic Flares
-    bool enableFlares = false;
-    float flareIntensity = 0.0f;
-
-    // Volumetric Rays (bounded to sky)
-    bool enableSunRays = false;
-    float sunRayIntensity = 0.0f;
-    float sunRayDecay = 0.94f;
-    float sunPos[2] = {0.50f, 0.10f};
-
-    void applyPreset(Preset preset);
+// Describes one tunable for the INI file and the overlay.
+struct Field {
+    const char* key;
+    const char* label;
+    const char* category;
+    enum Kind { Float, Bool, Color, Int } kind;
+    size_t offset;
+    float min;
+    float max;
 };
+const std::vector<Field>& fields();
+
+// Name of the state after the user changed a value by hand.
+constexpr const char* kCustomPreset = "Custom";
 
 class Config {
 public:
@@ -53,17 +49,39 @@ public:
 
     void load();
     void save();
-    const std::wstring& getModulePath() const { return m_modulePath; }
-    void setModulePath(const std::wstring& path) { m_modulePath = path; }
+    // Every change is written to settings.ini a moment later (call tick() once per frame).
+    void markDirty();
+    void tick();
 
-    ShaderSettings settings;
+    Settings settings;
+    std::string preset = "Vibrant"; // active preset name, kCustomPreset after manual changes
     bool showOverlay = false;
-    unsigned int toggleKey = 0x77; // VK_F8
+
+    // Presets: the built-in ones, then the user's own (Documents\TrackMania\TMVS\presets\*.ini).
+    std::vector<std::string> presetNames() const;
+    const std::vector<std::string>& userPresets() const { return m_userPresets; }
+    bool isUserPreset(const std::string& name) const;
+    bool selectPreset(const std::string& name); // from the menu: also becomes the current mood's preset
+    bool saveUserPreset(const std::string& name);
+    void deleteUserPreset(const std::string& name);
+
+    // Automatic preset per map mood (day / sunrise + sunset / night). "" = keep current.
+    bool autoMood = true;
+    std::string moodPreset[static_cast<int>(Mood::Count)] = {"Vibrant", "Vibrant", "Event Horizon"};
+    Mood mood = Mood::Unknown;
+    void onMoodDetected(Mood m);
 
 private:
     Config() = default;
-    std::wstring m_modulePath;
-    std::wstring m_iniPath;
+    bool applyNamed(const std::string& name);
+    void scanUserPresets();
+    std::wstring presetFile(const std::string& name) const;
+
+    std::wstring m_path;
+    std::wstring m_presetDir;
+    std::vector<std::string> m_userPresets;
+    bool m_dirty = false;
+    unsigned long m_dirtySince = 0;
 };
 
 } // namespace tmshaders

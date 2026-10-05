@@ -1,0 +1,5 @@
+executable: TMVibrantShaders.dll
+dependencies:
+  - id: CoreMod
+    version: ^1.0.1
+changelog: '- First public release: real-time lighting, shadows, light shafts, bloom, custom skies and per-map-mood presets.'

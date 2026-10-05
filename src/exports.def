@@ -1,0 +1,19 @@
+; Standalone mode: the d3d9.dll exports, forwarded to the system d3d9.dll (see proxy.cpp).
+EXPORTS
+    Direct3DCreate9=TMVS_Direct3DCreate9
+    Direct3DCreate9Ex=TMVS_Direct3DCreate9Ex
+    D3DPERF_BeginEvent=TMVS_D3DPERF_BeginEvent
+    D3DPERF_EndEvent=TMVS_D3DPERF_EndEvent
+    D3DPERF_GetStatus=TMVS_D3DPERF_GetStatus
+    D3DPERF_QueryRepeatFrame=TMVS_D3DPERF_QueryRepeatFrame
+    D3DPERF_SetMarker=TMVS_D3DPERF_SetMarker
+    D3DPERF_SetOptions=TMVS_D3DPERF_SetOptions
+    D3DPERF_SetRegion=TMVS_D3DPERF_SetRegion
+    DebugSetLevel=TMVS_DebugSetLevel
+    DebugSetMute=TMVS_DebugSetMute
+    Direct3D9EnableMaximizedWindowedModeShim=TMVS_Direct3D9EnableMaximizedWindowedModeShim
+    Direct3DCreate9On12=TMVS_Direct3DCreate9On12
+    Direct3DCreate9On12Ex=TMVS_Direct3DCreate9On12Ex
+    Direct3DShaderValidatorCreate9=TMVS_Direct3DShaderValidatorCreate9
+    PSGPError=TMVS_PSGPError
+    PSGPSampleTexture=TMVS_PSGPSampleTexture
