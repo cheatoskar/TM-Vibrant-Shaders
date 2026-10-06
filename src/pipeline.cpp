@@ -1450,9 +1450,16 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Rain splashes land on it too.
     const bool wantLong = s.longShadows > 0.0f && s.shadowStrength > 0.0f && m_sunKnown;
     const bool wantVolume = s.volumetricLight > 0.0f && m_sunKnown;
-    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f) && ensureHeightMap(device) && (temporal || m_heightValid);
+    if (m_heightReset) {
+        m_heightReset = false;
+        m_heightValid = false;
+        m_heightHoldUntil = in.time + 4.0f; // the respawn camera lasts ~1.5 s
+    }
+    if (in.driving || in.time > m_heightHoldUntil) m_heightHoldUntil = -1.0f;
+    const bool splat = temporal && m_heightHoldUntil < 0.0f;
+    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
-    if (heightMap && temporal && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s);
+    if (heightMap && splat && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s);
     const bool longShadows = heightMap && wantLong;
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
                                     longShadows ? s.longShadows : 0.0f};

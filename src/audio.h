@@ -12,5 +12,9 @@ namespace audio {
 void update(const Settings& settings, float time, bool active, HWND window);
 void shutdown();
 
+// Previewer: renders 28 s of rain with a close, a middle and a far thunder to a WAV file,
+// through the same synthesis the game hears.
+bool renderWav(const wchar_t* path, float rain, float volume);
+
 } // namespace audio
 } // namespace tmshaders

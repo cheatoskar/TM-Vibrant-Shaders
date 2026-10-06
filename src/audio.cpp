@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <thread>
 #include <vector>
 
@@ -301,6 +302,52 @@ void update(const Settings& s, float time, bool active, HWND window) {
 
 void shutdown() {
     g_running = false; // the mixer thread closes the device on its own
+}
+
+bool renderWav(const wchar_t* path, float rainAmount, float volume) {
+    // A close, a middle and a far thunder over the rain, 8 s apart.
+    const float thunderAt[3] = {2.0f, 10.0f, 18.0f};
+    const float thunderDistance[3] = {0.0f, 0.5f, 1.0f};
+    const int seconds = 28;
+    Rain rain;
+    Thunder thunder[2];
+    int nextThunder = 0, started = 0;
+    std::vector<float> mix(static_cast<size_t>(kBufferFrames) * 2);
+    std::vector<int16_t> pcm;
+    pcm.reserve(static_cast<size_t>(kRate) * seconds * 2);
+    for (int frame = 0; frame < kRate * seconds; frame += kBufferFrames) {
+        const float t = static_cast<float>(frame) / kRate;
+        if (started < 3 && t >= thunderAt[started]) {
+            thunder[nextThunder].start(1.0f - thunderDistance[started] * 0.35f, thunderDistance[started]);
+            nextThunder ^= 1;
+            started++;
+        }
+        std::fill(mix.begin(), mix.end(), 0.0f);
+        const float thunderLevel = fmaxf(thunder[0].level, thunder[1].level);
+        rain.render(mix.data(), kBufferFrames, rainAmount, 1.0f - 0.45f * thunderLevel);
+        for (auto& th : thunder) th.render(mix.data(), kBufferFrames);
+        for (float v : mix) pcm.push_back(static_cast<int16_t>(tanhf(v * volume) * 32000.0f));
+    }
+    FILE* f = _wfopen(path, L"wb");
+    if (!f) return false;
+    const uint32_t bytes = static_cast<uint32_t>(pcm.size() * 2);
+    const uint32_t riff = 36 + bytes, fmtSize = 16, rate = kRate, byteRate = kRate * 4;
+    const uint16_t pcmFormat = 1, channels = 2, align = 4, bits = 16;
+    fwrite("RIFF", 1, 4, f);
+    fwrite(&riff, 4, 1, f);
+    fwrite("WAVEfmt ", 1, 8, f);
+    fwrite(&fmtSize, 4, 1, f);
+    fwrite(&pcmFormat, 2, 1, f);
+    fwrite(&channels, 2, 1, f);
+    fwrite(&rate, 4, 1, f);
+    fwrite(&byteRate, 4, 1, f);
+    fwrite(&align, 2, 1, f);
+    fwrite(&bits, 2, 1, f);
+    fwrite("data", 1, 4, f);
+    fwrite(&bytes, 4, 1, f);
+    fwrite(pcm.data(), 2, pcm.size(), f);
+    fclose(f);
+    return true;
 }
 
 } // namespace audio

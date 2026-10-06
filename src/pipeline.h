@@ -39,6 +39,11 @@ public:
     void resetTrail() { m_trailReset = true; }
     void breakTrail() { m_trailBreak = true; }
 
+    // Restart or respawn: the height map starts over. The respawn camera shows the player's
+    // car from outside the area kept out of the map, and the ground under the parked car is
+    // never seen again to correct it: it would cast blotchy shadows around the car.
+    void resetHeights() { m_heightReset = true; }
+
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.
     bool init(IDirect3DDevice9* device, const std::wstring& shaderDir);
     bool ready() const { return m_ready; }
@@ -217,6 +222,8 @@ private:
     UINT m_splatCount = 0;
     int m_heightIndex = 0;
     bool m_heightValid = false;
+    bool m_heightReset = false;
+    float m_heightHoldUntil = -1.0f; // no splats until the player's camera is back (or this time)
     bool m_heightSupported = true;
     float m_heightOrigin[2] = {};
 

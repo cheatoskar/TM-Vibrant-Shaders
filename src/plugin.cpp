@@ -301,11 +301,13 @@ void processScene(IDirect3DDevice9* device) {
             if (s_resets >= 0) TMVS_LOG("engine: race reset (trail cleared)");
             s_resets = resets;
             g_pipeline.resetTrail();
+            g_pipeline.resetHeights();
         }
         if (respawns != s_respawns) {
             if (s_respawns >= 0) TMVS_LOG("engine: respawn");
             s_respawns = respawns;
             g_pipeline.breakTrail();
+            g_pipeline.resetHeights();
         }
     }
     inputs.jitter[0] = g_jitterUV[0];

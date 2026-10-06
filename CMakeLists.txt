@@ -140,8 +140,8 @@ set_target_properties(tm_vibrant_shaders PROPERTIES
 )
 
 # Offline previewer: runs the pipeline on recorded .tmcap frames (development tool).
-add_executable(tmvs_preview tools/preview.cpp)
-target_link_libraries(tmvs_preview PRIVATE tmvs_core)
+add_executable(tmvs_preview tools/preview.cpp src/audio.cpp)
+target_link_libraries(tmvs_preview PRIVATE tmvs_core winmm)
 target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into

@@ -14,6 +14,7 @@
 //     --bench                 GPU time per pass
 //     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
 //                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
+#include "audio.h"
 #include "config.h"
 #include "framecap.h"
 #include "gfx.h"
@@ -176,10 +177,17 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
 
 int main(int argc, char** argv) {
     tmshaders::log::setFileName(L"preview.log"); // never truncate the game's tmvs.log
+    // tmvs_preview --sound out.wav [rain] [volume]: the weather sound, without a capture.
+    if (argc >= 3 && !strcmp(argv[1], "--sound")) {
+        const float rain = argc > 3 ? static_cast<float>(atof(argv[3])) : 1.0f;
+        const float volume = argc > 4 ? static_cast<float>(atof(argv[4])) : 1.0f;
+        return tmshaders::audio::renderWav(widen(argv[2]).c_str(), rain, volume) ? 0 : 1;
+    }
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
                         "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--bench] "
-                        "[--batch jobs.txt]\n");
+                        "[--batch jobs.txt]\n"
+                        "       tmvs_preview --sound <out.wav> [rain] [volume]\n");
         return 2;
     }
 

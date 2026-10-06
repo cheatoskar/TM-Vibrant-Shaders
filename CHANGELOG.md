@@ -33,7 +33,7 @@
 - Advanced menu: Lighting and Sky had a second, duplicate section.
 - TAA: 3x3 neighbourhood and a looser history clamp while the image stands still. The sub-pixel jitter is off by default (fine grates shimmered with it).
 - Bounce light (GI) has its own history: no more blotches on the road, also with TAA off.
-- Long-range shadows: the player's car no longer goes into the height map (it left blotchy shadows behind and below the car).
+- Long-range shadows: the player's car no longer goes into the height map (it left blotchy shadows behind and below the car). The map also starts over on a restart or respawn: the respawn camera saw the car from outside the excluded area.
 - Reflections on wet and polished tracks are softly blurred instead of speckled.
 
 **Reflections**
@@ -41,7 +41,7 @@
 - Night presets (Neon, Horizon, Aurora) mirror at 1.3; auto quality steps back to 1 first when the frame rate drops.
 
 **Tools**
-- Previewer: `--time`, `--water`, `--drive` (moving camera, for the trail).
+- Previewer: `--time`, `--water`, `--drive` (moving camera, for the trail), `--sound out.wav` (the rain and thunder sound as a file).
 
 **License**
 - MIT.
