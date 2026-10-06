@@ -62,7 +62,7 @@ The mod hooks into the game's renderer, reads the depth buffer, the camera and t
 | **Golden Hour** | New clear sky, low warm sun, long light shafts. |
 | **Dreamy** | Soft pastel bloom, pink and teal. |
 | **Neon Night** | Starry sky, darker scene, neon that lights and reflects on the road. |
-| **Event Horizon** | Black hole and ringed planet over a dark, cold stadium. |
+| **Event Horizon** | The Ring World sky at night: a gas giant with its rings and a glowing black hole over a dark, cold stadium. |
 | **Aurora** | Northern lights, green and teal. |
 | **Rainy Day** | Overcast clouds, wet track, puddles and rain. |
 | **Thunderstorm** | Dark and soaked: low clouds, pouring rain, deep puddles, lightning. |
@@ -152,7 +152,7 @@ Eine deutsche Anleitung gibt es in [docs/INSTALL_DE.md](docs/INSTALL_DE.md).
 ![The F8 menu](docs/images/UI.png)
 
 - Settings, your presets and the log are in `Documents\TrackMania\TMVS\`.
-- **Preset per map mood:** with this on, the preset you choose on a day, sunset or night map is remembered for that kind of map.
+- **Preset per map mood:** pick a preset for day, sunset and night maps right in the menu (defaults: Vibrant, Golden Hour, Event Horizon). It switches when you load a map of that kind.
 - **Sky rotation** and **Planet direction** turn the sky objects into view if they're behind you.
 
 ### Making your own preset

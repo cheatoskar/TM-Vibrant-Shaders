@@ -385,7 +385,7 @@ float3 stars(float3 rd, float density) {
             float3 center = cell + 0.5 + (float3(hash13(cell + 3.1), hash13(cell + 5.7), hash13(cell + 9.3)) - 0.5) * 0.6;
             float d = length(p - center);
             float size = layer == 0 ? 0.07 : (layer == 1 ? 0.16 : 0.15);
-            float b = smoothstep(size, 0.0, d) * (layer == 0 ? 9.0 : (layer == 1 ? 3.5 : 1.6));
+            float b = smoothstep(size, 0.0, d) * (layer == 0 ? 14.0 : (layer == 1 ? 5.5 : 2.6));
             if (layer == 0) b += exp(-d * 30.0) * 0.6; // glow of the bright ones (feeds the bloom)
             float twinkle = 0.75 + 0.25 * sin(u_Proj2.z * (2.0 + h * 5.0) + h * 40.0);
             float t = frac(h * 91.7);
@@ -441,7 +441,7 @@ float3 meteors(float3 rd, float amount) {
         float trail = saturate(along / 0.12);
         float fade = smoothstep(0.0, 0.1, age) * smoothstep(0.9, 0.5, age);
         float glow = smoothstep(0.0015, 0.0, across) * (along > 0.0 ? 1.0 - trail : 0.0) * step(-0.002, along);
-        sum += float3(0.85, 0.9, 1.0) * glow * fade * 4.0 * step(0.0, rd.y);
+        sum += float3(0.85, 0.9, 1.0) * glow * fade * 4.0;
     }
     return sum * amount;
 }
@@ -470,12 +470,13 @@ float4 diskSample(float3 x, float3 dir, float3 n, float3 e1, float3 e2) {
     float3 q = float3(cos(a) * 2.5, sin(a) * 2.5, r * 0.9);
     float gas = noise3(q) * 0.65 + noise3(q * 2.7 + 11.0) * 0.35;
     float lanes = 0.75 + 0.25 * noise3(float3(r * 2.5, cos(a) * 0.6, sin(a) * 0.6));
-    float density = saturate(gas * 1.6 - 0.25) * lanes;
+    // Smooth, bright gas with faint lanes: Gargantua is clean, not noisy.
+    float density = saturate(gas * 0.7 + 0.35) * lerp(1.0, lanes, 0.5);
     density *= smoothstep(inner * 0.9, inner * 1.15, r) * smoothstep(outer, outer * 0.55, r);
 
     // Temperature falls off outward: white-hot inside, deep orange at the rim.
     float heat = pow(inner / r, 1.6);
-    float3 col = lerp(float3(1.0, 0.32, 0.07), float3(1.0, 0.86, 0.68), saturate(heat * 1.15));
+    float3 col = lerp(float3(1.0, 0.45, 0.15), float3(1.0, 0.9, 0.78), saturate(heat * 1.6 + 0.15));
     col = lerp(col, float3(0.85, 0.9, 1.0), saturate(heat - 0.75) * 1.5);
     // Relativistic beaming: the side orbiting towards the camera is much brighter.
     float v = min(sqrt(0.5 / max(r - 1.0, 0.5)), 0.7);
@@ -545,6 +546,8 @@ float3 blackHoleSky(float3 rd, float3 bh, float dist) {
         float outside = 2.0 / max(impact, 1.0) * (1.0 - sqrt(max(1.0 - impact * impact / (traceRadius * traceRadius), 0.0)));
         outDir = normalize(outDir + normalize(bh - outDir * dot(outDir, bh) + 1e-5) * outside);
         if (!captured) col += (1.0 - alpha) * spaceBackground(outDir);
+        // Photon ring: light that circled the hole, a thin sharp line around the shadow.
+        if (!captured) col += float3(1.0, 0.92, 0.82) * exp(-abs(closest - 2.65) * 9.0) * 1.6 * (1.0 - alpha);
     } else {
         // Weak field: background bent toward the hole by 2 rs / b.
         float deflect = 2.0 / (dist * sin(angle));
@@ -758,7 +761,7 @@ float3 ringWorldSky(float3 rd) {
         float3 up = normalize(cross(dir, side));
         ringN = normalize(up * cos(roll) + side * sin(roll));
         inPlane = normalize(cross(dir, ringN));
-        float offset = view == 2 ? -0.012 : 0.15; // > 0: plane above the camera
+        float offset = view == 2 ? -0.035 : 0.15; // > 0: plane above the camera
         center -= ringN * (dot(center, ringN) - offset);
     }
     float3 axis = normalize(ringN + dir * 0.05);
@@ -922,7 +925,8 @@ float3 customSky(float3 rd) {
         c += meteors(rd, saturate(u_Sky2.y));
     }
     // Below the horizon: dark ground haze instead of mirrored sky.
-    c = lerp(c, c * 0.15 + float3(0.01, 0.012, 0.02), smoothstep(0.0, -0.08, rd.y) * (mode == 1 ? 0.0 : 1.0));
+    // Below the horizon: the space skies go on (you're in space), the aurora gets dark ground haze.
+    c = lerp(c, c * 0.15 + float3(0.01, 0.012, 0.02), smoothstep(0.0, -0.08, rd.y) * (mode == 4 ? 1.0 : 0.0));
     return c * u_Sky.w;
 }
 
@@ -1335,7 +1339,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
                 float mu = dot(rd, u_SunWorld.xyz);
                 c += sunScatter(rd, u_Rays.z * 0.5) * daylight;
                 // Sun disc and a tight halo (feeds the bloom).
-                c += u_SunColor.rgb * (smoothstep(0.9994, 0.99975, mu) * 3.0 + pow(saturate(mu), 900.0) * 0.6) * u_Rays.z * daylight;
+                c += u_SunColor.rgb * (smoothstep(0.9994, 0.99975, mu) * 1.8 + pow(saturate(mu), 900.0) * 0.35) * u_Rays.z * daylight;
             }
         }
         // Day-for-night on the game's own sky (storm, manual night setting).
@@ -1436,7 +1440,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Neon light spilling onto nearby surfaces (screen-space, blurred light buffer).
     if (u_Light2.x > 0.0) {
         float3 spill = tex2Dlod(s9, float4(uv, 0, 0)).rgb;
-        c += spill * u_Light2.x * 4.0 * lerp(0.15, 1.0, saturate(luma(c) * 5.0)) * ao * (1.0 - emissive);
+        // Far away the glow would shrink to nothing: it gets stronger with distance.
+        c += spill * u_Light2.x * 4.0 * lerp(1.0, 2.0, saturate(dist / 120.0)) * lerp(0.15, 1.0, saturate(luma(c) * 5.0)) * ao * (1.0 - emissive);
     }
 
     // --- Reflections ---
@@ -1531,7 +1536,7 @@ float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
     float z = min(center.a, 2000.0);
     float pxPerMetre = abs(u_Proj.y) * u_Screen.y * 0.25 * 0.5 / z;  // quarter-res pixels
     // At least a few pixels: far away the glow must stay visible, not shrink to nothing.
-    float stepPx = clamp(3.0 * pxPerMetre / 6.0, 0.9, 12.0);
+    float stepPx = clamp(3.0 * pxPerMetre / 6.0, 1.6, 12.0);
     float3 sum = 0;
     float wsum = 0;
     [unroll] for (int i = -6; i <= 6; i++) {
@@ -1652,7 +1657,7 @@ float4 PS_RayMask(float2 uv : TEXCOORD0) : COLOR0 {
     float3 rd = viewToWorldDir(normalize(viewPosition(uv, 1.0)));
     float mu = saturate(dot(rd, u_SunWorld.xyz));
     float3 c = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
-    float window = pow(mu, 12.0) * 0.6 + pow(mu, 120.0) * 0.8;
+    float window = pow(mu, 12.0) * 0.6 + pow(mu, 120.0) * 0.45;
     return float4(min(c, 1.5) * window + u_SunColor.rgb * pow(mu, 40.0) * 0.25, 1);
 }
 

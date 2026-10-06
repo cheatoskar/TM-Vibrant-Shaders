@@ -66,7 +66,7 @@ struct Settings {
     float fogSunScatter = 0.7f;
 
     // Volumetric light shafts
-    float godRays = 1.8f;
+    float godRays = 1.5f;
     float godRayDecay = 0.99f;
 
     // Bloom & lens

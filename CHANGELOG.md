@@ -23,6 +23,9 @@
 - The black hole is a real light source: white-hot disk, wide halo, warm light on the scene
 - Brighter stars and Milky Way, shooting stars
 - F8 menu: Simple (everyday settings) and Advanced (everything); settings that don't apply to the current sky are hidden
+- Event Horizon uses the Ring World sky; default mood presets Vibrant / Golden Hour / Event Horizon; Replay Cinema with strong motion blur; Neon Night brighter with more neon
+- The sun disc blends less when you look straight into it
+- Space skies continue below the horizon
 - Presets: Balanced and Ring World removed (Ring World is a sky for any preset), light shafts much stronger in the day presets
 - Puddles mirror objects and lights more strongly
 - Custom settings survive a map change (no automatic mood preset while on Custom)

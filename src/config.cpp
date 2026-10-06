@@ -363,7 +363,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyColor[0] = 0.48f; s.skyColor[1] = 0.66f; s.skyColor[2] = 1.0f;
             s.fogDensity = 1.1f;
             s.fogSunScatter = 1.3f;
-            s.godRays = 1.85f;
+            s.godRays = 1.5f;
             s.godRayDecay = 0.99f;
             s.sunGlow = 1.0f;
             s.bloom = 0.11f;
@@ -387,7 +387,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.shadowStrength = 0.75f;
             s.fogDensity = 0.7f;
             s.fogSunScatter = 1.4f;
-            s.godRays = 1.85f;
+            s.godRays = 1.5f;
             s.godRayDecay = 0.99f;
             s.sunGlow = 1.0f;
             s.bloom = 0.09f;
@@ -429,7 +429,9 @@ void applyPreset(Settings& s, Preset preset) {
             s.aoStrength = 1.3f;
             s.ambientTint = 0.8f;
             s.highlightBoost = 3.0f;
-            s.bloom = 0.09f;
+            s.bloom = 0.4f;
+            s.godRays = 2.0f;
+            s.exposure = 1.5f;
             s.bloomRadius = 0.9f;
             s.fogDensity = 0.6f;
             s.contrast = 1.08f;
@@ -440,11 +442,13 @@ void applyPreset(Settings& s, Preset preset) {
             s.vignette = 0.3f;
             s.chromaticAberration = 0.0f;
             s.filmGrain = 0.01f;
-            s.neonLight = 1.0f;
+            s.neonLight = 2.0f;
             s.reflections = 0.5f;
             break;
         case Preset::EventHorizon:
-            s.skyMode = 3;
+            s.skyMode = 5;      // the ring world sky: planet, rings and a black hole
+            s.planetType = 0;
+            s.planetView = 0;
             s.skyRotation = 0.0f;
             s.skyEffectSize = 1.2f;
             s.planetSize = 1.0f;
@@ -556,8 +560,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.bloom = 0.1f;
             s.lensFlare = 0.35f;
             s.reflections = 0.35f;
-            s.motionBlur = 0.35f;
-            s.depthOfField = 0.25f;
+            s.motionBlur = 1.0f;
+            s.depthOfField = 0.25f; // meant for replays: while driving, the auto focus sits on your car
             s.bokehSize = 10.0f;
             s.vignette = 0.4f;
             s.contrast = 1.12f;

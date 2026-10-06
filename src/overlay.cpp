@@ -6,6 +6,7 @@
 #include "backends/imgui_impl_dx9.h"
 #include "backends/imgui_impl_win32.h"
 #include "tm_shaders_version.h"
+#include <cstdio>
 #include <cstring>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -215,6 +216,29 @@ bool drawKey(Settings& s, const char* key, const char* label = nullptr) {
     return f && isRelevant(*f, s) && drawField(*f, s, label);
 }
 
+// Which preset for which kind of map (day / sunset / night).
+void drawMoodPresets(Config& config, const std::vector<std::string>& names) {
+    for (int m = 0; m < static_cast<int>(Mood::Count); m++) {
+        std::string& mp = config.moodPreset[m];
+        char label[64];
+        snprintf(label, sizeof(label), "%s maps##mood%d", moodName(static_cast<Mood>(m)), m);
+        if (ImGui::BeginCombo(label, mp.empty() ? "Keep current" : mp.c_str())) {
+            if (ImGui::Selectable("Keep current", mp.empty())) {
+                mp.clear();
+                config.markDirty();
+            }
+            for (const auto& name : names) {
+                if (ImGui::Selectable(name.c_str(), mp == name)) {
+                    mp = name;
+                    if (static_cast<int>(config.mood) == m) config.selectPreset(name);
+                    config.markDirty();
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+}
+
 void heading(const char* text) {
     ImGui::Spacing();
     ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.35f, 1.0f), "%s", text);
@@ -255,12 +279,14 @@ bool drawSimple(Settings& s) {
     look |= drawKey(s, "NeonLight", "Neon light");
     look |= drawKey(s, "Exposure", "Brightness");
     look |= drawKey(s, "Saturation", "Colour");
+    look |= drawKey(s, "MotionBlur", "Motion blur");
 
     heading("Weather");
     look |= drawKey(s, "Rain", "Rain");
     look |= drawKey(s, "Wetness", "Wet roads");
     look |= drawKey(s, "VolumetricClouds", "Clouds");
     look |= drawKey(s, "Lightning", "Lightning");
+    look |= drawKey(s, "WaterSurfaces", "Water");
 
     heading("Performance");
     look |= drawKey(s, "AutoQuality", "Adapt quality to my GPU");
@@ -285,26 +311,6 @@ bool drawAdvanced(Config& config, Settings& s, const std::vector<std::string>& n
     if (config.isUserPreset(config.preset)) {
         ImGui::SameLine();
         if (ImGui::Button("Delete")) config.deleteUserPreset(config.preset);
-    }
-    if (config.autoMood && ImGui::TreeNode("Preset per map mood")) {
-        for (int m = 0; m < static_cast<int>(Mood::Count); m++) {
-            std::string& mp = config.moodPreset[m];
-            if (ImGui::BeginCombo(moodName(static_cast<Mood>(m)), mp.empty() ? "Keep current" : mp.c_str())) {
-                if (ImGui::Selectable("Keep current", mp.empty())) {
-                    mp.clear();
-                    config.markDirty();
-                }
-                for (const auto& name : names) {
-                    if (ImGui::Selectable(name.c_str(), mp == name)) {
-                        mp = name;
-                        if (static_cast<int>(config.mood) == m) config.selectPreset(name);
-                        config.markDirty();
-                    }
-                }
-                ImGui::EndCombo();
-            }
-        }
-        ImGui::TreePop();
     }
     ImGui::Combo("Debug view", &s.debugView, kDebugViews, IM_ARRAYSIZE(kDebugViews));
     ImGui::TextDisabled("Sun: %s (%.2f %.2f %.2f)", g_status.sunKnown ? "from game" : "unknown", g_status.sunDirection[0],
@@ -371,7 +377,8 @@ void drawMenu() {
     }
     if (ImGui::Checkbox("Preset per map mood", &config.autoMood)) config.markDirty();
     ImGui::SameLine();
-    ImGui::TextDisabled("map: %s", moodName(config.mood));
+    ImGui::TextDisabled("this map: %s", moodName(config.mood));
+    if (config.autoMood) drawMoodPresets(config, names);
     drawStatus(s);
 
     const bool look = config.advancedMenu ? drawAdvanced(config, s, names) : drawSimple(s);

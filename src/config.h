@@ -70,7 +70,7 @@ public:
 
     // Automatic preset per map mood (day / sunrise + sunset / night). "" = keep current.
     bool autoMood = true;
-    std::string moodPreset[static_cast<int>(Mood::Count)] = {"Vibrant", "Vibrant", "Event Horizon"};
+    std::string moodPreset[static_cast<int>(Mood::Count)] = {"Vibrant", "Golden Hour", "Event Horizon"};
     Mood mood = Mood::Unknown;
     void onMoodDetected(Mood m);
 
