@@ -904,23 +904,33 @@ float4 trailPoint(float i) {
 
 // The car is found anew in every frame, so the raw points wobble (most in jumps, when the
 // camera swings): each point is averaged with its neighbours on the same line (weights
-// 1 2 3 4 3 2 1), stopping at gaps and respawns.
+// 1 2 3 4 3 2 1). The window stays symmetric (as many points before as after), so the
+// newest end isn't pulled back: it stays on the car.
 float3 smoothPoint(float i, float4 centre) {
     float first = c_Trail.y - c_Trail.x, last = c_Trail.y - 1.0; // oldest / newest point
-    float3 sum = centre.xyz * 4.0;
-    float weight = 4.0;
+    float4 back[3], ahead[3];
+    float nb = 0.0, nf = 0.0;
     bool open = centre.w > 0.0;  // backwards: stop at the start of this line
     [unroll] for (int k = 1; k <= 3; k++) {
-        float4 q = trailPoint(i - k);
-        open = open && i - k >= first && q.w != 0.0 && distance(q.xyz, centre.xyz) < 12.0;
-        if (open) { sum += q.xyz * (4.0 - k); weight += 4.0 - k; }
-        open = open && q.w > 0.0;
+        back[k - 1] = trailPoint(i - k);
+        open = open && i - k >= first && back[k - 1].w != 0.0 && distance(back[k - 1].xyz, centre.xyz) < 12.0;
+        nb += open ? 1.0 : 0.0;
+        open = open && back[k - 1].w > 0.0;
     }
     open = true;                 // forwards: stop before the next line starts
     [unroll] for (int k = 1; k <= 3; k++) {
-        float4 q = trailPoint(i + k);
-        open = open && i + k <= last && q.w > 0.0 && distance(q.xyz, centre.xyz) < 12.0;
-        if (open) { sum += q.xyz * (4.0 - k); weight += 4.0 - k; }
+        ahead[k - 1] = trailPoint(i + k);
+        open = open && i + k <= last && ahead[k - 1].w > 0.0 && distance(ahead[k - 1].xyz, centre.xyz) < 12.0;
+        nf += open ? 1.0 : 0.0;
+    }
+    float n = min(nb, nf);
+    float3 sum = centre.xyz * 4.0;
+    float weight = 4.0;
+    [unroll] for (int k = 1; k <= 3; k++) {
+        if (k <= n) {
+            sum += (back[k - 1].xyz + ahead[k - 1].xyz) * (4.0 - k);
+            weight += 2.0 * (4.0 - k);
+        }
     }
     return sum / weight;
 }
@@ -1058,9 +1068,11 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     }
     m_trailTime += dt;
     m_trailClock += dt;
-    // Record the car 30 times a second while you drive (not in replays and intros).
-    if (in.driving && dt > 0.0f && m_temporalValid && m_trailClock >= 1.0f / 30.0f) {
-        m_trailClock = fmodf(m_trailClock, 1.0f / 30.0f);
+    // Record the car while you drive (not in replays and intros): every frame into the next
+    // slot (the live end of the trail, so it stays on the car), kept 30 times a second.
+    bool live = false;
+    if (in.driving && dt > 0.0f && m_temporalValid) {
+        live = true;
         bind(device, 0, m_nd.texture, false);
         const float stamp = m_trailTime + 1.0f; // never 0 (= no car)
         passConstants(device, m_trailBreak ? -stamp : stamp, 0.0f);
@@ -1074,11 +1086,18 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         m_quad.draw(device, kTrailWidth, kTrailHeight);
         profileMark(kTrailPoint);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-        m_trailBreak = false;
-        m_trailHead = (m_trailHead + 1) % kTrailPoints;
-        if (m_trailCount < kTrailPoints) m_trailCount++;
+        if (m_trailClock >= 1.0f / 30.0f) {
+            m_trailClock = fmodf(m_trailClock, 1.0f / 30.0f);
+            m_trailBreak = false;
+            m_trailHead = (m_trailHead + 1) % kTrailPoints;
+            if (m_trailCount < kTrailPoints) m_trailCount++;
+            live = false; // just kept: it's the newest point now
+        }
     }
-    if (m_trailCount < 2) return;
+    // Points to draw: the kept ones plus the live end.
+    const UINT points = live ? (m_trailCount + 1 < kTrailPoints ? m_trailCount + 1 : kTrailPoints) : m_trailCount;
+    const UINT next = live ? (m_trailHead + 1) % kTrailPoints : m_trailHead;
+    if (points < 2) return;
 
     const float* V = in.view;
     const float* P = in.projection;
@@ -1098,7 +1117,8 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     vc[4][2] = 2.0f / in.width;
     vc[4][3] = 2.0f / in.height;
     device->SetVertexShaderConstantF(0, &vc[0][0], 6);
-    const float trail[4] = {static_cast<float>(m_trailCount), static_cast<float>(m_trailHead), m_trailTime + 1.0f, s.trailDuration};
+    // The vertex shader works with unwrapped indices: next + kTrailPoints keeps them positive.
+    const float trail[4] = {static_cast<float>(points), static_cast<float>(next + kTrailPoints), m_trailTime + 1.0f, s.trailDuration};
     device->SetVertexShaderConstantF(16, trail, 1);
 
     device->SetRenderTarget(0, m_hdr.surface);
@@ -1122,7 +1142,7 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     const float strength = s.neonTrail * 2.0f;
     passConstants(device, s.trailColor[0] * strength, s.trailColor[1] * strength, s.trailColor[2] * strength, 0.0f);
     const float halfWidth = s.trailWidth * 0.5f;
-    const UINT quads = m_trailCount - 1;
+    const UINT quads = points - 1;
     // Two lines from the rear tyres, or one from the middle of the car.
     const float offsets[2] = {s.trailTyres ? -0.75f : 0.0f, 0.75f};
     for (int line = 0; line < (s.trailTyres ? 2 : 1); line++) {

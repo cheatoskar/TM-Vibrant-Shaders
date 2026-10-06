@@ -10,14 +10,14 @@ enum class Preset : int {
     Cinematic,       // IterationT style: dense sunlit haze, deep shadows, film contrast
     GoldenHour,      // procedural clear sky, low warm sun, long shafts, warm film look
     Dreamy,          // soft pastel bloom, lifted shadows, pink/teal split toning
-    NeonNight,       // starry night: day-for-night grading, glowing neon and floodlights
-    EventHorizon,    // IterationT black hole over a dark, cold stadium
+    Neon,            // starry night: day-for-night grading, glowing neon and floodlights
+    Horizon,         // IterationT black hole over a dark, cold stadium
     Aurora,          // aurora borealis night, green-teal grade
     Competition,     // clarity first: AO + contact shadows, no haze or lens effects
     Performance,     // lighter passes for weak GPUs
     RainyDay,        // overcast, wet roads, puddles and falling rain
     ReplayCinema,    // film look with motion blur and depth of field for replays
-    Thunderstorm,    // dark, overcast, pouring rain, soaked track, lightning
+    Storm,           // dark, overcast, pouring rain, soaked track, lightning
     Custom,
     Count
 };
@@ -70,7 +70,7 @@ public:
 
     // Automatic preset per map mood (day / sunrise + sunset / night). "" = keep current.
     bool autoMood = true;
-    std::string moodPreset[static_cast<int>(Mood::Count)] = {"Vibrant", "Golden Hour", "Event Horizon"};
+    std::string moodPreset[static_cast<int>(Mood::Count)] = {"Vibrant", "Golden Hour", "Horizon"};
     Mood mood = Mood::Unknown;
     void onMoodDetected(Mood m);
 

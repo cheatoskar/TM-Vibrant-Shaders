@@ -78,7 +78,8 @@ struct Rain {
         }
     }
 
-    void render(float* out, int frames, float target) {
+    // gain: < 1 while it thunders (the thunder masks the rain, as the ear hears it).
+    void render(float* out, int frames, float target, float gain) {
         for (int i = 0; i < frames; i++) {
             level += (target - level) * 0.00005f; // ~0.5 s glide
             if (level < 1e-4f) continue;
@@ -105,7 +106,7 @@ struct Rain {
                 if (plinkPhase[c] > 2.0f * kPi) plinkPhase[c] -= 2.0f * kPi;
                 const float env = dropEnv[c] * dropGain[c];
                 const float drop = tick[c].process(noise.next()) * env * env * 2.0f + sinf(plinkPhase[c]) * env * 0.25f;
-                out[i * 2 + c] += wash * (0.5f * steady + 0.25f * heavy) + rumble * 0.6f * heavy + drop * steady;
+                out[i * 2 + c] += (wash * (0.5f * steady + 0.25f * heavy) + rumble * 0.6f * heavy + drop * steady) * gain;
             }
         }
     }
@@ -122,6 +123,7 @@ struct Thunder {
     float t = -1.0f;      // seconds since start, < 0 = silent
     float power = 0.0f, distance = 0.0f;
     float swellAt[3] = {}, swellWidth[3] = {};
+    float level = 0.0f;   // current loudness (0..1), ducks the rain
 
     void start(float p, float d) {
         t = 0.0f;
@@ -151,7 +153,7 @@ struct Thunder {
                 const float x = (t - swellAt[k]) / swellWidth[k];
                 env += 0.7f * expf(-x * x);
             }
-            const float crack = distance < 0.6f ? expf(-t * 14.0f) * (1.0f - distance * 1.6f) : 0.0f;
+            const float crack = expf(-t * 14.0f) * (1.0f - distance * 0.7f); // the strike itself
             for (int c = 0; c < 2; c++) {
                 const float w = noise.next();
                 brown[c] = brown[c] * 0.995f + w * 0.05f;
@@ -159,12 +161,16 @@ struct Thunder {
                 const float snap = (w - crackHigh[c].process(w)) * crack;
                 const float band = rollLow[c].process(noise.next());
                 const float roll = band - rollHigh[c].process(band);
-                const float level = 0.35f + fabsf(flutter[c].process(noise.next() * 40.0f)); // ~0.35 .. 1.5, wobbling ~9 Hz
-                out[i * 2 + c] += (rumble * env * 0.12f + roll * env * level * 1.6f + snap * 0.6f) * power;
+                const float wobble = 0.35f + fabsf(flutter[c].process(noise.next() * 40.0f)); // ~0.35 .. 1.5, ~9 Hz
+                out[i * 2 + c] += (rumble * env * 0.12f + roll * env * wobble * 3.2f + snap * 0.8f) * power;
             }
+            this->level = fminf(env, 1.0f) * power;
             t += dt;
         }
-        if (t > 12.0f) t = -1.0f;
+        if (t > 12.0f) {
+            t = -1.0f;
+            this->level = 0.0f;
+        }
     }
 };
 
@@ -211,7 +217,8 @@ void mixer() {
                 nextThunder ^= 1;
             }
             std::fill(mix.begin(), mix.end(), 0.0f);
-            rain.render(mix.data(), kBufferFrames, g_rain.load());
+            const float thunderLevel = fmaxf(thunder[0].level, thunder[1].level);
+            rain.render(mix.data(), kBufferFrames, g_rain.load(), 1.0f - 0.45f * thunderLevel);
             for (auto& th : thunder) th.render(mix.data(), kBufferFrames);
             const float target = g_volume.load();
             int16_t* out = reinterpret_cast<int16_t*>(h.lpData);
@@ -274,7 +281,7 @@ void update(const Settings& s, float time, bool active, HWND window) {
         for (auto& p : g_pending) {
             if (p.at >= 0.0f) continue;
             p.at = strike.start + 0.4f + distance * 5.0f;
-            p.power = 1.0f - distance * 0.6f;
+            p.power = 1.0f - distance * 0.35f;
             p.distance = distance;
             break;
         }
@@ -286,6 +293,7 @@ void update(const Settings& s, float time, bool active, HWND window) {
             g_thunderPower = p.power;
             g_thunderDistance = p.distance;
             g_thunderSerial++;
+            TMVS_LOG("audio: thunder (distance %.2f)", p.distance);
         }
         p.at = -1.0f;
     }

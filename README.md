@@ -14,8 +14,8 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 | | |
 |---|---|
 | ![Sunset: original and Vibrant](docs/images/compare-sunset.jpg) | ![Day: original and Golden Hour](docs/images/compare-day.jpg) |
-| ![Original and Cinematic](docs/images/compare-cinematic.jpg) | ![Original and Thunderstorm](docs/images/compare-rain.jpg) |
-| ![Night: original and Neon Night](docs/images/compare-night.jpg) | ![Event Horizon: the Ring World sky at night](docs/images/event-horizon.jpg) |
+| ![Original and Cinematic](docs/images/compare-cinematic.jpg) | ![Original and Storm](docs/images/compare-rain.jpg) |
+| ![Night: original and Neon](docs/images/compare-night.jpg) | ![Horizon: the Ring World sky at night](docs/images/event-horizon.jpg) |
 | ![Black hole](docs/images/black-hole.jpg) | ![Aurora](docs/images/aurora.jpg) |
 
 **[Download](https://github.com/cheatoskar/tmnf-vibrant-shaders/releases/latest)** · [Installation](#installation) · [Presets](#presets) · [Hardware and FPS](#recommended-hardware) · [All settings](#all-settings)
@@ -72,11 +72,11 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 | **Cinematic** | Dense sunlit haze, deep shadows, film contrast. |
 | **Golden Hour** | New clear sky, low warm sun, long light shafts. |
 | **Dreamy** | Soft pastel bloom, pink and teal. |
-| **Neon Night** | Starry sky with shooting stars, bright neon that lights up the whole track. |
-| **Event Horizon** | The Ring World sky at night: a gas giant with its rings and a glowing black hole over a dark, cold stadium. |
+| **Neon** | Starry sky with shooting stars, bright neon that lights up the whole track. |
+| **Horizon** | The Ring World sky at night: a gas giant with its rings and a glowing black hole over a dark, cold stadium. |
 | **Aurora** | Northern lights, green and teal. |
 | **Rainy Day** | Overcast clouds, wet track, puddles and rain. |
-| **Thunderstorm** | Dark and soaked: low clouds, pouring rain, deep puddles, lightning. |
+| **Storm** | Dark and soaked: low clouds, pouring rain, deep puddles, lightning. |
 | **Replay Cinema** | Film look with a touch of motion blur and depth of field. Made for replays and the video export. |
 | **Competition** | Clarity first: AO and contact shadows, no haze or lens effects. |
 | **Performance** | Vibrant with the expensive parts switched off. |
@@ -108,7 +108,7 @@ How much the shaders cost, at 1920×1080, looking into the sun (the worst case):
 
 Only the Arc 140V row is measured. The other rows are **estimates**: the measured shader time scaled by each card's relative speed, on top of a typical frame rate for the bare game. Your numbers will differ with CPU, drivers and map. At 1440p expect about 1.8× the shader time, at 4K about 4×.
 
-Most presets cost about as much as Vibrant. Thunderstorm costs about 20% more, Golden Hour and Event Horizon (custom skies) about 40% more. Aurora is the heaviest sky, roughly 2× Vibrant.
+Most presets cost about as much as Vibrant. Storm costs about 20% more, Golden Hour and Horizon (custom skies) about 40% more. Aurora is the heaviest sky, roughly 2× Vibrant.
 
 What costs the most, if you want to win back FPS:
 
@@ -183,7 +183,7 @@ Eine deutsche Anleitung gibt es in [docs/INSTALL_DE.md](docs/INSTALL_DE.md).
 ![The F8 menu](docs/images/UI.png)
 
 - Settings, your presets and the log are in `Documents\TrackMania\TMVS\`.
-- **Preset per map mood:** pick a preset for day, sunset and night maps right in the menu (defaults: Vibrant, Golden Hour, Event Horizon). It switches when you load a map of that kind.
+- **Preset per map mood:** pick a preset for day, sunset and night maps right in the menu (defaults: Vibrant, Golden Hour, Horizon). It switches when you load a map of that kind.
 - **Sky rotation** and **Planet direction** turn the sky objects into view if they're behind you.
 
 ### Making your own preset

@@ -2,6 +2,9 @@
 
 ## Unreleased (1.2)
 
+**Presets**
+- Shorter names: Neon Night is now **Neon**, Event Horizon **Horizon**, Thunderstorm **Storm**. Saved settings with the old names keep working.
+
 **Lighting**
 - Volumetric light: sun shafts with real shadows in the haze, traced through the long-range height map, also with the sun off screen (~0.3 ms).
 - Bounce light: one-bounce screen-space global illumination at quarter resolution (~0.25 ms).
@@ -35,7 +38,7 @@
 
 **Reflections**
 - *Track reflections (dry)* goes up to 2: above 1 the dry track is polished, checkpoints and objects mirror clearly. Also in the simple menu.
-- Night presets (Neon Night, Event Horizon, Aurora) mirror at 1.3; auto quality steps back to 1 first when the frame rate drops.
+- Night presets (Neon, Horizon, Aurora) mirror at 1.3; auto quality steps back to 1 first when the frame rate drops.
 
 **Tools**
 - Previewer: `--time`, `--water`, `--drive` (moving camera, for the trail).

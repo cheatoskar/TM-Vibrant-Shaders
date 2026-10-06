@@ -117,14 +117,14 @@ const char* presetName(Preset preset) {
         case Preset::Cinematic: return "Cinematic";
         case Preset::GoldenHour: return "Golden Hour";
         case Preset::Dreamy: return "Dreamy";
-        case Preset::NeonNight: return "Neon Night";
-        case Preset::EventHorizon: return "Event Horizon";
+        case Preset::Neon: return "Neon";
+        case Preset::Horizon: return "Horizon";
         case Preset::Aurora: return "Aurora";
         case Preset::Competition: return "Competition";
         case Preset::Performance: return "Performance";
         case Preset::RainyDay: return "Rainy Day";
         case Preset::ReplayCinema: return "Replay Cinema";
-        case Preset::Thunderstorm: return "Thunderstorm";
+        case Preset::Storm: return "Storm";
         case Preset::Custom: return "Custom";
         default: return "?";
     }
@@ -177,6 +177,10 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
         return i >= 0 ? presetName(static_cast<Preset>(i)) : fallback;
     }
     if (!_wcsicmp(text.c_str(), L"Keep")) return {};
+    // Renamed in 1.2.
+    if (!_wcsicmp(text.c_str(), L"Neon Night")) return "Neon";
+    if (!_wcsicmp(text.c_str(), L"Event Horizon")) return "Horizon";
+    if (!_wcsicmp(text.c_str(), L"Thunderstorm")) return "Storm";
     return narrow(text);
 }
 
@@ -455,7 +459,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.vignette = 0.2f;
             s.chromaticAberration = 0.08f;
             break;
-        case Preset::NeonNight:
+        case Preset::Neon:
             s.skyMode = 2;
             s.starAmount = 1.3f;
             s.skyColor[0] = 0.35f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
@@ -478,7 +482,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.neonLight = 2.0f;
             s.reflections = 1.3f;   // night: the lit stadium mirrors in the dry track
             break;
-        case Preset::EventHorizon:
+        case Preset::Horizon:
             s.skyMode = 5;      // the ring world sky: planet, rings and a black hole
             s.reflections = 1.3f;
             s.planetType = 0;
@@ -611,7 +615,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.filmGrain = 0.025f;
             s.chromaticAberration = 0.1f;
             break;
-        case Preset::Thunderstorm:
+        case Preset::Storm:
             s.lensDrops = true;
             s.volumetricLight = 0.0f;
             // Overcast: the day map's sun is taken out like for a night sky, only darker grey.
