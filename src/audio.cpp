@@ -205,7 +205,19 @@ void mixer() {
     int nextThunder = 0;
     float volume = 0.0f;
     std::vector<float> mix(static_cast<size_t>(kBufferFrames) * 2);
-    TMVS_LOG("audio: weather sound started");
+    // Where the sound goes, and the Windows mixer volume of the game (it applies to us too).
+    WAVEOUTCAPSW caps{};
+    UINT deviceId = 0;
+    waveOutGetID(g_device, &deviceId);
+    waveOutGetDevCapsW(deviceId, &caps, sizeof(caps));
+    DWORD mixerVolume = 0;
+    waveOutGetVolume(g_device, &mixerVolume);
+    char deviceName[64] = {};
+    WideCharToMultiByte(CP_UTF8, 0, caps.szPname, -1, deviceName, sizeof(deviceName) - 1, nullptr, nullptr);
+    TMVS_LOG("audio: weather sound started (device \"%s\", mixer volume %d%%)", deviceName, static_cast<int>((mixerVolume & 0xFFFF) * 100 / 0xFFFF));
+    // While audible, the loudness that goes out, now and then (to tell "silent" from "too quiet").
+    double levelSum = 0.0;
+    int levelSamples = 0, levelLogs = 0;
 
     while (g_running) {
         bool wrote = false;
@@ -227,9 +239,26 @@ void mixer() {
                 volume += (target - volume) * 0.0005f;
                 const float v = tanhf(mix[static_cast<size_t>(i)] * volume); // soft limit
                 out[i] = static_cast<int16_t>(v * 32000.0f);
+                levelSum += v * v;
+            }
+            levelSamples += kBufferFrames * 2;
+            if (target < 0.01f) {
+                levelSum = 0.0;
+                levelSamples = 0;
+            } else if (levelSamples >= kRate * 2 * 20 && levelLogs < 30) {
+                levelLogs++;
+                TMVS_LOG("audio: output level %.3f rms (volume %.2f)", sqrt(levelSum / levelSamples), target);
+                levelSum = 0.0;
+                levelSamples = 0;
             }
             h.dwFlags &= ~WHDR_DONE;
-            waveOutWrite(g_device, &h, sizeof(WAVEHDR));
+            const MMRESULT written = waveOutWrite(g_device, &h, sizeof(WAVEHDR));
+            if (written != MMSYSERR_NOERROR) {
+                static int s_errors = 0;
+                if (s_errors++ < 5) TMVS_LOG("audio: waveOutWrite failed (%u)", written);
+                h.dwFlags |= WHDR_DONE;
+                continue;
+            }
             wrote = true;
         }
         if (!wrote) WaitForSingleObject(ready, 100);
