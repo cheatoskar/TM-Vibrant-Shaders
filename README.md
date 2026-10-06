@@ -10,6 +10,8 @@
 
 ![Storm: rain on a wet Stadium track, the checkpoint mirrored in the road](docs/images/storm-checkpoint.jpg)
 
+![Realistic: the start line in the late sun, with haze and soft shadows](docs/images/realistic-start.jpg)
+
 A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Controls](#controls) · [Documentation](#documentation)
@@ -47,13 +49,14 @@ Run the setup again to update or uninstall; your settings stay. Windows SmartScr
 | **Extras** | A neon light trail behind your car for the whole run. Track reflections up to a mirror finish. Grass detail and mowing stripes. |
 | **Comfort** | `F8` menu with a *Simple* and an *Advanced* view. Auto quality holds your frame rate. A live per-effect cost panel. A preset per map mood (day, sunset, night). Your own presets as shareable text files. |
 
-![On the rings of a gas giant, with a black hole in the sky](docs/images/ring-world.jpg)
+![Original and Realistic](docs/images/compare-realistic.jpg)
+
+![Original and Storm](docs/images/compare-rain.jpg)
 
 | | |
 |---|---|
 | ![Sunset: original and Vibrant](docs/images/compare-sunset.jpg) | ![Day: original and Golden Hour](docs/images/compare-day.jpg) |
-| ![Original and Realistic](docs/images/compare-realistic.jpg) | ![Original and Storm](docs/images/compare-rain.jpg) |
-| ![Night: original and Neon](docs/images/compare-night.jpg) | ![Horizon: the Ring World sky at night](docs/images/event-horizon.jpg) |
+| ![Night: original and Neon](docs/images/compare-night.jpg) | ![On the rings of a gas giant, with a black hole in the sky](docs/images/ring-world.jpg) |
 | ![Black hole](docs/images/black-hole.jpg) | ![Aurora](docs/images/aurora.jpg) |
 
 ---
