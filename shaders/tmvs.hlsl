@@ -1814,12 +1814,14 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         float smoothness = max(max(max(puddle, water), wet * 0.35), polish);
         float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.04;
         float4 ssr = tex2Dlod(s8, float4(uv + distort, 0, 0));
-        // The polished dry track: a soft 5-tap blur hides the half-res ray hits' patchwork.
-        if (polish > 0.0) {
+        // Rough wet asphalt and the polished dry track blur the reflection (5 taps): no
+        // speckles from the half-res ray hits. Puddles and water stay sharp.
+        float soften = max(polish, wet * (1.0 - max(puddle, water)));
+        if (soften > 0.0) {
             float2 o = u_Screen.zw * 3.0;
             float4 soft = ssr * 2.0 + tex2Dlod(s8, float4(uv + float2(o.x, 0), 0, 0)) + tex2Dlod(s8, float4(uv - float2(o.x, 0), 0, 0)) +
                           tex2Dlod(s8, float4(uv + float2(0, o.y), 0, 0)) + tex2Dlod(s8, float4(uv - float2(0, o.y), 0, 0));
-            ssr = lerp(ssr, soft / 6.0, polish);
+            ssr = lerp(ssr, soft / 6.0, soften);
         }
         // Standing water reads as a mirror even from above (the eye adapts to it): strongly
         // where it mirrors objects and lights, gently where it only mirrors the sky (a pale
@@ -2485,18 +2487,25 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     float2 prevUV = reproject(worldPosition(viewPosition(cuv, min(z, 20000.0))), prevZ) - u_Pass0.zw;
     if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(current, z);
 
-    // Neighbourhood statistics of the current frame (variance clipping in YCoCg).
+    // Neighbourhood statistics of the current frame (variance clipping in YCoCg), 3x3.
     float3 m1 = 0, m2 = 0;
-    [unroll] for (int k = 0; k < 5; k++) {
-        float2 o = k == 0 ? float2(0, 0) : (k == 1 ? float2(1, 0) : (k == 2 ? float2(-1, 0) : (k == 3 ? float2(0, 1) : float2(0, -1))));
-        float3 s = toYCoCg(tex2Dlod(s0, float4(cuv + o * u_Screen.zw, 0, 0)).rgb);
-        m1 += s;
-        m2 += s * s;
+    [unroll] for (int y = -1; y <= 1; y++) {
+        [unroll] for (int x = -1; x <= 1; x++) {
+            float3 s = toYCoCg(tex2Dlod(s0, float4(cuv + float2(x, y) * u_Screen.zw, 0, 0)).rgb);
+            m1 += s;
+            m2 += s * s;
+        }
     }
-    m1 /= 5.0;
-    m2 /= 5.0;
+    m1 /= 9.0;
+    m2 /= 9.0;
     float3 sigma = sqrt(max(m2 - m1 * m1, 0.0));
-    float3 boxMin = m1 - sigma * 1.25, boxMax = m1 + sigma * 1.25;
+    // Standing still the history is trusted more: the jittered samples and the noise of the
+    // effects add up to a calm image (fine grates and reflections stop shimmering). In motion
+    // the box gets tight again, against ghosting.
+    float speed = length((uv - prevUV) * u_Screen.xy);
+    float still = 1.0 - saturate(speed / 3.0);
+    float gamma = lerp(1.25, 2.25, still);
+    float3 boxMin = m1 - sigma * gamma, boxMax = m1 + sigma * gamma;
 
     float3 history = toYCoCg(historyCatmullRom(prevUV));
     // Clip towards the box centre.
@@ -2506,7 +2515,7 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     float m = max(a.x, max(a.y, a.z));
     if (m > 1.0) history = centre + v / m;
 
-    float weight = 0.1;
+    float weight = lerp(0.1, 0.06, still);
     // Disocclusion and moving objects (the car, opponents): the history must have seen
     // this surface at the depth the reprojection expects.
     if (z < SKY_Z) {
@@ -2515,7 +2524,6 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
         weight = lerp(weight, 1.0, smoothstep(0.02, 0.08, error));
     }
     // Fast motion: favour the current frame (less smearing).
-    float speed = length((uv - prevUV) * u_Screen.xy);
     weight = max(weight, saturate(speed / 60.0) * 0.4);
     return float4(fromYCoCg(lerp(history, toYCoCg(current), weight)), z);
 }

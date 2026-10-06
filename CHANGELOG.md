@@ -25,9 +25,12 @@
 - Spray no longer appears when climbing a quarter pipe, flying or falling.
 - Aurora: no moiré (grid and ring patterns) near the horizon; the curtains soften where they get smaller than a pixel.
 - Advanced menu: Lighting and Sky had a second, duplicate section.
+- TAA: 3x3 neighbourhood and a looser history clamp while the image stands still: fine grates and reflections no longer shimmer with the jitter.
+- Reflections on wet and polished tracks are softly blurred instead of speckled.
 
 **Reflections**
 - *Track reflections (dry)* goes up to 2: above 1 the dry track is polished, checkpoints and objects mirror clearly. Also in the simple menu.
+- Night presets (Neon Night, Event Horizon, Aurora) mirror at 1.3; auto quality steps back to 1 first when the frame rate drops.
 
 **Tools**
 - Previewer: `--time`, `--water`.

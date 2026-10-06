@@ -93,8 +93,9 @@ void AutoQuality::onFrame(double now, bool gameplay, float pipelineMs, const Set
 
 void AutoQuality::apply(Settings& s) const {
     if (m_level >= 3) return;
-    // Level 2: fewer samples (AO, shadows, clouds, long shadows).
+    // Level 2: fewer samples (AO, shadows, clouds, long shadows), no mirror finish.
     if (s.quality > 1) s.quality = 1;
+    if (s.reflections > 1.0f) s.reflections = 1.0f;
     if (m_level >= 2) return;
     // Level 1: drop the extras that cost the most for the least.
     s.quality = 0;

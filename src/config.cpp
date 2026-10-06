@@ -459,10 +459,11 @@ void applyPreset(Settings& s, Preset preset) {
             s.chromaticAberration = 0.0f;
             s.filmGrain = 0.01f;
             s.neonLight = 2.0f;
-            s.reflections = 0.5f;
+            s.reflections = 1.3f;   // night: the lit stadium mirrors in the dry track
             break;
         case Preset::EventHorizon:
             s.skyMode = 5;      // the ring world sky: planet, rings and a black hole
+            s.reflections = 1.3f;
             s.planetType = 0;
             s.planetView = 0;
             s.skyRotation = 0.0f;
@@ -486,6 +487,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Aurora:
             s.skyMode = 4;
+            s.reflections = 1.3f;
             s.starAmount = 1.2f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.85f; s.skyColor[2] = 0.75f;
             s.ambientTint = 0.9f;
