@@ -8,6 +8,8 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
+![Storm: rain on a wet Stadium track, the checkpoint mirrored in the road](docs/images/storm-checkpoint.jpg)
+
 ![On the rings of a gas giant, with a black hole in the sky](docs/images/ring-world.jpg)
 
 A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.

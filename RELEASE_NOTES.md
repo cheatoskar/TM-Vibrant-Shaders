@@ -6,6 +6,8 @@ This release brings full TrackMania United Forever support, real rain and thunde
 
 ![Original and Realistic](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.2.0/docs/images/compare-realistic.jpg)
 
+![Storm: rain on a wet track, the checkpoint mirrored in the road](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/main/docs/images/storm-checkpoint.jpg)
+
 ### Download and install
 
 **`TM-Vibrant-Shaders.zip`** is all you need. Unzip it and run **`TM-Vibrant-Shaders-Setup.exe`**. You can install:
