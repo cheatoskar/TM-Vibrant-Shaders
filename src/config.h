@@ -59,6 +59,7 @@ public:
     std::string preset = "Vibrant"; // active preset name, kCustomPreset after manual changes
     bool showOverlay = false;
     bool advancedMenu = false; // F8 menu: simple (everyday) or advanced (every setting)
+    int menuSections = 0;      // F8 menu: one bit per open section (all collapsed at first)
 
     // Presets: the built-in ones, then the user's own (Documents\TrackMania\TMVS\presets\*.ini).
     std::vector<std::string> presetNames() const;

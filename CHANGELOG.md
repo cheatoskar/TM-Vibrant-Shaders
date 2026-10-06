@@ -4,6 +4,10 @@
 
 **Presets**
 - Shorter names: Neon Night is now **Neon**, Event Horizon **Horizon**, Thunderstorm **Storm**. Saved settings with the old names keep working.
+- Night presets (Neon, Horizon, Aurora) show every star (3). Horizon turns the sky so Saturn and the black hole (up close, size 6) are in view from the start screen.
+
+**Menu**
+- The simple menu's sections (Sky, Look, Weather, Performance) and the preset-per-mood choice start collapsed; what you open stays open.
 
 **Lighting**
 - Volumetric light: sun shafts with real shadows in the haze, traced through the long-range height map, also with the sun off screen (~0.3 ms).

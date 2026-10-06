@@ -461,7 +461,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Neon:
             s.skyMode = 2;
-            s.starAmount = 1.3f;
+            s.starAmount = 3.0f;    // night presets: every star
             s.skyColor[0] = 0.35f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.3f;
             s.ambientTint = 0.8f;
@@ -487,10 +487,12 @@ void applyPreset(Settings& s, Preset preset) {
             s.reflections = 1.3f;
             s.planetType = 0;
             s.planetView = 0;
-            s.skyRotation = 0.0f;
-            s.skyEffectSize = 1.2f;
+            // Saturn and the black hole up close, both in view from the start screen.
+            s.planetAzimuth = 150.0f;
+            s.skyRotation = 263.0f;
+            s.skyEffectSize = 6.0f;
             s.planetSize = 1.0f;
-            s.starAmount = 1.5f;
+            s.starAmount = 3.0f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.48f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.4f;
             s.ambientTint = 0.7f;
@@ -509,7 +511,7 @@ void applyPreset(Settings& s, Preset preset) {
         case Preset::Aurora:
             s.skyMode = 4;
             s.reflections = 1.3f;
-            s.starAmount = 1.2f;
+            s.starAmount = 3.0f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.85f; s.skyColor[2] = 0.75f;
             s.ambientTint = 0.9f;
             s.highlightBoost = 4.0f;
@@ -671,6 +673,7 @@ void Config::load() {
     preset = presetFromText(text, "Vibrant");
     autoMood = GetPrivateProfileIntW(L"General", L"AutoMoodPresets", 1, ini) != 0;
     advancedMenu = GetPrivateProfileIntW(L"General", L"AdvancedMenu", 0, ini) != 0;
+    menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         if (GetPrivateProfileStringW(L"General", kMoodKeys[i], L"", text, 128, ini)) moodPreset[i] = presetFromText(text, moodPreset[i]);
     }
@@ -705,6 +708,9 @@ void Config::save() {
     WritePrivateProfileStringW(L"General", L"Enabled", settings.enabled ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"AdvancedMenu", advancedMenu ? L"1" : L"0", ini);
+    wchar_t sections[16];
+    swprintf(sections, 16, L"%d", menuSections);
+    WritePrivateProfileStringW(L"General", L"MenuSections", sections, ini);
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         WritePrivateProfileStringW(L"General", kMoodKeys[i], moodPreset[i].empty() ? L"Keep" : widen(moodPreset[i]).c_str(), ini);
     }

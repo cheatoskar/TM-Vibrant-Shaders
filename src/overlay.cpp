@@ -250,10 +250,17 @@ void drawMoodPresets(Config& config, const std::vector<std::string>& names) {
     }
 }
 
-void heading(const char* text) {
-    ImGui::Spacing();
-    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.35f, 1.0f), "%s", text);
-    ImGui::Separator();
+// A section of the menu that starts collapsed; whether it is open is remembered.
+bool section(Config& config, const char* label, int bit, bool header = true) {
+    const int flag = 1 << bit;
+    ImGui::SetNextItemOpen((config.menuSections & flag) != 0, ImGuiCond_Once);
+    const bool open = header ? ImGui::CollapsingHeader(label) : ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_NoTreePushOnOpen);
+    const int sections = open ? (config.menuSections | flag) : (config.menuSections & ~flag);
+    if (sections != config.menuSections) {
+        config.menuSections = sections;
+        config.markDirty();
+    }
+    return open;
 }
 
 void drawStatus(const Settings& s) {
@@ -272,46 +279,50 @@ void drawStatus(const Settings& s) {
 }
 
 // The everyday menu: the handful of things a player wants.
-bool drawSimple(Settings& s) {
+bool drawSimple(Config& config, Settings& s) {
     bool look = false;
-    heading("Sky");
-    look |= drawKey(s, "SkyMode", "Sky");
-    look |= drawKey(s, "PlanetType", "Planet");
-    look |= drawKey(s, "PlanetView", "View");
-    look |= drawKey(s, "PlanetAzimuth", "Planet direction");
-    look |= drawKey(s, "SkyEffectSize", "Black hole size");
-    look |= drawKey(s, "SkyRotation", "Turn the sky");
-    look |= drawKey(s, "StarAmount", "Stars");
-
-    heading("Look");
-    look |= drawKey(s, "ShadowStrength", "Shadows");
-    look |= drawKey(s, "GodRays", "Light shafts");
-    look |= drawKey(s, "Bloom", "Glow");
-    look |= drawKey(s, "NeonLight", "Neon light");
-    look |= drawKey(s, "Exposure", "Brightness");
-    look |= drawKey(s, "Saturation", "Colour");
-    look |= drawKey(s, "MotionBlur", "Motion blur");
-
-    heading("Weather");
-    look |= drawKey(s, "Rain", "Rain");
-    look |= drawKey(s, "Wetness", "Wet roads");
-    look |= drawKey(s, "VolumetricClouds", "Clouds");
-    look |= drawKey(s, "Lightning", "Lightning");
-    look |= drawKey(s, "LensDrops", "Drops on the lens");
-    if (s.rain > 0.0f || s.lightning > 0.0f) look |= drawKey(s, "WeatherSound", "Rain & thunder sound");
-    look |= drawKey(s, "WaterSurfaces", "Water");
-    look |= drawKey(s, "Reflections", "Reflections (dry track)");
-
-    heading("Performance");
-    look |= drawKey(s, "AutoQuality", "Adapt quality to my GPU");
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Turns effects down when the frame rate drops below the target, and back up when there is room.\n"
-                          "Your settings and presets stay as they are.");
+    if (section(config, "Sky", 0)) {
+        look |= drawKey(s, "SkyMode", "Sky");
+        look |= drawKey(s, "PlanetType", "Planet");
+        look |= drawKey(s, "PlanetView", "View");
+        look |= drawKey(s, "PlanetAzimuth", "Planet direction");
+        look |= drawKey(s, "SkyEffectSize", "Black hole size");
+        look |= drawKey(s, "SkyRotation", "Turn the sky");
+        look |= drawKey(s, "StarAmount", "Stars");
     }
-    look |= drawKey(s, "TargetFPS", "Target FPS");
-    look |= drawKey(s, "Quality", "Effect quality");
+
+    if (section(config, "Look", 1)) {
+        look |= drawKey(s, "ShadowStrength", "Shadows");
+        look |= drawKey(s, "GodRays", "Light shafts");
+        look |= drawKey(s, "Bloom", "Glow");
+        look |= drawKey(s, "NeonLight", "Neon light");
+        look |= drawKey(s, "Exposure", "Brightness");
+        look |= drawKey(s, "Saturation", "Colour");
+        look |= drawKey(s, "MotionBlur", "Motion blur");
+    }
+
+    if (section(config, "Weather", 2)) {
+        look |= drawKey(s, "Rain", "Rain");
+        look |= drawKey(s, "Wetness", "Wet roads");
+        look |= drawKey(s, "VolumetricClouds", "Clouds");
+        look |= drawKey(s, "Lightning", "Lightning");
+        look |= drawKey(s, "LensDrops", "Drops on the lens");
+        if (s.rain > 0.0f || s.lightning > 0.0f) look |= drawKey(s, "WeatherSound", "Rain & thunder sound");
+        look |= drawKey(s, "WaterSurfaces", "Water");
+        look |= drawKey(s, "Reflections", "Reflections (dry track)");
+    }
+
+    if (section(config, "Performance", 3)) {
+        look |= drawKey(s, "AutoQuality", "Adapt quality to my GPU");
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Turns effects down when the frame rate drops below the target, and back up when there is room.\n"
+                              "Your settings and presets stay as they are.");
+        }
+        look |= drawKey(s, "TargetFPS", "Target FPS");
+        look |= drawKey(s, "Quality", "Effect quality");
+    }
     return look;
 }
 
@@ -392,10 +403,10 @@ void drawMenu() {
     if (ImGui::Checkbox("Preset per map mood", &config.autoMood)) config.markDirty();
     ImGui::SameLine();
     ImGui::TextDisabled("this map: %s", moodName(config.mood));
-    if (config.autoMood) drawMoodPresets(config, names);
+    if (config.autoMood && section(config, "Which preset for which maps", 4, false)) drawMoodPresets(config, names);
     drawStatus(s);
 
-    const bool look = config.advancedMenu ? drawAdvanced(config, s, names) : drawSimple(s);
+    const bool look = config.advancedMenu ? drawAdvanced(config, s, names) : drawSimple(config, s);
     if (look) config.preset = kCustomPreset;
 
     ImGui::Spacing();

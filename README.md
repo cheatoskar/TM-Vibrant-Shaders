@@ -175,7 +175,7 @@ Eine deutsche Anleitung gibt es in [docs/INSTALL_DE.md](docs/INSTALL_DE.md).
 
 | Key | What it does |
 |---|---|
-| `F8` | Opens and closes the menu. *Simple* shows the everyday settings (preset, sky, shadows, light shafts, weather, auto quality), *Advanced* shows everything, your own presets and the measured cost of every effect. |
+| `F8` | Opens and closes the menu. *Simple* shows the everyday settings (preset, then sky, look, weather and performance as sections you can open), *Advanced* shows everything, your own presets and the measured cost of every effect. |
 | `F7` | Shaders on and off, for a quick before/after. |
 | `F9` | Reloads the shaders (only useful while developing). |
 | `F12` | Saves a frame capture. Attach it to bug reports. |
