@@ -196,8 +196,8 @@ void mixer() {
     for (int b = 0; b < kBuffers; b++) {
         headers[b].lpData = reinterpret_cast<LPSTR>(&data[static_cast<size_t>(b) * kBufferFrames * 2]);
         headers[b].dwBufferLength = kBufferFrames * 4;
-        headers[b].dwFlags = WHDR_DONE; // free to fill
         waveOutPrepareHeader(g_device, &headers[b], sizeof(WAVEHDR));
+        headers[b].dwFlags |= WHDR_DONE; // free to fill (preparing clears every other flag)
     }
     Rain rain;
     Thunder thunder[2];
@@ -219,6 +219,8 @@ void mixer() {
     double levelSum = 0.0;
     int levelSamples = 0, levelLogs = 0;
 
+    DWORD lastReturn = GetTickCount();
+    bool stallLogged = false;
     while (g_running) {
         bool wrote = false;
         for (auto& h : headers) {
@@ -261,7 +263,16 @@ void mixer() {
             }
             wrote = true;
         }
-        if (!wrote) WaitForSingleObject(ready, 100);
+        if (wrote) {
+            lastReturn = GetTickCount();
+            stallLogged = false;
+        } else {
+            WaitForSingleObject(ready, 100);
+            if (!stallLogged && GetTickCount() - lastReturn > 2000) {
+                stallLogged = true;
+                TMVS_LOG("audio: the device has not played a buffer for 2 s");
+            }
+        }
     }
     waveOutReset(g_device);
     for (auto& h : headers) waveOutUnprepareHeader(g_device, &h, sizeof(WAVEHDR));
@@ -272,6 +283,14 @@ void mixer() {
 
 } // namespace
 
+namespace {
+bool g_alwaysInFront = false;
+}
+
+void setAlwaysInFront(bool on) {
+    g_alwaysInFront = on;
+}
+
 void update(const Settings& s, float time, bool active, HWND window) {
     const bool wanted = s.enabled && s.weatherSound > 0.0f && (s.rain > 0.0f || s.lightning > 0.0f);
     // Fade with the scene: silent in menus and while the game is in the background. The game
@@ -281,7 +300,7 @@ void update(const Settings& s, float time, bool active, HWND window) {
     DWORD foregroundProcess = 0;
     const HWND foreground = GetForegroundWindow();
     if (foreground) GetWindowThreadProcessId(foreground, &foregroundProcess);
-    const bool inFront = foregroundProcess == GetCurrentProcessId();
+    const bool inFront = g_alwaysInFront || foregroundProcess == GetCurrentProcessId();
     const bool audible = wanted && active && inFront;
     static int s_logged = -1;
     const int state = (wanted ? 1 : 0) | (active ? 2 : 0) | (inFront ? 4 : 0);

@@ -183,6 +183,23 @@ int main(int argc, char** argv) {
         const float volume = argc > 4 ? static_cast<float>(atof(argv[4])) : 1.0f;
         return tmshaders::audio::renderWav(widen(argv[2]).c_str(), rain, volume) ? 0 : 1;
     }
+    // tmvs_preview --play <seconds> [volume]: plays the weather sound live, as in the game.
+    if (argc >= 3 && !strcmp(argv[1], "--play")) {
+        tmshaders::Settings s;
+        s.rain = 1.6f;
+        s.lightning = 1.0f;
+        s.weatherSound = argc > 3 ? static_cast<float>(atof(argv[3])) : 1.0f;
+        tmshaders::audio::setAlwaysInFront(true);
+        const DWORD start = GetTickCount();
+        const float length = static_cast<float>(atof(argv[2]));
+        for (float t = 0.0f; t < length; t = (GetTickCount() - start) / 1000.0f) {
+            tmshaders::audio::update(s, t, true, nullptr);
+            Sleep(16);
+        }
+        tmshaders::audio::shutdown();
+        Sleep(300);
+        return 0;
+    }
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
                         "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--bench] "
