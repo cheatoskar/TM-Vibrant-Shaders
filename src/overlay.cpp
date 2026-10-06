@@ -298,7 +298,7 @@ bool drawSimple(Settings& s) {
     look |= drawKey(s, "VolumetricClouds", "Clouds");
     look |= drawKey(s, "Lightning", "Lightning");
     look |= drawKey(s, "LensDrops", "Drops on the lens");
-    if (s.rain > 0.0f || s.lightning > 0.0f) look |= drawKey(s, "WeatherSound", "Sound");
+    if (s.rain > 0.0f || s.lightning > 0.0f) look |= drawKey(s, "WeatherSound", "Rain & thunder sound");
     look |= drawKey(s, "WaterSurfaces", "Water");
     look |= drawKey(s, "Reflections", "Reflections (dry track)");
 

@@ -31,10 +31,17 @@ const std::wstring& dataDir() {
     return dir;
 }
 
+std::wstring g_fileName = L"tmvs.log";
+
+void setFileName(const wchar_t* name) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_fileName = name;
+}
+
 void write(const char* fmt, ...) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_file) {
-        g_file = _wfopen((dataDir() + L"\\tmvs.log").c_str(), L"w");
+        g_file = _wfopen((dataDir() + L"\\" + g_fileName).c_str(), L"w");
         if (!g_file) return;
     }
     SYSTEMTIME t;

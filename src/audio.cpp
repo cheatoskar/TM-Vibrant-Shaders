@@ -229,8 +229,21 @@ void mixer() {
 
 void update(const Settings& s, float time, bool active, HWND window) {
     const bool wanted = s.enabled && s.weatherSound > 0.0f && (s.rain > 0.0f || s.lightning > 0.0f);
-    // Fade with the scene: silent in menus and while the game is in the background.
-    const bool audible = wanted && active && (!window || GetForegroundWindow() == window);
+    // Fade with the scene: silent in menus and while the game is in the background. The game
+    // counts as in front when any of its windows is (the device's focus window can be a
+    // child window that is never the foreground window itself).
+    (void)window;
+    DWORD foregroundProcess = 0;
+    const HWND foreground = GetForegroundWindow();
+    if (foreground) GetWindowThreadProcessId(foreground, &foregroundProcess);
+    const bool inFront = foregroundProcess == GetCurrentProcessId();
+    const bool audible = wanted && active && inFront;
+    static int s_logged = -1;
+    const int state = (wanted ? 1 : 0) | (active ? 2 : 0) | (inFront ? 4 : 0);
+    if (state != s_logged) {
+        s_logged = state;
+        TMVS_LOG("audio: %s (sound wanted %d, in a race %d, game in front %d)", audible ? "audible" : "silent", wanted, active, inFront);
+    }
     g_fade += ((audible ? 1.0f : 0.0f) - g_fade) * 0.05f;
     if (!g_running && wanted && !g_failed) {
         g_running = true;

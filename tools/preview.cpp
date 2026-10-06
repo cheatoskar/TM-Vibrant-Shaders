@@ -17,6 +17,7 @@
 #include "config.h"
 #include "framecap.h"
 #include "gfx.h"
+#include "log.h"
 #include "pipeline.h"
 #include <windows.h>
 #include <cstdio>
@@ -174,6 +175,7 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
 } // namespace
 
 int main(int argc, char** argv) {
+    tmshaders::log::setFileName(L"preview.log"); // never truncate the game's tmvs.log
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
                         "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--bench] "
