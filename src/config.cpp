@@ -78,7 +78,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
         TMVS_FIELD("LensDrops", "Rain drops on the lens", "Weather & Surfaces", Bool, lensDrops, 0.0f, 1.0f),
         TMVS_FIELD("WeatherSound", "Rain and thunder sound", "Weather & Surfaces", Float, weatherSound, 0.0f, 1.0f),
-        TMVS_FIELD("WaterSurfaces", "Water surfaces (Island/Bay/Coast)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
+        TMVS_FIELD("WaterSurfaces", "Water (pools, sea)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
         TMVS_FIELD("Reflections", "Track reflections (dry)", "Weather & Surfaces", Float, reflections, 0.0f, 1.0f),
         TMVS_FIELD("GrassDetail", "Grass detail", "Weather & Surfaces", Float, grassDetail, 0.0f, 1.0f),
         TMVS_FIELD("MowingStripes", "Mowing stripes", "Weather & Surfaces", Float, mowingStripes, 0.0f, 1.0f),

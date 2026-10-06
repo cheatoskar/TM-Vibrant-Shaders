@@ -284,6 +284,16 @@ void processScene(IDirect3DDevice9* device) {
     memcpy(inputs.sunColor, g_scene.lightColor, sizeof(inputs.sunColor));
     inputs.time = seconds();
     inputs.temporal = temporal;
+    {
+        float lo = 0.0f, hi = 0.0f;
+        if (engine::waterHeights(lo, hi)) {
+            inputs.water[0] = lo;
+            inputs.water[1] = hi;
+            inputs.water[2] = 1.0f;
+        } else {
+            inputs.water[2] = engine::waterHooked() ? 0.0f : -1.0f; // no colour guessing when the game can tell
+        }
+    }
     inputs.jitter[0] = g_jitterUV[0];
     inputs.jitter[1] = g_jitterUV[1];
     g_frameWidth = desc.Width;
@@ -483,6 +493,18 @@ void onPresent(IDirect3DDevice9* device) {
     D3DDEVICE_CREATION_PARAMETERS cp{};
     device->GetCreationParameters(&cp);
     audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);
+    {
+        static float s_waterMin = 1e30f, s_waterMax = 1e30f;
+        float lo = 0.0f, hi = 0.0f;
+        const bool known = engine::waterHeights(lo, hi);
+        if (!known) lo = hi = -1e30f;
+        if (fabsf(lo - s_waterMin) > 0.01f || fabsf(hi - s_waterMax) > 0.01f) {
+            s_waterMin = lo;
+            s_waterMax = hi;
+            if (known) TMVS_LOG("engine: water at height %.2f", lo);
+            else TMVS_LOG("engine: no water in view");
+        }
+    }
     // Replay / intro / video export detection, logged when it changes.
     static int s_cinematic = -1;
     const int cinematic = engine::cinematicActive() ? 1 : 0;

@@ -2,6 +2,7 @@
 #include "log.h"
 #include <windows.h>
 #include <cstring>
+#include <cmath>
 
 namespace tmshaders {
 namespace engine {
@@ -27,6 +28,7 @@ constexpr Slot kComputeDriverProjection = {104, 0x0095d530, "ComputeDriverProjec
 constexpr Slot kRenderShadowsSet = {76, 0x0095acc0, "RenderShadowsSet"};
 constexpr uintptr_t kShaderLevel = 0x00d123ba; // word: GPU shader path (PC0..PC3)
 
+
 // Non-virtual functions, hooked inline. The prologue bytes are checked before patching and
 // must be whole, position-independent instructions (they run again in the trampoline).
 struct InlineSite {
@@ -38,6 +40,8 @@ struct InlineSite {
 constexpr InlineSite kClipTracksUpdate = {0x00693e20, {0xd9, 0xe8, 0x83, 0xec, 0x08}, 5, "CGameCtnMediaClipPlayer::TracksUpdate"};
 constexpr InlineSite kClipViewerCams = {0x00673e50, {0x6a, 0xff, 0x68, 0xe8, 0xf4, 0xaa, 0x00}, 7, "CGameCtnMediaClipViewer::UpdateCams"};
 constexpr InlineSite kVideoShoot = {0x006f4510, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, "CGameCtnMediaVideoShooter::DoShoot"};
+// Renders the reflection of a water plane; gets the plane equation (world space).
+constexpr InlineSite kWaterPlane = {0x00991e30, {0x81, 0xec, 0xe0, 0x01, 0x00, 0x00}, 6, "CVisionViewportDx9::TexRender_Water_PlaneR"};
 
 using FrameBeginFn = int(__fastcall*)(void*, void*);
 using CameraBeginFn = void(__fastcall*)(void*, void*, void*, void*);
@@ -65,6 +69,10 @@ bool g_active = false;
 using TracksUpdateFn = void(__fastcall*)(void*, void*, float, float);
 using UpdateCamsFn = void(__fastcall*)(void*, void*);
 using DoShootFn = void(__fastcall*)(void*, void*, void*);
+using WaterPlaneFn = void(__fastcall*)(void*, void*, void*, void*, const float*, unsigned long, int);
+WaterPlaneFn g_waterPlane = nullptr;
+float g_waterPlaneEq[4] = {};
+DWORD g_lastWater = 0;          // GetTickCount of the last water reflection render
 TracksUpdateFn g_tracksUpdate = nullptr;
 UpdateCamsFn g_updateCams = nullptr;
 DoShootFn g_doShoot = nullptr;
@@ -146,6 +154,15 @@ void __fastcall updateCamsDetour(void* self, void* edx) {
 void __fastcall doShootDetour(void* self, void* edx, void* fiber) {
     markCinematic(4);
     g_doShoot(self, edx, fiber);
+}
+
+// The game draws the reflection of each visible water plane: that plane is where its water is.
+void __fastcall waterPlaneDetour(void* self, void* edx, void* bitmap, void* render, const float* plane, unsigned long flags, int mode) {
+    if (plane && readable(plane, sizeof(float) * 4)) {
+        memcpy(g_waterPlaneEq, plane, sizeof(g_waterPlaneEq));
+        g_lastWater = GetTickCount();
+    }
+    g_waterPlane(self, edx, bitmap, render, plane, flags, mode);
 }
 
 int g_loggedShadowMode = -2;
@@ -251,6 +268,7 @@ bool install(const Callbacks& callbacks) {
     g_tracksUpdate = reinterpret_cast<TracksUpdateFn>(inlineHook(kClipTracksUpdate, reinterpret_cast<void*>(&tracksUpdateDetour)));
     g_updateCams = reinterpret_cast<UpdateCamsFn>(inlineHook(kClipViewerCams, reinterpret_cast<void*>(&updateCamsDetour)));
     g_doShoot = reinterpret_cast<DoShootFn>(inlineHook(kVideoShoot, reinterpret_cast<void*>(&doShootDetour)));
+    g_waterPlane = reinterpret_cast<WaterPlaneFn>(inlineHook(kWaterPlane, reinterpret_cast<void*>(&waterPlaneDetour)));
     g_active = true;
     TMVS_LOG("engine: CVisionViewportDx9 hooks installed (module base %p)", GetModuleHandleW(nullptr));
     return true;
@@ -262,6 +280,21 @@ bool active() {
 
 const CameraInfo& currentCamera() {
     return g_camera;
+}
+
+bool waterHeights(float& minY, float& maxY) {
+    // Seen in the last 2 s, and level (the stadium pools, rivers and the sea all are).
+    if (!g_waterPlane || g_lastWater == 0 || GetTickCount() - g_lastWater > 2000) return false;
+    const float* p = g_waterPlaneEq;
+    const float len = sqrtf(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+    if (len < 1e-6f || fabsf(p[1]) / len < 0.99f) return false;
+    // a x + b y + c z + d = 0 with a = c = 0: y = -d / b.
+    minY = maxY = -p[3] / p[1];
+    return minY > -5000.0f && minY < 5000.0f;
+}
+
+bool waterHooked() {
+    return g_waterPlane != nullptr;
 }
 
 void setProjectionJitter(float x, float y) {

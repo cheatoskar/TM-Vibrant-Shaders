@@ -48,6 +48,11 @@ bool cinematicActive();
 // Sub-pixel offset (NDC) added to every perspective projection the engine computes from now
 // on, for TAA: each frame samples the pixels at a slightly different spot. 0, 0 = off.
 void setProjectionJitter(float x, float y);
+
+// Height of the water the game is drawing right now (from the plane it renders the water
+// reflection for). False when no water is in view (or the hook is unavailable).
+bool waterHeights(float& minY, float& maxY);
+bool waterHooked();
 // Which of the cinematic hooks fired since the last call (bit 0 clip player, 1 clip viewer,
 // 2 video export), for the log.
 unsigned cinematicSources();

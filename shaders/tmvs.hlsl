@@ -50,6 +50,7 @@ float4 u_Pass1 : register(c33);
 float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
 float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
+float4 u_Water     : register(c38); // water surface height range (world y) min, max; z: 1 = known, 0 = no water, -1 = ask the colour
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -1328,10 +1329,18 @@ float puddleMask(float3 world, float flatness, float grass) {
 }
 
 // Open water (TMUF Island/Bay/Coast): flat, blue.
-float waterMask(float3 c, float3 nWorld, float emissive) {
-    if (u_Weather.w <= 0.0) return 0.0;
+float waterMask(float3 c, float3 nWorld, float3 world, float emissive) {
+    if (u_Weather.w <= 0.0 || u_Water.z == 0.0) return 0.0;
+    float level = smoothstep(0.93, 0.99, nWorld.y) * (1.0 - emissive) * u_Weather.w;
+    if (u_Water.z > 0.5) {
+        // The game tells where its water is (the height its own water shaders use): every
+        // flat surface at that height is water - pools, rivers, the sea.
+        float d = max(u_Water.x - world.y, world.y - u_Water.y);
+        return smoothstep(0.35, 0.08, d) * level;
+    }
+    // Without the engine hooks: guess from the colour.
     float blue = (c.b - max(c.r, c.g * 0.8)) / max(c.b, 1e-3);
-    return smoothstep(0.15, 0.35, blue) * smoothstep(0.93, 0.99, nWorld.y) * (1.0 - emissive) * u_Weather.w;
+    return smoothstep(0.15, 0.35, blue) * level;
 }
 
 // Expanding rings where raindrops hit standing water. Returns the surface slope.
@@ -1459,7 +1468,7 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (nd.w >= SKY_Z) return 0;
     float3 nWorld = viewToWorldDir(nd.xyz);
     bool glossy = (u_Weather.x > 0.0 || u_Nature.w > 0.0) && nWorld.y > 0.5;
-    bool water = u_Weather.w > 0.0 && nWorld.y > 0.9;
+    bool water = u_Weather.w > 0.0 && u_Water.z != 0.0 && nWorld.y > 0.9;
     if (!glossy && !water) return 0;
 
     float3 p = viewPosition(uv, nd.w);
@@ -1726,7 +1735,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // --- Wet surfaces, puddles, water ---
     float wet = u_Weather.x * (1.0 - grass * 0.5) * (1.0 - emissive);
     float puddle = puddleMask(world, flatness, grass) * (1.0 - emissive);
-    float water = waterMask(c, nWorld, emissive);
+    float water = waterMask(c, nWorld, world, emissive);
     float reflectivity = max(max(wet * lerp(0.12, 0.55, flatness), puddle), water);
     reflectivity = max(reflectivity, u_Nature.w * flatness * (1.0 - grass) * (1.0 - emissive) * 0.35);
     float2 slope = 0;
@@ -1741,6 +1750,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         }
     }
     float3 nRefl = normalize(nWorld + float3(-slope.x, 0.0, -slope.y));
+    // Refraction: the pool floor seen through moving waves, a little bluer with depth.
+    if (water > 0.0) {
+        float2 refr = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.03;
+        float3 below = toLinear(tex2Dlod(s0, float4(uv + refr, 0, 0)).rgb) * (luma(c) / max(luma(albedo), 1e-3));
+        c = lerp(c, below * float3(0.82, 0.95, 1.0), water * 0.85);
+    }
     // Water fills the pores: wet asphalt and puddles are darker.
     c *= lerp(1.0, 0.62, wet * lerp(0.4, 1.0, flatness)) * lerp(1.0, 0.6, puddle) * lerp(1.0, 0.55, water);
 

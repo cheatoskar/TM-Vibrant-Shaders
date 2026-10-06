@@ -172,11 +172,12 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
 int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
-                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--bench] "
+                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--bench] "
                         "[--batch jobs.txt]\n");
         return 2;
     }
 
+    float waterHeight = -1e30f; // world height of the map's water (the game reports it in game)
     Job defaults;
     defaults.capture = argv[1];
     defaults.output = argv[2];
@@ -202,6 +203,8 @@ int main(int argc, char** argv) {
             before = argv[++i];
         } else if (!strcmp(argv[i], "--batch") && i + 1 < argc) {
             batch = argv[++i];
+        } else if (!strcmp(argv[i], "--water") && i + 1 < argc) {
+            waterHeight = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             defaults.time = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--move") && i + 1 < argc) {
@@ -304,6 +307,10 @@ int main(int argc, char** argv) {
         }
         // The previous frame's camera, moved by job.move (world space): view translation
         // t' = t - move * R.
+        if (waterHeight > -1e29f) {
+            in.water[0] = in.water[1] = waterHeight;
+            in.water[2] = 1.0f;
+        }
         Pipeline::Inputs moved = in;
         for (int j = 0; j < 3; j++) {
             moved.view[12 + j] -= job.move[0] * in.view[0 * 4 + j] + job.move[1] * in.view[1 * 4 + j] + job.move[2] * in.view[2 * 4 + j];

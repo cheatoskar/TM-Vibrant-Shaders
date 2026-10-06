@@ -28,6 +28,9 @@ public:
         bool temporal = true;
         // TAA jitter of this frame's projection, as the uv shift of the image content.
         float jitter[2] = {};
+        // Water surfaces from the game: world height range, state 1 = known, 0 = no water on
+        // this map, -1 = unknown (guess from the colour).
+        float water[3] = {0.0f, 0.0f, -1.0f};
     };
 
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.

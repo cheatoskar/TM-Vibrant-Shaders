@@ -510,6 +510,8 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
 
     device->SetPixelShaderConstantF(0, &c[0][0], 32);
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
+    const float water[4] = {in.water[0], in.water[1], in.water[2], 0.0f};
+    device->SetPixelShaderConstantF(38, water, 1);
 }
 
 // --- Long-range shadows -----------------------------------------------------
