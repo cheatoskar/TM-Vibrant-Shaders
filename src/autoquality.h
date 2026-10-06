@@ -38,6 +38,10 @@ private:
     bool m_checkGain = false;
     float m_fpsBeforeDown = 0.0f;
     double m_blockDownUntil = -1.0;
+    // Loading a map, the first frames and stalls (alt-tab) have low frame rates that say
+    // nothing about the GPU: no decisions until this time.
+    double m_quietUntil = -1.0;
+    bool m_wasGameplay = false;
 };
 
 } // namespace tmshaders

@@ -728,6 +728,11 @@ float4 c_Streak : register(c6);  // streak (world m), 0
 float4 c_Box    : register(c7);  // box size, box height, fall speed, min width (px)
 float4 c_Wind   : register(c8);  // wind x, z (m/s), splash rate (1/s), splash box size
 float4 c_Map    : register(c9);  // height map corner x, z, 1 / world size, 0
+float4 c_Prev0  : register(c10); // world -> previous frame's view, column 0
+float4 c_Prev1  : register(c11);
+float4 c_Prev2  : register(c12);
+float4 c_PrevP  : register(c13); // previous P00, P11, P20, P21
+float4 c_Motion : register(c14); // shutter (frames), previous frame valid, frame time (s), max streak (ndc)
 sampler2D s_height : register(s0);
 sampler2D s_depth  : register(s1);
 struct VSOut { float4 pos : POSITION; float4 data : TEXCOORD0; };
@@ -744,26 +749,44 @@ VSOut dropVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     o.pos = float4(0, 0, -2, 1);
     o.data = 0;
     float3 box = float3(c_Box.x, c_Box.y, c_Box.x);
-    float3 drift = float3(c_Wind.x, -c_Box.z * (0.85 + 0.3 * seed.w), c_Wind.y) * c_Cam.w;
-    float3 local = (frac((seed.xyz * box + drift - c_Cam.xyz) / box) - 0.5) * box;
+    float3 velocity = float3(c_Wind.x, -c_Box.z * (0.85 + 0.3 * seed.w), c_Wind.y);
+    float3 local = (frac((seed.xyz * box + velocity * c_Cam.w - c_Cam.xyz) / box) - 0.5) * box;
     float3 w = c_Cam.xyz + local;
-    float3 va = toView(w), vb = toView(w + c_Streak.xyz);
-    if (va.z < 0.4 || vb.z < 0.4) return o;
-    float4 ca = toClip(va), cb = toClip(vb);
-    float2 na = ca.xy / ca.w, nb = cb.xy / cb.w;
+    float3 va = toView(w);
+    if (va.z < 0.4) return o;
+    float4 ca = toClip(va);
+    float2 na = ca.xy / ca.w, nb;
+    if (c_Motion.y > 0.5) {
+        // The streak is the drop's real motion on screen: where it was a frame ago (camera
+        // turning and moving included), stretched to the shutter time.
+        float4 p = float4(w - velocity * c_Motion.z, 1.0);
+        float3 vp = float3(dot(p, c_Prev0), dot(p, c_Prev1), dot(p, c_Prev2));
+        if (vp.z < 0.4) return o;
+        float2 np = float2(vp.x * c_PrevP.x / vp.z + c_PrevP.z, vp.y * c_PrevP.y / vp.z + c_PrevP.w);
+        float2 move = (np - na) * c_Motion.x;
+        float l = length(move);
+        nb = na + (l > c_Motion.w ? move * (c_Motion.w / l) : move);
+    } else {
+        float3 vb = toView(w + c_Streak.xyz);
+        if (vb.z < 0.4) return o;
+        float4 cb = toClip(vb);
+        nb = cb.xy / cb.w;
+    }
     float2 d = (nb - na) / c_Proj2.zw;
     float len = length(d);
     float2 dir = len > 1e-3 ? d / len : float2(0.0, 1.0);
     if (len < 4.0) nb = na + dir * 4.0 * c_Proj2.zw; // a drop is never a dot
-    float z = lerp(va.z, vb.z, corner.y);
+    float z = va.z;
     // Real width, about 2.5 mm; thinner than the minimum means fainter, not wider.
     float widthPx = 0.0025 * c_Proj.y / (c_Proj2.w * z);
     float shown = max(widthPx, c_Box.w);
     float2 n = lerp(na, nb, corner.y) + float2(-dir.y, dir.x) * corner.x * shown * 0.5 * c_Proj2.zw;
-    float cw = lerp(ca.w, cb.w, corner.y);
-    o.pos = float4(n * cw, lerp(ca.z, cb.z, corner.y), cw);
+    o.pos = float4(n * ca.w, ca.z, ca.w);
     float edge = saturate(2.0 - 4.0 * max(abs(local.x), abs(local.z)) / box.x); // hide the box edges
-    o.data = float4(corner.x, corner.y, z, edge * sqrt(saturate(widthPx / shown)));
+    // Drops right in front of the lens are out of focus (a sharp one there looks painted on
+    // the screen), far ones fade into the rain haze. Some drops catch more light than others.
+    float depth = smoothstep(0.7, 2.5, z) * exp(-z / 28.0) * (0.55 + 0.9 * frac(seed.w * 7.31));
+    o.data = float4(corner.x, corner.y, z, edge * depth * sqrt(saturate(widthPx / shown)));
     return o;
 }
 
@@ -834,7 +857,7 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
     }
     const UINT quads = kRainDrops + kRainSplashes;
     bool ok = SUCCEEDED(device->CreateVertexBuffer(quads * 4 * 24, D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &m_rainVB, nullptr)) &&
-              SUCCEEDED(device->CreateIndexBuffer(kRainDrops * 6 * 2, D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_rainIB, nullptr));
+              SUCCEEDED(device->CreateIndexBuffer(kRainChunk * 6 * 2, D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_rainIB, nullptr));
     float* v = nullptr;
     if (ok && SUCCEEDED(m_rainVB->Lock(0, 0, reinterpret_cast<void**>(&v), 0))) {
         unsigned state = 0x2545F491u;
@@ -857,7 +880,7 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
     }
     WORD* index = nullptr;
     if (ok && SUCCEEDED(m_rainIB->Lock(0, 0, reinterpret_cast<void**>(&index), 0))) {
-        for (UINT q = 0; q < kRainDrops; q++) {
+        for (UINT q = 0; q < kRainChunk; q++) {
             const WORD b = static_cast<WORD>(q * 4);
             const WORD tri[6] = {b, static_cast<WORD>(b + 1), static_cast<WORD>(b + 2), static_cast<WORD>(b + 2), static_cast<WORD>(b + 1),
                                  static_cast<WORD>(b + 3)};
@@ -925,8 +948,8 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     vc[6][0] = streak[0];
     vc[6][1] = streak[1];
     vc[6][2] = streak[2];
-    vc[7][0] = 24.0f;  // box: 12 m around the camera, farther rain is the screen-space layer
-    vc[7][1] = 16.0f;
+    vc[7][0] = 30.0f;  // box: 15 m around the camera, farther rain is the screen-space layer
+    vc[7][1] = 20.0f;
     vc[7][2] = fall;
     vc[7][3] = 1.0f;   // min width (px)
     vc[8][0] = wind[0];
@@ -936,7 +959,25 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     vc[9][0] = m_heightOrigin[0];
     vc[9][1] = m_heightOrigin[1];
     vc[9][2] = 1.0f / kHeightMapWorld;
+    // Previous camera for the streaks (camera turns smear the rain like a real shutter).
+    const bool previous = in.temporal && m_temporalValid && m_havePrevious && dt > 1e-4f;
+    float pc[5][4] = {};
+    for (int j = 0; j < 3; j++) {
+        pc[j][0] = m_prevView[0 * 4 + j];
+        pc[j][1] = m_prevView[1 * 4 + j];
+        pc[j][2] = m_prevView[2 * 4 + j];
+        pc[j][3] = m_prevView[12 + j];
+    }
+    pc[3][0] = m_prevProjection[0];
+    pc[3][1] = m_prevProjection[5];
+    pc[3][2] = m_prevProjection[8];
+    pc[3][3] = m_prevProjection[9];
+    pc[4][0] = previous ? fminf(fmaxf(exposure / dt, 0.6f), 4.0f) : 0.0f;
+    pc[4][1] = previous ? 1.0f : 0.0f;
+    pc[4][2] = dt;
+    pc[4][3] = 0.25f; // longest streak: 1/8 of the screen
     device->SetVertexShaderConstantF(0, &vc[0][0], 10);
+    device->SetVertexShaderConstantF(10, &pc[0][0], 5);
 
     device->SetRenderTarget(0, target);
     D3DVIEWPORT9 viewport = {0, 0, in.width, in.height, 0.0f, 1.0f};
@@ -964,15 +1005,21 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         device->SetSamplerState(sampler, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
     }
 
-    const UINT drops = static_cast<UINT>(kRainDrops * fminf(s.rain, 1.0f));
+    // Rain 1 = steady rain, 2 = downpour (the buffers hold the downpour).
+    const float amount = fminf(s.rain, 2.0f) * 0.5f;
+    const UINT drops = static_cast<UINT>(kRainDrops * amount);
     if (drops > 0) {
         device->SetVertexShader(m_dropVS);
         device->SetPixelShader(m_shaders[kRainDrop]);
-        passConstants(device, 1.1f, 0.0f);
-        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, drops * 4, 0, drops * 2);
+        passConstants(device, 1.3f, 0.0f);
+        // 16-bit indices: draw in chunks, each with its own base vertex.
+        for (UINT first = 0; first < drops; first += kRainChunk) {
+            const UINT n = drops - first < kRainChunk ? drops - first : kRainChunk;
+            device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, static_cast<INT>(first * 4), 0, n * 4, 0, n * 2);
+        }
         profileMark(kRainDrop);
     }
-    const UINT splashCount = static_cast<UINT>(kRainSplashes * fminf(s.rain, 1.0f));
+    const UINT splashCount = static_cast<UINT>(kRainSplashes * amount);
     if (splashes && splashCount > 0) {
         device->SetVertexShader(m_splashVS);
         device->SetPixelShader(m_shaders[kRainSplash]);

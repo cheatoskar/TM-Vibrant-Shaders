@@ -1,8 +1,6 @@
-TM Vibrant Shaders (BETA) - shaders for TrackMania Nations / United Forever
+TM Vibrant Shaders - real-time lighting, weather and skies for
+TrackMania Nations / United Forever
 https://github.com/cheatoskar/tmnf-vibrant-shaders
-
-This is a beta: the presets are still being refined, so the look will change
-with the next versions.
 
 ======================================================================
 ENGLISH

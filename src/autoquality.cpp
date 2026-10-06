@@ -30,9 +30,13 @@ void AutoQuality::onFrame(double now, bool gameplay, float pipelineMs, const Set
         if (dt > 0.0 && dt < 0.25) {
             m_frames++;
             m_frameTime += dt;
+        } else if (dt >= 0.25) {
+            m_quietUntil = now + 4.0;
         }
     }
     m_lastFrame = now;
+    if (gameplay && !m_wasGameplay) m_quietUntil = now + 8.0; // a map just started
+    m_wasGameplay = gameplay;
     if (gameplay) {
         m_gameplayFrames++;
         m_pipelineSum += pipelineMs;
@@ -50,7 +54,7 @@ void AutoQuality::onFrame(double now, bool gameplay, float pipelineMs, const Set
     m_frameTime = 0.0;
     m_gameplayFrames = 0;
     m_pipelineSum = 0.0;
-    if (!valid || now - m_lastChange < kSettle) return;
+    if (!valid || now - m_lastChange < kSettle || now < m_quietUntil) return;
 
     const float target = s.targetFps;
     const float frameMs = 1000.0f / m_fps;

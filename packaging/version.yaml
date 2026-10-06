@@ -2,4 +2,4 @@ executable: TMVibrantShaders.dll
 dependencies:
   - id: CoreMod
     version: ^1.0.1
-changelog: '- First public release: real-time lighting, shadows, light shafts, bloom, custom skies and per-map-mood presets.'
+changelog: '- 1.1: rain and thunderstorms, long-range shadows, neon light, reflections, volumetric clouds, Ring World sky, TAA, auto quality and a new simple / advanced menu.'

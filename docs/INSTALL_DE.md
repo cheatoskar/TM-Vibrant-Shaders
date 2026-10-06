@@ -1,7 +1,5 @@
 # TM Vibrant Shaders – Installation (Deutsch)
 
-> **Beta:** Die Presets werden noch verfeinert, der Look kann sich mit neuen Versionen ändern.
-
 ## Voraussetzungen
 - TrackMania Nations Forever oder United Forever, Windows 10/11
 - Optional: [TrackMania ModLoader (TMLoader)](https://tomashu.dev/software/tmloader/). Es geht auch ohne.

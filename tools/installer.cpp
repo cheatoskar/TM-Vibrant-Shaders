@@ -378,7 +378,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     for (const auto& dir : findGameDirs()) {
         if (gameInstalled(dir)) inGame = dir;
     }
-    std::wstring status = L"Minecraft-style shaders for TrackMania Nations & United Forever.\n\nInstalled: ";
+    std::wstring status = L"Real-time lighting, weather and skies for TrackMania Nations & United Forever.\n\nInstalled: ";
     if (!inLoader && inGame.empty()) status += L"not yet";
     if (inLoader) status += L"ModLoader";
     if (inLoader && !inGame.empty()) status += L", ";

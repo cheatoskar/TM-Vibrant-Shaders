@@ -193,8 +193,9 @@ private:
     IDirect3DVolumeTexture9* m_cloudNoise = nullptr;
 
     // Rain particles: drops in a box around the camera, splashes on the height map.
-    static constexpr UINT kRainDrops = 7000;
-    static constexpr UINT kRainSplashes = 2600;
+    static constexpr UINT kRainDrops = 24000;    // at rain 2 (downpour)
+    static constexpr UINT kRainSplashes = 5200;
+    static constexpr UINT kRainChunk = 12000;    // quads per draw (16-bit indices)
     IDirect3DVertexShader9* m_dropVS = nullptr;
     IDirect3DVertexShader9* m_splashVS = nullptr;
     IDirect3DVertexDeclaration9* m_rainDecl = nullptr;

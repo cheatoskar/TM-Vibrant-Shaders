@@ -220,8 +220,8 @@ bool drawKey(Settings& s, const char* key, const char* label = nullptr) {
 void drawMoodPresets(Config& config, const std::vector<std::string>& names) {
     for (int m = 0; m < static_cast<int>(Mood::Count); m++) {
         std::string& mp = config.moodPreset[m];
-        char label[64];
-        snprintf(label, sizeof(label), "%s maps##mood%d", moodName(static_cast<Mood>(m)), m);
+        static const char* const kLabels[] = {"Day maps", "Sunset maps", "Night maps"};
+        const char* label = kLabels[m];
         if (ImGui::BeginCombo(label, mp.empty() ? "Keep current" : mp.c_str())) {
             if (ImGui::Selectable("Keep current", mp.empty())) {
                 mp.clear();
@@ -346,7 +346,7 @@ void drawMenu() {
     Config& config = Config::get();
     Settings& s = config.settings;
 
-    ImGui::SetNextWindowSize(ImVec2(440, 600), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(460, 620), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(40, 40), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("TM Vibrant Shaders " TM_SHADERS_VERSION_A, &config.showOverlay, ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();

@@ -71,7 +71,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("SplitToning", "Split toning", "Colour", Float, shadowTint, 0.0f, 1.0f),
 
         TMVS_FIELD("Wetness", "Wet roads", "Weather & Surfaces", Float, wetness, 0.0f, 1.0f),
-        TMVS_FIELD("Rain", "Rain", "Weather & Surfaces", Float, rain, 0.0f, 1.0f),
+        TMVS_FIELD("Rain", "Rain (2 = downpour)", "Weather & Surfaces", Float, rain, 0.0f, 2.0f),
         TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
         TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
         TMVS_FIELD("WaterSurfaces", "Water surfaces (Island/Bay/Coast)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
@@ -560,8 +560,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.bloom = 0.1f;
             s.lensFlare = 0.35f;
             s.reflections = 0.35f;
-            s.motionBlur = 1.0f;
-            s.depthOfField = 0.25f; // meant for replays: while driving, the auto focus sits on your car
+            s.motionBlur = 0.1f;
+            s.depthOfField = 0.08f; // meant for replays: while driving, the auto focus sits on your car
             s.bokehSize = 10.0f;
             s.vignette = 0.4f;
             s.contrast = 1.12f;
@@ -577,7 +577,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.cloudCoverage = 1.0f;
             s.cloudHeight = 650.0f;
             s.wetness = 1.0f;
-            s.rain = 1.0f;
+            s.rain = 1.6f;
             s.puddles = 0.55f;
             s.lightning = 1.0f;
             s.wind = 0.9f;

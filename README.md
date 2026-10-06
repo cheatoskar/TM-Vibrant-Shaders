@@ -1,55 +1,60 @@
 # TM Vibrant Shaders
 
-> [!WARNING]
-> **Beta.** Everything works, but I'm still tuning the presets, so the look will change between versions.
-> Bug reports and screenshots (`F12` captures) help a lot: [Issues](https://github.com/cheatoskar/tmnf-vibrant-shaders/issues).
-> The code is public so you can read it, but it's **not open source yet**. Please don't re-upload it or publish modified versions until the final release ([license](LICENSE)).
+**Real-time lighting, weather and skies for TrackMania Nations Forever and United Forever.**
 
-Shaders for **TrackMania Nations Forever** and **TrackMania United Forever**, in the spirit of Minecraft shader packs like Sildur's Vibrant, BSL and IterationT.
+[![Latest release](https://img.shields.io/github/v/release/cheatoskar/tmnf-vibrant-shaders?label=download)](https://github.com/cheatoskar/tmnf-vibrant-shaders/releases/latest)
+[![Build](https://github.com/cheatoskar/tmnf-vibrant-shaders/actions/workflows/build.yml/badge.svg)](https://github.com/cheatoskar/tmnf-vibrant-shaders/actions/workflows/build.yml)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
+![Game](https://img.shields.io/badge/game-TMNF%20%7C%20TMUF-orange)
 
-The mod hooks into the game's renderer, reads the depth buffer, the camera and the sun, and lights the scene again on top of the game's own image: shadows, ambient occlusion, light shafts, glowing neon, reflections, rain, clouds, new skies. It all happens before the HUD is drawn, so the HUD stays untouched.
+TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the camera and the sun, and lights the scene again on top of the game's own image: real shadows, ambient occlusion, light shafts, glowing neon, wet roads with reflections, rain that falls and splashes, volumetric clouds and entirely new skies. Everything is drawn before the HUD, so the interface stays sharp, and it works in replays and the video export too.
 
-![Ring World: a gas giant and its rings over the Stadium](docs/images/ring-world.jpg)
+![On the rings of a gas giant, with a black hole in the sky](docs/images/ring-world.jpg)
 
 | | |
 |---|---|
 | ![Sunset: original and Vibrant](docs/images/compare-sunset.jpg) | ![Day: original and Golden Hour](docs/images/compare-day.jpg) |
-| ![Original and Cinematic](docs/images/compare-cinematic.jpg) | ![Original and Rainy Day](docs/images/compare-rain.jpg) |
-| ![Night: original and Neon Night](docs/images/compare-night.jpg) | ![Black hole and ringed planet](docs/images/black-hole.jpg) |
-| ![Ring World, distant Saturn](docs/images/ring-saturn.jpg) | ![Aurora](docs/images/aurora.jpg) |
+| ![Original and Cinematic](docs/images/compare-cinematic.jpg) | ![Original and Thunderstorm](docs/images/compare-rain.jpg) |
+| ![Night: original and Neon Night](docs/images/compare-night.jpg) | ![Event Horizon: the Ring World sky at night](docs/images/event-horizon.jpg) |
+| ![Black hole](docs/images/black-hole.jpg) | ![Aurora](docs/images/aurora.jpg) |
+
+**[Download](https://github.com/cheatoskar/tmnf-vibrant-shaders/releases/latest)** · [Installation](#installation) · [Presets](#presets) · [Hardware and FPS](#recommended-hardware) · [All settings](#all-settings)
 
 ---
 
-## What it does
+## Features
 
 **Light and shadow**
 - Ambient occlusion in corners, under barriers and around cars.
-- Sun shadows traced against the depth buffer, plus **long-range shadows**: the mod builds a height map of the track as you drive, so low evening sun throws long shadows, even from things that are off screen.
+- Sun shadows traced against the depth buffer, plus **long-range shadows**: the mod builds a height map of the track as you drive, so a low sun throws long shadows, even from things that are off screen.
 - Warm sunlight, sky-coloured shade, light shafts and height fog.
-- **Neon light:** the blue and green borders and other coloured lights actually light up the road next to them.
+- **Neon light:** the blue and green borders and other coloured lights light up the road and walls around them, all the way down the track.
 
-**Surfaces and weather**
-- Wet roads, puddles with rain ripples, falling rain.
-- Screen-space reflections on wet or glossy track.
-- Grass detail: patches, stadium mowing stripes and short blades close to the camera.
-- Water surfaces with waves and reflections (TMUF Island, Bay, Coast; experimental).
+**Weather and surfaces**
+- **Rain** as real particles: drops that fall around you and streak with your speed, splashes on the track, ripples in the puddles.
+- Wet roads and puddles with screen-space reflections of the scenery and the lights.
+- **Thunderstorms** with lightning that lights up the clouds and the track.
+- Grass detail: patches, stadium mowing stripes and blades close to the camera.
+- Water surfaces with waves and reflections (TMUF Island, Bay and Coast; experimental).
 
 **Sky**
-- Volumetric clouds (ray-marched, lit by the sun).
-- Clear sky, starry night, aurora.
-- A black hole rendered by bending light through curved space-time.
-- **Ring World sky:** a Saturn, Jupiter, ice giant or exotic gas giant over the stadium. Look at it from far away, from next to the rings, or float right above the banded rings, with a black hole lighting up the scene.
+- Volumetric clouds, ray-marched and lit by the sun.
+- Clear sky, starry night with shooting stars, aurora.
+- A black hole rendered by bending light through curved space-time. It lights the scene like a second sun.
+- **Ring World:** Saturn, Jupiter, an ice giant or an exotic gas giant over the stadium. Look at it from far away, from next to the rings, or float right above them.
+- Night skies work on day maps: the game's baked-in sunlight is taken out.
 
 **Camera**
 - HDR glow, bloom, auto exposure and a filmic tone curve.
-- Temporal anti-aliasing (TAA) plus FXAA, and sharpening.
-- Motion blur and depth of field for replays and video export.
+- Temporal anti-aliasing (TAA) plus FXAA, and AMD CAS sharpening.
+- Motion blur and depth of field for replays and the video export.
 
-**Comfort**
-- In-game menu on `F8` where every value changes live, saved automatically.
-- Your own named presets.
-- A different preset per map mood: the mod recognises day, sunset and night maps.
-- Works in replays and in the video export.
+**Made to be used**
+- An `F8` menu with a **Simple** view for the everyday settings and an **Advanced** view with every value.
+- **Auto quality** keeps your frame rate: it turns effects down when the GPU can't keep up, and back up when it can.
+- The menu shows what each effect costs on your GPU, measured live.
+- A preset per kind of map: day, sunset and night maps get their own look automatically.
+- Your own presets, saved as small text files you can share.
 
 ---
 
@@ -61,12 +66,12 @@ The mod hooks into the game's renderer, reads the depth buffer, the camera and t
 | **Cinematic** | Dense sunlit haze, deep shadows, film contrast. |
 | **Golden Hour** | New clear sky, low warm sun, long light shafts. |
 | **Dreamy** | Soft pastel bloom, pink and teal. |
-| **Neon Night** | Starry sky, darker scene, neon that lights and reflects on the road. |
+| **Neon Night** | Starry sky with shooting stars, bright neon that lights up the whole track. |
 | **Event Horizon** | The Ring World sky at night: a gas giant with its rings and a glowing black hole over a dark, cold stadium. |
 | **Aurora** | Northern lights, green and teal. |
 | **Rainy Day** | Overcast clouds, wet track, puddles and rain. |
 | **Thunderstorm** | Dark and soaked: low clouds, pouring rain, deep puddles, lightning. |
-| **Replay Cinema** | Film look with motion blur and depth of field. Meant for replays and video export, not for driving. |
+| **Replay Cinema** | Film look with a touch of motion blur and depth of field. Made for replays and the video export. |
 | **Competition** | Clarity first: AO and contact shadows, no haze or lens effects. |
 | **Performance** | Vibrant with the expensive parts switched off. |
 
@@ -86,18 +91,18 @@ How much the shaders cost, at 1920×1080, looking into the sun (the worst case):
 
 | GPU | Game without shaders | Performance | Vibrant | Replay Cinema |
 |---|---|---|---|---|
-| Intel Iris Xe (laptop) | ~90 FPS | 9.2 ms, ~50 FPS | 15.9 ms, ~35 FPS | 21.9 ms, ~30 FPS |
-| GTX 1050 | ~200 FPS | 7.7 ms, ~80 FPS | 13.4 ms, ~55 FPS | 18.4 ms, ~45 FPS |
-| Radeon 780M (laptop) | ~160 FPS | 4.8 ms, ~90 FPS | 8.3 ms, ~70 FPS | 11.4 ms, ~55 FPS |
-| **Intel Arc 140V (measured)** | ~115 FPS | 3.4 ms, ~85 FPS | 5.9 ms, ~70 FPS | 8.1 ms, ~60 FPS |
-| GTX 1060 6 GB / RX 580 | ~300 FPS | 3.3 ms, ~150 FPS | 5.7 ms, ~110 FPS | 7.8 ms, ~90 FPS |
-| RTX 3060 | ~400 FPS | 1.6 ms, ~245 FPS | 2.8 ms, ~190 FPS | 3.8 ms, ~160 FPS |
-| GTX 1080 Ti | ~400 FPS | 1.4 ms, ~255 FPS | 2.5 ms, ~200 FPS | 3.4 ms, ~170 FPS |
-| RTX 4070 | ~450 FPS | 0.8 ms, ~330 FPS | 1.4 ms, ~280 FPS | 1.9 ms, ~245 FPS |
+| Intel Iris Xe (laptop) | ~90 FPS | 10.0 ms, ~45 FPS | 17.0 ms, ~35 FPS | 23.5 ms, ~30 FPS |
+| GTX 1050 | ~200 FPS | 8.4 ms, ~75 FPS | 14.3 ms, ~50 FPS | 19.7 ms, ~40 FPS |
+| Radeon 780M (laptop) | ~160 FPS | 5.2 ms, ~85 FPS | 8.9 ms, ~65 FPS | 12.3 ms, ~55 FPS |
+| **Intel Arc 140V (measured)** | ~115 FPS | 3.7 ms, ~80 FPS | 6.3 ms, ~65 FPS | 8.7 ms, ~55 FPS |
+| GTX 1060 6 GB / RX 580 | ~300 FPS | 3.6 ms, ~145 FPS | 6.1 ms, ~105 FPS | 8.4 ms, ~85 FPS |
+| RTX 3060 | ~400 FPS | 1.8 ms, ~235 FPS | 3.0 ms, ~180 FPS | 4.1 ms, ~150 FPS |
+| GTX 1080 Ti | ~400 FPS | 1.6 ms, ~245 FPS | 2.6 ms, ~195 FPS | 3.7 ms, ~160 FPS |
+| RTX 4070 | ~450 FPS | 0.9 ms, ~320 FPS | 1.5 ms, ~270 FPS | 2.1 ms, ~230 FPS |
 
 Only the Arc 140V row is measured. The other rows are **estimates**: the measured shader time scaled by each card's relative speed, on top of a typical frame rate for the bare game. Your numbers will differ with CPU, drivers and map. At 1440p expect about 1.8× the shader time, at 4K about 4×.
 
-Most other presets cost about the same as Vibrant. Golden Hour and the Ring World sky cost about 25% more because of the custom sky. Aurora is the heaviest sky, roughly 2× Vibrant.
+Most presets cost about as much as Vibrant. Thunderstorm costs about 20% more, Golden Hour and Event Horizon (custom skies) about 40% more. Aurora is the heaviest sky, roughly 2× Vibrant.
 
 What costs the most, if you want to win back FPS:
 
@@ -113,6 +118,24 @@ What costs the most, if you want to win back FPS:
 | Effect quality High → Low | saves about 1 ms |
 
 You don't have to tune this by hand. **Auto quality** (on by default) watches your frame rate and steps the effect quality down when it falls below the target FPS, and back up when there's room. It never touches your settings or presets, and it leaves them alone when the game itself (CPU, vsync) is the limit. The **Performance** section of the `F8` menu shows what every effect costs on your GPU right now, and how many FPS you'd get back by turning it off.
+
+### Recommended game settings
+
+These are the settings in TrackMania's own options (launcher → *Advanced*) that work best with the shaders:
+
+| Game setting | Recommended | Why |
+|---|---|---|
+| Antialiasing | **Off** | The mod switches it off anyway (it needs a readable depth buffer) and uses its own FXAA and TAA. |
+| Anisotropic filtering | **16x** | Costs almost nothing and keeps the road and the thin neon strips sharp far away, so they still glow at a distance. |
+| Shadows | Complex | Fine. The block shadows come from the mod. |
+| Shader quality | PC3 High | The richest base image to light. Lower works too, it just starts flatter. |
+| Textures | High | |
+| Geometry details | Normal | |
+| FX post-processing | On or off | Try both: off avoids the game's own glow adding to the mod's bloom. |
+| Water geometry, stadium water | On | |
+| Trees | Always high quality | |
+
+The shaders also work with everything on low: they only need the finished image and the depth buffer. The look then starts from a flatter image.
 
 ---
 
@@ -327,11 +350,10 @@ powershell -ExecutionPolicy Bypass -File .\install-modloader.ps1   # install the
 
 ## Credits
 
-- Inspired by the Minecraft shader packs **Sildur's Vibrant**, **BSL** and **IterationT**. No code from them is used.
 - [Dear ImGui](https://github.com/ocornut/imgui) (MIT) for the menu, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Anti-aliasing and sharpening follow **FXAA 3.11** (Timothy Lottes) and **AMD FidelityFX CAS**.
 - TrackMania is a trademark of Ubisoft / Nadeo. This is a fan project and has nothing to do with them.
 
 ## License
 
-© 2026 Oskar (cheatoskar). During the beta this is **source-available, not open source**. You can use the releases for free, also in videos and streams, read the code, and contribute through issues and pull requests. You can't redistribute it or publish modified versions. Details in [LICENSE](LICENSE). It will move to an open-source license once the shaders are final.
+© 2026 Oskar (cheatoskar). For now this is **source-available, not open source**. You can use the releases for free, also in videos and streams, read the code, and contribute through issues and pull requests. You can't redistribute it or publish modified versions. Details in [LICENSE](LICENSE). It will move to an open-source license once the shaders are final.
