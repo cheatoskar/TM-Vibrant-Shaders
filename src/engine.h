@@ -41,5 +41,12 @@ bool active();
 // Camera info of the camera currently between RenderCameraBegin/End (or the last one).
 const CameraInfo& currentCamera();
 
+// True while a MediaTracker clip plays (replays, intros, the replay editor) or the video
+// export runs: the moments for motion blur and depth of field. False while driving.
+bool cinematicActive();
+// Which of the cinematic hooks fired since the last call (bit 0 clip player, 1 clip viewer,
+// 2 video export), for the log.
+unsigned cinematicSources();
+
 } // namespace engine
 } // namespace tmshaders

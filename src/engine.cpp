@@ -27,6 +27,18 @@ constexpr Slot kComputeDriverProjection = {104, 0x0095d530, "ComputeDriverProjec
 constexpr Slot kRenderShadowsSet = {76, 0x0095acc0, "RenderShadowsSet"};
 constexpr uintptr_t kShaderLevel = 0x00d123ba; // word: GPU shader path (PC0..PC3)
 
+// Non-virtual functions, hooked inline. The prologue bytes are checked before patching and
+// must be whole, position-independent instructions (they run again in the trampoline).
+struct InlineSite {
+    uintptr_t address;
+    unsigned char prologue[8];
+    size_t length;
+    const char* name;
+};
+constexpr InlineSite kClipTracksUpdate = {0x00693e20, {0xd9, 0xe8, 0x83, 0xec, 0x08}, 5, "CGameCtnMediaClipPlayer::TracksUpdate"};
+constexpr InlineSite kClipViewerCams = {0x00673e50, {0x6a, 0xff, 0x68, 0xe8, 0xf4, 0xaa, 0x00}, 7, "CGameCtnMediaClipViewer::UpdateCams"};
+constexpr InlineSite kVideoShoot = {0x006f4510, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, "CGameCtnMediaVideoShooter::DoShoot"};
+
 using FrameBeginFn = int(__fastcall*)(void*, void*);
 using CameraBeginFn = void(__fastcall*)(void*, void*, void*, void*);
 using CameraEndFn = void(__fastcall*)(void*, void*, void*);
@@ -49,6 +61,15 @@ int g_forcedShadows = -1;
 Callbacks g_callbacks;
 CameraInfo g_camera;
 bool g_active = false;
+
+using TracksUpdateFn = void(__fastcall*)(void*, void*, float, float);
+using UpdateCamsFn = void(__fastcall*)(void*, void*);
+using DoShootFn = void(__fastcall*)(void*, void*, void*);
+TracksUpdateFn g_tracksUpdate = nullptr;
+UpdateCamsFn g_updateCams = nullptr;
+DoShootFn g_doShoot = nullptr;
+DWORD g_lastCinematic = 0;      // GetTickCount of the last cinematic hook call
+unsigned g_cinematicSources = 0;
 
 uintptr_t rebase(uintptr_t linkAddress) {
     return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) - kPreferredBase + linkAddress;
@@ -79,6 +100,51 @@ void patch(const Slot& slot, void* detour, Fn& original) {
     VirtualProtect(entry, sizeof(void*), PAGE_READWRITE, &old);
     *entry = detour;
     VirtualProtect(entry, sizeof(void*), old, &old);
+}
+
+// Jumps from the function's start to the detour; the trampoline runs the copied prologue
+// and jumps back behind it. Returns the trampoline (the "original" to call), or null.
+void* inlineHook(const InlineSite& site, void* detour) {
+    BYTE* target = reinterpret_cast<BYTE*>(rebase(site.address));
+    if (!readable(target, site.length) || memcmp(target, site.prologue, site.length) != 0) {
+        TMVS_LOG("engine: %s does not match this executable, not hooked", site.name);
+        return nullptr;
+    }
+    BYTE* trampoline = static_cast<BYTE*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!trampoline) return nullptr;
+    memcpy(trampoline, target, site.length);
+    trampoline[site.length] = 0xE9;
+    *reinterpret_cast<int32_t*>(trampoline + site.length + 1) =
+        static_cast<int32_t>((target + site.length) - (trampoline + site.length + 5));
+    DWORD old = 0;
+    VirtualProtect(target, site.length, PAGE_EXECUTE_READWRITE, &old);
+    target[0] = 0xE9;
+    *reinterpret_cast<int32_t*>(target + 1) = static_cast<int32_t>(static_cast<BYTE*>(detour) - (target + 5));
+    for (size_t i = 5; i < site.length; i++) target[i] = 0x90; // nop out the rest
+    VirtualProtect(target, site.length, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), target, site.length);
+    return trampoline;
+}
+
+void markCinematic(unsigned source) {
+    g_lastCinematic = GetTickCount();
+    g_cinematicSources |= source;
+}
+
+void __fastcall tracksUpdateDetour(void* self, void* edx, float time, float delta) {
+    markCinematic(1);
+    g_tracksUpdate(self, edx, time, delta);
+}
+
+void __fastcall updateCamsDetour(void* self, void* edx) {
+    markCinematic(2);
+    g_updateCams(self, edx);
+}
+
+// Runs once per frame while the export shoots (a fiber that is resumed every frame).
+void __fastcall doShootDetour(void* self, void* edx, void* fiber) {
+    markCinematic(4);
+    g_doShoot(self, edx, fiber);
 }
 
 int g_loggedShadowMode = -2;
@@ -171,6 +237,9 @@ bool install(const Callbacks& callbacks) {
     patch(kComputeDriverViewMatrix, reinterpret_cast<void*>(&viewMatrixDetour), g_viewMatrix);
     patch(kComputeDriverProjection, reinterpret_cast<void*>(&projectionDetour), g_projection);
     patch(kRenderShadowsSet, reinterpret_cast<void*>(&shadowsSetDetour), g_shadowsSet);
+    g_tracksUpdate = reinterpret_cast<TracksUpdateFn>(inlineHook(kClipTracksUpdate, reinterpret_cast<void*>(&tracksUpdateDetour)));
+    g_updateCams = reinterpret_cast<UpdateCamsFn>(inlineHook(kClipViewerCams, reinterpret_cast<void*>(&updateCamsDetour)));
+    g_doShoot = reinterpret_cast<DoShootFn>(inlineHook(kVideoShoot, reinterpret_cast<void*>(&doShootDetour)));
     g_active = true;
     TMVS_LOG("engine: CVisionViewportDx9 hooks installed (module base %p)", GetModuleHandleW(nullptr));
     return true;
@@ -182,6 +251,19 @@ bool active() {
 
 const CameraInfo& currentCamera() {
     return g_camera;
+}
+
+bool cinematicActive() {
+    // Without the hooks there is no way to tell: treat everything as cinematic, so the
+    // settings behave as before.
+    if (!g_tracksUpdate && !g_updateCams && !g_doShoot) return true;
+    return g_lastCinematic != 0 && GetTickCount() - g_lastCinematic < 500;
+}
+
+unsigned cinematicSources() {
+    const unsigned s = g_cinematicSources;
+    g_cinematicSources = 0;
+    return s;
 }
 
 } // namespace engine

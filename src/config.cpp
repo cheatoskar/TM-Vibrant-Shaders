@@ -76,7 +76,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Rain", "Rain (2 = downpour)", "Weather & Surfaces", Float, rain, 0.0f, 2.0f),
         TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
         TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
-        TMVS_FIELD("LensDrops", "Rain drops on the lens", "Weather & Surfaces", Float, lensDrops, 0.0f, 1.0f),
+        TMVS_FIELD("LensDrops", "Rain drops on the lens", "Weather & Surfaces", Bool, lensDrops, 0.0f, 1.0f),
         TMVS_FIELD("WeatherSound", "Rain and thunder sound", "Weather & Surfaces", Float, weatherSound, 0.0f, 1.0f),
         TMVS_FIELD("WaterSurfaces", "Water surfaces (Island/Bay/Coast)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
         TMVS_FIELD("Reflections", "Track reflections (dry)", "Weather & Surfaces", Float, reflections, 0.0f, 1.0f),
@@ -86,6 +86,7 @@ const std::vector<Field>& fields() {
 
         TMVS_FIELD("MotionBlur", "Motion blur", "Cinematic", Float, motionBlur, 0.0f, 1.5f),
         TMVS_FIELD("DepthOfField", "Depth of field", "Cinematic", Float, depthOfField, 0.0f, 1.0f),
+        TMVS_FIELD("CinematicOnlyInReplays", "Only in replays and video export", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
         TMVS_FIELD("FocusDistance", "Focus distance (m, 0 = auto)", "Cinematic", Float, focusDistance, 0.0f, 200.0f),
         TMVS_FIELD("BokehSize", "Max blur (px)", "Cinematic", Float, bokehSize, 2.0f, 24.0f),
 
@@ -175,7 +176,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 // Machine settings that belong to the installation, not to a look.
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
-           !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound");
+           !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem) {
@@ -349,6 +350,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepAuto = s.autoQuality;
     const float keepTarget = s.targetFps;
     const float keepSound = s.weatherSound;
+    const bool keepReplayOnly = s.cinematicOnlyInReplays;
     if (preset == Preset::Custom) return;
     s = Settings();
     s.disableGameMSAA = keepMSAA;
@@ -357,6 +359,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.autoQuality = keepAuto;
     s.targetFps = keepTarget;
     s.weatherSound = keepSound;
+    s.cinematicOnlyInReplays = keepReplayOnly;
     switch (preset) {
         case Preset::Vibrant:
             break; // Settings defaults are the Vibrant look.
@@ -586,7 +589,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.chromaticAberration = 0.1f;
             break;
         case Preset::Thunderstorm:
-            s.lensDrops = 0.35f;
+            s.lensDrops = true;
             s.volumetricLight = 0.0f;
             // Overcast: the day map's sun is taken out like for a night sky, only darker grey.
             s.skyNight = 0.45f;
@@ -655,6 +658,7 @@ void Config::load() {
     wchar_t target[32] = {};
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
     if (GetPrivateProfileStringW(L"Settings", L"WeatherSound", L"", target, 32, ini)) settings.weatherSound = static_cast<float>(_wtof(target));
+    settings.cinematicOnlyInReplays = GetPrivateProfileIntW(L"Settings", L"CinematicOnlyInReplays", 1, ini) != 0;
     if (preset == kCustomPreset) {
         applyPreset(settings, Preset::Vibrant);
         readFields(settings, ini, L"Settings", false);

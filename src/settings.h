@@ -24,6 +24,7 @@ struct Settings {
     bool disableGameMSAA = true; // required for the depth buffer; post AA replaces it
     int quality = 2;               // 0 low, 1 medium, 2 high (sample counts)
     bool readableGameDepth = true; // also hook the game's own depth buffers (menus, replay/video export)
+    bool cinematicOnlyInReplays = true; // motion blur and DOF only in replays, intros and the video export
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;
 
@@ -99,7 +100,7 @@ struct Settings {
     float puddles = 0.0f;          // standing water on flat ground
     float waterSurfaces = 0.0f;    // reflective, wavy open water (TMUF Island/Bay/Coast)
     float lightning = 0.0f;        // lightning flashes (how often)
-    float lensDrops = 0.0f;        // rain drops on the lens (replay look)
+    bool lensDrops = false;        // rain drops on the lens (only while it rains)
     float weatherSound = 0.6f;     // volume of rain and thunder (only plays with rain or lightning)
     float reflections = 0.0f;      // dry glossy reflections on the track
     float grassDetail = 0.7f;      // grass blades and patches

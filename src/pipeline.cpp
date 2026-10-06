@@ -1159,7 +1159,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         passConstants(device, 0.0f, 1.0f / m_gi[0].height);
         runPass(device, kBilateralBlur, m_gi[0]);
     }
-    const float lensDrops = s.lensDrops * fminf(s.rain, 1.0f);
+    const float lensDrops = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f;
     const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
     device->SetPixelShaderConstantF(37, volumeConstants, 1);
 

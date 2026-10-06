@@ -291,6 +291,12 @@ void processScene(IDirect3DDevice9* device) {
         // Auto quality renders a reduced copy; your settings stay untouched.
         Settings effective = settings;
         g_autoQuality.apply(effective);
+        // Motion blur and depth of field are for watching, not for driving (the auto focus
+        // would blur the track ahead of you).
+        if (effective.cinematicOnlyInReplays && !engine::cinematicActive()) {
+            effective.motionBlur = 0.0f;
+            effective.depthOfField = 0.0f;
+        }
         g_pipeline.render(device, inputs, effective, target);
         g_shadedThisFrame = true;
         g_gameplayThisFrame = g_gameplayThisFrame || g_scene.projection[14] > -1.0f; // not a menu background
@@ -440,6 +446,13 @@ void onPresent(IDirect3DDevice9* device) {
     D3DDEVICE_CREATION_PARAMETERS cp{};
     device->GetCreationParameters(&cp);
     audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);
+    // Replay / intro / video export detection, logged when it changes.
+    static int s_cinematic = -1;
+    const int cinematic = engine::cinematicActive() ? 1 : 0;
+    if (cinematic != s_cinematic) {
+        s_cinematic = cinematic;
+        TMVS_LOG("engine: cinematic %s (sources %u)", cinematic ? "on" : "off", engine::cinematicSources());
+    }
     g_shadedThisFrame = false;
     g_gameplayThisFrame = false;
 

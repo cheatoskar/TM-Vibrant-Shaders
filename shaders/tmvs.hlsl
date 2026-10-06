@@ -2308,32 +2308,68 @@ float4 PS_FXAA(float2 uv : TEXCOORD0) : COLOR0 {
 // ---------------------------------------------------------------------------------
 // AMD FidelityFX CAS (contrast adaptive sharpening) - s0 = LDR, u_Pass0.xy = texel
 // ---------------------------------------------------------------------------------
-// Rain drops on the lens (the replay look). Cells over the screen, each with a drop that
-// appears, grows heavier, slides down a little and dries off. Inside a drop the scene is
-// seen through a tiny lens: shrunk, flipped, a bright core and a dark rim.
-//   returns uv offset (xy) and brightness (z)
+// Rain drops on the lens. Two kinds, like on a real camera in the rain:
+//  - small droplets that land, sit still and slowly dry off,
+//  - bigger drops that run down the lens, wobbling, with a thin wet trail behind them.
+// Water on a lens is clear: it only bends the image behind it (no dark rim, no "bubble").
+//   returns uv offset (xy) and a brightness factor (z, ~1)
 float3 lensDrops(float2 uv) {
     float3 r = float3(0, 0, 1);
-    if (u_Volume.w <= 0.0) return r;
+    float amount = u_Volume.w;
+    if (amount <= 0.0) return r;
     float aspect = u_Screen.x * u_Screen.w;
+    float2 p = float2(uv.x * aspect, uv.y); // square units
     float t = u_Proj2.z;
-    [unroll] for (int layer = 0; layer < 2; layer++) {
-        float scale = layer == 0 ? 7.0 : 13.0;
-        float2 p = float2(uv.x * aspect, uv.y) * scale;
-        float2 cell = floor(p);
-        float h = hash12(cell + layer * 37.0);
-        float cycle = t * (0.05 + 0.05 * h) + h * 7.3;
+
+    // Small droplets, sitting still.
+    {
+        float scale = 26.0;
+        float2 q = p * scale;
+        float2 cell = floor(q);
+        float h = hash12(cell + 91.7);
+        float cycle = t * (0.03 + 0.04 * h) + h * 11.0;
         float life = frac(cycle);
-        if (hash12(cell + floor(cycle) * 13.1 + layer) > u_Volume.w * 0.6) continue;
-        float2 centre = (float2(hash12(cell + 3.1), hash12(cell + 5.7)) - 0.5) * 0.5;
-        centre.y += life * life * 0.3; // heavy drops slide down
-        float radius = lerp(0.1, 0.28, hash12(cell + 9.2)) * smoothstep(0.0, 0.04, life) * (1.0 - smoothstep(0.7, 1.0, life));
-        float2 d = frac(p) - 0.5 - centre;
-        d.y *= 1.2;
-        float k = length(d) / max(radius, 1e-4);
-        if (k < 1.0) {
-            r.xy = -d / scale * float2(1.0 / aspect, 1.0) * 2.2;
-            r.z = lerp(1.08, 0.55, pow(k, 4.0));
+        if (hash12(cell + floor(cycle) * 7.7) < amount * 0.32) {
+            float2 centre = (float2(hash12(cell + 1.7), hash12(cell + 4.3)) - 0.5) * 0.5;
+            float2 d = frac(q) - 0.5 - centre;
+            float ang = atan2(d.y, d.x);
+            float radius = lerp(0.12, 0.3, hash12(cell + 8.1)) * smoothstep(0.0, 0.03, life) * (1.0 - smoothstep(0.6, 1.0, life));
+            float k = length(d) / max(radius, 1e-4) * (1.0 + 0.12 * sin(ang * 3.0 + h * 20.0));
+            if (k < 1.0) {
+                float bulge = sqrt(1.0 - k * k); // the drop's dome
+                r.xy = -d / scale * float2(1.0 / aspect, 1.0) * 1.4 * bulge;
+                r.z = 1.0 + 0.06 * bulge - 0.12 * smoothstep(0.85, 1.0, k);
+            }
+        }
+    }
+
+    // Running drops: one per column at most, sliding down at their own pace.
+    {
+        float scale = 9.0;
+        float col = floor(p.x * scale);
+        float h = hash12(float2(col, 17.3));
+        float speed = 0.06 + 0.12 * h;
+        float cycle = t * speed + h * 5.0;
+        if (hash12(float2(col, floor(cycle) * 3.1)) < amount * 0.5) {
+            float y = frac(cycle) * 1.4 - 0.2;                 // top to bottom of the screen
+            float cx = (col + 0.5 + (h - 0.5) * 0.5) / scale + sin(y * 9.0 + h * 30.0) * 0.006;
+            float radius = lerp(0.012, 0.022, frac(h * 7.3));
+            float2 d = float2(p.x - cx, p.y - y);
+            d.y *= d.y > 0.0 ? 0.8 : 1.3;                       // heavier at the bottom
+            float k = length(d) / radius;
+            if (k < 1.0) {
+                float bulge = sqrt(1.0 - k * k);
+                r.xy = -d * float2(1.0 / aspect, 1.0) * 1.8 * bulge;
+                r.z = 1.0 + 0.08 * bulge - 0.12 * smoothstep(0.85, 1.0, k);
+            } else if (p.y < y && p.y > y - 0.25) {
+                // The wet trail it leaves: a thin streak that dries from the top.
+                float along = (y - p.y) / 0.25;
+                float tx = cx + sin(p.y * 9.0 + h * 30.0) * 0.006 - sin(y * 9.0 + h * 30.0) * 0.006;
+                float w = radius * 0.3 * (1.0 - along);
+                float trail = smoothstep(w, 0.0, abs(p.x - tx)) * (1.0 - along);
+                r.x += (p.x - tx) * trail * 0.6 / aspect;
+                r.z *= 1.0 + 0.03 * trail;
+            }
         }
     }
     return r;
