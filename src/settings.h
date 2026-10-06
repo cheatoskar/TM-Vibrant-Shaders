@@ -97,6 +97,7 @@ struct Settings {
     float puddles = 0.0f;          // standing water on flat ground
     float waterSurfaces = 0.0f;    // reflective, wavy open water (TMUF Island/Bay/Coast)
     float lightning = 0.0f;        // lightning flashes (how often)
+    float weatherSound = 0.6f;     // volume of rain and thunder (only plays with rain or lightning)
     float reflections = 0.0f;      // dry glossy reflections on the track
     float grassDetail = 0.7f;      // grass blades and patches
     float mowingStripes = 0.5f;    // stadium mowing pattern

@@ -74,6 +74,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Rain", "Rain (2 = downpour)", "Weather & Surfaces", Float, rain, 0.0f, 2.0f),
         TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
         TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
+        TMVS_FIELD("WeatherSound", "Rain and thunder sound", "Weather & Surfaces", Float, weatherSound, 0.0f, 1.0f),
         TMVS_FIELD("WaterSurfaces", "Water surfaces (Island/Bay/Coast)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
         TMVS_FIELD("Reflections", "Track reflections (dry)", "Weather & Surfaces", Float, reflections, 0.0f, 1.0f),
         TMVS_FIELD("GrassDetail", "Grass detail", "Weather & Surfaces", Float, grassDetail, 0.0f, 1.0f),
@@ -171,7 +172,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 // Machine settings that belong to the installation, not to a look.
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
-           !strcmp(f.key, "TargetFPS");
+           !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem) {
@@ -344,6 +345,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepEnabled = s.enabled;
     const bool keepAuto = s.autoQuality;
     const float keepTarget = s.targetFps;
+    const float keepSound = s.weatherSound;
     if (preset == Preset::Custom) return;
     s = Settings();
     s.disableGameMSAA = keepMSAA;
@@ -351,6 +353,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.enabled = keepEnabled;
     s.autoQuality = keepAuto;
     s.targetFps = keepTarget;
+    s.weatherSound = keepSound;
     switch (preset) {
         case Preset::Vibrant:
             break; // Settings defaults are the Vibrant look.
@@ -637,6 +640,7 @@ void Config::load() {
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
     wchar_t target[32] = {};
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
+    if (GetPrivateProfileStringW(L"Settings", L"WeatherSound", L"", target, 32, ini)) settings.weatherSound = static_cast<float>(_wtof(target));
     if (preset == kCustomPreset) {
         applyPreset(settings, Preset::Vibrant);
         readFields(settings, ini, L"Settings", false);

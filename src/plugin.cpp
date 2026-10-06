@@ -1,4 +1,5 @@
 #include "plugin.h"
+#include "audio.h"
 #include "capture.h"
 #include "config.h"
 #include "depth.h"
@@ -72,6 +73,7 @@ int g_capturesWritten = 0;
 Pipeline g_pipeline;
 AutoQuality g_autoQuality;
 bool g_shadedThisFrame = false;
+bool g_gameplayThisFrame = false; // a gameplay camera (not a menu background) was shaded
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
 gfx::Target g_sceneCopy;
 
@@ -291,6 +293,7 @@ void processScene(IDirect3DDevice9* device) {
         g_autoQuality.apply(effective);
         g_pipeline.render(device, inputs, effective, target);
         g_shadedThisFrame = true;
+        g_gameplayThisFrame = g_gameplayThisFrame || g_scene.projection[14] > -1.0f; // not a menu background
     }
 
     device->SetRenderTarget(0, target);
@@ -434,7 +437,11 @@ void onPresent(IDirect3DDevice9* device) {
     const Settings& settings = Config::get().settings;
     g_pipeline.setProfiling(settings.autoQuality || Config::get().showOverlay);
     g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline.totalTime(), settings);
+    D3DDEVICE_CREATION_PARAMETERS cp{};
+    device->GetCreationParameters(&cp);
+    audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);
     g_shadedThisFrame = false;
+    g_gameplayThisFrame = false;
 
     overlay::Status status;
     status.pipeline = &g_pipeline;
@@ -568,6 +575,7 @@ void boot() {
 }
 
 void shutdown() {
+    audio::shutdown();
     hook::remove();
 }
 

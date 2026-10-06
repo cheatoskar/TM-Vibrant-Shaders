@@ -146,7 +146,7 @@ const Field* findField(const char* key) {
 // Settings of the installation (not of a look): changing them keeps the preset.
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
-           !strcmp(f.key, "ReadableGameDepth");
+           !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "WeatherSound");
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -169,6 +169,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("Puddles")) return s.wetness > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("TargetFPS")) return s.autoQuality;
+    if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f;
     if (is("SunAzimuth")) return s.sunElevationOverride >= 0.0f;
     return true;
 }
@@ -286,6 +287,7 @@ bool drawSimple(Settings& s) {
     look |= drawKey(s, "Wetness", "Wet roads");
     look |= drawKey(s, "VolumetricClouds", "Clouds");
     look |= drawKey(s, "Lightning", "Lightning");
+    if (s.rain > 0.0f || s.lightning > 0.0f) look |= drawKey(s, "WeatherSound", "Sound");
     look |= drawKey(s, "WaterSurfaces", "Water");
 
     heading("Performance");

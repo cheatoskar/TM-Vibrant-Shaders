@@ -97,6 +97,7 @@ add_library(tmvs_core STATIC
   src/framecap.cpp
   src/config.cpp
   src/log.cpp
+  src/weather.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
@@ -117,6 +118,7 @@ add_library(tm_vibrant_shaders SHARED
   src/capture.cpp
   src/overlay.cpp
   src/autoquality.cpp
+  src/audio.cpp
   src/proxy.cpp
   src/exports.def
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
@@ -128,7 +130,7 @@ add_library(tm_vibrant_shaders SHARED
   ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
 )
-target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core)
+target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm)
 target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR})
 target_compile_options(tm_vibrant_shaders PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
 

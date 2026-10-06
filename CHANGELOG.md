@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (1.2)
+
+- Rain and thunder sound: synthesised on the fly (no sound files). Rain gets louder with the rain setting, thunder follows each lightning flash after a delay that depends on how far away it struck. Volume under *Rain and thunder sound*; silent in menus and while the game is in the background.
+
 ## 1.1.0
 
 **Lighting**

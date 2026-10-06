@@ -1,4 +1,5 @@
 #include "pipeline.h"
+#include "weather.h"
 #include "log.h"
 #include "config.h"
 #include "noise.h"
@@ -29,25 +30,6 @@ bool readFile(const std::wstring& path, std::string& out) {
     size_t read = fread(&out[0], 1, out.size(), f);
     fclose(f);
     return read == out.size();
-}
-
-// Lightning: random strikes (about one every 15 s at full strength), each a bright
-// flash with a couple of flickers. Deterministic in time, so every camera agrees.
-float lightningFlash(float time, float amount) {
-    if (amount <= 0.0f) return 0.0f;
-    float flash = 0.0f;
-    for (int k = 0; k < 2; k++) {
-        const float slot = floorf(time) - static_cast<float>(k);
-        unsigned h = static_cast<unsigned>(static_cast<int>(slot)) * 2654435761u;
-        h ^= h >> 15;
-        h *= 2246822519u;
-        h ^= h >> 13;
-        if ((h & 0xFFFF) / 65535.0f > amount * 0.07f) continue;
-        const float t = time - (slot + ((h >> 16) & 0xFF) / 255.0f);
-        if (t < 0.0f || t > 1.5f) continue;
-        flash += expf(-t * 8.0f) + 0.7f * expf(-fabsf(t - 0.22f) * 30.0f) + 0.5f * expf(-fabsf(t - 0.5f) * 25.0f);
-    }
-    return fminf(flash, 1.6f) * fminf(amount * 1.5f, 1.0f);
 }
 
 float smoothstepf(float a, float b, float x) {
@@ -504,7 +486,7 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[35][3] = s.longShadowRange;
     c[36][0] = s.neonLight;
     c[36][1] = in.sunKnown && len > 1e-5f ? 1.0f : 0.0f; // the game's sun, even under a night sky
-    c[36][2] = lightningFlash(in.time, s.lightning);
+    c[36][2] = weather::lightningFlash(in.time, s.lightning);
 
     device->SetPixelShaderConstantF(0, &c[0][0], 32);
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
