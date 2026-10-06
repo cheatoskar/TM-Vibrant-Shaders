@@ -49,7 +49,7 @@ float4 u_Pass1 : register(c33);
 
 float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
-float4 u_Light2    : register(c36); // neon light spill, 0, 0, 0
+float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, 0
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -476,13 +476,17 @@ float3 blackHoleSky(float3 rd, float3 bh, float dist) {
     float closest = 1e4;
     float3 outDir;
     const float traceRadius = 26.0;
-    float cone = asin(min(traceRadius / dist, 0.99));
+    // Close up (camera inside the trace sphere) every ray is traced from the camera.
+    bool inside = dist < traceRadius;
+    float cone = inside ? 4.0 : asin(min(traceRadius / dist, 0.99));
     if (angle < cone) {
         // Straight to the trace sphere, then integrate the bent ray inside it.
         float3 p = -bh * dist;
-        float b = dot(p, rd);
-        float c = dot(p, p) - traceRadius * traceRadius;
-        p += rd * (-b - sqrt(max(b * b - c, 0.0)));
+        if (!inside) {
+            float b = dot(p, rd);
+            float c = dot(p, p) - traceRadius * traceRadius;
+            p += rd * (-b - sqrt(max(b * b - c, 0.0)));
+        }
         float3 v = rd;
         float3 h = cross(p, v);
         float h2 = dot(h, h);
@@ -644,8 +648,12 @@ float ringDensity(int type, float rr, float2 x, float near) {
     float d = bands * smoothstep(inner, inner + 0.06, rr) * smoothstep(outer, outer - 0.12, rr);
     d *= 1.0 - 0.92 * smoothstep(0.02, 0.0, abs(rr - (inner + outer) * 0.5 - 0.17)); // Cassini division
     d *= lerp(0.45, 1.0, smoothstep(1.55, 1.65, rr));                                 // faint inner ring
-    d *= lerp(1.0, 0.35 + 0.9 * noise3(float3(x * 600.0, rr * 300.0)), near);
-    if (type == 1) d *= 0.55; // Jupiter: dusty rings
+    // Close up: ringlets with gaps between them, and clumps of ice.
+    float ringlets = noise3(float3(rr * 160.0, 0.3, 2.1));
+    d *= lerp(1.0, smoothstep(0.2, 0.7, ringlets) * 0.85 + 0.15, near);
+    d *= lerp(1.0, 0.55 + 0.6 * noise3(float3(rr * 520.0, 1.7, 4.2)), near);
+    d *= lerp(1.0, 0.35 + 0.9 * noise3(float3(x * 600.0, rr * 300.0)), near * 0.6);
+    if (type == 1) d *= 0.7;  // Jupiter: dusty rings
     if (type == 2) d *= 0.5;  // ice giant: thin rings
     return saturate(d);
 }
@@ -680,26 +688,40 @@ float3 ringWorldSky(float3 rd) {
     float4 m2 = moon(rd, normalize(rotateY(float3(0.2, 0.55, -0.9), u_Sky.z)), 0.009, sun, float3(0.85, 0.7, 0.55));
     col = lerp(col, m2.rgb, m2.a);
 
-    // Planet placement. View 0: the classic distant view of a ringed planet. View 1: right
-    // next to the ring plane - the rings sweep towards the camera like a huge arch.
+    // Planet placement.
+    //   View 0: the classic distant view of a ringed planet, from above the rings.
+    //   View 1: just outside the rings, a little below them - the lit rings rise from the
+    //           planet and sweep over the stadium.
+    //   View 2: under the rings - they span the whole sky like a ceiling, the planet sits
+    //           huge on the horizon.
+    int view = (int)(u_Planet.y + 0.5);
     float3 dir = dirFromAngles(u_Planet.z, u_Planet.w);
     float size = max(u_Sky2.w, 0.3);
-    bool ringPlane = u_Planet.y > 0.5;
-    float dist = ringPlane ? 2.75 : 5.5 / size;
+    float dist = view == 2 ? 2.3 : (view == 1 ? 2.6 : 5.5 / size);
     float3 center = dir * dist;
-    // The ring plane contains the planet direction and leans over the sky.
     float3 side = normalize(cross(float3(0, 1, 0), dir));
-    float lean = ringPlane ? 0.62 : 0.32;
-    float3 inPlane = normalize(side * cos(lean) + float3(0, 1, 0) * sin(lean));
-    float3 ringN = normalize(cross(inPlane, dir));
-    if (ringN.y < 0.0) ringN = -ringN;
-    // Camera slightly above the ring plane (ring-plane view) or well above it (distant).
-    float above = ringPlane ? 0.11 : dist * 0.22;
-    center -= ringN * (above + dot(center, ringN));
+    float3 inPlane, ringN;
+    if (view == 0) {
+        // The ring plane contains the planet direction and leans over the sky.
+        inPlane = normalize(side * cos(0.32) + float3(0, 1, 0) * sin(0.32));
+        ringN = normalize(cross(inPlane, dir));
+        if (ringN.y < 0.0) ringN = -ringN;
+        center -= ringN * (dist * 0.22 + dot(center, ringN)); // camera well above the rings
+    } else {
+        // Ring plane through the planet direction, rolled sideways so it crosses the view
+        // diagonally; the camera is below it, so the rings hang over the stadium.
+        float roll = view == 2 ? 0.5 : 0.45;
+        float3 up = normalize(cross(dir, side));
+        ringN = normalize(up * cos(roll) + side * sin(roll));
+        inPlane = normalize(cross(dir, ringN));
+        float below = view == 2 ? 0.06 : 0.15;
+        center -= ringN * (dot(center, ringN) - below);
+    }
     float3 axis = normalize(ringN + dir * 0.05);
     // The planet's own star lights it from behind the viewer (a big gibbous planet, like in
-    // IterationT) instead of the game's sun, which is often behind it.
-    sun = normalize(-dir * 0.55 + side * 0.65 + float3(0, 0.5, 0));
+    // IterationT) instead of the game's sun, which is often behind it. Seen from below the
+    // rings, the star is below them too, so the side we look at is lit.
+    sun = normalize(-dir * 0.55 + side * 0.65 + (view == 0 ? float3(0, 0.5, 0) : -ringN * 0.3));
 
     // Planet sphere.
     float b = dot(rd, center);
@@ -749,8 +771,9 @@ float3 ringWorldSky(float3 rd) {
             bool litSide = dot(sun, ringN) * -denom > 0.0;
             float front = 0.35 + 0.65 * saturate(abs(dot(sun, ringN)) * 2.0);
             float forward = pow(saturate(dot(rd, sun)), 6.0) * 1.5;
-            ringCol = ringColor(type) * (litSide ? front : front * 0.35 + forward) * shadow * 0.65;
-            ringA = d * 0.9;
+            float near = saturate(1.0 - tRing / 1.2);
+            ringCol = ringColor(type) * (litSide ? front : front * 0.35 + forward) * shadow * lerp(0.65, 0.95, near);
+            ringA = d * lerp(0.9, 0.8, near);
         }
     }
     // Composite back to front.
@@ -1064,8 +1087,8 @@ float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
     return lerp(c, g, mask);
 }
 
-// Rain streaks on three cylinders around the camera (1.5 - 9 m away), hidden behind
-// closer geometry. Returns the streak coverage.
+// Distant rain: streaks on three cylinders around the camera (13 - 32 m away), beyond the
+// rain particles, hidden behind closer geometry. Returns the streak coverage.
 float rainStreaks(float3 rd, float sceneDist) {
     float az = atan2(rd.x, rd.z);
     float horiz = max(sqrt(saturate(1.0 - rd.y * rd.y)), 0.05);
@@ -1073,7 +1096,7 @@ float rainStreaks(float3 rd, float sceneDist) {
     float mppScale = 2.0 / (abs(u_Proj.y) * u_Screen.y); // metres per pixel at 1 m
     float acc = 0.0;
     [unroll] for (int l = 0; l < 3; l++) {
-        float d = l == 0 ? 1.5 : (l == 1 ? 3.6 : 9.0);
+        float d = l == 0 ? 13.0 : (l == 1 ? 20.0 : 32.0);
         if (sceneDist > d) {
             float2 q = float2(az * d, elevation * d);
             q.x += q.y * 0.12 * u_Nature.z;            // wind slant
@@ -1090,7 +1113,7 @@ float rainStreaks(float3 rd, float sceneDist) {
                 float len = 0.3 + 0.4 * h3;
                 float y0 = h4 * (1.0 - len);
                 float inY = smoothstep(y0, y0 + 0.08, f.y) * smoothstep(y0 + len, y0 + len - 0.12, f.y);
-                acc += saturate(1.0 - dx / width) * (0.0012 / width) * inY * (1.0 - l * 0.2);
+                acc += saturate(1.0 - dx / width) * (0.0012 / width) * inY * (0.8 - l * 0.2);
             }
         }
     }
@@ -1178,18 +1201,22 @@ float3 upsampleOcclusion(float2 uv, float z, float3 n) {
 }
 
 // Light sources in the game's LDR image: lamps and neon strips. Returns 0..1.
-//   c = linear colour, nWorld = world normal (for sun glare on the road)
-float emissiveAmount(float2 uv, float3 c, float3 nWorld) {
+//   c = linear colour, nWorld = world normal, rd = view ray (to tell sun glare from lights)
+float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd) {
     float peak = max(c.r, max(c.g, c.b));
     if (peak <= 0.5) return 0.0;
     float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
-    // Erode: a light covers a few pixels. Single bright texels (specular glints on
-    // asphalt lit by floodlights) are texture detail and must not turn into lights.
+    // Erode: single bright texels (specular glints on asphalt lit by floodlights) are
+    // texture detail, not lights. A pixel survives if it continues along some axis, so
+    // thin lines - the neon strips far down the track - stay lights.
+    float along = 0.0;
     [unroll] for (int e = 0; e < 4; e++) {
-        float2 eo = float2(e == 0 || e == 2 ? -1.5 : 1.5, e < 2 ? -1.5 : 1.5) * u_Screen.zw;
-        float3 ec = toLinear(tex2Dlod(s0, float4(uv + eo, 0, 0)).rgb);
-        peak = min(peak, max(ec.r, max(ec.g, ec.b)));
+        float2 eo = (e == 0 ? float2(1, 0) : (e == 1 ? float2(0, 1) : (e == 2 ? float2(1, 1) : float2(1, -1)))) * u_Screen.zw;
+        float3 ea = toLinear(tex2Dlod(s0, float4(uv + eo, 0, 0)).rgb);
+        float3 eb = toLinear(tex2Dlod(s0, float4(uv - eo, 0, 0)).rgb);
+        along = max(along, min(max(ea.r, max(ea.g, ea.b)), max(eb.r, max(eb.g, eb.b))));
     }
+    peak = min(peak, along);
     float surround = 0.0;
     float2 r = float2(0.012 * u_Screen.y * u_Screen.z, 0.012);
     [unroll] for (int k = 0; k < 8; k++) {
@@ -1203,8 +1230,36 @@ float emissiveAmount(float2 uv, float3 c, float3 nWorld) {
     // ... or a strongly coloured bright strip (neon), which glows in daylight too.
     float neon = smoothstep(0.5, 0.8, sat) * smoothstep(0.5, 0.85, peak);
     float amount = max(contrast, neon * 0.75);
-    // The sun's glare on the road is a reflection, not a light: white and facing up.
-    return amount * (1.0 - smoothstep(0.7, 0.9, nWorld.y) * (1.0 - smoothstep(0.3, 0.6, sat)));
+    // The sun's glare is a reflection, not a light: white, and either on the road (facing
+    // up) or on any surface that mirrors the sun towards the camera (roofs, glass).
+    // Sunset glare is orange, so in the mirror direction only clearly saturated colour
+    // (neon) stays a light.
+    float white = 1.0 - smoothstep(0.3, 0.6, sat);
+    float mirror = u_Light2.y > 0.5 ? smoothstep(0.75, 0.95, dot(reflect(rd, nWorld), u_SunWorld.xyz)) : 0.0;
+    float glare = max(smoothstep(0.7, 0.9, nWorld.y) * white, mirror * (1.0 - smoothstep(0.6, 0.9, sat)));
+    return amount * (1.0 - glare);
+}
+
+// The game bakes its sun into the image: lit sides, and white specular glare where a
+// surface mirrors the sun. Day-for-night (a night sky over a day map) takes it back out.
+//   Returns the factor for the colour.
+float removeGameSun(float3 c, float3 nWorld, float3 rd, float sat, float night) {
+    if (night <= 0.0 || u_Light2.y < 0.5) return 1.0;
+    float3 sun = u_SunWorld.xyz;
+    float above = saturate(sun.y * 6.0 + 0.4);
+    // Direct light: the sun side was lit with about twice the ambient.
+    float direct = saturate(dot(nWorld, sun)) * above;
+    float k = 1.0 / (1.0 + direct * 1.1 * night);
+    // Glare: bright, white and in the mirror direction of the sun.
+    float mirror = pow(saturate(dot(reflect(rd, nWorld), sun)), 4.0) * above;
+    // (Sunset glare is orange: only clearly coloured light - neon - is safe.)
+    float glare = mirror * (1.0 - smoothstep(0.45, 0.8, sat)) * smoothstep(0.15, 0.5, luma(c));
+    // Glare comes down to the level of plain lit asphalt - not below it, or it would leave
+    // dark patches. Moonlight is flat: what's still bright gets compressed.
+    float l = luma(c) * k;
+    float cap = lerp(1.0, min(1.0, 0.11 / max(l, 1e-3)), saturate(glare * 2.0) * night);
+    float flatten = 1.0 / (1.0 + 2.5 * night * l * cap);
+    return k * cap * flatten;
 }
 
 float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
@@ -1232,10 +1287,15 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
                 c += u_SunColor.rgb * (smoothstep(0.9994, 0.99975, mu) * 3.0 + pow(saturate(mu), 900.0) * 0.6) * u_Rays.z * daylight;
             }
         }
+        // Day-for-night on the game's own sky (storm, manual night setting).
+        if (u_Sky.x < 0.5) c = lerp(c, luma(c) * float3(0.85, 0.9, 1.0), saturate(u_Sky.y * 1.6)) * lerp(1.0, 0.3, u_Sky.y);
         if (u_Clouds.x > 0.0) {
             float4 cloud = tex2Dlod(s6, float4(uv, 0, 0));
-            c = c * lerp(1.0, cloud.a, u_Clouds.x) + cloud.rgb * u_Clouds.x;
+            // Lightning lights the cloud layer from inside.
+            float3 inner = float3(0.75, 0.8, 1.0) * u_Light2.z * (1.0 - cloud.a) * 3.0;
+            c = c * lerp(1.0, cloud.a, u_Clouds.x) + (cloud.rgb * lerp(1.0, 0.45, u_Sky.y) + inner) * u_Clouds.x;
         }
+        c += float3(0.6, 0.65, 0.85) * u_Light2.z * 0.6 * saturate(rd.y * 3.0 + 0.3);
         if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + 0.03) * rainStreaks(rd, SKY_Z) * 1.0;
         return float4(c, 1);
     }
@@ -1260,8 +1320,11 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float flatness = smoothstep(0.8, 0.97, nWorld.y);
 
     // Expand the LDR image back toward HDR: light sources glow.
-    float emissive = emissiveAmount(uv, c, nWorld);
+    float emissive = emissiveAmount(uv, c, nWorld, rd);
     float3 glow = c * u_Rays.w * emissive;
+    // White lights and screens glow less than coloured ones, or they bleach to flat white.
+    float peakC = max(c.r, max(c.g, c.b));
+    glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3)));
 
     // The game bakes a bright sun glare into the asphalt; tame it so the road doesn't
     // wash out to white (it's a reflection, it gets its sun highlight further down).
@@ -1269,6 +1332,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Below the tonemapper's knee the asphalt keeps its texture contrast.
     float glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, luma(c)) * (1.0 - smoothstep(0.25, 0.5, sat));
     c *= lerp(1.0, 0.6, glare);
+    c *= removeGameSun(c, nWorld, rd, sat, u_Sky.y);
 
     // --- Grass ---
     float grass = grassMask(c, nWorld, emissive);
@@ -1328,11 +1392,13 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (reflectivity > 0.0) {
         float3 r = reflect(rd, nRefl);
         float NdotV = saturate(dot(nRefl, -rd));
-        // Standing water reads as a mirror even from above (the eye adapts to it).
-        float F = max(0.02 + 0.98 * pow(1.0 - NdotV, 5.0), max(puddle, water) * 0.1);
         float smoothness = max(max(puddle, water), wet * 0.35);
         float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.04;
         float4 ssr = tex2Dlod(s8, float4(uv + distort, 0, 0));
+        // Standing water reads as a mirror even from above (the eye adapts to it): strongly
+        // where it mirrors objects and lights, gently where it only mirrors the sky (a pale
+        // sky everywhere made puddles look like camouflage patches).
+        float F = max(0.02 + 0.98 * pow(1.0 - NdotV, 5.0), max(puddle, water) * lerp(0.1, 0.4, ssr.a));
         float3 refl = lerp(skyReflection(r, skyAvg, daylight), ssr.rgb, ssr.a);
         c = lerp(c, refl, saturate(F * reflectivity * lerp(0.6, 1.0, smoothness)));
         // Sun glint (GGX): sharp on puddles and water, broad on wet asphalt.
@@ -1363,6 +1429,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float night = u_Sky.y;
     c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55) * lerp(1.0, 0.16, night);
     c += glow * (1.0 - saturate(fogAmount));
+    // Lightning: a cold flash over everything (surfaces facing up and the haze most).
+    if (u_Light2.z > 0.0) c += (c * 2.5 + fogColor * 0.4 * fogAmount + 0.01) * float3(0.8, 0.85, 1.0) * u_Light2.z * (0.6 + 0.4 * saturate(nWorld.y));
 
     if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + u_SunColor.rgb * daylight * 0.15 + 0.03) * rainStreaks(rd, dist) * 1.0;
     return float4(c, 1);
@@ -1372,13 +1440,14 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 // Neon light spill: coloured light sources light up the surfaces around them.
 // Quarter-res light buffer, blurred over a world-space radius, depth-aware.
 // ---------------------------------------------------------------------------------
-// s0 = scene colour (sRGB), s1 = full normal/depth. out.rgb = light, out.a = view z
+// s0 = scene colour (sRGB, bilinear), s1 = full normal/depth. out.rgb = light, out.a = view z
 float4 PS_SpillDown(float2 uv : TEXCOORD0) : COLOR0 {
-    float3 sum = 0;
+    float3 sum = 0, strongest = 0;
     float zmin = SKY_Z;
+    // Four bilinear taps cover the whole 4x4 block, so thin far-away strips aren't missed.
     [unroll] for (int j = 0; j < 2; j++) {
         [unroll] for (int i = 0; i < 2; i++) {
-            float2 suv = uv + (float2(i, j) - 0.5) * u_Screen.zw * 2.0;
+            float2 suv = uv + (float2(i, j) * 2.0 - 1.0) * u_Screen.zw;
             float3 c = toLinear(tex2Dlod(s0, float4(suv, 0, 0)).rgb);
             float4 nd = tex2Dlod(s1, float4(suv, 0, 0));
             float peak = max(c.r, max(c.g, c.b));
@@ -1387,10 +1456,12 @@ float4 PS_SpillDown(float2 uv : TEXCOORD0) : COLOR0 {
             // also means sun glare and white paint - leave those out.)
             float e = smoothstep(0.45, 0.8, sat) * smoothstep(0.45, 0.85, peak) * (nd.w < SKY_Z ? 1.0 : 0.0);
             sum += c * e;
+            strongest = max(strongest, c * e);
             zmin = min(zmin, nd.w);
         }
     }
-    return float4(sum * 0.25, zmin);
+    // Half average, half brightest: a strip one pixel wide still lights its surroundings.
+    return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
 }
 
 // s0 = light buffer, u_Pass0.xy = direction * texel. Radius scales with 1/z (about 3 m).
@@ -1398,7 +1469,8 @@ float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
     float4 center = tex2Dlod(s0, float4(uv, 0, 0));
     float z = min(center.a, 2000.0);
     float pxPerMetre = abs(u_Proj.y) * u_Screen.y * 0.25 * 0.5 / z;  // quarter-res pixels
-    float stepPx = clamp(3.0 * pxPerMetre / 6.0, 0.5, 12.0);
+    // At least a few pixels: far away the glow must stay visible, not shrink to nothing.
+    float stepPx = clamp(3.0 * pxPerMetre / 6.0, 0.9, 12.0);
     float3 sum = 0;
     float wsum = 0;
     [unroll] for (int i = -6; i <= 6; i++) {
@@ -1933,4 +2005,57 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
 // Plain copy (TAA history -> output when nothing else follows).
 float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(tex2Dlod(s0, float4(uv, 0, 0)).rgb, 1);
+}
+
+// ---------------------------------------------------------------------------------
+// Rain particles: drops and splashes are real geometry (pipeline.cpp draws them with its
+// own vertex shader), blended additively over the finished image (after TAA).
+//   s0 = full normal/depth, s1 = scene colour (sRGB), s2 = sky average (1x1),
+//   s3 = neon light (quarter), s4 = adapted exposure (1x1), u_Pass0.x = intensity
+//   data.xy = position in the quad, data.z = view z, data.w = fade / splash age
+// ---------------------------------------------------------------------------------
+float3 rainLight(float2 uv) {
+    // A drop is a tiny lens: it shows the sky and, upside down, what's behind it.
+    // At night the street lights and neon in it are what makes rain visible.
+    float3 sky = tex2Dlod(s2, float4(0.5, 0.5, 0, 0)).rgb;
+    float3 behind = toLinear(tex2Dlod(s1, float4(uv + float2(0.0, -0.02), 0, 0)).rgb);
+    float3 neon = tex2Dlod(s3, float4(uv, 0, 0)).rgb;
+    float peak = max(behind.r, max(behind.g, behind.b));
+    float3 light = sky * 0.8 + behind * 0.25 + behind * smoothstep(0.6, 1.0, peak) * u_Rays.w * 0.5 + neon * 4.0 + 0.015;
+    // To display space with the frame's exposure (the image is already tonemapped).
+    float autoEv = clamp(log2(0.2) - tex2Dlod(s4, float4(0.5, 0.5, 0, 0)).r, -1.5, 0.15) * u_Grade0.y;
+    float night = u_Sky.y;
+    light *= lerp(1.0, 0.25, night);
+    return toSRGB(tonemap(light * u_Grade0.x * exp2(autoEv)));
+}
+
+float4 PS_RainDrop(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 uv = (vpos + 0.5) * u_Screen.zw;
+    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - data.z);
+    float across = saturate(1.0 - abs(data.x));
+    float along = smoothstep(0.0, 0.3, data.y) * smoothstep(1.0, 0.5, data.y);
+    return float4(rainLight(uv) * (across * along * data.w * u_Pass0.x), 0);
+}
+
+float4 PS_RainSplash(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 uv = (vpos + 0.5) * u_Screen.zw;
+    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - (data.z * 0.985 - 0.05));
+    float p = data.w;           // age, 0..1
+    float2 q = data.xy;         // x: -1..1 across, y: 0..1 up
+    // Crown: a thin wall of water that opens up and rises, then falls apart.
+    float h = 0.55 * sin(saturate(p * 2.5) * PI * 0.5) * (1.0 - 0.6 * p);
+    float r = 0.2 + 0.55 * sqrt(p);
+    float wall = exp(-pow((abs(q.x) - r * (0.7 + 0.3 * q.y / max(h, 0.05))) * 8.0, 2.0));
+    wall *= smoothstep(h, h * 0.6, q.y) * saturate(q.y / max(h * 0.3, 0.02));
+    // Droplets thrown out on short arcs.
+    float drops = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float dx = (k - 1.5) / 1.5;
+        float2 pos = float2(dx * (0.25 + 0.7 * p), 3.2 * p * (1.0 - p) * (0.55 + 0.25 * frac(k * 0.618 + 0.3)));
+        drops += smoothstep(0.1, 0.03, length((q - pos) * float2(1.0, 1.4)));
+    }
+    // Flash where the drop hits the ground.
+    float hit = exp(-q.y * 14.0 - q.x * q.x * 5.0) * saturate(1.0 - p * 2.5);
+    float a = (wall * 0.7 + drops * 0.8 + hit) * (1.0 - p) * u_Pass0.x;
+    return float4(rainLight(uv) * a * 0.7, 0);
 }

@@ -77,6 +77,8 @@ private:
         kSpillDown,
         kSpillBlur,
         kLighting,
+        kRainDrop,
+        kRainSplash,
         kFocus,
         kDofBlur,
         kCinematic,
@@ -108,6 +110,9 @@ private:
     bool ensureHeightMap(IDirect3DDevice9* device);
     void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings);
     bool ensureCloudNoise(IDirect3DDevice9* device);
+    bool ensureRain(IDirect3DDevice9* device);
+    void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool splashes,
+                  IDirect3DSurface9* target);
     bool detectCameraCut(const Inputs& inputs) const;
 
     struct ProfileFrame {
@@ -186,6 +191,17 @@ private:
     float m_heightOrigin[2] = {};
 
     IDirect3DVolumeTexture9* m_cloudNoise = nullptr;
+
+    // Rain particles: drops in a box around the camera, splashes on the height map.
+    static constexpr UINT kRainDrops = 7000;
+    static constexpr UINT kRainSplashes = 2600;
+    IDirect3DVertexShader9* m_dropVS = nullptr;
+    IDirect3DVertexShader9* m_splashVS = nullptr;
+    IDirect3DVertexDeclaration9* m_rainDecl = nullptr;
+    IDirect3DVertexBuffer9* m_rainVB = nullptr; // drops, then splashes
+    IDirect3DIndexBuffer9* m_rainIB = nullptr;
+    bool m_rainSupported = true;
+    float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks)
     bool m_historyValid = false;
     bool m_profiling = false;
     ProfileFrame m_profile[kProfileFrames];

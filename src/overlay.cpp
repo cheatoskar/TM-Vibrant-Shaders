@@ -1,5 +1,7 @@
 #include "overlay.h"
+#include "autoquality.h"
 #include "config.h"
+#include "pipeline.h"
 #include "imgui.h"
 #include "backends/imgui_impl_dx9.h"
 #include "backends/imgui_impl_win32.h"
@@ -20,7 +22,7 @@ bool g_reloadRequested = false;
 
 const char* kSkyModes[] = {"Game sky", "Clear sky + clouds", "Starry night", "Black hole", "Aurora", "Ring world"};
 const char* kPlanetTypes[] = {"Saturn", "Jupiter", "Ice giant", "Exotic"};
-const char* kPlanetViews[] = {"Distant", "Next to the rings"};
+const char* kPlanetViews[] = {"Distant", "Next to the rings", "Under the rings"};
 const char* kDebugViews[] = {"Final image", "Depth", "Normals", "Ambient occlusion", "Sun shadows", "Light shafts", "Bloom", "Long shadows"};
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -80,6 +82,57 @@ void init(IDirect3DDevice9* device) {
     ImGui_ImplDX9_Init(device);
     g_originalWndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(hookedWndProc)));
     g_initialized = true;
+}
+
+// What each effect costs right now, measured on the GPU (timestamp queries).
+void drawPerformance() {
+    const Pipeline* pipeline = g_status.pipeline;
+    if (!pipeline || !ImGui::CollapsingHeader("Performance")) return;
+    struct Group {
+        const char* label;
+        const char* passes[3];
+    };
+    static const Group kGroups[] = {
+        {"Depth & normals", {"LinearDepth", "Prepare", "DownsampleND"}},
+        {"AO & sun shadows", {"OcclusionShadow", "BilateralBlur", nullptr}},
+        {"Long-range shadows / rain map", {"HeightSplat", "HeightMerge", nullptr}},
+        {"Custom sky", {"Sky", "SkyAverage", nullptr}},
+        {"Volumetric clouds", {"Clouds", nullptr, nullptr}},
+        {"Reflections", {"Reflect", nullptr, nullptr}},
+        {"Neon light", {"SpillDown", "SpillBlur", nullptr}},
+        {"Lighting, grass, weather, fog", {"Lighting", nullptr, nullptr}},
+        {"Rain particles", {"RainDrop", "RainSplash", nullptr}},
+        {"Depth of field, motion blur", {"Focus", "DofBlur", "Cinematic"}},
+        {"Light shafts", {"RayMask", "RayBlur", nullptr}},
+        {"Bloom", {"BloomDown", "BloomUp", nullptr}},
+        {"Exposure, colour grading", {"Luminance", "Adapt", "Final"}},
+        {"FXAA", {"FXAA", nullptr, nullptr}},
+        {"Temporal AA", {"TAA", nullptr, nullptr}},
+        {"Sharpening", {"Sharpen", "Copy", nullptr}},
+    };
+    const float total = pipeline->totalTime();
+    const float fps = ImGui::GetIO().Framerate;
+    if (total <= 0.0f) {
+        ImGui::TextDisabled("Measuring... (needs GPU timestamp queries)");
+        return;
+    }
+    const float frameMs = fps > 1.0f ? 1000.0f / fps : 0.0f;
+    ImGui::Text("Effects: %.2f ms per frame", total);
+    if (frameMs > total) ImGui::TextDisabled("Without effects: about %.0f FPS (now %.0f)", 1000.0f / (frameMs - total), fps);
+    for (const Group& g : kGroups) {
+        float ms = 0.0f;
+        for (const char* name : g.passes) {
+            if (!name) continue;
+            for (int p = 0; p < pipeline->passCount(); p++) {
+                if (!strcmp(Pipeline::passName(p), name)) ms += pipeline->passTime(p);
+            }
+        }
+        if (ms < 0.005f) continue;
+        // FPS gained by switching this off, from the current frame time.
+        const float gain = frameMs > ms ? 1000.0f / (frameMs - ms) - fps : 0.0f;
+        ImGui::BulletText("%-30s %5.2f ms  (+%.0f FPS off)", g.label, ms, gain);
+    }
+    ImGui::TextDisabled("Measured on your GPU. Switching an effect off gains about its time.");
 }
 
 void drawMenu() {
@@ -152,6 +205,10 @@ void drawMenu() {
     if (g_status.shaderError) ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "Shader error, see tmvs.log");
     ImGui::TextDisabled("Sun: %s (%.2f %.2f %.2f)   %.0f FPS", g_status.sunKnown ? "from game" : "unknown",
                         g_status.sunDirection[0], g_status.sunDirection[1], g_status.sunDirection[2], ImGui::GetIO().Framerate);
+    if (s.autoQuality && g_status.autoQuality) {
+        const AutoQuality& aq = *g_status.autoQuality;
+        ImGui::TextDisabled("Auto quality: %s (target %.0f FPS)", AutoQuality::levelName(aq.level()), s.targetFps);
+    }
     ImGui::Separator();
 
     bool changed = false;
@@ -194,6 +251,8 @@ void drawMenu() {
         config.preset = kCustomPreset;
         config.markDirty();
     }
+
+    drawPerformance();
 
     ImGui::Separator();
     if (ImGui::Button("Reset preset")) {

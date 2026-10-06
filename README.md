@@ -67,11 +67,12 @@ The mod hooks into the game's renderer, reads the depth buffer, the camera and t
 | **Aurora** | Northern lights, green and teal. |
 | **Ring World** | A gas giant and its rings over the stadium, a black hole far away. |
 | **Rainy Day** | Overcast clouds, wet track, puddles and rain. |
+| **Thunderstorm** | Dark and soaked: low clouds, pouring rain, deep puddles, lightning. |
 | **Replay Cinema** | Film look with motion blur and depth of field. Meant for replays and video export, not for driving. |
 | **Competition** | Clarity first: AO and contact shadows, no haze or lens effects. |
 | **Performance** | Vibrant with the expensive parts switched off. |
 
-Change any value and the preset turns into **Custom**. Type a name and press **Save as preset** to keep it.
+Change any value and the preset turns into **Custom**. Type a name and press **Save as preset** to keep it. While you're on *Custom*, a map change never swaps your tweaks for a mood preset.
 
 ---
 
@@ -108,8 +109,10 @@ What costs the most, if you want to win back FPS:
 | Volumetric clouds | 1.5 ms |
 | Reflections (wet / dry track) | 0.5–1 ms |
 | Depth of field | 2 ms |
-| Rain | 1 ms |
+| Rain (particles and wet surfaces) | 0.5–1 ms |
 | Effect quality High → Low | saves about 1 ms |
+
+You don't have to tune this by hand. **Auto quality** (on by default) watches your frame rate and steps the effect quality down when it falls below the target FPS, and back up when there's room. It never touches your settings or presets, and it leaves them alone when the game itself (CPU, vsync) is the limit. The **Performance** section of the `F8` menu shows what every effect costs on your GPU right now, and how many FPS you'd get back by turning it off.
 
 ---
 
@@ -196,10 +199,10 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Sky brightness | Brightness of the custom skies. |
 | Clouds (clear sky) | Amount of the flat clouds in the clear sky. |
 | Stars | Number and brightness of stars. |
-| Black hole size | Size of the black hole. |
+| Black hole size | Size of the black hole. Above 3 you are right at its edge, the disk sweeping across the sky. |
 | Ringed planet | Size of the planet in the starry night and black hole skies, or of the ring world planet. 0 = none. |
 | Ring world planet | Saturn, Jupiter, ice giant or exotic. |
-| Ring world view | *Distant*: the classic view of a ringed planet. *Next to the rings*: the rings sweep over you. |
+| Ring world view | *Distant*: the classic view of a ringed planet. *Next to the rings*: just outside them, the rings cross the sky in front of the planet. *Under the rings*: inside the ring system, the rings hang over the stadium like a ceiling. |
 | Planet direction / height | Where the planet is in the sky. |
 | Volumetric clouds | 3D clouds over any sky. 0 = off. |
 | Cloud coverage | How much of the sky the clouds cover. |
@@ -218,8 +221,9 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Setting | What it does |
 |---|---|
 | Wet roads | Darker, shiny, reflective track. |
-| Rain | Falling rain, plus ripples on wet surfaces. |
+| Rain | Rain drops falling around you, splashes on the track, ripples on wet surfaces. |
 | Puddles | Standing water on flat ground (needs wet roads). |
+| Lightning | How often lightning flashes light up the sky and the track. |
 | Water surfaces | Waves and reflections on open water (TMUF Island/Bay/Coast). Experimental: it detects water by colour. |
 | Track reflections (dry) | Glossy reflections on dry track. |
 | Grass detail | Grass patches and blades close to the camera. |
@@ -279,6 +283,8 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Temporal anti-aliasing | Smooths edges and flicker over several frames. Some softness on fast movement. |
 | Sharpening (CAS) | Gets back detail after anti-aliasing. |
 | Effect quality | Number of samples for AO, shadows and clouds. Low is noticeably faster. |
+| Auto quality | Lowers the effect quality on its own when the frame rate drops below the target. |
+| Auto quality: target FPS | The frame rate auto quality tries to hold. |
 | Disable game MSAA (restart) | Needed for the depth effects. Leave it on. |
 | Effects in replay/video export (restart) | Also hooks the depth buffers the game uses for replays and the video export. |
 

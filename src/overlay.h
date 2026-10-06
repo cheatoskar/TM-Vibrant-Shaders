@@ -2,6 +2,9 @@
 #include <d3d9.h>
 
 namespace tmshaders {
+class Pipeline;
+class AutoQuality;
+
 namespace overlay {
 
 struct Status {
@@ -10,6 +13,8 @@ struct Status {
     bool sunKnown = false;
     float sunDirection[3] = {};
     const char* shaderError = nullptr;
+    const Pipeline* pipeline = nullptr;       // GPU time per pass (measured while the menu is open)
+    const AutoQuality* autoQuality = nullptr;
 };
 
 void preReset();

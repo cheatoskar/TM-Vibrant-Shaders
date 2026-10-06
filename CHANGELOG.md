@@ -14,6 +14,15 @@
 - Vibrant: more sun, stronger shadows and light shafts, neon glows in daylight too
 - Fixed: the sun's glare on the road counted as a light source (blotchy glow, washed-out road)
 - Previewer: `--batch` for many variants per run, `--move` to test motion blur
+- Rain particles: real drops that streak with your speed, splashes on the track; drawn after TAA so they don't smear
+- New preset Thunderstorm: dark overcast, pouring rain, puddles, lightning
+- Auto quality: holds a target FPS by stepping the effect quality down and up; Performance panel in the F8 menu with the cost of every effect
+- Night skies on day maps: the game's baked sun (lit sides, glare on roofs, roads and screens) is taken out, no more white patches
+- Neon borders glow far down the track too, not only near the car
+- Ring World: Saturn by default, new view "Under the rings", "Next to the rings" reworked; Event Horizon can go right up to the black hole
+- Puddles mirror objects and lights more strongly
+- Custom settings survive a map change (no automatic mood preset while on Custom)
+- Night presets without chromatic aberration; Vibrant with stronger shadows, light shafts and a little more bloom
 
 ## 1.0.0-beta.1
 

@@ -24,11 +24,13 @@ struct Settings {
     bool disableGameMSAA = true; // required for the depth buffer; post AA replaces it
     int quality = 2;               // 0 low, 1 medium, 2 high (sample counts)
     bool readableGameDepth = true; // also hook the game's own depth buffers (menus, replay/video export)
+    bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
+    float targetFps = 60.0f;
 
     // Lighting (screen-space, reconstructed from depth)
     float aoStrength = 1.0f;
     float aoRadius = 1.6f;          // metres
-    float shadowStrength = 0.85f;   // screen-space sun shadows
+    float shadowStrength = 0.95f;   // screen-space sun shadows
     float shadowLength = 9.0f;      // metres
     float longShadows = 0.8f;       // world-space height map shadows (long, off-screen casters)
     float longShadowRange = 120.0f; // metres
@@ -48,10 +50,10 @@ struct Settings {
     float skyBrightness = 1.0f;
     float cloudAmount = 0.5f;
     float starAmount = 1.0f;
-    float skyEffectSize = 1.0f;    // black hole size
+    float skyEffectSize = 1.0f;    // black hole size (above ~3 the camera is right at its disk)
     float planetSize = 0.0f;       // ringed planet in the space skies (0 = none)
     int planetType = 0;            // ring world: 0 Saturn, 1 Jupiter, 2 ice giant, 3 exotic
-    int planetView = 1;            // ring world: 0 distant, 1 next to the ring plane
+    int planetView = 1;            // ring world: 0 distant, 1 next to the rings, 2 under the rings
     float planetAzimuth = 35.0f;   // degrees
     float planetElevation = 14.0f; // degrees
     float volumetricClouds = 0.0f; // ray-marched cloud layer (0 = off)
@@ -64,11 +66,11 @@ struct Settings {
     float fogSunScatter = 0.7f;
 
     // Volumetric light shafts
-    float godRays = 0.8f;
+    float godRays = 1.15f;
     float godRayDecay = 0.965f;
 
     // Bloom & lens
-    float bloom = 0.08f;
+    float bloom = 0.09f;
     float bloomRadius = 0.85f;
     float highlightBoost = 3.5f;   // LDR -> HDR expansion of light sources
     float lensFlare = 0.25f;
@@ -94,6 +96,7 @@ struct Settings {
     float rain = 0.0f;             // falling rain and ripples
     float puddles = 0.0f;          // standing water on flat ground
     float waterSurfaces = 0.0f;    // reflective, wavy open water (TMUF Island/Bay/Coast)
+    float lightning = 0.0f;        // lightning flashes (how often)
     float reflections = 0.0f;      // dry glossy reflections on the track
     float grassDetail = 0.7f;      // grass blades and patches
     float mowingStripes = 0.5f;    // stadium mowing pattern

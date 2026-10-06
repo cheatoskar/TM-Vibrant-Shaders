@@ -19,6 +19,7 @@ enum class Preset : int {
     RainyDay,        // overcast, wet roads, puddles and falling rain
     RingWorld,       // IterationT planets: a gas giant and its rings over the stadium
     ReplayCinema,    // film look with motion blur and depth of field for replays
+    Thunderstorm,    // dark, overcast, pouring rain, soaked track, lightning
     Custom,
     Count
 };

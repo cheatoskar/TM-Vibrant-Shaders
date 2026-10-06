@@ -13,6 +13,7 @@ namespace {
 const char* const kEntryPoints[] = {
     "PS_LinearDepth", "PS_Prepare",  "PS_DownsampleND", "PS_HeightMerge", "PS_HeightSplat", "PS_OcclusionShadow", "PS_BilateralBlur",
     "PS_Sky",         "PS_SkyAverage", "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
+    "PS_RainDrop",    "PS_RainSplash",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",
@@ -28,6 +29,25 @@ bool readFile(const std::wstring& path, std::string& out) {
     size_t read = fread(&out[0], 1, out.size(), f);
     fclose(f);
     return read == out.size();
+}
+
+// Lightning: random strikes (about one every 15 s at full strength), each a bright
+// flash with a couple of flickers. Deterministic in time, so every camera agrees.
+float lightningFlash(float time, float amount) {
+    if (amount <= 0.0f) return 0.0f;
+    float flash = 0.0f;
+    for (int k = 0; k < 2; k++) {
+        const float slot = floorf(time) - static_cast<float>(k);
+        unsigned h = static_cast<unsigned>(static_cast<int>(slot)) * 2654435761u;
+        h ^= h >> 15;
+        h *= 2246822519u;
+        h ^= h >> 13;
+        if ((h & 0xFFFF) / 65535.0f > amount * 0.07f) continue;
+        const float t = time - (slot + ((h >> 16) & 0xFF) / 255.0f);
+        if (t < 0.0f || t > 1.5f) continue;
+        flash += expf(-t * 8.0f) + 0.7f * expf(-fabsf(t - 0.22f) * 30.0f) + 0.5f * expf(-fabsf(t - 0.5f) * 25.0f);
+    }
+    return fminf(flash, 1.6f) * fminf(amount * 1.5f, 1.0f);
 }
 
 float smoothstepf(float a, float b, float x) {
@@ -137,6 +157,9 @@ void Pipeline::release() {
     gfx::release(m_stateBlock);
     gfx::release(m_splatVS);
     gfx::release(m_splatDecl);
+    gfx::release(m_dropVS);
+    gfx::release(m_splashVS);
+    gfx::release(m_rainDecl);
     m_quad.destroy();
     destroyTargets();
 }
@@ -258,6 +281,8 @@ void Pipeline::destroyTargets() {
     gfx::release(m_heightDepth);
     gfx::release(m_splatPoints);
     gfx::release(m_cloudNoise);
+    gfx::release(m_rainVB);
+    gfx::release(m_rainIB);
     m_taaValid = false;
     m_heightValid = false;
     m_width = m_height = 0;
@@ -478,6 +503,8 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[35][2] = kHeightMapWorld;
     c[35][3] = s.longShadowRange;
     c[36][0] = s.neonLight;
+    c[36][1] = in.sunKnown && len > 1e-5f ? 1.0f : 0.0f; // the game's sun, even under a night sky
+    c[36][2] = lightningFlash(in.time, s.lightning);
 
     device->SetPixelShaderConstantF(0, &c[0][0], 32);
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
@@ -682,6 +709,286 @@ bool Pipeline::ensureCloudNoise(IDirect3DDevice9* device) {
     return ok;
 }
 
+// --- Rain particles ---------------------------------------------------------
+
+namespace {
+
+// Drops: a box around the camera that is fixed in the world (wrapped as the camera moves),
+// each drop a screen-aligned streak along its motion relative to the camera.
+// Splashes: random spots in a box around the camera, placed on the height map and kept
+// only where that spot is the visible surface.
+const char* kRainVS = R"(
+float4 c_V0     : register(c0);  // world -> view, column 0 (rotation, translation)
+float4 c_V1     : register(c1);
+float4 c_V2     : register(c2);
+float4 c_Proj   : register(c3);  // P00, P11, P20, P21
+float4 c_Proj2  : register(c4);  // P22, P32, 2 / width, 2 / height
+float4 c_Cam    : register(c5);  // camera world xyz, time
+float4 c_Streak : register(c6);  // streak (world m), 0
+float4 c_Box    : register(c7);  // box size, box height, fall speed, min width (px)
+float4 c_Wind   : register(c8);  // wind x, z (m/s), splash rate (1/s), splash box size
+float4 c_Map    : register(c9);  // height map corner x, z, 1 / world size, 0
+sampler2D s_height : register(s0);
+sampler2D s_depth  : register(s1);
+struct VSOut { float4 pos : POSITION; float4 data : TEXCOORD0; };
+
+float3 toView(float3 w) { float4 p = float4(w, 1.0); return float3(dot(p, c_V0), dot(p, c_V1), dot(p, c_V2)); }
+float4 toClip(float3 v) {
+    float4 c = float4(v.x * c_Proj.x + v.z * c_Proj.z, v.y * c_Proj.y + v.z * c_Proj.w, v.z * c_Proj2.x + c_Proj2.y, v.z);
+    c.xy += float2(-c_Proj2.z, c_Proj2.w) * 0.5 * c.w; // D3D9 half-pixel offset
+    return c;
+}
+
+VSOut dropVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
+    VSOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    float3 box = float3(c_Box.x, c_Box.y, c_Box.x);
+    float3 drift = float3(c_Wind.x, -c_Box.z * (0.85 + 0.3 * seed.w), c_Wind.y) * c_Cam.w;
+    float3 local = (frac((seed.xyz * box + drift - c_Cam.xyz) / box) - 0.5) * box;
+    float3 w = c_Cam.xyz + local;
+    float3 va = toView(w), vb = toView(w + c_Streak.xyz);
+    if (va.z < 0.4 || vb.z < 0.4) return o;
+    float4 ca = toClip(va), cb = toClip(vb);
+    float2 na = ca.xy / ca.w, nb = cb.xy / cb.w;
+    float2 d = (nb - na) / c_Proj2.zw;
+    float len = length(d);
+    float2 dir = len > 1e-3 ? d / len : float2(0.0, 1.0);
+    if (len < 4.0) nb = na + dir * 4.0 * c_Proj2.zw; // a drop is never a dot
+    float z = lerp(va.z, vb.z, corner.y);
+    // Real width, about 2.5 mm; thinner than the minimum means fainter, not wider.
+    float widthPx = 0.0025 * c_Proj.y / (c_Proj2.w * z);
+    float shown = max(widthPx, c_Box.w);
+    float2 n = lerp(na, nb, corner.y) + float2(-dir.y, dir.x) * corner.x * shown * 0.5 * c_Proj2.zw;
+    float cw = lerp(ca.w, cb.w, corner.y);
+    o.pos = float4(n * cw, lerp(ca.z, cb.z, corner.y), cw);
+    float edge = saturate(2.0 - 4.0 * max(abs(local.x), abs(local.z)) / box.x); // hide the box edges
+    o.data = float4(corner.x, corner.y, z, edge * sqrt(saturate(widthPx / shown)));
+    return o;
+}
+
+VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
+    VSOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    float cycle = c_Cam.w * c_Wind.z * (0.8 + 0.4 * seed.w) + seed.z;
+    float k = floor(cycle), age = frac(cycle) / 0.3;
+    if (age > 1.0) return o;
+    float2 r = frac(sin(float2(k * 12.9898 + seed.x * 78.233, k * 39.3468 + seed.y * 11.135)) * 43758.5453);
+    // The box sits ahead of the camera, where the ground is in view.
+    float size = c_Wind.w;
+    float2 ahead = c_Cam.xz + normalize(c_V2.xz + 1e-4) * size * 0.4;
+    float2 xz = ahead + (frac((r * size - ahead) / size) - 0.5) * size;
+    float2 m = (xz - c_Map.xy) * c_Map.z;
+    if (any(m < 0.0) || any(m > 1.0)) return o;
+    float h = tex2Dlod(s_height, float4(m, 0, 0)).r;
+    if (h <= 0.0) return o;
+    float3 v = toView(float3(xz.x, h - 10000.0, xz.y));
+    if (v.z < 0.6) return o;
+    // Only where this spot is the surface you see (not under a bridge, not on a wall top
+    // seen from the side).
+    float4 c = toClip(v);
+    float2 suv = float2(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+    if (any(suv < 0.0) || any(suv > 1.0)) return o;
+    float sceneZ = tex2Dlod(s_depth, float4(suv, 0, 0)).r;
+    if (abs(sceneZ - v.z) > 0.25 + v.z * 0.02) return o;
+    float s = 0.08 + 0.06 * seed.w;
+    float3 up = float3(c_V0.y, c_V1.y, c_V2.y);
+    float3 right = normalize(float3(1.0, 0.0, 0.0) - up * up.x);
+    o.pos = toClip(v + right * corner.x * s * 1.7 + up * corner.y * s * 1.6);
+    o.data = float4(corner.x, corner.y, v.z, age);
+    return o;
+}
+)";
+
+} // namespace
+
+bool Pipeline::ensureRain(IDirect3DDevice9* device) {
+    if (!m_rainSupported) return false;
+    if (m_rainVB && m_rainIB) return true;
+    if (!m_dropVS) {
+        // Additive blending into the FP16 HDR target.
+        IDirect3D9* d3d = nullptr;
+        device->GetDirect3D(&d3d);
+        D3DDEVICE_CREATION_PARAMETERS cp{};
+        device->GetCreationParameters(&cp);
+        D3DDISPLAYMODE mode{};
+        device->GetDisplayMode(0, &mode);
+        const bool blend = d3d && SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format,
+                                                                    D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING,
+                                                                    D3DRTYPE_TEXTURE, D3DFMT_A16B16G16R16F));
+        if (d3d) d3d->Release();
+        m_dropVS = blend ? gfx::compileVertexShader(device, kRainVS, "dropVS", "RainVS") : nullptr;
+        m_splashVS = blend ? gfx::compileVertexShader(device, kRainVS, "splashVS", "RainVS") : nullptr;
+        const D3DVERTEXELEMENT9 elements[] = {
+            {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+            {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
+            D3DDECL_END(),
+        };
+        if (m_dropVS) device->CreateVertexDeclaration(elements, &m_rainDecl);
+        if (!m_dropVS || !m_splashVS || !m_rainDecl) {
+            TMVS_LOG("pipeline: rain particles unavailable (no FP16 blending or vertex shader failed)");
+            m_rainSupported = false;
+            return false;
+        }
+    }
+    const UINT quads = kRainDrops + kRainSplashes;
+    bool ok = SUCCEEDED(device->CreateVertexBuffer(quads * 4 * 24, D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &m_rainVB, nullptr)) &&
+              SUCCEEDED(device->CreateIndexBuffer(kRainDrops * 6 * 2, D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_rainIB, nullptr));
+    float* v = nullptr;
+    if (ok && SUCCEEDED(m_rainVB->Lock(0, 0, reinterpret_cast<void**>(&v), 0))) {
+        unsigned state = 0x2545F491u;
+        auto random = [&state]() {
+            state = state * 1664525u + 1013904223u;
+            return static_cast<float>(state >> 8) / 16777216.0f;
+        };
+        static const float kCorners[4][2] = {{-1.0f, 0.0f}, {1.0f, 0.0f}, {-1.0f, 1.0f}, {1.0f, 1.0f}};
+        for (UINT q = 0; q < quads; q++) {
+            const float seed[4] = {random(), random(), random(), random()};
+            for (const auto& corner : kCorners) {
+                for (float x : seed) *v++ = x;
+                *v++ = corner[0];
+                *v++ = corner[1];
+            }
+        }
+        m_rainVB->Unlock();
+    } else {
+        ok = false;
+    }
+    WORD* index = nullptr;
+    if (ok && SUCCEEDED(m_rainIB->Lock(0, 0, reinterpret_cast<void**>(&index), 0))) {
+        for (UINT q = 0; q < kRainDrops; q++) {
+            const WORD b = static_cast<WORD>(q * 4);
+            const WORD tri[6] = {b, static_cast<WORD>(b + 1), static_cast<WORD>(b + 2), static_cast<WORD>(b + 2), static_cast<WORD>(b + 1),
+                                 static_cast<WORD>(b + 3)};
+            memcpy(index, tri, sizeof(tri));
+            index += 6;
+        }
+        m_rainIB->Unlock();
+    } else {
+        ok = false;
+    }
+    if (!ok) {
+        gfx::release(m_rainVB);
+        gfx::release(m_rainIB);
+        TMVS_LOG("pipeline: rain particle buffers failed");
+        m_rainSupported = false;
+    }
+    return ok;
+}
+
+void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt, bool splashes,
+                        IDirect3DSurface9* target) {
+    const float* V = in.view;
+    const float* P = in.projection;
+    float camera[3];
+    for (int j = 0; j < 3; j++) camera[j] = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
+    // Camera velocity (smoothed): drops streak along their motion relative to the camera.
+    if (in.temporal) {
+        float velocity[3] = {};
+        if (m_temporalValid && dt > 1e-4f) {
+            const float* W = m_prevView;
+            for (int j = 0; j < 3; j++) {
+                const float before = -(W[12] * W[j * 4 + 0] + W[13] * W[j * 4 + 1] + W[14] * W[j * 4 + 2]);
+                velocity[j] = (camera[j] - before) / dt;
+            }
+        }
+        for (int j = 0; j < 3; j++) m_cameraVelocity[j] += (velocity[j] - m_cameraVelocity[j]) * 0.3f;
+    }
+    const float wind[2] = {2.5f + s.wind * 5.0f, 1.0f + s.wind * 2.0f};
+    const float fall = 9.0f;
+    const float exposure = 0.03f;
+    float streak[3] = {-(wind[0] - m_cameraVelocity[0]) * exposure, fall * exposure + m_cameraVelocity[1] * exposure,
+                       -(wind[1] - m_cameraVelocity[2]) * exposure};
+    const float length = sqrtf(streak[0] * streak[0] + streak[1] * streak[1] + streak[2] * streak[2]);
+    if (length > 1.2f) for (float& x : streak) x *= 1.2f / length;
+
+    float vc[10][4] = {};
+    for (int j = 0; j < 3; j++) {
+        vc[j][0] = V[0 * 4 + j];
+        vc[j][1] = V[1 * 4 + j];
+        vc[j][2] = V[2 * 4 + j];
+        vc[j][3] = V[12 + j];
+    }
+    vc[3][0] = P[0];
+    vc[3][1] = P[5];
+    vc[3][2] = P[8];
+    vc[3][3] = P[9];
+    vc[4][0] = P[10];
+    vc[4][1] = P[14];
+    vc[4][2] = 2.0f / in.width;
+    vc[4][3] = 2.0f / in.height;
+    vc[5][0] = camera[0];
+    vc[5][1] = camera[1];
+    vc[5][2] = camera[2];
+    vc[5][3] = fmodf(in.time, 1000.0f);
+    vc[6][0] = streak[0];
+    vc[6][1] = streak[1];
+    vc[6][2] = streak[2];
+    vc[7][0] = 24.0f;  // box: 12 m around the camera, farther rain is the screen-space layer
+    vc[7][1] = 16.0f;
+    vc[7][2] = fall;
+    vc[7][3] = 1.0f;   // min width (px)
+    vc[8][0] = wind[0];
+    vc[8][1] = wind[1];
+    vc[8][2] = 2.5f;   // splashes per second per particle
+    vc[8][3] = 30.0f;
+    vc[9][0] = m_heightOrigin[0];
+    vc[9][1] = m_heightOrigin[1];
+    vc[9][2] = 1.0f / kHeightMapWorld;
+    device->SetVertexShaderConstantF(0, &vc[0][0], 10);
+
+    device->SetRenderTarget(0, target);
+    D3DVIEWPORT9 viewport = {0, 0, in.width, in.height, 0.0f, 1.0f};
+    device->SetViewport(&viewport);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x7);
+    bind(device, 0, m_nd.texture, false);
+    bind(device, 1, in.color, true);
+    bind(device, 2, m_skyAverage.texture, false);
+    bind(device, 3, s.neonLight > 0.0f ? m_spill[0].texture : nullptr, true);
+    bind(device, 4, m_adapted[m_adaptIndex].texture, false);
+    device->SetVertexDeclaration(m_rainDecl);
+    device->SetStreamSource(0, m_rainVB, 0, 24);
+    device->SetIndices(m_rainIB);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER0, m_heightMap[m_heightIndex].texture);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER1, m_linearDepth.texture);
+    for (DWORD sampler = D3DVERTEXTEXTURESAMPLER0; sampler <= D3DVERTEXTEXTURESAMPLER1; sampler++) {
+        device->SetSamplerState(sampler, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+        device->SetSamplerState(sampler, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+        device->SetSamplerState(sampler, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        device->SetSamplerState(sampler, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        device->SetSamplerState(sampler, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    }
+
+    const UINT drops = static_cast<UINT>(kRainDrops * fminf(s.rain, 1.0f));
+    if (drops > 0) {
+        device->SetVertexShader(m_dropVS);
+        device->SetPixelShader(m_shaders[kRainDrop]);
+        passConstants(device, 1.1f, 0.0f);
+        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, drops * 4, 0, drops * 2);
+        profileMark(kRainDrop);
+    }
+    const UINT splashCount = static_cast<UINT>(kRainSplashes * fminf(s.rain, 1.0f));
+    if (splashes && splashCount > 0) {
+        device->SetVertexShader(m_splashVS);
+        device->SetPixelShader(m_shaders[kRainSplash]);
+        passConstants(device, 0.8f, 0.0f);
+        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, kRainDrops * 4, 0, splashCount * 4, 0, splashCount * 2);
+        profileMark(kRainSplash);
+    }
+
+    device->SetStreamSource(0, nullptr, 0, 0);
+    device->SetIndices(nullptr);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER0, nullptr);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER1, nullptr);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+}
+
 // A replay camera cut, a respawn or a jump to another camera: temporal history from the
 // previous frame would smear the old view over the new one.
 bool Pipeline::detectCameraCut(const Inputs& in) const {
@@ -744,9 +1051,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 
     // 1b. Long-range shadows: update the world-space height map.
     // Extra cameras (replay blends) use the map as it is: it follows the main camera.
-    const bool longShadows = s.longShadows > 0.0f && s.shadowStrength > 0.0f && m_sunKnown && ensureHeightMap(device) &&
-                             (temporal || m_heightValid);
-    if (longShadows && temporal) updateHeightMap(device, in, s);
+    // Rain splashes land on it too.
+    const bool wantLong = s.longShadows > 0.0f && s.shadowStrength > 0.0f && m_sunKnown;
+    const bool heightMap = (wantLong || s.rain > 0.0f) && ensureHeightMap(device) && (temporal || m_heightValid);
+    // Every other frame is enough for a map of the static world (saves ~0.15 ms).
+    if (heightMap && temporal && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s);
+    const bool longShadows = heightMap && wantLong;
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
                                     longShadows ? s.longShadows : 0.0f};
     device->SetPixelShaderConstantF(34, longConstants, 1);
@@ -803,7 +1113,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     const bool spill = s.neonLight > 0.0f;
     if (spill) {
-        bind(device, 0, in.color, false);
+        bind(device, 0, in.color, true);
         bind(device, 1, m_nd.texture, false);
         runPass(device, kSpillDown, m_spill[0]);
         bind(device, 0, m_spill[0].texture, true);
@@ -967,6 +1277,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         passConstants(device, 1.0f / in.width, 1.0f / in.height);
         runPass(device, sharpen ? kSharpen : kCopy, output, in.width, in.height);
     }
+    // Rain particles go on top of the finished image: TAA would erase thin, fast drops as
+    // flicker, and keeping them out of its history avoids trails.
+    if (s.rain > 0.0f && post && ensureRain(device)) drawRain(device, in, s, dt, heightMap && m_heightValid, output);
     profileEnd();
 
     if (temporal) {

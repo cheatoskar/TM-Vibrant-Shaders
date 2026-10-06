@@ -9,6 +9,7 @@
 #include "log.h"
 #include "overlay.h"
 #include "pipeline.h"
+#include "autoquality.h"
 #include "tracer.h"
 #include "tm_shaders_version.h"
 #include <d3d9.h>
@@ -69,6 +70,8 @@ struct SceneState {
 bool g_captureRequested = false;
 int g_capturesWritten = 0;
 Pipeline g_pipeline;
+AutoQuality g_autoQuality;
+bool g_shadedThisFrame = false;
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
 gfx::Target g_sceneCopy;
 
@@ -282,7 +285,13 @@ void processScene(IDirect3DDevice9* device) {
         g_captureRequested = false;
         writeCapture(device, inputs);
     }
-    if (settings.enabled) g_pipeline.render(device, inputs, settings, target);
+    if (settings.enabled) {
+        // Auto quality renders a reduced copy; your settings stay untouched.
+        Settings effective = settings;
+        g_autoQuality.apply(effective);
+        g_pipeline.render(device, inputs, effective, target);
+        g_shadedThisFrame = true;
+    }
 
     device->SetRenderTarget(0, target);
     device->SetDepthStencilSurface(savedDepth);
@@ -421,7 +430,15 @@ void onPresent(IDirect3DDevice9* device) {
     // Fallback when the engine hooks are unavailable: process at Present (HUD included).
     if (!engine::active() && g_scene.haveView) processScene(device);
 
+    // GPU timing costs a few queries per frame: only while it's used.
+    const Settings& settings = Config::get().settings;
+    g_pipeline.setProfiling(settings.autoQuality || Config::get().showOverlay);
+    g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline.totalTime(), settings);
+    g_shadedThisFrame = false;
+
     overlay::Status status;
+    status.pipeline = &g_pipeline;
+    status.autoQuality = &g_autoQuality;
     status.depthAvailable = depth::texture() != nullptr;
     status.engineHooks = engine::active();
     status.sunKnown = sunDirection(status.sunDirection);

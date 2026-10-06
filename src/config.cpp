@@ -33,10 +33,10 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("SkyBrightness", "Sky brightness", "Sky & Atmosphere", Float, skyBrightness, 0.2f, 3.0f),
         TMVS_FIELD("CloudAmount", "Clouds (clear sky)", "Sky & Atmosphere", Float, cloudAmount, 0.0f, 1.0f),
         TMVS_FIELD("StarAmount", "Stars", "Sky & Atmosphere", Float, starAmount, 0.0f, 3.0f),
-        TMVS_FIELD("SkyEffectSize", "Black hole size", "Sky & Atmosphere", Float, skyEffectSize, 0.3f, 3.0f),
+        TMVS_FIELD("SkyEffectSize", "Black hole size (> 3: up close)", "Sky & Atmosphere", Float, skyEffectSize, 0.3f, 6.0f),
         TMVS_FIELD("PlanetSize", "Ringed planet (0 = off)", "Sky & Atmosphere", Float, planetSize, 0.0f, 2.5f),
         TMVS_FIELD("PlanetType", "Ring world planet", "Sky & Atmosphere", Int, planetType, 0.0f, 3.0f),
-        TMVS_FIELD("PlanetView", "Ring world view", "Sky & Atmosphere", Int, planetView, 0.0f, 1.0f),
+        TMVS_FIELD("PlanetView", "Ring world view", "Sky & Atmosphere", Int, planetView, 0.0f, 2.0f),
         TMVS_FIELD("PlanetAzimuth", "Planet direction", "Sky & Atmosphere", Float, planetAzimuth, 0.0f, 360.0f),
         TMVS_FIELD("PlanetElevation", "Planet height", "Sky & Atmosphere", Float, planetElevation, -10.0f, 60.0f),
         TMVS_FIELD("VolumetricClouds", "Volumetric clouds", "Sky & Atmosphere", Float, volumetricClouds, 0.0f, 1.0f),
@@ -73,6 +73,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Wetness", "Wet roads", "Weather & Surfaces", Float, wetness, 0.0f, 1.0f),
         TMVS_FIELD("Rain", "Rain", "Weather & Surfaces", Float, rain, 0.0f, 1.0f),
         TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
+        TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
         TMVS_FIELD("WaterSurfaces", "Water surfaces (Island/Bay/Coast)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
         TMVS_FIELD("Reflections", "Track reflections (dry)", "Weather & Surfaces", Float, reflections, 0.0f, 1.0f),
         TMVS_FIELD("GrassDetail", "Grass detail", "Weather & Surfaces", Float, grassDetail, 0.0f, 1.0f),
@@ -88,6 +89,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("TAA", "Temporal anti-aliasing", "Image", Bool, taa, 0.0f, 1.0f),
         TMVS_FIELD("Sharpen", "Sharpening (CAS)", "Image", Float, sharpen, 0.0f, 1.0f),
         TMVS_FIELD("Quality", "Effect quality", "Image", Int, quality, 0.0f, 2.0f),
+        TMVS_FIELD("AutoQuality", "Auto quality (adapts to your GPU)", "Image", Bool, autoQuality, 0.0f, 1.0f),
+        TMVS_FIELD("TargetFPS", "Auto quality: target FPS", "Image", Float, targetFps, 30.0f, 240.0f),
         TMVS_FIELD("DisableGameMSAA", "Disable game MSAA (restart)", "Image", Bool, disableGameMSAA, 0.0f, 1.0f),
         TMVS_FIELD("ReadableGameDepth", "Effects in replay/video export (restart)", "Image", Bool, readableGameDepth, 0.0f, 1.0f),
     };
@@ -111,6 +114,7 @@ const char* presetName(Preset preset) {
         case Preset::RainyDay: return "Rainy Day";
         case Preset::RingWorld: return "Ring World";
         case Preset::ReplayCinema: return "Replay Cinema";
+        case Preset::Thunderstorm: return "Thunderstorm";
         case Preset::Custom: return "Custom";
         default: return "?";
     }
@@ -168,7 +172,8 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 
 // Machine settings that belong to the installation, not to a look.
 bool isSystemField(const Field& f) {
-    return !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth");
+    return !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
+           !strcmp(f.key, "TargetFPS");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem) {
@@ -316,6 +321,8 @@ void Config::onMoodDetected(Mood m) {
     mood = m;
     markDirty();
     TMVS_LOG("config: map mood %s", moodName(m));
+    // Your own unsaved tweaks win over the mood presets: a map change must not throw them away.
+    if (preset == kCustomPreset) return;
     const std::string& p = moodPreset[static_cast<int>(m)];
     if (!autoMood || p.empty() || p == preset) return;
     if (applyNamed(p)) {
@@ -337,11 +344,15 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepMSAA = s.disableGameMSAA;
     const bool keepDepth = s.readableGameDepth;
     const bool keepEnabled = s.enabled;
+    const bool keepAuto = s.autoQuality;
+    const float keepTarget = s.targetFps;
     if (preset == Preset::Custom) return;
     s = Settings();
     s.disableGameMSAA = keepMSAA;
     s.readableGameDepth = keepDepth;
     s.enabled = keepEnabled;
+    s.autoQuality = keepAuto;
+    s.targetFps = keepTarget;
     switch (preset) {
         case Preset::Vibrant:
             break; // Settings defaults are the Vibrant look.
@@ -447,7 +458,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.temperature = -0.12f;
             s.shadowTint = 0.5f;
             s.vignette = 0.3f;
-            s.chromaticAberration = 0.1f;
+            s.chromaticAberration = 0.0f;
             s.filmGrain = 0.01f;
             s.neonLight = 1.0f;
             s.reflections = 0.5f;
@@ -470,6 +481,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.temperature = -0.05f;
             s.shadowTint = 0.6f;
             s.vignette = 0.45f;
+            s.chromaticAberration = 0.0f;
             s.filmGrain = 0.015f;
             break;
         case Preset::Aurora:
@@ -487,6 +499,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.tint = -0.15f;
             s.shadowTint = 0.6f;
             s.vignette = 0.3f;
+            s.chromaticAberration = 0.0f;
             break;
         case Preset::Competition:
             s.aoStrength = 0.8f;
@@ -553,7 +566,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::RingWorld:
             s.skyMode = 5;
-            s.planetType = 1;
+            s.planetType = 0;
             s.planetView = 1;
             s.planetSize = 1.0f;
             s.skyEffectSize = 1.0f;
@@ -592,6 +605,40 @@ void applyPreset(Settings& s, Preset preset) {
             s.filmGrain = 0.025f;
             s.chromaticAberration = 0.1f;
             break;
+        case Preset::Thunderstorm:
+            // Overcast: the day map's sun is taken out like for a night sky, only darker grey.
+            s.skyNight = 0.45f;
+            s.volumetricClouds = 1.0f;
+            s.cloudCoverage = 1.0f;
+            s.cloudHeight = 650.0f;
+            s.wetness = 1.0f;
+            s.rain = 1.0f;
+            s.puddles = 0.55f;
+            s.lightning = 1.0f;
+            s.wind = 0.9f;
+            s.sunLight = 0.0f;
+            s.shadowStrength = 0.1f;
+            s.longShadows = 0.0f;
+            s.ambientTint = 0.9f;
+            s.skyColor[0] = 0.5f; s.skyColor[1] = 0.56f; s.skyColor[2] = 0.68f;
+            s.fogDensity = 2.2f;
+            s.fogSunScatter = 0.0f;
+            s.godRays = 0.0f;
+            s.sunGlow = 0.0f;
+            s.lensFlare = 0.0f;
+            s.highlightBoost = 4.5f;
+            s.neonLight = 1.3f;
+            s.bloom = 0.12f;
+            s.exposure = -0.3f;
+            s.contrast = 1.1f;
+            s.saturation = 0.78f;
+            s.vibrance = 0.05f;
+            s.temperature = -0.25f;
+            s.shadowTint = 0.4f;
+            s.vignette = 0.45f;
+            s.chromaticAberration = 0.0f;
+            s.filmGrain = 0.02f;
+            break;
         default:
             break;
     }
@@ -621,6 +668,9 @@ void Config::load() {
     settings.enabled = GetPrivateProfileIntW(L"General", L"Enabled", 1, ini) != 0;
     settings.disableGameMSAA = GetPrivateProfileIntW(L"Settings", L"DisableGameMSAA", 1, ini) != 0;
     settings.readableGameDepth = GetPrivateProfileIntW(L"Settings", L"ReadableGameDepth", 1, ini) != 0;
+    settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
+    wchar_t target[32] = {};
+    if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
     if (preset == kCustomPreset) {
         applyPreset(settings, Preset::Vibrant);
         readFields(settings, ini, L"Settings", false);
