@@ -172,6 +172,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("ShadowLength")) return s.shadowStrength > 0.0f;
     if (is("GodRayDecay")) return s.godRays > 0.0f;
     if (is("Puddles")) return s.wetness > 0.0f;
+    if (is("LensDrops")) return s.rain > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("TargetFPS")) return s.autoQuality;
     if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f;

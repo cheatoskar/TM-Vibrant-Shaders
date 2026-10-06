@@ -50,7 +50,7 @@ float4 u_Pass1 : register(c33);
 float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
 float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
-float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, 0
+float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -1524,6 +1524,41 @@ float3 upsampleOcclusion(float2 uv, float z, float3 n) {
     return wsum > 1e-4 ? sum / wsum : 1.0;
 }
 
+// Rain on every surface, not only the road: thin streams running down steep wet surfaces
+// (walls, barriers, the car's flanks) and small splash rings on everything that faces the
+// sky (barrier tops, the car's roof). Puddles have their own ripples.
+float3 rainOnSurfaces(float3 c, float3 world, float3 nWorld, float dist, float3 skyLight, float puddle) {
+    float rain = saturate(u_Weather.y) * saturate(u_Weather.x * 1.5);
+    if (rain <= 0.0 || dist > 40.0) return c;
+    float t = u_Proj2.z;
+    float fade = 1.0 - smoothstep(20.0, 40.0, dist);
+    float steep = 1.0 - smoothstep(0.35, 0.7, abs(nWorld.y));
+    if (steep > 0.0) {
+        float3 tangent = normalize(cross(float3(0, 1, 0), nWorld) + 1e-5);
+        float u = dot(world, tangent) * 6.0; // a stream every ~16 cm at most
+        float col = floor(u);
+        float h = hash12(float2(col, 3.7));
+        float x = frac(u) - 0.5 - (h - 0.5) * 0.4 + sin(world.y * 7.0 + h * 6.0) * 0.08;
+        float seg = frac(world.y * 1.5 + t * (0.8 + h) + h * 10.0);
+        float stream = smoothstep(0.09, 0.0, abs(x)) * smoothstep(0.0, 0.1, seg) * smoothstep(0.75, 0.3, seg) * step(0.55, h);
+        c = lerp(c, c * 0.6 + skyLight * 0.35, stream * steep * fade * rain);
+    }
+    float up = smoothstep(0.5, 0.8, nWorld.y) * (1.0 - puddle);
+    if (up > 0.0) {
+        float2 q = world.xz * 5.0; // 20 cm cells, one drop at a time each
+        float2 cell = floor(q);
+        float h = hash12(cell);
+        float cycle = t * 2.5 * (0.5 + h) + h * 13.0;
+        float phase = frac(cycle);
+        float hit = step(1.0 - rain * 0.6, hash12(cell + floor(cycle) * 1.37));
+        float2 centre = float2(hash12(cell + 1.3), hash12(cell + 2.9)) * 0.6 + 0.2;
+        float d = length(frac(q) - centre);
+        float ring = smoothstep(0.045, 0.0, abs(d - phase * 0.3)) * (1.0 - phase) * (1.0 - phase) * hit;
+        c += skyLight * ring * up * fade * 0.35;
+    }
+    return c;
+}
+
 float3 upsampleGI(float2 uv, float z, float3 n) { // from quarter res, depths from s3 (half res)
     float2 halfTexel = u_Screen.zw * 4.0;
     float2 base = (floor(uv / halfTexel - 0.5) + 0.5) * halfTexel;
@@ -1763,6 +1798,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             c += u_SunColor.rgb * spec * reflectivity * shadow * daylight * 0.5;
         }
     }
+
+    c = rainOnSurfaces(c, world, nWorld, dist, skyAvg.rgb * 0.8 + 0.04, puddle);
 
     // One bounce of light: the surface's own colour (the game's image is the best albedo
     // there is) times the light bounced onto it, less where it's occluded. The game's image
@@ -2271,14 +2308,47 @@ float4 PS_FXAA(float2 uv : TEXCOORD0) : COLOR0 {
 // ---------------------------------------------------------------------------------
 // AMD FidelityFX CAS (contrast adaptive sharpening) - s0 = LDR, u_Pass0.xy = texel
 // ---------------------------------------------------------------------------------
+// Rain drops on the lens (the replay look). Cells over the screen, each with a drop that
+// appears, grows heavier, slides down a little and dries off. Inside a drop the scene is
+// seen through a tiny lens: shrunk, flipped, a bright core and a dark rim.
+//   returns uv offset (xy) and brightness (z)
+float3 lensDrops(float2 uv) {
+    float3 r = float3(0, 0, 1);
+    if (u_Volume.w <= 0.0) return r;
+    float aspect = u_Screen.x * u_Screen.w;
+    float t = u_Proj2.z;
+    [unroll] for (int layer = 0; layer < 2; layer++) {
+        float scale = layer == 0 ? 7.0 : 13.0;
+        float2 p = float2(uv.x * aspect, uv.y) * scale;
+        float2 cell = floor(p);
+        float h = hash12(cell + layer * 37.0);
+        float cycle = t * (0.05 + 0.05 * h) + h * 7.3;
+        float life = frac(cycle);
+        if (hash12(cell + floor(cycle) * 13.1 + layer) > u_Volume.w * 0.6) continue;
+        float2 centre = (float2(hash12(cell + 3.1), hash12(cell + 5.7)) - 0.5) * 0.5;
+        centre.y += life * life * 0.3; // heavy drops slide down
+        float radius = lerp(0.1, 0.28, hash12(cell + 9.2)) * smoothstep(0.0, 0.04, life) * (1.0 - smoothstep(0.7, 1.0, life));
+        float2 d = frac(p) - 0.5 - centre;
+        d.y *= 1.2;
+        float k = length(d) / max(radius, 1e-4);
+        if (k < 1.0) {
+            r.xy = -d / scale * float2(1.0 / aspect, 1.0) * 2.2;
+            r.z = lerp(1.08, 0.55, pow(k, 4.0));
+        }
+    }
+    return r;
+}
+
 float4 PS_Sharpen(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 drop = lensDrops(uv);
+    uv += drop.xy;
     float2 t = u_Pass0.xy;
     float3 b = tex2Dlod(s0, float4(uv + float2(0, -t.y), 0, 0)).rgb;
     float3 d = tex2Dlod(s0, float4(uv + float2(-t.x, 0), 0, 0)).rgb;
     float3 e = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
     float3 f = tex2Dlod(s0, float4(uv + float2(t.x, 0), 0, 0)).rgb;
     float3 h = tex2Dlod(s0, float4(uv + float2(0, t.y), 0, 0)).rgb;
-    if (u_Post.y <= 0.001) return float4(e, 1);
+    if (u_Post.y <= 0.001) return float4(e * drop.z, 1);
     float3 mn = min(min(min(d, e), min(f, b)), h);
     float3 mx = max(max(max(d, e), max(f, b)), h);
     float3 amp = saturate(min(mn, 2.0 - mx) / max(mx, 1e-4));
@@ -2286,7 +2356,7 @@ float4 PS_Sharpen(float2 uv : TEXCOORD0) : COLOR0 {
     float peak = -1.0 / lerp(8.0, 5.0, saturate(u_Post.y));
     float3 w = amp * peak;
     float3 c = (b * w + d * w + f * w + h * w + e) / (1.0 + 4.0 * w);
-    return float4(saturate(c), 1);
+    return float4(saturate(c * drop.z), 1);
 }
 
 // Utility: raw depth (INTZ) -> R32F, used for frame captures.
@@ -2372,7 +2442,8 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
 
 // Plain copy (TAA history -> output when nothing else follows).
 float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR0 {
-    return float4(tex2Dlod(s0, float4(uv, 0, 0)).rgb, 1);
+    float3 drop = lensDrops(uv);
+    return float4(tex2Dlod(s0, float4(uv + drop.xy, 0, 0)).rgb * drop.z, 1);
 }
 
 // ---------------------------------------------------------------------------------

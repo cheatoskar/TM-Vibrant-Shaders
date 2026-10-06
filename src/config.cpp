@@ -76,6 +76,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Rain", "Rain (2 = downpour)", "Weather & Surfaces", Float, rain, 0.0f, 2.0f),
         TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
         TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
+        TMVS_FIELD("LensDrops", "Rain drops on the lens", "Weather & Surfaces", Float, lensDrops, 0.0f, 1.0f),
         TMVS_FIELD("WeatherSound", "Rain and thunder sound", "Weather & Surfaces", Float, weatherSound, 0.0f, 1.0f),
         TMVS_FIELD("WaterSurfaces", "Water surfaces (Island/Bay/Coast)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
         TMVS_FIELD("Reflections", "Track reflections (dry)", "Weather & Surfaces", Float, reflections, 0.0f, 1.0f),
@@ -585,6 +586,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.chromaticAberration = 0.1f;
             break;
         case Preset::Thunderstorm:
+            s.lensDrops = 0.35f;
             s.volumetricLight = 0.0f;
             // Overcast: the day map's sun is taken out like for a night sky, only darker grey.
             s.skyNight = 0.45f;

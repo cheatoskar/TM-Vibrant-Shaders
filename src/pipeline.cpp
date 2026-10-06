@@ -1159,7 +1159,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         passConstants(device, 0.0f, 1.0f / m_gi[0].height);
         runPass(device, kBilateralBlur, m_gi[0]);
     }
-    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, 0.0f};
+    const float lensDrops = s.lensDrops * fminf(s.rain, 1.0f);
+    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
     device->SetPixelShaderConstantF(37, volumeConstants, 1);
 
     // 3. Custom sky, the average sky colour (fog), volumetric clouds.
@@ -1338,9 +1339,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
                      m_taa[1].create(device, in.width, in.height, D3DFMT_A16B16G16R16F);
     const bool sharpen = s.sharpen > 0.001f && post;
+    // Drops on the lens sit on the lens: after TAA (it would smear them along the camera's
+    // motion), in the last pass.
+    const bool drops = lensDrops > 0.0f && post;
     // Chain: Final -> [FXAA] -> [TAA] -> [Sharpen | Copy] -> output.
     IDirect3DTexture9* current = nullptr;
-    if (!fxaa && !taa && !sharpen) {
+    if (!fxaa && !taa && !sharpen && !drops) {
         runPass(device, kFinal, output, in.width, in.height);
     } else {
         runPass(device, kFinal, m_ldr);
@@ -1349,7 +1353,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (fxaa) {
         bind(device, 0, current, true);
         passConstants(device, 1.0f / in.width, 1.0f / in.height);
-        if (!taa && !sharpen) {
+        if (!taa && !sharpen && !drops) {
             runPass(device, kFXAA, output, in.width, in.height);
             current = nullptr;
         } else {
