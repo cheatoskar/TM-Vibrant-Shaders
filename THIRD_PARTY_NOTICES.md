@@ -30,6 +30,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## minimp3
+
+MP3 decoder for the weather sounds (https://github.com/lieff/minimp3). Compiled into `TMVibrantShaders.dll`. Released under CC0 1.0 Universal (public domain), no conditions.
+
+## Weather recordings
+
+The rain and thunder sounds embedded in `TMVibrantShaders.dll` are recordings from freesound.org under CC0 1.0 (public domain). Sources and authors: [sounds/CREDITS.md](sounds/CREDITS.md).
+
 ## AMD FidelityFX Contrast Adaptive Sharpening (CAS)
 
 The sharpening pass follows the CAS algorithm.

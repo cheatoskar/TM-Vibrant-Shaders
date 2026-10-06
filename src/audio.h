@@ -15,6 +15,8 @@ void shutdown();
 // Previewer: renders 28 s of rain with a close, a middle and a far thunder to a WAV file,
 // through the same synthesis the game hears.
 bool renderWav(const wchar_t* path, float rain, float volume);
+// Previewer: decodes an MP3 to a 44.1 kHz stereo WAV (as the game would load it).
+bool decodeToWav(const wchar_t* mp3Path, const wchar_t* wavPath);
 // Previewer: play as if the game were in front (the console window belongs to another process).
 void setAlwaysInFront(bool on);
 

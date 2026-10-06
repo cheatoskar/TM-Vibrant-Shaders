@@ -1,0 +1,13 @@
+// Weather sounds: CC0 recordings from freesound.org (see sounds/CREDITS.md), embedded as
+// RCDATA. The ids are kRainClip and kThunderClips in src/audio.cpp.
+1  RCDATA "rain.mp3"
+11 RCDATA "thunder_close1.mp3"
+12 RCDATA "thunder_close2.mp3"
+13 RCDATA "thunder_close3.mp3"
+14 RCDATA "thunder_close4.mp3"
+21 RCDATA "thunder_medium1.mp3"
+22 RCDATA "thunder_medium2.mp3"
+23 RCDATA "thunder_medium3.mp3"
+31 RCDATA "thunder_far1.mp3"
+32 RCDATA "thunder_far2.mp3"
+33 RCDATA "thunder_far3.mp3"

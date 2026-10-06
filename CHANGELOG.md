@@ -11,7 +11,7 @@
 
 **Weather and water**
 - Lightning bolts in the sky with branches, near where you look; thunder follows after a delay that matches the distance.
-- Rain and thunder sound, synthesised on the fly, with a volume setting (up to 2). The log shows the output device and level.
+- Rain and thunder sound from real CC0 recordings (freesound.org): a seamless rain loop that follows the rain amount, ten thunders in three distance groups (never the same one twice in a row, pitch, loudness and dullness vary per strike, panned to the side of the flash). Volume up to 2, default 0.45. The log shows the output device and level.
 - Rain on every surface: streams running down steep wet surfaces, splash rings on the car and barrier tops.
 - Rain drops on the lens: clear drops that bend the image, small ones that dry off, big ones that run down. On/off in the simple menu.
 - Spray behind the car on wet roads.

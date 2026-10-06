@@ -38,7 +38,7 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 - **Spray** behind the car on wet roads.
 - Wet roads and puddles with screen-space reflections of the scenery and the lights.
 - **Thunderstorms** with lightning bolts in the sky, flashes that light up the clouds and the track, and thunder.
-- **Rain and thunder sound**, generated on the fly.
+- **Rain and thunder sound** from real recordings: a rain loop and ten different thunders (close cracks, rolling and far rumbles), each strike pitched and filtered a little differently and coming from the side of the flash.
 - **Water:** pools and rivers (and the TMUF sea) get waves, refraction and reflections. The mod knows the water's height from the game, so nothing else turns into water.
 - Grass detail: patches, stadium mowing stripes and blades close to the camera.
 
@@ -369,7 +369,8 @@ powershell -ExecutionPolicy Bypass -File .\install-modloader.ps1   # install the
 
 ## Credits
 
-- [Dear ImGui](https://github.com/ocornut/imgui) (MIT) for the menu, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- [Dear ImGui](https://github.com/ocornut/imgui) (MIT) for the menu and [minimp3](https://github.com/lieff/minimp3) (CC0) for the sounds, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- Rain and thunder recordings from [freesound.org](https://freesound.org) (CC0) by Rubaoliva, loganzsound, seth-m, Fission9, TRP, Kinoton, Martineerok, kingsrow and bastipictures, see [sounds/CREDITS.md](sounds/CREDITS.md).
 - Anti-aliasing and sharpening follow **FXAA 3.11** (Timothy Lottes) and **AMD FidelityFX CAS**.
 - TrackMania is a trademark of Ubisoft / Nadeo. This is a fan project and has nothing to do with them.
 

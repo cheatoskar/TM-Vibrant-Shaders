@@ -1,4 +1,4 @@
-// Offline previewer: renders recorded game frames (.tmcap) through the shader pipeline.
+﻿// Offline previewer: renders recorded game frames (.tmcap) through the shader pipeline.
 //
 //   tmvs_preview <capture.tmcap> <out.bmp> [options]
 //     --preset <name|index>   Vibrant, Cinematic, Golden Hour, Competition, Performance, ...
@@ -183,6 +183,8 @@ int main(int argc, char** argv) {
         const float volume = argc > 4 ? static_cast<float>(atof(argv[4])) : 1.0f;
         return tmshaders::audio::renderWav(widen(argv[2]).c_str(), rain, volume) ? 0 : 1;
     }
+    // tmvs_preview --decode in.mp3 out.wav
+    if (argc >= 4 && !strcmp(argv[1], "--decode")) return tmshaders::audio::decodeToWav(widen(argv[2]).c_str(), widen(argv[3]).c_str()) ? 0 : 1;
     // tmvs_preview --play <seconds> [volume]: plays the weather sound live, as in the game.
     if (argc >= 3 && !strcmp(argv[1], "--play")) {
         tmshaders::Settings s;
@@ -204,7 +206,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
                         "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--bench] "
                         "[--batch jobs.txt]\n"
-                        "       tmvs_preview --sound <out.wav> [rain] [volume]\n");
+                        "       tmvs_preview --sound <out.wav> [rain] [volume] | --play <seconds> [volume] | --decode <in.mp3> <out.wav>\n");
         return 2;
     }
 

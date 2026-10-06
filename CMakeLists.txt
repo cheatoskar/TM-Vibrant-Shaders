@@ -26,6 +26,13 @@ FetchContent_Declare(
   GIT_TAG v1.91.5
 )
 FetchContent_MakeAvailable(imgui)
+# MP3 decoder for the weather sounds (public domain / CC0, header only).
+FetchContent_Declare(
+  minimp3
+  GIT_REPOSITORY https://github.com/lieff/minimp3.git
+  GIT_TAG ea99364f61c14656440e8d77e9c233ccf3124633
+)
+FetchContent_MakeAvailable(minimp3)
 
 configure_file(src/version.h.in "${CMAKE_CURRENT_BINARY_DIR}/tm_shaders_version.h" @ONLY)
 # File version resource: also how the setup recognises its own d3d9.dll in a game folder.
@@ -122,6 +129,7 @@ add_library(tm_vibrant_shaders SHARED
   src/proxy.cpp
   src/exports.def
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
+  sounds/sounds.rc
 
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -131,7 +139,7 @@ add_library(tm_vibrant_shaders SHARED
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
 )
 target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm)
-target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR})
+target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR})
 target_compile_options(tm_vibrant_shaders PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
 
 set_target_properties(tm_vibrant_shaders PROPERTIES
@@ -140,8 +148,13 @@ set_target_properties(tm_vibrant_shaders PROPERTIES
 )
 
 # Offline previewer: runs the pipeline on recorded .tmcap frames (development tool).
-add_executable(tmvs_preview tools/preview.cpp src/audio.cpp)
+add_executable(tmvs_preview tools/preview.cpp src/audio.cpp "${CMAKE_CURRENT_SOURCE_DIR}/sounds/sounds.rc")
 target_link_libraries(tmvs_preview PRIVATE tmvs_core winmm)
+target_include_directories(tmvs_preview PRIVATE ${minimp3_SOURCE_DIR})
+# The sound files are found next to sounds.rc.
+set_property(SOURCE sounds/sounds.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/sounds")
+file(GLOB TMVS_SOUND_FILES "${CMAKE_CURRENT_SOURCE_DIR}/sounds/*.mp3")
+set_source_files_properties(sounds/sounds.rc PROPERTIES OBJECT_DEPENDS "${TMVS_SOUND_FILES}")
 target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
