@@ -259,7 +259,7 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Rain drops on the lens | Drops landing on the camera and running down the screen (only while it rains). |
 | Rain and thunder sound | Volume of the rain and the thunder (only with rain or lightning). |
 | Water (pools, sea) | Waves, refraction and reflections on the game's water. |
-| Track reflections (dry) | Glossy reflections on dry track. |
+| Track reflections (dry) | Reflections on the dry track: up to 1 a glossy sheen, from 1 to 2 polished like a mirror (checkpoints and objects reflect clearly). |
 | Grass detail | Grass patches and blades close to the camera. |
 | Mowing stripes | Stadium-style stripes in the grass. |
 | Wind | Speed of rain slant, grass and clouds. |
@@ -370,4 +370,4 @@ powershell -ExecutionPolicy Bypass -File .\install-modloader.ps1   # install the
 
 ## License
 
-© 2026 Oskar (cheatoskar). For now this is **source-available, not open source**. You can use the releases for free, also in videos and streams, read the code, and contribute through issues and pull requests. You can't redistribute it or publish modified versions. Details in [LICENSE](LICENSE). It will move to an open-source license once the shaders are final.
+© 2026 Oskar (cheatoskar). [MIT License](LICENSE): use it, change it, share it, build on it. Keep the copyright notice. Third-party parts keep their own licenses ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).

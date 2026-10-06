@@ -21,8 +21,19 @@
 **Performance**
 - Sky shader split per sky mode; the aurora's curtains render at half resolution with FSR 1 EASU upscaling (aurora sky about 3x cheaper).
 
+**Fixes**
+- Spray no longer appears when climbing a quarter pipe, flying or falling.
+- Aurora: no moiré (grid and ring patterns) near the horizon; the curtains soften where they get smaller than a pixel.
+- Advanced menu: Lighting and Sky had a second, duplicate section.
+
+**Reflections**
+- *Track reflections (dry)* goes up to 2: above 1 the dry track is polished, checkpoints and objects mirror clearly. Also in the simple menu.
+
 **Tools**
 - Previewer: `--time`, `--water`.
+
+**License**
+- MIT.
 
 ## 1.1.0
 

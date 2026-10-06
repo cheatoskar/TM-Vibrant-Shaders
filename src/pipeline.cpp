@@ -851,6 +851,7 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float bestZ = min(z0, min(z1, z2));
     float2 bestUV = float2(0.5, bestZ == z0 ? 0.6 : (bestZ == z1 ? 0.65 : 0.7));
     if (bestZ < 1.5 || bestZ > 16.0) return o; // no car in front of the camera
+    if (abs(c_V2.y) > 0.45) return o;           // camera pitched up/down: quarter pipe, loop, wall ride
     float3 v = viewRay(bestUV, bestZ);
     float3 car = c_Cam.xyz + c_V0.xyz * v.x + c_V1.xyz * v.y + c_V2.xyz * v.z;
     float3 fwd = normalize(float3(c_V2.x, 0.0, c_V2.z) + 1e-5); // camera forward, level
@@ -1031,7 +1032,10 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     device->SetVertexShaderConstantF(0, &vc[0][0], 10);
     device->SetVertexShaderConstantF(10, &pc[0][0], 5);
     const float speed = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
-    const float spray[4] = {speed, s.wetness * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
+    // Only on the ground: climbing a quarter pipe, flying or falling throws no spray.
+    const float climb = fabsf(m_cameraVelocity[1]) / fmaxf(speed, 1.0f);
+    const float grounded = fminf(fmaxf(1.0f - (climb - 0.15f) / 0.2f, 0.0f), 1.0f);
+    const float spray[4] = {speed, s.wetness * grounded * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
     device->SetVertexShaderConstantF(15, spray, 1);
 
     device->SetRenderTarget(0, target);

@@ -298,6 +298,7 @@ bool drawSimple(Settings& s) {
     look |= drawKey(s, "LensDrops", "Drops on the lens");
     if (s.rain > 0.0f || s.lightning > 0.0f) look |= drawKey(s, "WeatherSound", "Sound");
     look |= drawKey(s, "WaterSurfaces", "Water");
+    look |= drawKey(s, "Reflections", "Reflections (dry track)");
 
     heading("Performance");
     look |= drawKey(s, "AutoQuality", "Adapt quality to my GPU");

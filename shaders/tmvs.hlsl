@@ -957,18 +957,23 @@ float noise2(float2 p) {
     return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
-float auroraCurtain(float2 p, float t) {
+// footprint: size of a pixel in p units. Where the thin lines get smaller than a pixel they
+// widen (keeping their average brightness): no moiré rings near the horizon.
+float auroraCurtain(float2 p, float t, float footprint) {
     float2 w = float2(noise2(p * 0.45 + float2(t, 0.0)), noise2(p * 0.45 + float2(5.2, 1.3 - t)));
     p += (w - 0.5) * 3.2;
-    float n = noise2(p * 0.7) * 0.7 + noise2(p * 1.6 + 9.1) * 0.3;
     float activity = smoothstep(0.4, 0.75, noise2(p * 0.12 + float2(3.7, t * 0.5)));  // patches, not a full sky
-    return exp(-abs(n - 0.5) * 26.0) * activity;
+    float k = 26.0 / (1.0 + footprint * 12.0);
+    // The fine octave is the first to alias: it fades out first.
+    float fine = saturate(1.0 - footprint * 3.0);
+    float n = noise2(p * 0.7) * lerp(1.0, 0.7, fine) + (noise2(p * 1.6 + 9.1) - 0.5) * 0.3 * fine + 0.15 * fine;
+    return exp(-abs(n - 0.5) * k) * pow(k / 26.0, 0.6) * activity;
 }
 
 // The glowing curtains, marched through `slices` layers of height (40 = full quality).
 // Fewer slices take bigger steps through the same height range. jitter: 0..1 start offset,
 // changing every frame so TAA smooths the banding of the low slice counts.
-float3 auroraCurtains(float3 rd, float slices, float jitter) {
+float3 auroraCurtains(float3 rd, float slices, float jitter, float pixAngle) {
     if (rd.y <= 0.0) return 0;
     float ca = cos(u_Sky.z), sa = sin(u_Sky.z);
     float2 flat = float2(rd.x * ca - rd.z * sa, rd.x * sa + rd.z * ca);
@@ -978,8 +983,12 @@ float3 auroraCurtains(float3 rd, float slices, float jitter) {
     [loop] for (int i = 0; i < (int)slices; i++) {
         float fi = (i + jitter) * stride;
         float height = 1.0 + pow(fi, 1.4) * 0.012;
-        float2 p = flat * height / (rd.y * 1.6 + 0.12) * 1.6;
-        float curtain = auroraCurtain(p, t);
+        float den = rd.y * 1.6 + 0.12;
+        float q = height / den * 1.6;
+        float2 p = flat * q;
+        // How far p moves per pixel: along the slice (q) and towards the horizon (dq/dy).
+        float footprint = (q + 1.6 * q / den) * pixAngle;
+        float curtain = auroraCurtain(p, t, footprint);
         float3 tint = lerp(float3(0.12, 1.0, 0.4), float3(0.15, 0.65, 0.95), saturate((fi - 8.0) / 24.0));
         tint = lerp(tint, float3(0.75, 0.25, 0.9), saturate((fi - 22.0) / 18.0));
         avg = lerp(avg, tint * curtain, 1.0 - pow(0.55, stride));
@@ -1151,7 +1160,8 @@ float4 PS_AuroraHalf(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
                   max(tex2Dlod(s0, float4(uv + float2(-o.x, o.y), 0, 0)).w, tex2Dlod(s0, float4(uv + float2(o.x, o.y), 0, 0)).w));
     if (z < SKY_Z) return 0;
     float3 rd = viewToWorldDir(normalize(viewPosition(uv, 1.0)));
-    return float4(auroraCurtains(rd, u_Pass0.x, ign(vpos)), 1);
+    float3 rdNext = viewToWorldDir(normalize(viewPosition(uv + float2(0.0, u_Pass0.w * 2.0), 1.0)));
+    return float4(auroraCurtains(rd, u_Pass0.x, ign(vpos), length(rdNext - rd)), 1);
 }
 
 // Lightning bolt (u_Light2.w = azimuth + 7 * distance step 0..50, < 0 = none): a jagged
@@ -1477,8 +1487,10 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float maxDist = min(120.0, nd.w * 1.5 + 25.0);
     float noise = ign(vpos);
     float tPrev = 0.05;
-    [loop] for (int i = 1; i <= 16; i++) {
-        float t = (i - 1 + noise) / 16.0;
+    // A polished dry track is a mirror: finer steps so the reflection holds together.
+    float steps = u_Nature.w > 1.0 ? 32.0 : 16.0;
+    [loop] for (int i = 1; i <= (int)steps; i++) {
+        float t = (i - 1 + noise) / steps;
         t = t * t * maxDist + 0.1;
         float3 q = p + r * t;
         if (q.z < 0.25) break;
@@ -1488,7 +1500,7 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         if (delta > 0.0 && delta < 0.4 + t * 0.1) {
             // Refine between the last two steps.
             float a = tPrev, b = t;
-            [unroll] for (int k = 0; k < 4; k++) {
+            [unroll] for (int k = 0; k < 6; k++) {
                 float m = (a + b) * 0.5;
                 float3 qm = p + r * m;
                 if (qm.z - tex2Dlod(s1, float4(projectToUV(qm), 0, 0)).w > 0.0) b = m; else a = m;
@@ -1738,7 +1750,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float puddle = puddleMask(world, flatness, grass) * (1.0 - emissive);
     float water = waterMask(c, nWorld, world, nd.w, emissive);
     float reflectivity = max(max(wet * lerp(0.12, 0.55, flatness), puddle), water);
-    reflectivity = max(reflectivity, u_Nature.w * flatness * (1.0 - grass) * (1.0 - emissive) * 0.35);
+    // Dry reflections: 0..1 a glossy sheen, 1..2 polished like a showroom floor (objects and
+    // checkpoints mirror clearly in the dry track).
+    float polish = saturate(u_Nature.w - 1.0);
+    float dry = flatness * (1.0 - grass) * (1.0 - emissive);
+    reflectivity = max(reflectivity, min(u_Nature.w, 1.0) * dry * lerp(0.35, 1.0, polish));
+    polish *= dry;
     float2 slope = 0;
     if (reflectivity > 0.0) {
         float t = u_Proj2.z;
@@ -1794,13 +1811,21 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (reflectivity > 0.0) {
         float3 r = reflect(rd, nRefl);
         float NdotV = saturate(dot(nRefl, -rd));
-        float smoothness = max(max(puddle, water), wet * 0.35);
+        float smoothness = max(max(max(puddle, water), wet * 0.35), polish);
         float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.04;
         float4 ssr = tex2Dlod(s8, float4(uv + distort, 0, 0));
+        // The polished dry track: a soft 5-tap blur hides the half-res ray hits' patchwork.
+        if (polish > 0.0) {
+            float2 o = u_Screen.zw * 3.0;
+            float4 soft = ssr * 2.0 + tex2Dlod(s8, float4(uv + float2(o.x, 0), 0, 0)) + tex2Dlod(s8, float4(uv - float2(o.x, 0), 0, 0)) +
+                          tex2Dlod(s8, float4(uv + float2(0, o.y), 0, 0)) + tex2Dlod(s8, float4(uv - float2(0, o.y), 0, 0));
+            ssr = lerp(ssr, soft / 6.0, polish);
+        }
         // Standing water reads as a mirror even from above (the eye adapts to it): strongly
         // where it mirrors objects and lights, gently where it only mirrors the sky (a pale
         // sky everywhere made puddles look like camouflage patches).
         float F = max(0.02 + 0.98 * pow(1.0 - NdotV, 5.0), max(puddle, water) * lerp(0.1, 0.4, ssr.a));
+        F = max(F, polish * lerp(0.05, 0.55, ssr.a));
         float3 refl = lerp(skyReflection(r, skyAvg, daylight), ssr.rgb, ssr.a);
         c = lerp(c, refl, saturate(F * reflectivity * lerp(0.6, 1.0, smoothness)));
         // Sun glint (GGX): sharp on puddles and water, broad on wet asphalt.

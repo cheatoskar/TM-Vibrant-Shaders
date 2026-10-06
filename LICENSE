@@ -1,34 +1,24 @@
-TM Vibrant Shaders - License
+MIT License
 
-Copyright (c) 2026 Oskar (cheatoskar). All rights reserved.
+Copyright (c) 2026 Oskar (cheatoskar)
 
-The source code of TM Vibrant Shaders is public so that everybody can see what the
-mod does, report bugs and suggest improvements. Until the project moves to an
-open-source license, these terms apply:
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-YOU MAY
-  1. Download the official releases from
-     https://github.com/cheatoskar/tmnf-vibrant-shaders and use them free of charge,
-     including for videos and streams (also monetised ones).
-  2. Read the source code, and build it on your own computer for private testing
-     or to prepare a contribution to this repository.
-  3. Open issues and pull requests in this repository. By submitting a
-     contribution you agree that the author may use, modify and relicense it as
-     part of this project, including under a future open-source license.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-YOU MAY NOT, without written permission from the author
-  1. Redistribute the mod, its files or builds of it (re-uploads, mirrors,
-     mod packs).
-  2. Publish modified versions or derived works, or reuse substantial parts of
-     the code or shaders in other projects.
-  3. Sell the mod or use it commercially, other than as described above.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 Third-party components keep their own licenses, see THIRD_PARTY_NOTICES.md.
 TrackMania is a trademark of Ubisoft / Nadeo. This is an unofficial fan project.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
-CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
