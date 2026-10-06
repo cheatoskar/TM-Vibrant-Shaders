@@ -1,6 +1,6 @@
 TM Vibrant Shaders - real-time lighting, weather and skies for
 TrackMania Nations / United Forever
-https://github.com/cheatoskar/tmnf-vibrant-shaders
+https://github.com/cheatoskar/TM-Vibrant-Shaders
 
 ======================================================================
 ENGLISH
@@ -13,10 +13,12 @@ INSTALL - the easy way
        - Install for the TrackMania ModLoader (recommended if you use it:
          https://tomashu.dev/software/tmloader/), then tick
          "TM Vibrant Shaders" in the ModLoader and start the game.
-       - Install into the game folder (no ModLoader needed): select your
-         TrackMania folder (the one with TmForever.exe), then start the
-         game as usual. Windows asks for admin rights if the game is in
-         "Program Files".
+       - Install into TrackMania Nations Forever / United Forever (no
+         ModLoader needed): the setup lists every TrackMania it finds,
+         each with its own button. "Install into another game folder"
+         lets you pick the folder with TmForever.exe yourself. Then start
+         the game as usual. Windows asks for admin rights if the game is
+         in "Program Files".
 
 INSTALL - by hand, no .exe
   With the ModLoader:
@@ -32,6 +34,7 @@ INSTALL - by hand, no .exe
 IN GAME
   F8   shader menu (presets, every setting, your own presets)
   F7   shaders on/off
+  F12  screenshot and frame capture (for bug reports)
   Everything you change is saved automatically, in
   Documents\TrackMania\TMVS.
 
@@ -57,10 +60,12 @@ INSTALLIEREN - der einfache Weg
        - Für den TrackMania ModLoader installieren (empfohlen, wenn du ihn
          nutzt: https://tomashu.dev/software/tmloader/), dann im ModLoader
          "TM Vibrant Shaders" anhaken und das Spiel starten.
-       - In den Spielordner installieren (ohne ModLoader): den
-         TrackMania-Ordner auswählen (der mit TmForever.exe), dann das Spiel
-         ganz normal starten. Liegt das Spiel unter "Programme", fragt
-         Windows nach Admin-Rechten.
+       - In TrackMania Nations Forever / United Forever installieren (ohne
+         ModLoader): Das Setup zeigt jedes gefundene TrackMania mit eigenem
+         Button. Mit "Install into another game folder" wählst du den
+         Ordner mit der TmForever.exe selbst. Dann das Spiel ganz normal
+         starten. Liegt das Spiel unter "Programme", fragt Windows nach
+         Admin-Rechten.
 
 INSTALLIEREN - von Hand, ohne .exe
   Mit ModLoader:
@@ -76,6 +81,7 @@ INSTALLIEREN - von Hand, ohne .exe
 IM SPIEL
   F8   Shader-Menü (Presets, alle Einstellungen, eigene Presets)
   F7   Shader an/aus
+  F12  Screenshot und Frame-Capture (für Fehlerberichte)
   Alles wird automatisch gespeichert, in Dokumente\TrackMania\TMVS.
 
 DEINSTALLIEREN

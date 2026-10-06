@@ -4,7 +4,7 @@ Real-time lighting, weather and skies for TrackMania Nations Forever and United 
 
 This release brings full TrackMania United Forever support, real rain and thunder sound, volumetric light, bounce light, lightning bolts, water that is found by its height, a neon light trail and the new **Realistic** preset.
 
-![Original and Realistic](https://raw.githubusercontent.com/cheatoskar/tmnf-vibrant-shaders/v1.2.0/docs/images/compare-realistic.jpg)
+![Original and Realistic](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.2.0/docs/images/compare-realistic.jpg)
 
 ### Download and install
 
@@ -52,4 +52,4 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 - Aurora: no grid and ring patterns near the horizon.
 - The replay camera detection also works with the ModLoader.
 
-Full details in the [README](https://github.com/cheatoskar/tmnf-vibrant-shaders#readme) and the [changelog](https://github.com/cheatoskar/tmnf-vibrant-shaders/blob/main/CHANGELOG.md). Sound recordings: CC0 from freesound.org, see [sounds/CREDITS.md](https://github.com/cheatoskar/tmnf-vibrant-shaders/blob/main/sounds/CREDITS.md). The mod is now MIT licensed.
+Full details in the [README](https://github.com/cheatoskar/TM-Vibrant-Shaders#readme) and the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md). Sound recordings: CC0 from freesound.org, see [sounds/CREDITS.md](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/sounds/CREDITS.md). The mod is now MIT licensed.
