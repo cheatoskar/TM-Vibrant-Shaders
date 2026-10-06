@@ -33,13 +33,19 @@ constexpr uintptr_t kShaderLevel = 0x00d123ba; // word: GPU shader path (PC0..PC
 // must be whole, position-independent instructions (they run again in the trampoline).
 struct InlineSite {
     uintptr_t address;
-    unsigned char prologue[8];
+    unsigned char prologue[12];
     size_t length;
     const char* name;
 };
 constexpr InlineSite kClipTracksUpdate = {0x00693e20, {0xd9, 0xe8, 0x83, 0xec, 0x08}, 5, "CGameCtnMediaClipPlayer::TracksUpdate"};
 constexpr InlineSite kClipViewerCams = {0x00673e50, {0x6a, 0xff, 0x68, 0xe8, 0xf4, 0xaa, 0x00}, 7, "CGameCtnMediaClipViewer::UpdateCams"};
 constexpr InlineSite kVideoShoot = {0x006f4510, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, "CGameCtnMediaVideoShooter::DoShoot"};
+// Map load (CGameCtnApp::ChallengeCreateSceneGraph): the zone gets the sea level of the
+// environment's decoration, -1 when it has none.
+constexpr InlineSite kWaterTileHeight = {0x0054e100, {0x55, 0x8b, 0xe9, 0xd9, 0x85, 0x08, 0x01, 0x00, 0x00}, 9, "CHmsZone::WaterRenderTileHeightSet"};
+// Water blocks (Stadium pools and rivers) are terrain blocks: their surface is always here,
+// 1.06 m below the ground (measured in game: 7.937 +- 0.003).
+constexpr float kBlockWaterY = 7.94f;
 // Renders the reflection of a water plane; gets the plane equation (world space).
 constexpr InlineSite kWaterPlane = {0x00991e30, {0x81, 0xec, 0xe0, 0x01, 0x00, 0x00}, 6, "CVisionViewportDx9::TexRender_Water_PlaneR"};
 
@@ -73,6 +79,10 @@ using WaterPlaneFn = void(__fastcall*)(void*, void*, void*, void*, const float*,
 WaterPlaneFn g_waterPlane = nullptr;
 float g_waterPlaneEq[4] = {};
 DWORD g_lastWater = 0;          // GetTickCount of the last water reflection render
+using TileHeightFn = void(__fastcall*)(void*, void*, float);
+TileHeightFn g_tileHeight = nullptr;
+bool g_mapLoaded = false;       // a map load was seen, so its sea level is known
+float g_seaLevel = -1.0f;       // -1 = no sea
 TracksUpdateFn g_tracksUpdate = nullptr;
 UpdateCamsFn g_updateCams = nullptr;
 DoShootFn g_doShoot = nullptr;
@@ -163,6 +173,22 @@ void __fastcall waterPlaneDetour(void* self, void* edx, void* bitmap, void* rend
         g_lastWater = GetTickCount();
     }
     g_waterPlane(self, edx, bitmap, render, plane, flags, mode);
+}
+
+// Water height from a plane (a x + b y + c z + d = 0); false unless it is level.
+bool levelPlaneHeight(const float* p, float& y) {
+    const float len = sqrtf(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+    if (len < 1e-6f || fabsf(p[1]) / len < 0.99f) return false;
+    y = -p[3] / p[1];
+    return y > -5000.0f && y < 5000.0f;
+}
+
+void __fastcall tileHeightDetour(void* self, void* edx, float height) {
+    g_tileHeight(self, edx, height);
+    g_mapLoaded = true;
+    g_seaLevel = height;
+    if (height != -1.0f) TMVS_LOG("engine: sea level %.2f", height);
+    else TMVS_LOG("engine: no sea on this map");
 }
 
 int g_loggedShadowMode = -2;
@@ -269,6 +295,7 @@ bool install(const Callbacks& callbacks) {
     g_updateCams = reinterpret_cast<UpdateCamsFn>(inlineHook(kClipViewerCams, reinterpret_cast<void*>(&updateCamsDetour)));
     g_doShoot = reinterpret_cast<DoShootFn>(inlineHook(kVideoShoot, reinterpret_cast<void*>(&doShootDetour)));
     g_waterPlane = reinterpret_cast<WaterPlaneFn>(inlineHook(kWaterPlane, reinterpret_cast<void*>(&waterPlaneDetour)));
+    g_tileHeight = reinterpret_cast<TileHeightFn>(inlineHook(kWaterTileHeight, reinterpret_cast<void*>(&tileHeightDetour)));
     g_active = true;
     TMVS_LOG("engine: CVisionViewportDx9 hooks installed (module base %p)", GetModuleHandleW(nullptr));
     return true;
@@ -282,19 +309,13 @@ const CameraInfo& currentCamera() {
     return g_camera;
 }
 
-bool waterHeights(float& minY, float& maxY) {
-    // Seen in the last 2 s, and level (the stadium pools, rivers and the sea all are).
-    if (!g_waterPlane || g_lastWater == 0 || GetTickCount() - g_lastWater > 2000) return false;
-    const float* p = g_waterPlaneEq;
-    const float len = sqrtf(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
-    if (len < 1e-6f || fabsf(p[1]) / len < 0.99f) return false;
-    // a x + b y + c z + d = 0 with a = c = 0: y = -d / b.
-    minY = maxY = -p[3] / p[1];
-    return minY > -5000.0f && minY < 5000.0f;
-}
-
-bool waterHooked() {
-    return g_waterPlane != nullptr;
+bool waterHeights(float& blockY, float& seaY) {
+    if (!g_mapLoaded) return false;
+    blockY = seaY = kBlockWaterY; // no sea: both the same
+    float y = 0.0f;
+    if (g_lastWater != 0 && GetTickCount() - g_lastWater < 2000 && levelPlaneHeight(g_waterPlaneEq, y)) seaY = y;
+    else if (g_seaLevel != -1.0f) seaY = g_seaLevel;
+    return true;
 }
 
 void setProjectionJitter(float x, float y) {

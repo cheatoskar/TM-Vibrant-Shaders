@@ -28,14 +28,19 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 - Ambient occlusion in corners, under barriers and around cars.
 - Sun shadows traced against the depth buffer, plus **long-range shadows**: the mod builds a height map of the track as you drive, so a low sun throws long shadows, even from things that are off screen.
 - Warm sunlight, sky-coloured shade, light shafts and height fog.
+- **Volumetric light:** sun shafts in the haze with real shadows from the track's structures, also when the sun is off screen.
+- **Bounce light** (screen-space global illumination): surfaces light each other with their own colour, the road brightens the car's underside, the neon colours the walls.
 - **Neon light:** the blue and green borders and other coloured lights light up the road and walls around them, all the way down the track.
 
 **Weather and surfaces**
-- **Rain** as real particles: drops that fall around you and streak with your speed, splashes on the track, ripples in the puddles.
+- **Rain** as real particles: drops that fall around you and streak with the camera's motion, splashes on the track, ripples in the puddles, streams running down walls, drops hitting the car.
+- Rain drops on the lens that run down the screen (on/off).
+- **Spray** behind the car on wet roads.
 - Wet roads and puddles with screen-space reflections of the scenery and the lights.
-- **Thunderstorms** with lightning that lights up the clouds and the track.
+- **Thunderstorms** with lightning bolts in the sky, flashes that light up the clouds and the track, and thunder.
+- **Rain and thunder sound**, generated on the fly.
+- **Water:** pools and rivers (and the TMUF sea) get waves, refraction and reflections. The mod knows the water's height from the game, so nothing else turns into water.
 - Grass detail: patches, stadium mowing stripes and blades close to the camera.
-- Water surfaces with waves and reflections (TMUF Island, Bay and Coast; experimental).
 
 **Sky**
 - Volumetric clouds, ray-marched and lit by the sun.
@@ -46,13 +51,13 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 
 **Camera**
 - HDR glow, bloom, auto exposure and a filmic tone curve.
-- Temporal anti-aliasing (TAA) plus FXAA, and AMD CAS sharpening.
-- Motion blur and depth of field for replays and the video export.
+- Temporal anti-aliasing with sub-pixel jitter (real TAA, the edges get supersampled over a few frames) plus FXAA, and AMD CAS sharpening.
+- Motion blur and depth of field that switch on by themselves in replays, intros and the video export, and stay off while you drive.
 
 **Made to be used**
 - An `F8` menu with a **Simple** view for the everyday settings and an **Advanced** view with every value.
 - **Auto quality** keeps your frame rate: it turns effects down when the GPU can't keep up, and back up when it can.
-- The menu shows what each effect costs on your GPU, measured live.
+- The *Performance* panel shows what each effect costs on your GPU, measured live.
 - A preset per kind of map: day, sunset and night maps get their own look automatically.
 - Your own presets, saved as small text files you can share.
 
@@ -110,6 +115,8 @@ What costs the most, if you want to win back FPS:
 |---|---|
 | Light shafts (when the sun is on screen) | 1.1 ms |
 | Long-range shadows | 0.8 ms |
+| Volumetric light | 0.3 ms |
+| Bounce light (GI) | 0.25 ms |
 | Temporal AA | 0.7 ms |
 | Volumetric clouds | 1.5 ms |
 | Reflections (wet / dry track) | 0.5–1 ms |
@@ -202,6 +209,7 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Long-range shadows | Strength of the height-map shadows: long evening shadows and shadows from off-screen objects. |
 | Long shadow range (m) | How far those shadows reach. |
 | Neon light on surroundings | How much coloured lights (borders, signs) light up the surfaces around them. |
+| Bounce light (global illumination) | Light bounced from surface to surface with their colour (one bounce, screen space). |
 | Sunlight warmth | How strongly sunlit surfaces take on the sun colour. |
 | Sky ambient tint | How strongly shaded surfaces take on the sky colour. |
 | Sun colour | Colour of the sunlight. |
@@ -234,7 +242,8 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Sun glow | Glow and disc of the sun. |
 | Haze density / height falloff | How thick the haze is, and how fast it thins out with height. |
 | Haze sun scattering | How much the haze glows around the sun. |
-| Light shafts / length | Strength and length of the sun rays. |
+| Light shafts / length | Strength and length of the sun rays (screen space, around the visible sun). |
+| Volumetric light (shadowed haze) | Sunlit haze with the shadows of the structures in it, also with the sun behind you. |
 
 </details>
 
@@ -246,8 +255,10 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Wet roads | Darker, shiny, reflective track. |
 | Rain | Rain drops falling around you, splashes on the track, ripples on wet surfaces. |
 | Puddles | Standing water on flat ground (needs wet roads). |
-| Lightning | How often lightning flashes light up the sky and the track. |
-| Water surfaces | Waves and reflections on open water (TMUF Island/Bay/Coast). Experimental: it detects water by colour. |
+| Lightning | How often lightning strikes: a bolt in the sky, a flash over the track, thunder a few seconds later. |
+| Rain drops on the lens | Drops landing on the camera and running down the screen (only while it rains). |
+| Rain and thunder sound | Volume of the rain and the thunder (only with rain or lightning). |
+| Water (pools, sea) | Waves, refraction and reflections on the game's water. |
 | Track reflections (dry) | Glossy reflections on dry track. |
 | Grass detail | Grass patches and blades close to the camera. |
 | Mowing stripes | Stadium-style stripes in the grass. |
@@ -262,6 +273,7 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 |---|---|
 | Motion blur | Blur from camera movement. 1 = one full frame of movement. Your car stays sharp in the chase camera. |
 | Depth of field | Background and foreground blur. |
+| Only in replays and video export | Motion blur and depth of field switch off while you drive (on by default). |
 | Focus distance (m) | 0 = auto focus on what's in the middle of the screen. |
 | Max blur (px) | Largest blur size, at 1080p. |
 
@@ -304,6 +316,7 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 |---|---|
 | FXAA anti-aliasing | Smooths edges within a frame. |
 | Temporal anti-aliasing | Smooths edges and flicker over several frames. Some softness on fast movement. |
+| TAA: sub-pixel jitter | Every frame samples a slightly different spot inside each pixel, so TAA supersamples the edges. |
 | Sharpening (CAS) | Gets back detail after anti-aliasing. |
 | Effect quality | Number of samples for AO, shadows and clouds. Low is noticeably faster. |
 | Auto quality | Lowers the effect quality on its own when the frame rate drops below the target. |
@@ -330,7 +343,8 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 - **Where it draws.** It runs at the end of the game's 3D camera (`CVisionViewportDx9`, found through the game's symbol map), before the HUD.
 - **Depth.** The game's depth buffer is swapped for a readable INTZ texture.
 - **Camera and sun** come from the game's own Direct3D 9 calls.
-- **Passes.** Everything is ps_3_0 pixel shaders, in this order: depth and normals → height map for long shadows → AO and shadows → sky and clouds → reflections and neon light → lighting → depth of field and motion blur → light shafts → bloom → exposure → tone mapping → FXAA → TAA → sharpening.
+- **Passes.** Everything is ps_3_0 pixel shaders, in this order: depth and normals → height map for long shadows → AO and shadows → volumetric light and bounce light → sky and clouds → reflections and neon light → lighting → depth of field and motion blur → light shafts → bloom → exposure → tone mapping → FXAA → TAA → sharpening and lens drops, then rain, splashes and spray as particles.
+- **Replays and water.** Small hooks into the game's MediaTracker and video export tell replays from driving; the sea level comes from the map load, and water blocks always sit at the same height.
 - The shaders are compiled when the mod is built, so the game doesn't stall at start-up.
 
 ### Building from source

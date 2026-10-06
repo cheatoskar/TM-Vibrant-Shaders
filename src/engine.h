@@ -49,10 +49,10 @@ bool cinematicActive();
 // on, for TAA: each frame samples the pixels at a slightly different spot. 0, 0 = off.
 void setProjectionJitter(float x, float y);
 
-// Height of the water the game is drawing right now (from the plane it renders the water
-// reflection for). False when no water is in view (or the hook is unavailable).
-bool waterHeights(float& minY, float& maxY);
-bool waterHooked();
+// The two water heights of this map: the water blocks' (always the same) and the sea level
+// (from the map load or the plane the game renders the water reflection for; = blockY without
+// a sea). False until a map load was seen (hooks unavailable): the shaders then guess by colour.
+bool waterHeights(float& blockY, float& seaY);
 // Which of the cinematic hooks fired since the last call (bit 0 clip player, 1 clip viewer,
 // 2 video export), for the log.
 unsigned cinematicSources();

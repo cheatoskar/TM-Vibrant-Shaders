@@ -2,7 +2,27 @@
 
 ## Unreleased (1.2)
 
-- Rain and thunder sound: synthesised on the fly (no sound files). Rain gets louder with the rain setting, thunder follows each lightning flash after a delay that depends on how far away it struck. Volume under *Rain and thunder sound*; silent in menus and while the game is in the background.
+**Lighting**
+- Volumetric light: sun shafts with real shadows in the haze, traced through the long-range height map, also with the sun off screen (~0.3 ms).
+- Bounce light: one-bounce screen-space global illumination at quarter resolution (~0.25 ms).
+
+**Weather and water**
+- Lightning bolts in the sky with branches, near where you look; thunder follows after a delay that matches the distance.
+- Rain and thunder sound, synthesised on the fly, with a volume setting.
+- Rain on every surface: streams running down steep wet surfaces, splash rings on the car and barrier tops.
+- Rain drops on the lens: clear drops that bend the image, small ones that dry off, big ones that run down. On/off in the simple menu.
+- Spray behind the car on wet roads.
+- Water: found by height instead of colour (water blocks always sit at 7.94 m; the sea level comes from the map load), so pools and rivers (and the TMUF sea) get waves, refraction and reflections and nothing else does. On by default.
+
+**Camera**
+- Jittered TAA: the game's projection gets a sub-pixel offset each frame, TAA supersamples the edges.
+- Motion blur and depth of field only in replays, intros and the video export (detected from the game), not while driving.
+
+**Performance**
+- Sky shader split per sky mode; the aurora's curtains render at half resolution with FSR 1 EASU upscaling (aurora sky about 3x cheaper).
+
+**Tools**
+- Previewer: `--time`, `--water`.
 
 ## 1.1.0
 

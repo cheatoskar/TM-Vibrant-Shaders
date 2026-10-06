@@ -50,7 +50,7 @@ float4 u_Pass1 : register(c33);
 float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
 float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
-float4 u_Water     : register(c38); // water surface height range (world y) min, max; z: 1 = known, 0 = no water, -1 = ask the colour
+float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -1329,14 +1329,15 @@ float puddleMask(float3 world, float flatness, float grass) {
 }
 
 // Open water (TMUF Island/Bay/Coast): flat, blue.
-float waterMask(float3 c, float3 nWorld, float3 world, float emissive) {
+float waterMask(float3 c, float3 nWorld, float3 world, float z, float emissive) {
     if (u_Weather.w <= 0.0 || u_Water.z == 0.0) return 0.0;
     float level = smoothstep(0.93, 0.99, nWorld.y) * (1.0 - emissive) * u_Weather.w;
     if (u_Water.z > 0.5) {
         // The game tells where its water is (the height its own water shaders use): every
         // flat surface at that height is water - pools, rivers, the sea.
-        float d = max(u_Water.x - world.y, world.y - u_Water.y);
-        return smoothstep(0.35, 0.08, d) * level;
+        // Far away the depth gets too coarse to tell the water from the ground 1 m above.
+        float d = min(abs(world.y - u_Water.x), abs(world.y - u_Water.y));
+        return smoothstep(0.2, 0.05, d) * saturate((350.0 - z) / 100.0) * level;
     }
     // Without the engine hooks: guess from the colour.
     float blue = (c.b - max(c.r, c.g * 0.8)) / max(c.b, 1e-3);
@@ -1735,7 +1736,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // --- Wet surfaces, puddles, water ---
     float wet = u_Weather.x * (1.0 - grass * 0.5) * (1.0 - emissive);
     float puddle = puddleMask(world, flatness, grass) * (1.0 - emissive);
-    float water = waterMask(c, nWorld, world, emissive);
+    float water = waterMask(c, nWorld, world, nd.w, emissive);
     float reflectivity = max(max(wet * lerp(0.12, 0.55, flatness), puddle), water);
     reflectivity = max(reflectivity, u_Nature.w * flatness * (1.0 - grass) * (1.0 - emissive) * 0.35);
     float2 slope = 0;

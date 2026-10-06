@@ -290,8 +290,6 @@ void processScene(IDirect3DDevice9* device) {
             inputs.water[0] = lo;
             inputs.water[1] = hi;
             inputs.water[2] = 1.0f;
-        } else {
-            inputs.water[2] = engine::waterHooked() ? 0.0f : -1.0f; // no colour guessing when the game can tell
         }
     }
     inputs.jitter[0] = g_jitterUV[0];
@@ -501,8 +499,7 @@ void onPresent(IDirect3DDevice9* device) {
         if (fabsf(lo - s_waterMin) > 0.01f || fabsf(hi - s_waterMax) > 0.01f) {
             s_waterMin = lo;
             s_waterMax = hi;
-            if (known) TMVS_LOG("engine: water at height %.2f", lo);
-            else TMVS_LOG("engine: no water in view");
+            if (known) TMVS_LOG("engine: water heights %.2f .. %.2f", lo, hi);
         }
     }
     // Replay / intro / video export detection, logged when it changes.
