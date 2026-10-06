@@ -3,6 +3,7 @@
 ## Unreleased (1.2)
 
 **Game support**
+- Setup: every TrackMania found (Nations and United Forever) gets its own install button, next to the ModLoader and "another game folder".
 - TrackMania United Forever: its TmForever.exe is a different build than Nations Forever's, and the engine hooks only knew Nations. Both builds now have their own address table and the mod picks the one that matches. In United, the map's environment is read at load: the Stadium water heights only apply on Stadium maps, the island, bay and coast seas come from the game.
 - The replay camera hook (UpdateCams) also works when the game is loaded at another base address (it never did with the ModLoader).
 
@@ -22,7 +23,7 @@
 - Rain and thunder sound from real CC0 recordings (freesound.org): a seamless rain loop that follows the rain amount, ten thunders in three distance groups (never the same one twice in a row, pitch, loudness and dullness vary per strike, panned to the side of the flash). Volume up to 2, default 0.45. The log shows the output device and level.
 - Rain on every surface: streams running down steep wet surfaces, splash rings on the car and barrier tops.
 - Rain drops on the lens: clear drops that bend the image, small ones that dry off, big ones that run down. On/off in the simple menu.
-- Spray behind the car on wet roads.
+- Spray behind the car on wet roads: its own setting, off by default. It only flies while the tyres touch the road (checked in the depth buffer beside the rear tyres, so slopes keep it and jumps stop it) and varies in gusts per tyre.
 - Water: found by height instead of colour (water blocks always sit at 7.94 m; the sea level comes from the map load), so pools and rivers (and the TMUF sea) get waves, refraction and reflections and nothing else does. On by default.
 
 **Neon trail**
@@ -36,7 +37,6 @@
 - Sky shader split per sky mode; the aurora's curtains render at half resolution with FSR 1 EASU upscaling (aurora sky about 3x cheaper).
 
 **Fixes**
-- Spray no longer appears when climbing a quarter pipe, flying or falling.
 - Aurora: no moiré (grid and ring patterns) near the horizon; the curtains soften where they get smaller than a pixel.
 - Advanced menu: Lighting and Sky had a second, duplicate section.
 - TAA: 3x3 neighbourhood and a looser history clamp while the image stands still. The sub-pixel jitter is off by default (fine grates shimmered with it).

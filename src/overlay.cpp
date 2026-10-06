@@ -173,7 +173,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("LongShadowRange")) return s.longShadows > 0.0f;
     if (is("ShadowLength")) return s.shadowStrength > 0.0f;
     if (is("GodRayDecay")) return s.godRays > 0.0f;
-    if (is("Puddles")) return s.wetness > 0.0f;
+    if (is("Puddles") || is("Spray")) return s.wetness > 0.0f;
     if (is("LensDrops")) return s.rain > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("TargetFPS")) return s.autoQuality;
@@ -307,6 +307,7 @@ bool drawSimple(Config& config, Settings& s) {
         look |= drawKey(s, "VolumetricClouds", "Clouds");
         look |= drawKey(s, "Lightning", "Lightning");
         look |= drawKey(s, "LensDrops", "Drops on the lens");
+        look |= drawKey(s, "Spray", "Spray behind the car");
         if (s.rain > 0.0f || s.lightning > 0.0f) look |= drawKey(s, "WeatherSound", "Rain & thunder sound");
         look |= drawKey(s, "WaterSurfaces", "Water");
         look |= drawKey(s, "Reflections", "Reflections (dry track)");

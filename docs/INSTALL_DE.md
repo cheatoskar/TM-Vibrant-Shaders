@@ -8,7 +8,7 @@
 1. **`TM-Vibrant-Shaders.zip`** von der [Releases-Seite](https://github.com/cheatoskar/tmnf-vibrant-shaders/releases) herunterladen und entpacken.
 2. TrackMania schließen, **`TM-Vibrant-Shaders-Setup.exe`** starten und auswählen:
    - **Für den ModLoader installieren:** Danach im ModLoader bei *TM Vibrant Shaders* einen Haken setzen und das Spiel starten.
-   - **In den Spielordner installieren (ohne ModLoader):** Den TrackMania-Ordner mit der `TmForever.exe` auswählen und das Spiel ganz normal starten. Liegt das Spiel unter *Programme*, fragt Windows nach Admin-Rechten.
+   - **In TrackMania Nations Forever / United Forever installieren (ohne ModLoader):** Das Setup zeigt jedes gefundene TrackMania mit eigenem Button. Mit *Install into another game folder* wählst du den Ordner mit der `TmForever.exe` selbst aus. Danach das Spiel ganz normal starten. Liegt das Spiel unter *Programme*, fragt Windows nach Admin-Rechten.
 
 Wenn Windows SmartScreen warnt, liegt das nur daran, dass das Setup nicht signiert ist. Dann auf *Weitere Informationen → Trotzdem ausführen* klicken.
 Startest du das Setup erneut, kannst du **aktualisieren** oder **deinstallieren**.

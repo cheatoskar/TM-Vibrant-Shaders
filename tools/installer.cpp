@@ -176,6 +176,16 @@ std::vector<std::wstring> findGameDirs() {
     return dirs;
 }
 
+// United Forever sets its window title in Nadeo.ini; Nations Forever has none.
+std::wstring gameName(const std::wstring& dir) {
+    wchar_t title[128] = {};
+    GetPrivateProfileStringW(L"TmForever", L"WindowTitle", L"", title, 128, (dir + L"\\Nadeo.ini").c_str());
+    if (title[0]) return title;
+    std::wstring lower = dir;
+    for (auto& ch : lower) ch = static_cast<wchar_t>(towlower(ch));
+    return lower.find(L"united") != std::wstring::npos ? L"TrackMania United Forever" : L"TrackMania Nations Forever";
+}
+
 std::wstring pickGameDir(const std::wstring& suggestion) {
     std::wstring result;
     IFileOpenDialog* dialog = nullptr;
@@ -287,9 +297,12 @@ void doModLoaderInstall() {
             MB_OK | MB_ICONINFORMATION);
 }
 
-void doGameInstall() {
-    const std::vector<std::wstring> dirs = findGameDirs();
-    std::wstring dir = pickGameDir(dirs.empty() ? L"" : dirs.front());
+// dir: one of the games found, or empty to pick a folder.
+void doGameInstall(std::wstring dir) {
+    if (dir.empty()) {
+        const std::vector<std::wstring> dirs = findGameDirs();
+        dir = pickGameDir(dirs.empty() ? L"" : dirs.front());
+    }
     if (dir.empty()) return;
     if (!exists(dir + L"\\TmForever.exe")) {
         message(L"TmForever.exe is not in\n" + dir + L"\n\nPlease select the TrackMania folder itself.", MB_OK | MB_ICONWARNING);
@@ -308,7 +321,7 @@ void doGameInstall() {
         message(L"Could not copy d3d9.dll to\n" + dir, MB_OK | MB_ICONERROR);
         return;
     }
-    message(L"Installed into\n" + dir + L"\n\nJust start TrackMania as usual (no ModLoader needed).\n"
+    message(L"Installed into " + gameName(dir) + L"\n" + dir + L"\n\nJust start the game as usual (no ModLoader needed).\n"
             L"In game: F8 opens the shader menu, F7 turns the shaders on/off.",
             MB_OK | MB_ICONINFORMATION);
 }
@@ -371,27 +384,36 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
     }
 
-    // Current state, for the dialog text.
+    // Current state, for the dialog text: the ModLoader and every game found (Nations and
+    // United Forever can both be installed; each gets its own button).
     const bool loaderFound = exists(loaderDir());
     const bool inLoader = exists(productsDir() + L"\\" + kProduct);
-    std::wstring inGame;
-    for (const auto& dir : findGameDirs()) {
-        if (gameInstalled(dir)) inGame = dir;
-    }
+    const std::vector<std::wstring> games = findGameDirs();
+    bool inGame = false;
     std::wstring status = L"Real-time lighting, weather and skies for TrackMania Nations & United Forever.\n\nInstalled: ";
-    if (!inLoader && inGame.empty()) status += L"not yet";
-    if (inLoader) status += L"ModLoader";
-    if (inLoader && !inGame.empty()) status += L", ";
-    if (!inGame.empty()) status += L"game folder (" + inGame + L")";
+    std::wstring installed;
+    if (inLoader) installed = L"ModLoader";
+    for (const auto& dir : games) {
+        if (!gameInstalled(dir)) continue;
+        inGame = true;
+        installed += (installed.empty() ? L"" : L", ") + gameName(dir);
+    }
+    status += installed.empty() ? L"not yet" : installed;
 
     const std::wstring loaderButton = std::wstring(L"Install for the TrackMania ModLoader\n") +
                                       (loaderFound ? L"Recommended. Switch the mod on or off in the ModLoader."
                                                    : L"The ModLoader was not found - this opens its download page.");
-    const TASKDIALOG_BUTTON buttons[] = {
-        {101, loaderButton.c_str()},
-        {102, L"Install into the game folder (no ModLoader)\nAdds d3d9.dll next to TmForever.exe. Start TrackMania as usual."},
-        {103, L"Uninstall\nRemoves the mod from the ModLoader and the game folder."},
-    };
+    std::vector<std::wstring> gameButtons;
+    for (const auto& dir : games) {
+        gameButtons.push_back(L"Install into " + gameName(dir) + (gameInstalled(dir) ? L" (update)" : L"") +
+                              L"\nAdds d3d9.dll to " + dir + L". No ModLoader needed.");
+    }
+    std::vector<TASKDIALOG_BUTTON> buttons;
+    buttons.push_back({101, loaderButton.c_str()});
+    for (size_t i = 0; i < games.size(); i++) buttons.push_back({200 + static_cast<int>(i), gameButtons[i].c_str()});
+    buttons.push_back({102, games.empty() ? L"Install into the game folder (no ModLoader)\nAdds d3d9.dll next to TmForever.exe. Start TrackMania as usual."
+                                          : L"Install into another game folder\nChoose the folder with TmForever.exe yourself."});
+    if (inLoader || inGame) buttons.push_back({103, L"Uninstall\nRemoves the mod from the ModLoader and every game folder."});
     TASKDIALOGCONFIG config{sizeof(config)};
     config.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION;
     config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
@@ -399,8 +421,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     config.pszMainIcon = TD_INFORMATION_ICON;
     config.pszMainInstruction = L"How do you want to install TM Vibrant Shaders?";
     config.pszContent = status.c_str();
-    config.pButtons = buttons;
-    config.cButtons = (inLoader || !inGame.empty()) ? 3 : 2;
+    config.pButtons = buttons.data();
+    config.cButtons = static_cast<UINT>(buttons.size());
     config.nDefaultButton = 101;
     config.pszFooter = L"Settings and your presets live in Documents\\TrackMania\\TMVS.";
     config.pszFooterIcon = TD_INFORMATION_ICON;
@@ -409,9 +431,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (FAILED(TaskDialogIndirect(&config, &choice, nullptr, nullptr))) return kFailed;
     switch (choice) {
         case 101: doModLoaderInstall(); break;
-        case 102: doGameInstall(); break;
+        case 102: doGameInstall(L""); break;
         case 103: doUninstall(); break;
-        default: break;
+        default:
+            if (choice >= 200 && choice < 200 + static_cast<int>(games.size())) doGameInstall(games[static_cast<size_t>(choice - 200)]);
+            break;
     }
     CoUninitialize();
     return kOk;

@@ -35,7 +35,7 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 **Weather and surfaces**
 - **Rain** as real particles: drops that fall around you and streak with the camera's motion, splashes on the track, ripples in the puddles, streams running down walls, drops hitting the car.
 - Rain drops on the lens that run down the screen (on/off).
-- **Spray** behind the car on wet roads.
+- **Spray** behind the car on wet roads (off by default, *Spray* in the weather settings). It only flies while the tyres touch the road, and comes and goes in gusts.
 - Wet roads and puddles with screen-space reflections of the scenery and the lights.
 - **Thunderstorms** with lightning bolts in the sky, flashes that light up the clouds and the track, and thunder.
 - **Rain and thunder sound** from real recordings: a rain loop and ten different thunders (close cracks, rolling and far rumbles), each strike pitched and filtered a little differently and coming from the side of the flash.
@@ -157,7 +157,7 @@ The shaders also work with everything on low: they only need the finished image 
 1. Download **`TM-Vibrant-Shaders.zip`** from [Releases](https://github.com/cheatoskar/tmnf-vibrant-shaders/releases) and extract it.
 2. Close TrackMania and run **`TM-Vibrant-Shaders-Setup.exe`**. Pick one:
    - **Install for the TrackMania ModLoader.** Then tick *TM Vibrant Shaders* in the ModLoader and start the game.
-   - **Install into the game folder (no ModLoader).** Pick your TrackMania folder (the one with `TmForever.exe`) and start the game as usual. Windows asks for admin rights if the game is in *Program Files*.
+   - **Install into TrackMania Nations Forever / United Forever (no ModLoader).** The setup lists every TrackMania it finds, each with its own button; *Install into another game folder* lets you pick one yourself (the folder with `TmForever.exe`). Start the game as usual. Windows asks for admin rights if the game is in *Program Files*.
 
 Run the setup again to update or uninstall. It isn't code-signed, so SmartScreen may warn you. Click *More info → Run anyway*, or install by hand. Every release lists SHA-256 checksums.
 

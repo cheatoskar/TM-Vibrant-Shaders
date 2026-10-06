@@ -868,10 +868,32 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float3 car = c_Cam.xyz + c_V0.xyz * v.x + c_V1.xyz * v.y + c_V2.xyz * v.z;
     float3 fwd = normalize(float3(c_V2.x, 0.0, c_V2.z) + 1e-5); // camera forward, level
     float3 right = float3(fwd.z, 0.0, -fwd.x);
+    // Only with the tyres on the road (slopes included, jumps and falls not): the road next to
+    // the rear tyres (the camera can't see it behind the car) must be where the tyres are.
+    // Either side will do: a barrier may stand on the other.
+    float under = car.y - 0.85; // the point found is ~0.85 m above the road
+    float grounded = 0.0;
+    for (int k = 0; k < 2; k++) {
+        float3 beside = car + right * (k == 0 ? -1.7 : 1.7);
+        beside.y = under;
+        float3 bv = toView(beside);
+        if (bv.z < 0.5) continue;
+        float4 bc = toClip(bv);
+        float2 buv = float2(bc.x / bc.w * 0.5 + 0.5, 0.5 - bc.y / bc.w * 0.5);
+        float3 rv = viewRay(buv, tex2Dlod(s_depth, float4(buv, 0, 0)).r);
+        float roadY = c_Cam.y + c_V0.y * rv.x + c_V1.y * rv.y + c_V2.y * rv.z;
+        grounded = max(grounded, saturate(1.0 - (abs(roadY - under) - 0.45) / 0.45));
+    }
+    if (grounded <= 0.0) return o;
     float life = 0.6;
     float age = frac(c_Cam.w / life * (0.85 + 0.3 * seed.w) + seed.z);
     float ts = age * life;
     float side = seed.x < 0.5 ? -1.0 : 1.0;
+    // Gusts: each tyre throws more or less water as it rolls through wetter and drier
+    // patches (two slow waves per side); fewer particles where it is drier.
+    float t = c_Cam.w;
+    float gust = 0.6 + 0.2 * sin(t * (1.7 + 0.6 * side) + side) + 0.15 * sin(t * (4.3 - 1.1 * side) + 2.0 * side);
+    if (frac(seed.w * 5.31 + seed.z * 2.7) > gust * grounded) return o;
     // The point found is the car's tail (rear wing / engine cover): the tyres sit below it.
     float3 tyre = car + right * side * 0.8 - fwd * 0.2;
     tyre.y = car.y - 0.8;
@@ -881,7 +903,7 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     p.y = max(p.y - 4.9 * ts * ts, tyre.y - 0.05);
     float3 view = toView(p);
     if (view.z < 0.5) return o;
-    float size = lerp(0.15, 1.1, sqrt(age)) * (0.7 + 0.6 * frac(seed.w * 3.7));
+    float size = lerp(0.15, 1.1, sqrt(age)) * (0.7 + 0.6 * frac(seed.w * 3.7)) * (0.6 + 0.4 * gust);
     o.pos = toClip(view + float3(corner.x, corner.y * 2.0 - 1.0, 0.0) * size);
     o.data = float4(corner.x, corner.y * 2.0 - 1.0, view.z, age);
     return o;
@@ -1313,10 +1335,8 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     device->SetVertexShaderConstantF(0, &vc[0][0], 10);
     device->SetVertexShaderConstantF(10, &pc[0][0], 5);
     const float speed = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
-    // Only on the ground: climbing a quarter pipe, flying or falling throws no spray.
-    const float climb = fabsf(m_cameraVelocity[1]) / fmaxf(speed, 1.0f);
-    const float grounded = fminf(fmaxf(1.0f - (climb - 0.15f) / 0.2f, 0.0f), 1.0f);
-    const float spray[4] = {speed, s.wetness * grounded * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
+    // Whether the tyres touch the road is checked per particle in the depth buffer.
+    const float spray[4] = {speed, s.spray * s.wetness * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
     device->SetVertexShaderConstantF(15, spray, 1);
 
     device->SetRenderTarget(0, target);

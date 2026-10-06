@@ -83,6 +83,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("GrassDetail", "Grass detail", "Weather & Surfaces", Float, grassDetail, 0.0f, 1.0f),
         TMVS_FIELD("MowingStripes", "Mowing stripes", "Weather & Surfaces", Float, mowingStripes, 0.0f, 1.0f),
         TMVS_FIELD("Wind", "Wind", "Weather & Surfaces", Float, wind, 0.0f, 1.0f),
+        TMVS_FIELD("Spray", "Spray behind the car (wet roads)", "Weather & Surfaces", Float, spray, 0.0f, 1.0f),
 
         TMVS_FIELD("MotionBlur", "Motion blur", "Cinematic", Float, motionBlur, 0.0f, 1.5f),
         TMVS_FIELD("DepthOfField", "Depth of field", "Cinematic", Float, depthOfField, 0.0f, 1.0f),

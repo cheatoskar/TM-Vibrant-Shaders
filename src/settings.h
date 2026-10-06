@@ -104,6 +104,7 @@ struct Settings {
     // Weather & surfaces
     float wetness = 0.0f;          // wet roads: darker, glossy, reflective
     float rain = 0.0f;             // falling rain and ripples
+    float spray = 0.0f;            // water thrown up behind the car on wet roads (off by default)
     float puddles = 0.0f;          // standing water on flat ground
     float waterSurfaces = 0.8f;    // waves, reflections and refraction on the game's water (pools, sea)
     float lightning = 0.0f;        // lightning flashes (how often)
