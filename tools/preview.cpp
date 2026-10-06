@@ -1,4 +1,4 @@
-﻿// Offline previewer: renders recorded game frames (.tmcap) through the shader pipeline.
+// Offline previewer: renders recorded game frames (.tmcap) through the shader pipeline.
 //
 //   tmvs_preview <capture.tmcap> <out.bmp> [options]
 //     --preset <name|index>   Vibrant, Cinematic, Golden Hour, Competition, Performance, ...
