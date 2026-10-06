@@ -445,7 +445,7 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
 
     c[20][0] = static_cast<float>(s.skyMode);
     // Day-for-night only when the map itself isn't already a night map.
-    c[20][1] = s.skyNight >= 0.0f ? s.skyNight : (nightSky ? (gameNight ? 0.35f : 0.95f) : (ringWorld && !gameNight ? 0.2f : 0.0f));
+    c[20][1] = s.skyNight >= 0.0f ? s.skyNight : (nightSky ? (gameNight ? 0.35f : 0.95f) : (ringWorld && !gameNight ? 0.35f : 0.0f));
     c[20][2] = s.skyRotation * 3.14159265f / 180.0f;
     c[20][3] = s.skyBrightness;
     c[21][0] = s.cloudAmount;

@@ -53,7 +53,7 @@ struct Settings {
     float skyEffectSize = 1.0f;    // black hole size (above ~3 the camera is right at its disk)
     float planetSize = 0.0f;       // ringed planet in the space skies (0 = none)
     int planetType = 0;            // ring world: 0 Saturn, 1 Jupiter, 2 ice giant, 3 exotic
-    int planetView = 1;            // ring world: 0 distant, 1 next to the rings, 2 under the rings
+    int planetView = 1;            // ring world: 0 distant, 1 next to the rings, 2 on the rings
     float planetAzimuth = 35.0f;   // degrees
     float planetElevation = 14.0f; // degrees
     float volumetricClouds = 0.0f; // ray-marched cloud layer (0 = off)
@@ -66,8 +66,8 @@ struct Settings {
     float fogSunScatter = 0.7f;
 
     // Volumetric light shafts
-    float godRays = 1.15f;
-    float godRayDecay = 0.965f;
+    float godRays = 1.8f;
+    float godRayDecay = 0.99f;
 
     // Bloom & lens
     float bloom = 0.09f;

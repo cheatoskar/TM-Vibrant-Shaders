@@ -22,7 +22,7 @@ bool g_reloadRequested = false;
 
 const char* kSkyModes[] = {"Game sky", "Clear sky + clouds", "Starry night", "Black hole", "Aurora", "Ring world"};
 const char* kPlanetTypes[] = {"Saturn", "Jupiter", "Ice giant", "Exotic"};
-const char* kPlanetViews[] = {"Distant", "Next to the rings", "Under the rings"};
+const char* kPlanetViews[] = {"Distant", "Next to the rings", "On the rings"};
 const char* kDebugViews[] = {"Final image", "Depth", "Normals", "Ambient occlusion", "Sun shadows", "Light shafts", "Bloom", "Long shadows"};
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -135,31 +135,148 @@ void drawPerformance() {
     ImGui::TextDisabled("Measured on your GPU. Switching an effect off gains about its time.");
 }
 
-void drawMenu() {
-    Config& config = Config::get();
-    Settings& s = config.settings;
-
-    ImGui::SetNextWindowSize(ImVec2(470, 640), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(40, 40), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("TM Vibrant Shaders " TM_SHADERS_VERSION_A, &config.showOverlay, ImGuiWindowFlags_NoCollapse)) {
-        ImGui::End();
-        return;
+const Field* findField(const char* key) {
+    for (const Field& f : fields()) {
+        if (!strcmp(f.key, key)) return &f;
     }
+    return nullptr;
+}
 
-    if (ImGui::Checkbox("Enabled (F7)", &s.enabled)) config.markDirty();
-    ImGui::SameLine();
-    ImGui::TextDisabled("F8 menu");
+// Settings of the installation (not of a look): changing them keeps the preset.
+bool isMachineSetting(const Field& f) {
+    return !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
+           !strcmp(f.key, "ReadableGameDepth");
+}
 
-    // Presets: built-in, then your own. Everything is saved automatically.
-    const std::vector<std::string> names = config.presetNames();
-    const bool custom = config.preset == kCustomPreset;
-    if (ImGui::BeginCombo("Preset", custom ? "Custom (modified)" : config.preset.c_str())) {
-        for (size_t i = 0; i < names.size(); i++) {
-            if (i == static_cast<size_t>(Preset::Custom)) ImGui::Separator(); // user presets below
-            if (ImGui::Selectable(names[i].c_str(), names[i] == config.preset)) config.selectPreset(names[i]);
+// Only show what does something with the current choices (planet settings only for the
+// skies that have a planet, cloud settings only with clouds on, ...).
+bool isRelevant(const Field& f, const Settings& s) {
+    auto is = [&f](const char* key) { return !strcmp(f.key, key); };
+    const int sky = s.skyMode;
+    if (is("SkyRotation")) return sky >= 2;
+    if (is("CloudAmount")) return sky == 1;
+    if (is("StarAmount")) return sky >= 1;
+    if (is("SkyBrightness")) return sky >= 1;
+    if (is("SkyEnhance")) return sky == 0;
+    if (is("SkyEffectSize")) return sky == 3 || sky == 5;
+    if (is("PlanetSize") || is("PlanetType")) return sky == 2 || sky == 3 || sky == 5;
+    if (is("PlanetView") || is("PlanetAzimuth") || is("PlanetElevation")) return sky == 5;
+    if (is("CloudCoverage") || is("CloudHeight")) return s.volumetricClouds > 0.0f;
+    if (is("LongShadowRange")) return s.longShadows > 0.0f;
+    if (is("ShadowLength")) return s.shadowStrength > 0.0f;
+    if (is("GodRayDecay")) return s.godRays > 0.0f;
+    if (is("Puddles")) return s.wetness > 0.0f;
+    if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
+    if (is("TargetFPS")) return s.autoQuality;
+    if (is("SunAzimuth")) return s.sunElevationOverride >= 0.0f;
+    return true;
+}
+
+// One setting as a widget. Returns true when the look changed (-> preset becomes Custom).
+bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
+    char* base = reinterpret_cast<char*>(&s);
+    if (!label) label = f.label;
+    bool changed = false;
+    switch (f.kind) {
+        case Field::Bool:
+            changed = ImGui::Checkbox(label, reinterpret_cast<bool*>(base + f.offset));
+            break;
+        case Field::Int: {
+            int* value = reinterpret_cast<int*>(base + f.offset);
+            if (!strcmp(f.key, "Quality")) {
+                static const char* kQualities[] = {"Low (fast)", "Medium", "High"};
+                changed = ImGui::Combo(label, value, kQualities, IM_ARRAYSIZE(kQualities));
+            } else if (!strcmp(f.key, "SkyMode")) {
+                changed = ImGui::Combo(label, value, kSkyModes, IM_ARRAYSIZE(kSkyModes));
+            } else if (!strcmp(f.key, "PlanetType")) {
+                changed = ImGui::Combo(label, value, kPlanetTypes, IM_ARRAYSIZE(kPlanetTypes));
+            } else if (!strcmp(f.key, "PlanetView")) {
+                changed = ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
+            } else {
+                changed = ImGui::SliderInt(label, value, static_cast<int>(f.min), static_cast<int>(f.max));
+            }
+            break;
         }
-        ImGui::EndCombo();
+        case Field::Color:
+            changed = ImGui::ColorEdit3(label, reinterpret_cast<float*>(base + f.offset), ImGuiColorEditFlags_NoInputs);
+            break;
+        default:
+            changed = ImGui::SliderFloat(label, reinterpret_cast<float*>(base + f.offset), f.min, f.max,
+                                         !strcmp(f.key, "TargetFPS") ? "%.0f" : "%.2f");
+            break;
     }
+    if (!changed) return false;
+    Config::get().markDirty();
+    return !isMachineSetting(f);
+}
+
+bool drawKey(Settings& s, const char* key, const char* label = nullptr) {
+    const Field* f = findField(key);
+    return f && isRelevant(*f, s) && drawField(*f, s, label);
+}
+
+void heading(const char* text) {
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.35f, 1.0f), "%s", text);
+    ImGui::Separator();
+}
+
+void drawStatus(const Settings& s) {
+    if (!g_status.depthAvailable) {
+        ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "Depth buffer unavailable - restart the game with MSAA disabled.");
+    }
+    if (!g_status.engineHooks) {
+        ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Unknown game build: effects also apply to the HUD.");
+    }
+    if (g_status.shaderError) ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "Shader error, see tmvs.log");
+    if (s.autoQuality && g_status.autoQuality) {
+        ImGui::TextDisabled("%.0f FPS   auto quality: %s", ImGui::GetIO().Framerate, AutoQuality::levelName(g_status.autoQuality->level()));
+    } else {
+        ImGui::TextDisabled("%.0f FPS", ImGui::GetIO().Framerate);
+    }
+}
+
+// The everyday menu: the handful of things a player wants.
+bool drawSimple(Settings& s) {
+    bool look = false;
+    heading("Sky");
+    look |= drawKey(s, "SkyMode", "Sky");
+    look |= drawKey(s, "PlanetType", "Planet");
+    look |= drawKey(s, "PlanetView", "View");
+    look |= drawKey(s, "PlanetAzimuth", "Planet direction");
+    look |= drawKey(s, "SkyEffectSize", "Black hole size");
+    look |= drawKey(s, "SkyRotation", "Turn the sky");
+    look |= drawKey(s, "StarAmount", "Stars");
+
+    heading("Look");
+    look |= drawKey(s, "ShadowStrength", "Shadows");
+    look |= drawKey(s, "GodRays", "Light shafts");
+    look |= drawKey(s, "Bloom", "Glow");
+    look |= drawKey(s, "NeonLight", "Neon light");
+    look |= drawKey(s, "Exposure", "Brightness");
+    look |= drawKey(s, "Saturation", "Colour");
+
+    heading("Weather");
+    look |= drawKey(s, "Rain", "Rain");
+    look |= drawKey(s, "Wetness", "Wet roads");
+    look |= drawKey(s, "VolumetricClouds", "Clouds");
+    look |= drawKey(s, "Lightning", "Lightning");
+
+    heading("Performance");
+    look |= drawKey(s, "AutoQuality", "Adapt quality to my GPU");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Turns effects down when the frame rate drops below the target, and back up when there is room.\n"
+                          "Your settings and presets stay as they are.");
+    }
+    look |= drawKey(s, "TargetFPS", "Target FPS");
+    look |= drawKey(s, "Quality", "Effect quality");
+    return look;
+}
+
+// Everything: own presets, mood presets, every setting, measured costs, debug views.
+bool drawAdvanced(Config& config, Settings& s, const std::vector<std::string>& names) {
     static char presetNameBuffer[48] = "";
     ImGui::SetNextItemWidth(200.0f);
     ImGui::InputTextWithHint("##presetname", "name for your preset", presetNameBuffer, sizeof(presetNameBuffer));
@@ -169,11 +286,7 @@ void drawMenu() {
         ImGui::SameLine();
         if (ImGui::Button("Delete")) config.deleteUserPreset(config.preset);
     }
-
-    if (ImGui::Checkbox("Preset per map mood", &config.autoMood)) config.markDirty();
-    ImGui::SameLine();
-    ImGui::TextDisabled("map: %s", moodName(config.mood));
-    if (config.autoMood && ImGui::TreeNode("Mood presets")) {
+    if (config.autoMood && ImGui::TreeNode("Preset per map mood")) {
         for (int m = 0; m < static_cast<int>(Mood::Count); m++) {
             std::string& mp = config.moodPreset[m];
             if (ImGui::BeginCombo(moodName(static_cast<Mood>(m)), mp.empty() ? "Keep current" : mp.c_str())) {
@@ -193,65 +306,20 @@ void drawMenu() {
         }
         ImGui::TreePop();
     }
-    ImGui::Combo("View", &s.debugView, kDebugViews, IM_ARRAYSIZE(kDebugViews));
+    ImGui::Combo("Debug view", &s.debugView, kDebugViews, IM_ARRAYSIZE(kDebugViews));
+    ImGui::TextDisabled("Sun: %s (%.2f %.2f %.2f)", g_status.sunKnown ? "from game" : "unknown", g_status.sunDirection[0],
+                        g_status.sunDirection[1], g_status.sunDirection[2]);
 
-    // Status.
-    if (!g_status.depthAvailable) {
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "Depth buffer unavailable - restart the game with MSAA disabled.");
-    }
-    if (!g_status.engineHooks) {
-        ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Unknown game build: effects also apply to the HUD.");
-    }
-    if (g_status.shaderError) ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "Shader error, see tmvs.log");
-    ImGui::TextDisabled("Sun: %s (%.2f %.2f %.2f)   %.0f FPS", g_status.sunKnown ? "from game" : "unknown",
-                        g_status.sunDirection[0], g_status.sunDirection[1], g_status.sunDirection[2], ImGui::GetIO().Framerate);
-    if (s.autoQuality && g_status.autoQuality) {
-        const AutoQuality& aq = *g_status.autoQuality;
-        ImGui::TextDisabled("Auto quality: %s (target %.0f FPS)", AutoQuality::levelName(aq.level()), s.targetFps);
-    }
-    ImGui::Separator();
-
-    bool changed = false;
-    char* base = reinterpret_cast<char*>(&s);
+    bool look = false;
     const char* openCategory = nullptr;
     bool categoryOpen = false;
     for (const Field& f : fields()) {
         if (!openCategory || strcmp(openCategory, f.category) != 0) {
             openCategory = f.category;
-            categoryOpen = ImGui::CollapsingHeader(f.category, strcmp(f.category, "Lighting") == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+            categoryOpen = ImGui::CollapsingHeader(f.category);
         }
-        if (!categoryOpen) continue;
-        switch (f.kind) {
-            case Field::Bool:
-                changed |= ImGui::Checkbox(f.label, reinterpret_cast<bool*>(base + f.offset));
-                break;
-            case Field::Int:
-                if (strcmp(f.key, "Quality") == 0) {
-                    static const char* kQualities[] = {"Low (fast)", "Medium", "High"};
-                    changed |= ImGui::Combo(f.label, reinterpret_cast<int*>(base + f.offset), kQualities, IM_ARRAYSIZE(kQualities));
-                } else if (strcmp(f.key, "SkyMode") == 0) {
-                    changed |= ImGui::Combo(f.label, reinterpret_cast<int*>(base + f.offset), kSkyModes, IM_ARRAYSIZE(kSkyModes));
-                } else if (strcmp(f.key, "PlanetType") == 0) {
-                    changed |= ImGui::Combo(f.label, reinterpret_cast<int*>(base + f.offset), kPlanetTypes, IM_ARRAYSIZE(kPlanetTypes));
-                } else if (strcmp(f.key, "PlanetView") == 0) {
-                    changed |= ImGui::Combo(f.label, reinterpret_cast<int*>(base + f.offset), kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
-                } else {
-                    changed |= ImGui::SliderInt(f.label, reinterpret_cast<int*>(base + f.offset), static_cast<int>(f.min), static_cast<int>(f.max));
-                }
-                break;
-            case Field::Color:
-                changed |= ImGui::ColorEdit3(f.label, reinterpret_cast<float*>(base + f.offset), ImGuiColorEditFlags_NoInputs);
-                break;
-            default:
-                changed |= ImGui::SliderFloat(f.label, reinterpret_cast<float*>(base + f.offset), f.min, f.max, "%.3f");
-                break;
-        }
+        if (categoryOpen && isRelevant(f, s)) look |= drawField(f, s);
     }
-    if (changed) {
-        config.preset = kCustomPreset;
-        config.markDirty();
-    }
-
     drawPerformance();
 
     ImGui::Separator();
@@ -265,7 +333,53 @@ void drawMenu() {
     }
     ImGui::SameLine();
     if (ImGui::Button("Reload shaders (F9)")) g_reloadRequested = true;
-    ImGui::TextDisabled("Changes are saved automatically.   F12 frame capture");
+    return look;
+}
+
+void drawMenu() {
+    Config& config = Config::get();
+    Settings& s = config.settings;
+
+    ImGui::SetNextWindowSize(ImVec2(440, 600), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(40, 40), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("TM Vibrant Shaders " TM_SHADERS_VERSION_A, &config.showOverlay, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::Checkbox("Enabled (F7)", &s.enabled)) config.markDirty();
+    ImGui::SameLine(ImGui::GetWindowWidth() - 190.0f);
+    if (ImGui::RadioButton("Simple", !config.advancedMenu)) {
+        config.advancedMenu = false;
+        config.markDirty();
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Advanced", config.advancedMenu)) {
+        config.advancedMenu = true;
+        config.markDirty();
+    }
+
+    // Presets: built-in, then your own. Everything is saved automatically.
+    const std::vector<std::string> names = config.presetNames();
+    const bool custom = config.preset == kCustomPreset;
+    if (ImGui::BeginCombo("Preset", custom ? "Custom (your changes)" : config.preset.c_str())) {
+        for (size_t i = 0; i < names.size(); i++) {
+            if (i == static_cast<size_t>(Preset::Custom)) ImGui::Separator(); // user presets below
+            if (ImGui::Selectable(names[i].c_str(), names[i] == config.preset)) config.selectPreset(names[i]);
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::Checkbox("Preset per map mood", &config.autoMood)) config.markDirty();
+    ImGui::SameLine();
+    ImGui::TextDisabled("map: %s", moodName(config.mood));
+    drawStatus(s);
+
+    const bool look = config.advancedMenu ? drawAdvanced(config, s, names) : drawSimple(s);
+    if (look) config.preset = kCustomPreset;
+
+    ImGui::Spacing();
+    ImGui::TextDisabled(config.advancedMenu ? "Saved automatically.   F12 frame capture"
+                                            : "Saved automatically.   More settings and your own presets: Advanced");
     ImGui::End();
 }
 

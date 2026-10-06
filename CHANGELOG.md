@@ -19,7 +19,11 @@
 - Auto quality: holds a target FPS by stepping the effect quality down and up; Performance panel in the F8 menu with the cost of every effect
 - Night skies on day maps: the game's baked sun (lit sides, glare on roofs, roads and screens) is taken out, no more white patches
 - Neon borders glow far down the track too, not only near the car
-- Ring World: Saturn by default, new view "Under the rings", "Next to the rings" reworked; Event Horizon can go right up to the black hole
+- Ring World: new view "On the rings", "Next to the rings" reworked, planet types also in the black hole and starry skies; Event Horizon can go right up to the black hole
+- The black hole is a real light source: white-hot disk, wide halo, warm light on the scene
+- Brighter stars and Milky Way, shooting stars
+- F8 menu: Simple (everyday settings) and Advanced (everything); settings that don't apply to the current sky are hidden
+- Presets: Balanced and Ring World removed (Ring World is a sky for any preset), light shafts much stronger in the day presets
 - Puddles mirror objects and lights more strongly
 - Custom settings survive a map change (no automatic mood preset while on Custom)
 - Night presets without chromatic aberration; Vibrant with stronger shadows, light shafts and a little more bloom

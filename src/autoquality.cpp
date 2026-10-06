@@ -95,13 +95,13 @@ void AutoQuality::apply(Settings& s) const {
     // Level 1: drop the extras that cost the most for the least.
     s.quality = 0;
     s.longShadows = 0.0f;
-    s.neonLight = 0.0f;
     s.grassDetail = 0.0f;
     s.reflections = 0.0f;
     if (s.bokehSize > 8.0f) s.bokehSize = 8.0f;
     if (m_level >= 1) return;
     // Level 0: the look stays, the expensive passes go.
     s.taa = false;
+    s.neonLight = 0.0f; // the glowing borders are the look: they go last
     s.godRays = 0.0f;
     s.volumetricClouds = 0.0f;
     s.depthOfField = 0.0f;

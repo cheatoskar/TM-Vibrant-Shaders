@@ -8,7 +8,6 @@ namespace tmshaders {
 enum class Preset : int {
     Vibrant = 0,     // Sildur's Vibrant style: saturated, warm sun, strong shafts
     Cinematic,       // IterationT style: dense sunlit haze, deep shadows, film contrast
-    Balanced,        // BSL style: natural light, soft bloom, blue shadows
     GoldenHour,      // procedural clear sky, low warm sun, long shafts, warm film look
     Dreamy,          // soft pastel bloom, lifted shadows, pink/teal split toning
     NeonNight,       // starry night: day-for-night grading, glowing neon and floodlights
@@ -17,7 +16,6 @@ enum class Preset : int {
     Competition,     // clarity first: AO + contact shadows, no haze or lens effects
     Performance,     // lighter passes for weak GPUs
     RainyDay,        // overcast, wet roads, puddles and falling rain
-    RingWorld,       // IterationT planets: a gas giant and its rings over the stadium
     ReplayCinema,    // film look with motion blur and depth of field for replays
     Thunderstorm,    // dark, overcast, pouring rain, soaked track, lightning
     Custom,
@@ -60,6 +58,7 @@ public:
     Settings settings;
     std::string preset = "Vibrant"; // active preset name, kCustomPreset after manual changes
     bool showOverlay = false;
+    bool advancedMenu = false; // F8 menu: simple (everyday) or advanced (every setting)
 
     // Presets: the built-in ones, then the user's own (Documents\TrackMania\TMVS\presets\*.ini).
     std::vector<std::string> presetNames() const;

@@ -38,7 +38,7 @@ The mod hooks into the game's renderer, reads the depth buffer, the camera and t
 - Volumetric clouds (ray-marched, lit by the sun).
 - Clear sky, starry night, aurora.
 - A black hole rendered by bending light through curved space-time.
-- **Ring World:** a Saturn, Jupiter, ice giant or exotic gas giant hanging over the stadium, either far away or with its rings sweeping right over you. A small black hole sits in the distance.
+- **Ring World sky:** a Saturn, Jupiter, ice giant or exotic gas giant over the stadium. Look at it from far away, from next to the rings, or float right above the banded rings, with a black hole lighting up the scene.
 
 **Camera**
 - HDR glow, bloom, auto exposure and a filmic tone curve.
@@ -59,18 +59,18 @@ The mod hooks into the game's renderer, reads the depth buffer, the camera and t
 |---|---|
 | **Vibrant** | The default. Warm sun, saturated colours, glowing borders, light shafts. |
 | **Cinematic** | Dense sunlit haze, deep shadows, film contrast. |
-| **Balanced** | Natural light, soft bloom, cool shadows. |
 | **Golden Hour** | New clear sky, low warm sun, long light shafts. |
 | **Dreamy** | Soft pastel bloom, pink and teal. |
 | **Neon Night** | Starry sky, darker scene, neon that lights and reflects on the road. |
 | **Event Horizon** | Black hole and ringed planet over a dark, cold stadium. |
 | **Aurora** | Northern lights, green and teal. |
-| **Ring World** | A gas giant and its rings over the stadium, a black hole far away. |
 | **Rainy Day** | Overcast clouds, wet track, puddles and rain. |
 | **Thunderstorm** | Dark and soaked: low clouds, pouring rain, deep puddles, lightning. |
 | **Replay Cinema** | Film look with motion blur and depth of field. Meant for replays and video export, not for driving. |
 | **Competition** | Clarity first: AO and contact shadows, no haze or lens effects. |
 | **Performance** | Vibrant with the expensive parts switched off. |
+
+Every sky works with every preset: pick *Ring world*, *Black hole*, *Aurora* and so on under **Sky** in the menu.
 
 Change any value and the preset turns into **Custom**. Type a name and press **Save as preset** to keep it. While you're on *Custom*, a map change never swaps your tweaks for a mood preset.
 
@@ -97,7 +97,7 @@ How much the shaders cost, at 1920×1080, looking into the sun (the worst case):
 
 Only the Arc 140V row is measured. The other rows are **estimates**: the measured shader time scaled by each card's relative speed, on top of a typical frame rate for the bare game. Your numbers will differ with CPU, drivers and map. At 1440p expect about 1.8× the shader time, at 4K about 4×.
 
-Most other presets cost about the same as Vibrant. Golden Hour and Ring World cost about 25% more because of the custom sky. Aurora is the heaviest sky, roughly 2× Vibrant.
+Most other presets cost about the same as Vibrant. Golden Hour and the Ring World sky cost about 25% more because of the custom sky. Aurora is the heaviest sky, roughly 2× Vibrant.
 
 What costs the most, if you want to win back FPS:
 
@@ -144,7 +144,7 @@ Eine deutsche Anleitung gibt es in [docs/INSTALL_DE.md](docs/INSTALL_DE.md).
 
 | Key | What it does |
 |---|---|
-| `F8` | Opens and closes the menu. |
+| `F8` | Opens and closes the menu. *Simple* shows the everyday settings (preset, sky, shadows, light shafts, weather, auto quality), *Advanced* shows everything, your own presets and the measured cost of every effect. |
 | `F7` | Shaders on and off, for a quick before/after. |
 | `F9` | Reloads the shaders (only useful while developing). |
 | `F12` | Saves a frame capture. Attach it to bug reports. |
@@ -158,7 +158,7 @@ Eine deutsche Anleitung gibt es in [docs/INSTALL_DE.md](docs/INSTALL_DE.md).
 ### Making your own preset
 
 1. Pick the preset that's closest to what you want.
-2. Open the menu with `F8` and change values. Everything updates live, and `F7` shows the original next to it.
+2. Open the menu with `F8`, switch to **Advanced** and change values. Everything updates live, and `F7` shows the original next to it.
 3. Type a name into the field under the preset list and press **Save as preset**.
 
 Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini` per preset. Send the file to a friend and they can drop it into the same folder. It shows up in their preset list next time the game starts. Delete a preset with the **Delete** button next to the list.
@@ -198,11 +198,11 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Sky rotation | Turns stars, black hole, planets and aurora around you. |
 | Sky brightness | Brightness of the custom skies. |
 | Clouds (clear sky) | Amount of the flat clouds in the clear sky. |
-| Stars | Number and brightness of stars. |
+| Stars | Number and brightness of stars, and how often shooting stars cross the sky. |
 | Black hole size | Size of the black hole. Above 3 you are right at its edge, the disk sweeping across the sky. |
 | Ringed planet | Size of the planet in the starry night and black hole skies, or of the ring world planet. 0 = none. |
 | Ring world planet | Saturn, Jupiter, ice giant or exotic. |
-| Ring world view | *Distant*: the classic view of a ringed planet. *Next to the rings*: just outside them, the rings cross the sky in front of the planet. *Under the rings*: inside the ring system, the rings hang over the stadium like a ceiling. |
+| Ring world view | *Distant*: the classic view of a ringed planet. *Next to the rings*: just outside them, the rings cross the sky in front of the planet. *On the rings*: you float just above them, the banded rings stretch to the horizon. |
 | Planet direction / height | Where the planet is in the sky. |
 | Volumetric clouds | 3D clouds over any sky. 0 = off. |
 | Cloud coverage | How much of the sky the clouds cover. |

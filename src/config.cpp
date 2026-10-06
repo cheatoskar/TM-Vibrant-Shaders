@@ -103,7 +103,6 @@ const char* presetName(Preset preset) {
     switch (preset) {
         case Preset::Vibrant: return "Vibrant";
         case Preset::Cinematic: return "Cinematic";
-        case Preset::Balanced: return "Balanced";
         case Preset::GoldenHour: return "Golden Hour";
         case Preset::Dreamy: return "Dreamy";
         case Preset::NeonNight: return "Neon Night";
@@ -112,7 +111,6 @@ const char* presetName(Preset preset) {
         case Preset::Competition: return "Competition";
         case Preset::Performance: return "Performance";
         case Preset::RainyDay: return "Rainy Day";
-        case Preset::RingWorld: return "Ring World";
         case Preset::ReplayCinema: return "Replay Cinema";
         case Preset::Thunderstorm: return "Thunderstorm";
         case Preset::Custom: return "Custom";
@@ -163,7 +161,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
     if (iswdigit(text[0])) {
         const int i = _wtoi(text.c_str());
         // Index 10 was "Custom" before more presets were added.
-        if (i >= 10) return presetName(Preset::Custom);
+        if (i >= 10 || i >= static_cast<int>(Preset::Custom)) return presetName(Preset::Custom);
         return i >= 0 ? presetName(static_cast<Preset>(i)) : fallback;
     }
     if (!_wcsicmp(text.c_str(), L"Keep")) return {};
@@ -365,8 +363,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyColor[0] = 0.48f; s.skyColor[1] = 0.66f; s.skyColor[2] = 1.0f;
             s.fogDensity = 1.1f;
             s.fogSunScatter = 1.3f;
-            s.godRays = 1.3f;
-            s.godRayDecay = 0.975f;
+            s.godRays = 1.85f;
+            s.godRayDecay = 0.99f;
             s.sunGlow = 1.0f;
             s.bloom = 0.11f;
             s.lensFlare = 0.45f;
@@ -377,24 +375,6 @@ void applyPreset(Settings& s, Preset preset) {
             s.temperature = 0.12f;
             s.shadowTint = 0.45f;
             s.filmGrain = 0.02f;
-            break;
-        case Preset::Balanced:
-            s.aoStrength = 0.9f;
-            s.shadowStrength = 0.55f;
-            s.sunLight = 0.3f;
-            s.ambientTint = 0.45f;
-            s.fogDensity = 0.25f;
-            s.godRays = 0.45f;
-            s.bloom = 0.05f;
-            s.lensFlare = 0.1f;
-            s.chromaticAberration = 0.05f;
-            s.vignette = 0.18f;
-            s.contrast = 1.03f;
-            s.saturation = 1.04f;
-            s.vibrance = 0.15f;
-            s.temperature = 0.03f;
-            s.shadowTint = 0.2f;
-            s.filmGrain = 0.008f;
             break;
         case Preset::GoldenHour:
             s.skyMode = 1;
@@ -407,8 +387,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.shadowStrength = 0.75f;
             s.fogDensity = 0.7f;
             s.fogSunScatter = 1.4f;
-            s.godRays = 1.3f;
-            s.godRayDecay = 0.975f;
+            s.godRays = 1.85f;
+            s.godRayDecay = 0.99f;
             s.sunGlow = 1.0f;
             s.bloom = 0.09f;
             s.lensFlare = 0.4f;
@@ -431,7 +411,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyEnhance = 0.8f;
             s.bloom = 0.2f;
             s.bloomRadius = 1.0f;
-            s.godRays = 0.9f;
+            s.godRays = 1.3f;
             s.contrast = 0.92f;
             s.saturation = 1.15f;
             s.vibrance = 0.35f;
@@ -564,25 +544,6 @@ void applyPreset(Settings& s, Preset preset) {
             s.shadowTint = 0.3f;
             s.vignette = 0.35f;
             break;
-        case Preset::RingWorld:
-            s.skyMode = 5;
-            s.planetType = 0;
-            s.planetView = 1;
-            s.planetSize = 1.0f;
-            s.skyEffectSize = 1.0f;
-            s.starAmount = 1.5f;
-            s.skyColor[0] = 0.45f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
-            s.ambientTint = 0.7f;
-            s.fogDensity = 0.4f;
-            s.godRays = 0.5f;
-            s.sunGlow = 1.0f;
-            s.contrast = 1.12f;
-            s.saturation = 1.05f;
-            s.temperature = -0.05f;
-            s.shadowTint = 0.5f;
-            s.vignette = 0.35f;
-            s.filmGrain = 0.012f;
-            break;
         case Preset::ReplayCinema:
             s.aoStrength = 1.2f;
             s.sunLight = 0.7f;
@@ -590,8 +551,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.sunColor[0] = 1.0f; s.sunColor[1] = 0.82f; s.sunColor[2] = 0.58f;
             s.fogDensity = 1.0f;
             s.fogSunScatter = 1.2f;
-            s.godRays = 1.1f;
-            s.godRayDecay = 0.975f;
+            s.godRays = 1.6f;
+            s.godRayDecay = 0.985f;
             s.bloom = 0.1f;
             s.lensFlare = 0.35f;
             s.reflections = 0.35f;
@@ -658,6 +619,7 @@ void Config::load() {
     GetPrivateProfileStringW(L"General", L"Preset", L"", text, 128, ini);
     preset = presetFromText(text, "Vibrant");
     autoMood = GetPrivateProfileIntW(L"General", L"AutoMoodPresets", 1, ini) != 0;
+    advancedMenu = GetPrivateProfileIntW(L"General", L"AdvancedMenu", 0, ini) != 0;
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         if (GetPrivateProfileStringW(L"General", kMoodKeys[i], L"", text, 128, ini)) moodPreset[i] = presetFromText(text, moodPreset[i]);
     }
@@ -687,6 +649,7 @@ void Config::save() {
     WritePrivateProfileStringW(L"General", L"Preset", widen(preset).c_str(), ini);
     WritePrivateProfileStringW(L"General", L"Enabled", settings.enabled ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"AdvancedMenu", advancedMenu ? L"1" : L"0", ini);
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         WritePrivateProfileStringW(L"General", kMoodKeys[i], moodPreset[i].empty() ? L"Keep" : widen(moodPreset[i]).c_str(), ini);
     }

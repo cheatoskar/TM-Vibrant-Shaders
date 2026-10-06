@@ -371,19 +371,22 @@ float3 rotateY(float3 v, float a) {
     return float3(c * v.x - s * v.z, v.y, s * v.x + c * v.z);
 }
 
-// Point stars on a 3D grid, anti-aliased, with gentle twinkle.
+// Point stars on a 3D grid, anti-aliased, with gentle twinkle. Each star covers at least
+// a pixel or two (smaller ones flicker away under TAA), the brightest get a glow.
 float3 stars(float3 rd, float density) {
     float3 sum = 0;
-    [loop] for (int layer = 0; layer < 2; layer++) {
-        float scale = layer == 0 ? 160.0 : 380.0;
+    [loop] for (int layer = 0; layer < 3; layer++) {
+        float scale = layer == 0 ? 70.0 : (layer == 1 ? 160.0 : 340.0);
+        float chance = layer == 0 ? 0.035 : (layer == 1 ? 0.08 : 0.1);
         float3 p = rd * scale;
         float3 cell = floor(p);
         float h = hash13(cell + layer * 71.0);
-        if (h > 1.0 - 0.06 * density) {
+        if (h > 1.0 - chance * density) {
             float3 center = cell + 0.5 + (float3(hash13(cell + 3.1), hash13(cell + 5.7), hash13(cell + 9.3)) - 0.5) * 0.6;
             float d = length(p - center);
-            float size = layer == 0 ? 0.11 : 0.07;
-            float b = smoothstep(size, 0.0, d) * (layer == 0 ? 2.5 : 1.0);
+            float size = layer == 0 ? 0.07 : (layer == 1 ? 0.16 : 0.15);
+            float b = smoothstep(size, 0.0, d) * (layer == 0 ? 9.0 : (layer == 1 ? 3.5 : 1.6));
+            if (layer == 0) b += exp(-d * 30.0) * 0.6; // glow of the bright ones (feeds the bloom)
             float twinkle = 0.75 + 0.25 * sin(u_Proj2.z * (2.0 + h * 5.0) + h * 40.0);
             float t = frac(h * 91.7);
             float3 tint = t < 0.3 ? float3(0.7, 0.8, 1.0) : (t < 0.8 ? float3(1, 1, 1) : float3(1.0, 0.8, 0.6));
@@ -414,7 +417,33 @@ float3 galaxy(float3 rd) {
 }
 
 float3 spaceBackground(float3 rd) {
-    return galaxy(rd) + stars(rd, u_Sky2.y) + float3(0.004, 0.006, 0.012);
+    return galaxy(rd) * 2.2 + stars(rd, u_Sky2.y) + float3(0.004, 0.006, 0.012);
+}
+
+// Shooting stars: every few seconds one streaks across the upper sky.
+float3 meteors(float3 rd, float amount) {
+    float3 sum = 0;
+    float t = u_Proj2.z / 2.7;
+    [unroll] for (int k = 0; k < 2; k++) {
+        float slot = floor(t + k * 0.5) - k * 0.5;
+        float age = (t - slot) * 2.7;                       // seconds since this slot began
+        float h1 = hash12(float2(slot, 1.7 + k)), h2 = hash12(float2(slot, 9.3 + k)), h3 = hash12(float2(slot, 4.1 + k));
+        if (h3 > 0.6 || age > 0.9) continue;
+        float az = h1 * 6.2832, el = 0.35 + h2 * 0.6;
+        float3 start = float3(sin(az) * cos(el), sin(el), cos(az) * cos(el));
+        float3 dir = normalize(cross(start, float3(cos(az + 1.3), 0.4 - h2, sin(az + 1.3))));
+        float travel = age * 0.45;                           // radians per second
+        float3 head = normalize(start + dir * travel);
+        // Distance to the trail segment behind the head (small angles: plane approximation).
+        float3 v = rd - head;
+        float along = -dot(v, dir);
+        float across = length(v + dir * along);
+        float trail = saturate(along / 0.12);
+        float fade = smoothstep(0.0, 0.1, age) * smoothstep(0.9, 0.5, age);
+        float glow = smoothstep(0.0015, 0.0, across) * (along > 0.0 ? 1.0 - trail : 0.0) * step(-0.002, along);
+        sum += float3(0.85, 0.9, 1.0) * glow * fade * 4.0 * step(0.0, rd.y);
+    }
+    return sum * amount;
 }
 
 // Frame around a sky direction: x = right, y = up, z = forward.
@@ -454,7 +483,8 @@ float4 diskSample(float3 x, float3 dir, float3 n, float3 e1, float3 e2) {
     float g = sqrt(1.0 - v * v) / (1.0 - v * dot(orbit, -dir));
     float beaming = clamp(g * g * g, 0.12, 3.5);
     float redshift = sqrt(saturate(1.0 - 1.0 / r));
-    float3 emission = col * (0.35 + heat * 3.5) * beaming * redshift;
+    // White-hot and far brighter than anything else in the sky: it feeds a big bloom.
+    float3 emission = col * (0.6 + heat * 7.0) * beaming * redshift;
     return float4(emission * density, saturate(density * 1.4));
 }
 
@@ -522,67 +552,11 @@ float3 blackHoleSky(float3 rd, float3 bh, float dist) {
         col = spaceBackground(outDir);
     }
     // Soft glow of the inner disk scattered around the hole (feeds the bloom).
+    // Light of the inner disk scattered around the hole: a tight hot glow and a wide halo
+    // that spills into the sky (it is a light source, not a sticker).
     float glow = exp(-angle * dist / 9.0) * smoothstep(2.3, 3.4, angle * dist);
-    return col + float3(1.0, 0.75, 0.5) * glow * 0.18;
-}
-
-// Ringed gas giant (sky detail for the space skies). Returns rgb and coverage.
-float4 ringedPlanet(float3 rd, float3 light) {
-    float size = u_Sky2.w;
-    if (size <= 0.0) return 0;
-    float3 dir = normalize(rotateY(float3(-0.62, 0.14, 0.8), u_Sky.z));
-    float radius = sin(0.16 * size);
-    float3 center = dir;                          // planet at distance 1
-    float3 ringN = normalize(float3(0.18, 1.0, -0.12));
-    float3 toC = center;
-
-    // Sphere.
-    float b = dot(rd, toC);
-    float c = dot(toC, toC) - radius * radius;
-    float disc = b * b - c;
-    float tPlanet = disc > 0.0 ? b - sqrt(disc) : 1e9;
-    // Ring plane through the centre.
-    float denom = dot(rd, ringN);
-    float tRing = abs(denom) > 1e-5 ? dot(center, ringN) / denom : -1.0;
-
-    float4 result = 0;
-    if (tRing > 0.0 && tRing < tPlanet) {
-        float3 x = rd * tRing - center;
-        float rr = length(x) / radius;
-        if (rr > 1.22 && rr < 2.3) {
-            float bands = 0.55 + 0.45 * noise3(float3(rr * 38.0, 0.0, 0.0)) * noise3(float3(rr * 9.0, 3.0, 0.0));
-            float density = bands * smoothstep(1.22, 1.3, rr) * smoothstep(2.3, 2.15, rr);
-            density *= 1.0 - 0.9 * smoothstep(0.015, 0.0, abs(rr - 1.95));       // Cassini division
-            density *= lerp(0.55, 1.0, smoothstep(1.5, 1.6, rr));                // fainter C ring
-            // Planet shadow across the rings.
-            float3 wp = rd * tRing;
-            float lb = dot(light, center - wp);
-            float lc = dot(center - wp, center - wp) - radius * radius;
-            float shadow = (lb > 0.0 && lb * lb - lc > 0.0) ? 0.08 : 1.0;
-            float3 ringCol = float3(0.92, 0.82, 0.66) * (0.35 + 0.65 * abs(dot(light, ringN))) * shadow;
-            result = float4(ringCol * 0.7 * density, density * 0.85);
-        }
-    }
-    if (tPlanet < 1e8 && (result.a < 0.999)) {
-        float3 x = rd * tPlanet;
-        float3 nrm = normalize(x - center);
-        float lat = dot(nrm, ringN);
-        float band = noise3(float3(lat * 14.0, 0.0, 1.0)) * 0.6 + noise3(float3(lat * 45.0 + nrm.x * 0.6, 2.0, 0.0)) * 0.4;
-        float3 albedo = lerp(float3(0.78, 0.66, 0.46), float3(0.97, 0.9, 0.72), band);
-        albedo = lerp(albedo, float3(0.62, 0.68, 0.72), smoothstep(0.75, 0.95, abs(lat)));  // bluish poles
-        float ndl = dot(nrm, light);
-        float lit = smoothstep(-0.08, 0.35, ndl);
-        // Shadow of the rings on the planet.
-        float denomL = dot(light, ringN);
-        float tl = abs(denomL) > 1e-4 ? dot(center - x, ringN) / denomL : -1.0;
-        float rs = tl > 0.0 ? length(x + light * tl - center) / radius : 0.0;
-        float ringShadow = (rs > 1.25 && rs < 2.3) ? 0.35 : 1.0;
-        float limb = pow(saturate(dot(nrm, -rd)), 0.35);
-        float3 planet = albedo * (lit * ringShadow * 0.8 * limb + 0.01);
-        result.rgb += (1.0 - result.a) * planet;
-        result.a = 1.0;
-    }
-    return result;
+    float halo = exp(-angle * dist / 45.0);
+    return col + float3(1.0, 0.78, 0.55) * (glow * 0.5 + halo * 0.06);
 }
 
 // ---------------------------------------------------------------------------------
@@ -652,10 +626,79 @@ float ringDensity(int type, float rr, float2 x, float near) {
     float ringlets = noise3(float3(rr * 160.0, 0.3, 2.1));
     d *= lerp(1.0, smoothstep(0.2, 0.7, ringlets) * 0.85 + 0.15, near);
     d *= lerp(1.0, 0.55 + 0.6 * noise3(float3(rr * 520.0, 1.7, 4.2)), near);
-    d *= lerp(1.0, 0.35 + 0.9 * noise3(float3(x * 600.0, rr * 300.0)), near * 0.6);
+    d *= lerp(1.0, 0.6 + 0.6 * noise3(float3(x * 600.0, rr * 300.0)), near * 0.3);
     if (type == 1) d *= 0.7;  // Jupiter: dusty rings
     if (type == 2) d *= 0.5;  // ice giant: thin rings
     return saturate(d);
+}
+
+// Direction (xyz) and light strength (w) of the black hole of the current sky, if any.
+float4 blackHoleLight() {
+    int mode = (int)(u_Sky.x + 0.5);
+    if (mode == 3) return float4(blackHoleDirection(), saturate(u_Sky2.z * 0.45));
+    if (mode == 5) return float4(normalize(rotateY(float3(0.55, 0.22, -0.8), u_Sky.z)), saturate(u_Sky2.z * 0.25));
+    return 0;
+}
+
+// Ringed gas giant (sky detail for the space skies). Returns rgb and coverage.
+float4 ringedPlanet(float3 rd, float3 light) {
+    float size = u_Sky2.w;
+    if (size <= 0.0) return 0;
+    float3 dir = normalize(rotateY(float3(-0.62, 0.14, 0.8), u_Sky.z));
+    float radius = sin(0.16 * size);
+    float3 center = dir;                          // planet at distance 1
+    float3 ringN = normalize(float3(0.18, 1.0, -0.12));
+    float3 toC = center;
+
+    // Sphere.
+    float b = dot(rd, toC);
+    float c = dot(toC, toC) - radius * radius;
+    float disc = b * b - c;
+    float tPlanet = disc > 0.0 ? b - sqrt(disc) : 1e9;
+    // Ring plane through the centre.
+    float denom = dot(rd, ringN);
+    float tRing = abs(denom) > 1e-5 ? dot(center, ringN) / denom : -1.0;
+
+    float4 result = 0;
+    if (tRing > 0.0 && tRing < tPlanet) {
+        float3 x = rd * tRing - center;
+        float rr = length(x) / radius;
+        if (rr > 1.22 && rr < 2.3) {
+            float bands = 0.55 + 0.45 * noise3(float3(rr * 38.0, 0.0, 0.0)) * noise3(float3(rr * 9.0, 3.0, 0.0));
+            float density = bands * smoothstep(1.22, 1.3, rr) * smoothstep(2.3, 2.15, rr);
+            density *= 1.0 - 0.9 * smoothstep(0.015, 0.0, abs(rr - 1.95));       // Cassini division
+            density *= lerp(0.55, 1.0, smoothstep(1.5, 1.6, rr));                // fainter C ring
+            // Planet shadow across the rings.
+            float3 wp = rd * tRing;
+            float lb = dot(light, center - wp);
+            float lc = dot(center - wp, center - wp) - radius * radius;
+            float shadow = (lb > 0.0 && lb * lb - lc > 0.0) ? 0.08 : 1.0;
+            int type = (int)(u_Planet.x + 0.5);
+            density *= type == 1 ? 0.7 : (type == 2 ? 0.6 : 1.0);
+            float3 ringCol = ringColor(type) * (0.35 + 0.65 * abs(dot(light, ringN))) * shadow;
+            result = float4(ringCol * 0.7 * density, density * 0.85);
+        }
+    }
+    if (tPlanet < 1e8 && (result.a < 0.999)) {
+        float3 x = rd * tPlanet;
+        float3 nrm = normalize(x - center);
+        float lat = dot(nrm, ringN);
+        float3 e1 = normalize(cross(ringN, float3(0.3, 0.1, 0.9)));
+        float lon = atan2(dot(nrm, cross(ringN, e1)), dot(nrm, e1));
+        float3 albedo = planetAlbedo((int)(u_Planet.x + 0.5), lat, lon, nrm);
+        float ndl = dot(nrm, light);
+        float lit = smoothstep(-0.08, 0.35, ndl);
+        // Shadow of the rings on the planet.
+        float denomL = dot(light, ringN);
+        float tl = abs(denomL) > 1e-4 ? dot(center - x, ringN) / denomL : -1.0;
+        float rs = tl > 0.0 ? length(x + light * tl - center) / radius : 0.0;
+        float ringShadow = (rs > 1.25 && rs < 2.3) ? 0.35 : 1.0;
+        float limb = pow(saturate(dot(nrm, -rd)), 0.35);
+        float3 planet = albedo * (lit * ringShadow * 0.8 * limb + 0.01);
+        result.rgb += (1.0 - result.a) * planet;
+        result.a = 1.0;
+    }
+    return result;
 }
 
 // Small rocky moon (direction, angular radius): colour and coverage.
@@ -677,7 +720,7 @@ float3 ringWorldSky(float3 rd) {
 
     // Background: stars, galaxy and a small, far black hole (with its lensing).
     float3 bhDir = normalize(rotateY(float3(0.55, 0.22, -0.8), u_Sky.z));
-    float3 col = blackHoleSky(rd, bhDir, 70.0 / (u_Sky2.z * 0.28));
+    float3 col = blackHoleSky(rd, bhDir, 70.0 / (u_Sky2.z * 0.55));
     // The sun as a star.
     float mu = dot(rd, sun);
     col += u_SunColor.rgb * (smoothstep(0.99955, 0.9998, mu) * 6.0 + pow(saturate(mu), 300.0) * 0.6 + pow(saturate(mu), 20.0) * 0.03);
@@ -692,12 +735,12 @@ float3 ringWorldSky(float3 rd) {
     //   View 0: the classic distant view of a ringed planet, from above the rings.
     //   View 1: just outside the rings, a little below them - the lit rings rise from the
     //           planet and sweep over the stadium.
-    //   View 2: under the rings - they span the whole sky like a ceiling, the planet sits
-    //           huge on the horizon.
+    //   View 2: on the rings - floating just above them, the banded ring plane stretches
+    //           to the horizon and rises over the stadium on one side.
     int view = (int)(u_Planet.y + 0.5);
     float3 dir = dirFromAngles(u_Planet.z, u_Planet.w);
-    float size = max(u_Sky2.w, 0.3);
-    float dist = view == 2 ? 2.3 : (view == 1 ? 2.6 : 5.5 / size);
+    float size = u_Sky2.w > 0.0 ? max(u_Sky2.w, 0.3) : 1.0;
+    float dist = view == 2 ? 2.2 : (view == 1 ? 2.6 : 5.5 / size);
     float3 center = dir * dist;
     float3 side = normalize(cross(float3(0, 1, 0), dir));
     float3 inPlane, ringN;
@@ -709,19 +752,20 @@ float3 ringWorldSky(float3 rd) {
         center -= ringN * (dist * 0.22 + dot(center, ringN)); // camera well above the rings
     } else {
         // Ring plane through the planet direction, rolled sideways so it crosses the view
-        // diagonally; the camera is below it, so the rings hang over the stadium.
-        float roll = view == 2 ? 0.5 : 0.45;
+        // diagonally. Next to the rings the camera is below them; on the rings it floats
+        // just above the ring particles.
+        float roll = view == 2 ? 0.35 : 0.45;
         float3 up = normalize(cross(dir, side));
         ringN = normalize(up * cos(roll) + side * sin(roll));
         inPlane = normalize(cross(dir, ringN));
-        float below = view == 2 ? 0.06 : 0.15;
-        center -= ringN * (dot(center, ringN) - below);
+        float offset = view == 2 ? -0.012 : 0.15; // > 0: plane above the camera
+        center -= ringN * (dot(center, ringN) - offset);
     }
     float3 axis = normalize(ringN + dir * 0.05);
     // The planet's own star lights it from behind the viewer (a big gibbous planet, like in
     // IterationT) instead of the game's sun, which is often behind it. Seen from below the
     // rings, the star is below them too, so the side we look at is lit.
-    sun = normalize(-dir * 0.55 + side * 0.65 + (view == 0 ? float3(0, 0.5, 0) : -ringN * 0.3));
+    sun = normalize(-dir * 0.55 + side * 0.65 + (view == 0 ? float3(0, 0.5, 0) : (view == 1 ? -ringN * 0.3 : ringN * 0.45)));
 
     // Planet sphere.
     float b = dot(rd, center);
@@ -772,7 +816,7 @@ float3 ringWorldSky(float3 rd) {
             float front = 0.35 + 0.65 * saturate(abs(dot(sun, ringN)) * 2.0);
             float forward = pow(saturate(dot(rd, sun)), 6.0) * 1.5;
             float near = saturate(1.0 - tRing / 1.2);
-            ringCol = ringColor(type) * (litSide ? front : front * 0.35 + forward) * shadow * lerp(0.65, 0.95, near);
+            ringCol = ringColor(type) * (litSide ? front : front * 0.35 + forward) * shadow * lerp(0.65, 0.8, near);
             ringA = d * lerp(0.9, 0.8, near);
         }
     }
@@ -863,15 +907,19 @@ float3 customSky(float3 rd) {
         c += float3(0.9, 0.95, 1.0) * (smoothstep(0.9993, 0.9996, m) * 3.0 + pow(saturate(m), 400.0) * 0.4);
         float4 planet = ringedPlanet(rd, moon);
         c = c * (1.0 - planet.a) + planet.rgb * 0.5;
+        c += meteors(rd, saturate(u_Sky2.y));
     } else if (mode == 3) {
         c = blackHoleSky(rd, blackHoleDirection(), 70.0 / u_Sky2.z);
         float3 pdir = normalize(rotateY(float3(-0.62, 0.14, 0.8), u_Sky.z));
         float4 planet = ringedPlanet(rd, normalize(blackHoleDirection() * 0.45 - pdir * 0.75 + float3(0, 0.35, 0)));
         c = c * (1.0 - planet.a) + planet.rgb;
+        c += meteors(rd, saturate(u_Sky2.y));
     } else if (mode == 5) {
         c = ringWorldSky(rd);
+        c += meteors(rd, saturate(u_Sky2.y) * 0.6);
     } else {
         c = auroraSky(rd);
+        c += meteors(rd, saturate(u_Sky2.y));
     }
     // Below the horizon: dark ground haze instead of mirrored sky.
     c = lerp(c, c * 0.15 + float3(0.01, 0.012, 0.02), smoothstep(0.0, -0.08, rd.y) * (mode == 1 ? 0.0 : 1.0));
@@ -1202,9 +1250,12 @@ float3 upsampleOcclusion(float2 uv, float z, float3 n) {
 
 // Light sources in the game's LDR image: lamps and neon strips. Returns 0..1.
 //   c = linear colour, nWorld = world normal, rd = view ray (to tell sun glare from lights)
-float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd) {
+float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist) {
+    // Far away the game's mipmaps blend a strip with its dark frame: it gets dimmer, so
+    // the bar for "bright" comes down with distance.
+    float low = lerp(0.5, 0.28, saturate((dist - 20.0) / 150.0));
     float peak = max(c.r, max(c.g, c.b));
-    if (peak <= 0.5) return 0.0;
+    if (peak <= low) return 0.0;
     float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
     // Erode: single bright texels (specular glints on asphalt lit by floodlights) are
     // texture detail, not lights. A pixel survives if it continues along some axis, so
@@ -1228,7 +1279,7 @@ float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd) {
     // Clearly brighter than the surroundings (lamps at night) ...
     float contrast = saturate((peak - surround) * 3.0) * pow(smoothstep(0.75, 1.0, peak), 2.0);
     // ... or a strongly coloured bright strip (neon), which glows in daylight too.
-    float neon = smoothstep(0.5, 0.8, sat) * smoothstep(0.5, 0.85, peak);
+    float neon = smoothstep(0.5, 0.8, sat) * smoothstep(low, low + 0.35, peak);
     float amount = max(contrast, neon * 0.75);
     // The sun's glare is a reflection, not a light: white, and either on the road (facing
     // up) or on any surface that mirrors the sun towards the camera (roofs, glass).
@@ -1320,7 +1371,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float flatness = smoothstep(0.8, 0.97, nWorld.y);
 
     // Expand the LDR image back toward HDR: light sources glow.
-    float emissive = emissiveAmount(uv, c, nWorld, rd);
+    float emissive = emissiveAmount(uv, c, nWorld, rd, dist);
     float3 glow = c * u_Rays.w * emissive;
     // White lights and screens glow less than coloured ones, or they bleach to flat white.
     float peakC = max(c.r, max(c.g, c.b));
@@ -1427,8 +1478,17 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 
     // Day-for-night for the night skies: darker, cooler, less saturated - but lights keep glowing.
     float night = u_Sky.y;
+    float3 unlit = c;
     c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55) * lerp(1.0, 0.16, night);
-    c += glow * (1.0 - saturate(fogAmount));
+    // A black hole in the sky is the brightest light around: warm light on everything that
+    // faces it, and the haze glows towards it.
+    float4 bh = blackHoleLight();
+    if (bh.w > 0.0) {
+        float3 bhColor = float3(1.0, 0.8, 0.6) * bh.w;
+        c += unlit * bhColor * saturate(dot(nWorld, bh.xyz) * 0.8 + 0.2) * 0.35;
+        c += bhColor * pow(saturate(dot(rd, bh.xyz)), 6.0) * saturate(fogAmount * 2.0 + 0.05) * 0.4;
+    }
+    c += glow * (1.0 - 0.6 * saturate(fogAmount)); // lights shine through the haze
     // Lightning: a cold flash over everything (surfaces facing up and the haze most).
     if (u_Light2.z > 0.0) c += (c * 2.5 + fogColor * 0.4 * fogAmount + 0.01) * float3(0.8, 0.85, 1.0) * u_Light2.z * (0.6 + 0.4 * saturate(nWorld.y));
 
@@ -1454,7 +1514,8 @@ float4 PS_SpillDown(float2 uv : TEXCOORD0) : COLOR0 {
             float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
             // Strongly coloured, bright: neon. (White lamps light things too, but white
             // also means sun glare and white paint - leave those out.)
-            float e = smoothstep(0.45, 0.8, sat) * smoothstep(0.45, 0.85, peak) * (nd.w < SKY_Z ? 1.0 : 0.0);
+            float low = lerp(0.45, 0.28, saturate((nd.w - 20.0) / 150.0));
+            float e = smoothstep(0.45, 0.8, sat) * smoothstep(low, low + 0.4, peak) * (nd.w < SKY_Z ? 1.0 : 0.0);
             sum += c * e;
             strongest = max(strongest, c * e);
             zmin = min(zmin, nd.w);
