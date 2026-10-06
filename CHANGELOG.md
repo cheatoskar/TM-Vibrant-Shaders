@@ -2,6 +2,10 @@
 
 ## Unreleased (1.2)
 
+**Game support**
+- TrackMania United Forever: its TmForever.exe is a different build than Nations Forever's, and the engine hooks only knew Nations. Both builds now have their own address table and the mod picks the one that matches. In United, the map's environment is read at load: the Stadium water heights only apply on Stadium maps, the island, bay and coast seas come from the game.
+- The replay camera hook (UpdateCams) also works when the game is loaded at another base address (it never did with the ModLoader).
+
 **Presets**
 - Shorter names: Neon Night is now **Neon**, Event Horizon **Horizon**, Thunderstorm **Storm**. Saved settings with the old names keep working.
 - Night presets (Neon, Horizon, Aurora) show every star (3). Horizon turns the sky so Saturn and the black hole (up close, size 6) are in view from the start screen.

@@ -53,6 +53,10 @@ void setProjectionJitter(float x, float y);
 int raceResets();
 int respawns();
 
+// The map is a Stadium map (always in Nations Forever; United Forever has six more
+// environments).
+bool stadium();
+
 // The two water heights of this map: the water blocks' (always the same) and the sea level
 // (from the map load or the plane the game renders the water reflection for; = blockY without
 // a sea). False until a map load was seen (hooks unavailable): the shaders then guess by colour.

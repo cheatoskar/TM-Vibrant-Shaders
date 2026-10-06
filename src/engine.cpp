@@ -8,49 +8,79 @@ namespace tmshaders {
 namespace engine {
 namespace {
 
-// Link-time addresses from TmForever.map (preferred base 0x00400000).
+// TmForever.exe comes in two builds: Nations Forever and United Forever. Same code, shifted
+// addresses. Link-time addresses (preferred base 0x00400000): TMNF from TmForever.map, TMUF
+// found by matching TMNF's code (absolute addresses and call targets masked) and checked
+// over 256 bytes.
 constexpr uintptr_t kPreferredBase = 0x00400000;
-constexpr uintptr_t kViewportVTable = 0x00bd10bc; // ??_7CVisionViewportDx9@@6B@
+
+enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSiteCount };
+
+struct GameBuild {
+    const char* name;
+    uintptr_t viewportVTable;      // ??_7CVisionViewportDx9@@6B@
+    uintptr_t slots[kSlotCount];   // the original functions in the vtable
+    uintptr_t sites[kSiteCount];   // non-virtual functions, hooked inline
+    uintptr_t handlers[kSiteCount]; // absolute address inside a prologue (its SEH handler), or 0
+    uintptr_t shaderLevel;         // word: GPU shader path (PC0..PC3)
+    uintptr_t idGetString;         // const char* CMwId::GetString() const
+};
+
+constexpr GameBuild kBuilds[] = {
+    {"Nations Forever", 0x00bd10bc,
+     {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20}, 0x00d123ba, 0x00935400},
+    {"United Forever", 0x00bd109c,
+     {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620}, 0x00d1442a, 0x00935290},
+};
+const GameBuild* g_build = nullptr;
 
 struct Slot {
     int index;
-    uintptr_t expected; // link-time address of the original function
+    SlotId id;
     const char* name;
 };
 
-constexpr Slot kRenderFrameBegin = {93, 0x009a0990, "RenderFrameBegin"};
-constexpr Slot kRenderCameraBegin = {95, 0x0099d750, "RenderCameraBegin"};
-constexpr Slot kRenderCameraEnd = {100, 0x0099fe80, "RenderCameraEnd"};
-constexpr Slot kRenderOverlayZones = {101, 0x009a2390, "RenderOverlayZones"};
-constexpr Slot kRenderFrameEnd = {102, 0x009a4070, "RenderFrameEnd"};
-constexpr Slot kComputeDriverViewMatrix = {103, 0x0095ab40, "ComputeDriverViewMatrix"};
-constexpr Slot kComputeDriverProjection = {104, 0x0095d530, "ComputeDriverProjection"};
-constexpr Slot kRenderShadowsSet = {76, 0x0095acc0, "RenderShadowsSet"};
-constexpr uintptr_t kShaderLevel = 0x00d123ba; // word: GPU shader path (PC0..PC3)
-
+constexpr Slot kRenderFrameBegin = {93, kFrameBegin, "RenderFrameBegin"};
+constexpr Slot kRenderCameraBegin = {95, kCameraBegin, "RenderCameraBegin"};
+constexpr Slot kRenderCameraEnd = {100, kCameraEnd, "RenderCameraEnd"};
+constexpr Slot kRenderOverlayZones = {101, kOverlayZones, "RenderOverlayZones"};
+constexpr Slot kRenderFrameEnd = {102, kFrameEnd, "RenderFrameEnd"};
+constexpr Slot kComputeDriverViewMatrix = {103, kViewMatrix, "ComputeDriverViewMatrix"};
+constexpr Slot kComputeDriverProjection = {104, kProjection, "ComputeDriverProjection"};
+constexpr Slot kRenderShadowsSet = {76, kShadowsSet, "RenderShadowsSet"};
 
 // Non-virtual functions, hooked inline. The prologue bytes are checked before patching and
-// must be whole, position-independent instructions (they run again in the trampoline).
+// must be whole instructions that still work when copied (they run again in the trampoline).
+// handlerAt: offset of the build's handler address in the prologue (it moves with the
+// module), or -1.
 struct InlineSite {
-    uintptr_t address;
+    SiteId id;
     unsigned char prologue[12];
     size_t length;
+    int handlerAt;
     const char* name;
 };
-constexpr InlineSite kClipTracksUpdate = {0x00693e20, {0xd9, 0xe8, 0x83, 0xec, 0x08}, 5, "CGameCtnMediaClipPlayer::TracksUpdate"};
-constexpr InlineSite kClipViewerCams = {0x00673e50, {0x6a, 0xff, 0x68, 0xe8, 0xf4, 0xaa, 0x00}, 7, "CGameCtnMediaClipViewer::UpdateCams"};
-constexpr InlineSite kVideoShoot = {0x006f4510, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, "CGameCtnMediaVideoShooter::DoShoot"};
+constexpr InlineSite kClipTracksUpdate = {kClipTracks, {0xd9, 0xe8, 0x83, 0xec, 0x08}, 5, -1, "CGameCtnMediaClipPlayer::TracksUpdate"};
+constexpr InlineSite kClipViewerCams = {kClipCams, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnMediaClipViewer::UpdateCams"};
+constexpr InlineSite kVideoShootSite = {kVideoShoot, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CGameCtnMediaVideoShooter::DoShoot"};
 // Map load (CGameCtnApp::ChallengeCreateSceneGraph): the zone gets the sea level of the
 // environment's decoration, -1 when it has none.
-constexpr InlineSite kWaterTileHeight = {0x0054e100, {0x55, 0x8b, 0xe9, 0xd9, 0x85, 0x08, 0x01, 0x00, 0x00}, 9, "CHmsZone::WaterRenderTileHeightSet"};
+constexpr InlineSite kWaterTileHeight = {kTileHeight, {0x55, 0x8b, 0xe9, 0xd9, 0x85, 0x08, 0x01, 0x00, 0x00}, 9, -1, "CHmsZone::WaterRenderTileHeightSet"};
 // Race (re)start: the race HUD is reset. Respawn: back to the last checkpoint (or the start).
-constexpr InlineSite kRaceReset = {0x004bedd0, {0x56, 0x8b, 0xf1, 0x83, 0xbe, 0xa4, 0x01, 0x00, 0x00, 0x00}, 10, "CTrackManiaRaceInterface::RaceOnReset"};
-constexpr InlineSite kRespawn = {0x0047c0d0, {0x53, 0x8b, 0x5c, 0x24, 0x08}, 5, "CTrackManiaRace::RespawnPlayer"};
+constexpr InlineSite kRaceResetSite = {kRaceReset, {0x56, 0x8b, 0xf1, 0x83, 0xbe, 0xa4, 0x01, 0x00, 0x00, 0x00}, 10, -1, "CTrackManiaRaceInterface::RaceOnReset"};
+constexpr InlineSite kRespawnSite = {kRespawn, {0x53, 0x8b, 0x5c, 0x24, 0x08}, 5, -1, "CTrackManiaRace::RespawnPlayer"};
 // Water blocks (Stadium pools and rivers) are terrain blocks: their surface is always here,
 // 1.06 m below the ground (measured in game: 7.937 +- 0.003).
 constexpr float kBlockWaterY = 7.94f;
 // Renders the reflection of a water plane; gets the plane equation (world space).
-constexpr InlineSite kWaterPlane = {0x00991e30, {0x81, 0xec, 0xe0, 0x01, 0x00, 0x00}, 6, "CVisionViewportDx9::TexRender_Water_PlaneR"};
+constexpr InlineSite kWaterPlaneSite = {kWaterPlane, {0x81, 0xec, 0xe0, 0x01, 0x00, 0x00}, 6, -1, "CVisionViewportDx9::TexRender_Water_PlaneR"};
+// Map load: the map's decoration and environment (TMUF has seven; water blocks are Stadium's).
+constexpr InlineSite kLoadDecorationSite = {kLoadDecoration, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnChallenge::LoadDecorationAndCollection"};
 
 using FrameBeginFn = int(__fastcall*)(void*, void*);
 using CameraBeginFn = void(__fastcall*)(void*, void*, void*, void*);
@@ -86,6 +116,10 @@ using TileHeightFn = void(__fastcall*)(void*, void*, float);
 using RaceResetFn = void(__fastcall*)(void*, void*);
 using RespawnFn = void(__fastcall*)(void*, void*, void*, int);
 RaceResetFn g_raceReset = nullptr;
+using LoadDecorationFn = void(__fastcall*)(void*, void*, const void*);
+using IdGetStringFn = const char*(__fastcall*)(const void*, void*);
+LoadDecorationFn g_loadDecoration = nullptr;
+char g_environment[32] = {}; // "Stadium", "Speed", ... ("" = not known yet)
 RespawnFn g_respawn = nullptr;
 volatile LONG g_raceResets = 0; // counters: the plugin compares them every frame
 volatile LONG g_respawns = 0;
@@ -110,19 +144,19 @@ bool readable(const void* p, size_t size) {
     return reinterpret_cast<const BYTE*>(p) + size <= reinterpret_cast<const BYTE*>(mbi.BaseAddress) + mbi.RegionSize;
 }
 
-void** vtable() {
-    return reinterpret_cast<void**>(rebase(kViewportVTable));
+void** vtable(const GameBuild& build) {
+    return reinterpret_cast<void**>(rebase(build.viewportVTable));
 }
 
-bool verify(const Slot& slot) {
-    void** table = vtable();
+bool verify(const GameBuild& build, const Slot& slot) {
+    void** table = vtable(build);
     if (!readable(&table[slot.index], sizeof(void*))) return false;
-    return reinterpret_cast<uintptr_t>(table[slot.index]) == rebase(slot.expected);
+    return reinterpret_cast<uintptr_t>(table[slot.index]) == rebase(build.slots[slot.id]);
 }
 
 template <typename Fn>
 void patch(const Slot& slot, void* detour, Fn& original) {
-    void** entry = &vtable()[slot.index];
+    void** entry = &vtable(*g_build)[slot.index];
     original = reinterpret_cast<Fn>(*entry);
     DWORD old = 0;
     VirtualProtect(entry, sizeof(void*), PAGE_READWRITE, &old);
@@ -133,8 +167,14 @@ void patch(const Slot& slot, void* detour, Fn& original) {
 // Jumps from the function's start to the detour; the trampoline runs the copied prologue
 // and jumps back behind it. Returns the trampoline (the "original" to call), or null.
 void* inlineHook(const InlineSite& site, void* detour) {
-    BYTE* target = reinterpret_cast<BYTE*>(rebase(site.address));
-    if (!readable(target, site.length) || memcmp(target, site.prologue, site.length) != 0) {
+    BYTE* target = reinterpret_cast<BYTE*>(rebase(g_build->sites[site.id]));
+    unsigned char expected[12];
+    memcpy(expected, site.prologue, sizeof(expected));
+    if (site.handlerAt >= 0) {
+        const uint32_t handler = static_cast<uint32_t>(rebase(g_build->handlers[site.id]));
+        memcpy(expected + site.handlerAt, &handler, sizeof(handler));
+    }
+    if (!readable(target, site.length) || memcmp(target, expected, site.length) != 0) {
         TMVS_LOG("engine: %s does not match this executable, not hooked", site.name);
         return nullptr;
     }
@@ -202,6 +242,17 @@ void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
     g_respawn(self, edx, player, flag);
 }
 
+// SGameCtnIdentifier of the decoration at +0xc4: id, collection (the environment), author.
+void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMods) {
+    g_loadDecoration(self, edx, forcedMods);
+    const void* collection = static_cast<const BYTE*>(self) + 0xc8;
+    if (!readable(collection, sizeof(uint32_t))) return;
+    const char* name = reinterpret_cast<IdGetStringFn>(rebase(g_build->idGetString))(collection, nullptr);
+    if (!name || !readable(name, 1)) return;
+    if (strncmp(name, g_environment, sizeof(g_environment)) != 0) TMVS_LOG("engine: environment %s", name);
+    strncpy_s(g_environment, name, _TRUNCATE);
+}
+
 void __fastcall tileHeightDetour(void* self, void* edx, float height) {
     InterlockedIncrement(&g_raceResets); // a new map
     g_tileHeight(self, edx, height);
@@ -223,7 +274,7 @@ int __fastcall frameBeginDetour(void* self, void* edx) {
     if (mode != g_loggedShadowMode) {
         g_loggedShadowMode = mode;
         TMVS_LOG("engine: shadow mode %d, shader level %u", mode,
-                 static_cast<unsigned>(*reinterpret_cast<const unsigned short*>(rebase(kShaderLevel))));
+                 static_cast<unsigned>(*reinterpret_cast<const unsigned short*>(rebase(g_build->shaderLevel))));
     }
     if (g_callbacks.frameBegin) g_callbacks.frameBegin();
     return g_frameBegin(self, edx);
@@ -295,11 +346,17 @@ bool install(const Callbacks& callbacks) {
 
     const Slot slots[] = {kRenderFrameBegin, kRenderCameraBegin, kRenderCameraEnd, kRenderOverlayZones,
                           kRenderFrameEnd, kComputeDriverViewMatrix, kComputeDriverProjection, kRenderShadowsSet};
-    for (const Slot& slot : slots) {
-        if (!verify(slot)) {
-            TMVS_LOG("engine: slot %d (%s) does not match this executable, engine hooks disabled", slot.index, slot.name);
-            return false;
+    for (const GameBuild& build : kBuilds) {
+        bool match = true;
+        for (const Slot& slot : slots) match = match && verify(build, slot);
+        if (match) {
+            g_build = &build;
+            break;
         }
+    }
+    if (!g_build) {
+        TMVS_LOG("engine: unknown TmForever.exe build (neither Nations nor United Forever), engine hooks disabled");
+        return false;
     }
 
     g_callbacks = callbacks;
@@ -313,13 +370,14 @@ bool install(const Callbacks& callbacks) {
     patch(kRenderShadowsSet, reinterpret_cast<void*>(&shadowsSetDetour), g_shadowsSet);
     g_tracksUpdate = reinterpret_cast<TracksUpdateFn>(inlineHook(kClipTracksUpdate, reinterpret_cast<void*>(&tracksUpdateDetour)));
     g_updateCams = reinterpret_cast<UpdateCamsFn>(inlineHook(kClipViewerCams, reinterpret_cast<void*>(&updateCamsDetour)));
-    g_doShoot = reinterpret_cast<DoShootFn>(inlineHook(kVideoShoot, reinterpret_cast<void*>(&doShootDetour)));
-    g_waterPlane = reinterpret_cast<WaterPlaneFn>(inlineHook(kWaterPlane, reinterpret_cast<void*>(&waterPlaneDetour)));
+    g_doShoot = reinterpret_cast<DoShootFn>(inlineHook(kVideoShootSite, reinterpret_cast<void*>(&doShootDetour)));
+    g_waterPlane = reinterpret_cast<WaterPlaneFn>(inlineHook(kWaterPlaneSite, reinterpret_cast<void*>(&waterPlaneDetour)));
     g_tileHeight = reinterpret_cast<TileHeightFn>(inlineHook(kWaterTileHeight, reinterpret_cast<void*>(&tileHeightDetour)));
-    g_raceReset = reinterpret_cast<RaceResetFn>(inlineHook(kRaceReset, reinterpret_cast<void*>(&raceResetDetour)));
-    g_respawn = reinterpret_cast<RespawnFn>(inlineHook(kRespawn, reinterpret_cast<void*>(&respawnDetour)));
+    g_raceReset = reinterpret_cast<RaceResetFn>(inlineHook(kRaceResetSite, reinterpret_cast<void*>(&raceResetDetour)));
+    g_respawn = reinterpret_cast<RespawnFn>(inlineHook(kRespawnSite, reinterpret_cast<void*>(&respawnDetour)));
+    g_loadDecoration = reinterpret_cast<LoadDecorationFn>(inlineHook(kLoadDecorationSite, reinterpret_cast<void*>(&loadDecorationDetour)));
     g_active = true;
-    TMVS_LOG("engine: CVisionViewportDx9 hooks installed (module base %p)", GetModuleHandleW(nullptr));
+    TMVS_LOG("engine: TrackMania %s, CVisionViewportDx9 hooks installed (module base %p)", g_build->name, GetModuleHandleW(nullptr));
     return true;
 }
 
@@ -331,9 +389,15 @@ const CameraInfo& currentCamera() {
     return g_camera;
 }
 
+bool stadium() {
+    if (g_environment[0]) return strcmp(g_environment, "Stadium") == 0;
+    return g_build == &kBuilds[0]; // Nations Forever has nothing else
+}
+
 bool waterHeights(float& blockY, float& seaY) {
     if (!g_mapLoaded) return false;
-    blockY = seaY = kBlockWaterY; // no sea: both the same
+    // Water blocks only exist in Stadium; elsewhere a surface at their height is no water.
+    blockY = seaY = stadium() ? kBlockWaterY : -1e30f; // no sea: both the same
     float y = 0.0f;
     if (g_lastWater != 0 && GetTickCount() - g_lastWater < 2000 && levelPlaneHeight(g_waterPlaneEq, y)) seaY = y;
     else if (g_seaLevel != -1.0f) seaY = g_seaLevel;
