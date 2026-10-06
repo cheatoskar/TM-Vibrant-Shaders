@@ -102,6 +102,7 @@ void AutoQuality::apply(Settings& s) const {
     s.grassDetail = 0.0f;
     s.reflections = 0.0f;
     s.volumetricLight = 0.0f;
+    s.globalIllumination = 0.0f;
     if (s.bokehSize > 8.0f) s.bokehSize = 8.0f;
     if (m_level >= 1) return;
     // Level 0: the look stays, the expensive passes go.

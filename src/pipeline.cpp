@@ -13,7 +13,7 @@ namespace {
 
 const char* const kEntryPoints[] = {
     "PS_LinearDepth", "PS_Prepare",  "PS_DownsampleND", "PS_HeightMerge", "PS_HeightSplat", "PS_OcclusionShadow", "PS_BilateralBlur",
-    "PS_ShadowHeight", "PS_Volumetric",
+    "PS_ShadowHeight", "PS_Volumetric", "PS_GI",
     "PS_SkyClear",    "PS_SkyStars", "PS_SkyBlackHole", "PS_SkyAurora",   "PS_SkyRing",     "PS_AuroraHalf",
     "PS_SkyAverage",  "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
     "PS_RainDrop",    "PS_RainSplash",
@@ -200,6 +200,8 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_occlusionTmp.create(device, hw, hh, D3DFMT_A8R8G8B8);
     ok &= m_skyAverage.create(device, 1, 1, D3DFMT_A16B16G16R16F);
     ok &= m_sky.create(device, width, height, D3DFMT_A16B16G16R16F);
+    ok &= m_gi[0].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
+    ok &= m_gi[1].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
     ok &= m_hdr.create(device, width, height, D3DFMT_A16B16G16R16F);
     ok &= m_rays[0].create(device, hw, hh, D3DFMT_A16B16G16R16F);
     ok &= m_rays[1].create(device, hw, hh, D3DFMT_A16B16G16R16F);
@@ -244,6 +246,7 @@ void Pipeline::destroyTargets() {
     m_occlusionTmp.destroy();
     m_skyAverage.destroy();
     m_sky.destroy();
+    for (auto& t : m_gi) t.destroy();
     m_hdr.destroy();
     for (auto& t : m_rays) t.destroy();
     for (auto& t : m_bloomDown) t.destroy();
@@ -1139,7 +1142,24 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         passConstants(device, kVolumeSteps[q], 0.0f);
         runPass(device, kVolumetric, m_rays[1]);
     }
-    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, 0.0f, 0.0f};
+    // 2c. One-bounce global illumination, blurred like the AO.
+    const bool gi = s.globalIllumination > 0.0f;
+    if (gi) {
+        static const float kGISamples[3] = {4.0f, 6.0f, 8.0f};
+        const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
+        bind(device, 0, m_ndHalf.texture, false);
+        bind(device, 1, in.color, true);
+        passConstants(device, kGISamples[q], 10.0f);
+        runPass(device, kGI, m_gi[0]);
+        bind(device, 0, m_gi[0].texture, false);
+        bind(device, 1, m_ndHalf.texture, false);
+        passConstants(device, 1.0f / m_gi[0].width, 0.0f);
+        runPass(device, kBilateralBlur, m_gi[1]);
+        bind(device, 0, m_gi[1].texture, false);
+        passConstants(device, 0.0f, 1.0f / m_gi[0].height);
+        runPass(device, kBilateralBlur, m_gi[0]);
+    }
+    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, 0.0f};
     device->SetPixelShaderConstantF(37, volumeConstants, 1);
 
     // 3. Custom sky, the average sky colour (fog), volumetric clouds.
@@ -1211,8 +1231,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 8, m_reflect.texture, true);
     bind(device, 9, m_spill[0].texture, true);
     bind(device, 10, m_rays[1].texture, true);
+    bind(device, 11, m_gi[0].texture, false);
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
+    device->SetTexture(11, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
 

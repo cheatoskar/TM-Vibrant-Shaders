@@ -98,6 +98,7 @@ void drawPerformance() {
         {"AO & sun shadows", {"OcclusionShadow", "BilateralBlur", nullptr}},
         {"Long-range shadows / rain map", {"HeightSplat", "HeightMerge", nullptr}},
         {"Volumetric light", {"ShadowHeight", "Volumetric", nullptr}},
+        {"Bounce light (GI)", {"GI", nullptr, nullptr}},
         {"Custom sky", {"Sky*", "AuroraHalf", nullptr}},
         {"Volumetric clouds", {"Clouds", nullptr, nullptr}},
         {"Reflections", {"Reflect", nullptr, nullptr}},

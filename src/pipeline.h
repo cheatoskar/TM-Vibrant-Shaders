@@ -72,6 +72,7 @@ private:
         kBilateralBlur,
         kShadowHeight,
         kVolumetric,
+        kGI,
         kSkyClear, // one entry per sky mode (1..5), in mode order
         kSkyStars,
         kSkyBlackHole,
@@ -153,6 +154,7 @@ private:
     gfx::Target m_occlusion;    // half: AO, sun visibility
     gfx::Target m_occlusionTmp; // half
     gfx::Target m_sky;          // full: custom sky (HDR)
+    gfx::Target m_gi[2];        // quarter: one-bounce global illumination, ping-pong for the blur
     gfx::Target m_skyAverage;   // 1x1
     gfx::Target m_hdr;          // full HDR
     gfx::Target m_rays[2];      // half

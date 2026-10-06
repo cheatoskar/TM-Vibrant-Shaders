@@ -67,6 +67,7 @@ struct Settings {
 
     // Volumetric light shafts
     float godRays = 1.5f;
+    float globalIllumination = 0.5f; // one bounce of coloured light (screen space)
     float volumetricLight = 0.6f;  // sun shafts with shadows in the haze (needs the height map)
     float godRayDecay = 0.99f;
 

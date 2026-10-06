@@ -48,6 +48,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("FogHeightFalloff", "Haze height falloff", "Sky & Atmosphere", Float, fogHeightFalloff, 0.0f, 3.0f),
         TMVS_FIELD("FogSunScatter", "Haze sun scattering", "Sky & Atmosphere", Float, fogSunScatter, 0.0f, 2.0f),
         TMVS_FIELD("GodRays", "Light shafts", "Sky & Atmosphere", Float, godRays, 0.0f, 2.0f),
+        TMVS_FIELD("GlobalIllumination", "Bounce light (global illumination)", "Lighting", Float, globalIllumination, 0.0f, 2.0f),
         TMVS_FIELD("VolumetricLight", "Volumetric light (shadowed haze)", "Sky & Atmosphere", Float, volumetricLight, 0.0f, 2.0f),
         TMVS_FIELD("GodRayDecay", "Light shaft length", "Sky & Atmosphere", Float, godRayDecay, 0.9f, 0.995f),
 
@@ -494,6 +495,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Competition:
             s.volumetricLight = 0.0f;
+            s.globalIllumination = 0.0f;
             s.aoStrength = 0.8f;
             s.shadowStrength = 0.4f;
             s.sunLight = 0.2f;
@@ -516,6 +518,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Performance:
             s.volumetricLight = 0.0f;
+            s.globalIllumination = 0.0f;
             // Same look, cheaper: fewer AO / shadow samples, no shafts, flare or extra passes.
             s.quality = 0;
             s.godRays = 0.0f;

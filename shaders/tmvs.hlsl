@@ -50,7 +50,7 @@ float4 u_Pass1 : register(c33);
 float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
 float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
-float4 u_Volume    : register(c37); // volumetric light strength, march range (m), 0, 0
+float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, 0
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -63,6 +63,7 @@ sampler3D s7 : register(s7); // tiling cloud noise (volume texture)
 sampler2D s8 : register(s8);
 sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
+sampler2D s11 : register(s11); // global illumination (lighting pass)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -397,6 +398,47 @@ float4 PS_BilateralBlur(float2 uv : TEXCOORD0) : COLOR0 {
         wsum += w;
     }
     return float4(sum / max(wsum, 1e-4), 1);
+}
+
+// ---------------------------------------------------------------------------------
+// Screen-space global illumination (quarter res): one diffuse bounce. Every visible surface
+// that faces this pixel lights it with its own colour from the game's image: green from
+// the grass on the walls, red from the car on the road, blue from the neon borders.
+//   s0 = half normal/depth, s1 = scene colour (sRGB, bilinear), u_Pass0.x = samples,
+//   u_Pass0.y = radius (m). out.rgb = bounced light (linear)
+// ---------------------------------------------------------------------------------
+float4 PS_GI(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float4 nd = tex2Dlod(s0, float4(uv, 0, 0));
+    if (nd.w >= SKY_Z) return 0;
+    float3 p = viewPosition(uv, nd.w);
+    float3 n = nd.xyz;
+    float noise = ign(vpos);
+    float noise2 = hash12(vpos + 41.7);
+    float radius = u_Pass0.y;
+    float projScale = abs(u_Proj.y) * 0.5 * u_Screen.y * 0.25; // quarter-res pixels per metre at z = 1
+    float radiusPx = clamp(radius * projScale / p.z, 2.0, u_Screen.y * 0.08);
+    float samples = u_Pass0.x;
+    float3 sum = 0;
+    float angle = noise * 2.0 * PI;
+    [loop] for (int i = 0; i < (int)samples; i++) {
+        float t = (i + noise2) / samples;
+        float a = angle + t * 7.0 * 2.0 * PI;
+        float2 suv = uv + float2(cos(a), sin(a)) * (radiusPx * sqrt(t) + 1.0) * u_Screen.zw * 4.0;
+        if (any(suv < 0.0) || any(suv > 1.0)) continue;
+        float4 snd = tex2Dlod(s0, float4(suv, 0, 0));
+        if (snd.w >= SKY_Z) continue;
+        float3 d = viewPosition(suv, snd.w) - p;
+        float dd = dot(d, d) + 1e-4;
+        float3 dir = d * rsqrt(dd);
+        // Lambert at the receiver and at the sender (it has to face us), soft distance falloff.
+        // Form factor: each sample stands for 1/N of the disc (pi r^2), seen under
+        // cos * cos / (pi d^2). Close facing surfaces (a wall next to the road) bounce most.
+        float w = saturate(dot(n, dir)) * saturate(dot(snd.xyz, -dir)) * radius * radius / max(dd, 0.1 * radius * radius);
+        sum += toLinear(tex2Dlod(s1, float4(suv, 0, 0)).rgb) * w;
+    }
+    // Fades out far away, where the radius is below a pixel.
+    float fade = saturate(2.0 - p.z / 120.0);
+    return float4(min(sum / samples * fade, 4.0), 1);
 }
 
 // ---------------------------------------------------------------------------------
@@ -1482,6 +1524,26 @@ float3 upsampleOcclusion(float2 uv, float z, float3 n) {
     return wsum > 1e-4 ? sum / wsum : 1.0;
 }
 
+float3 upsampleGI(float2 uv, float z, float3 n) { // from quarter res, depths from s3 (half res)
+    float2 halfTexel = u_Screen.zw * 4.0;
+    float2 base = (floor(uv / halfTexel - 0.5) + 0.5) * halfTexel;
+    float3 sum = 0;
+    float wsum = 0;
+    [unroll] for (int j = 0; j < 2; j++) {
+        [unroll] for (int i = 0; i < 2; i++) {
+            float2 suv = base + float2(i, j) * halfTexel;
+            float4 nd = tex2Dlod(s3, float4(suv, 0, 0));
+            float2 f = 1.0 - abs(uv - suv) / halfTexel;
+            float w = max(f.x * f.y, 0.001);
+            w *= exp(-abs(nd.w - z) / (0.03 * z + 0.05));
+            w *= pow(saturate(dot(nd.xyz, n)), 8.0) + 0.002;
+            sum += tex2Dlod(s11, float4(suv, 0, 0)).rgb * w;
+            wsum += w;
+        }
+    }
+    return wsum > 1e-4 ? sum / wsum : 0.0;
+}
+
 // Light sources in the game's LDR image: lamps and neon strips. Returns 0..1.
 //   c = linear colour, nWorld = world normal, rd = view ray (to tell sun glare from lights)
 float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist) {
@@ -1550,6 +1612,7 @@ float removeGameSun(float3 c, float3 nWorld, float3 rd, float sat, float night) 
 float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 srgb = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
     float3 c = toLinear(srgb);
+    float3 albedo = c;
     float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
     float3 rdView = normalize(viewPosition(uv, 1.0));
     float3 rd = viewToWorldDir(rdView);
@@ -1700,6 +1763,11 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             c += u_SunColor.rgb * spec * reflectivity * shadow * daylight * 0.5;
         }
     }
+
+    // One bounce of light: the surface's own colour (the game's image is the best albedo
+    // there is) times the light bounced onto it, less where it's occluded. The game's image
+    // is already shaded (darker than the true albedo), hence the boost.
+    if (u_Volume.z > 0.0) c += albedo * upsampleGI(uv, nd.w, n) * u_Volume.z * 2.5 * lerp(0.5, 1.0, occ.r);
 
     // Aerial perspective: exponential height fog lit by the sky and the sun.
     float density = u_Atmo.x * 0.0009;
