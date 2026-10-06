@@ -92,6 +92,7 @@ const std::vector<Field>& fields() {
 
         TMVS_FIELD("FXAA", "FXAA anti-aliasing", "Image", Bool, fxaa, 0.0f, 1.0f),
         TMVS_FIELD("TAA", "Temporal anti-aliasing", "Image", Bool, taa, 0.0f, 1.0f),
+        TMVS_FIELD("TAAJitter", "TAA: sub-pixel jitter", "Image", Bool, taaJitter, 0.0f, 1.0f),
         TMVS_FIELD("Sharpen", "Sharpening (CAS)", "Image", Float, sharpen, 0.0f, 1.0f),
         TMVS_FIELD("Quality", "Effect quality", "Image", Int, quality, 0.0f, 2.0f),
         TMVS_FIELD("AutoQuality", "Auto quality (adapts to your GPU)", "Image", Bool, autoQuality, 0.0f, 1.0f),
@@ -176,7 +177,8 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 // Machine settings that belong to the installation, not to a look.
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
-           !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays");
+           !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
+           !strcmp(f.key, "TAAJitter");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem) {
@@ -351,6 +353,7 @@ void applyPreset(Settings& s, Preset preset) {
     const float keepTarget = s.targetFps;
     const float keepSound = s.weatherSound;
     const bool keepReplayOnly = s.cinematicOnlyInReplays;
+    const bool keepJitter = s.taaJitter;
     if (preset == Preset::Custom) return;
     s = Settings();
     s.disableGameMSAA = keepMSAA;
@@ -360,6 +363,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.targetFps = keepTarget;
     s.weatherSound = keepSound;
     s.cinematicOnlyInReplays = keepReplayOnly;
+    s.taaJitter = keepJitter;
     switch (preset) {
         case Preset::Vibrant:
             break; // Settings defaults are the Vibrant look.
@@ -659,6 +663,7 @@ void Config::load() {
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
     if (GetPrivateProfileStringW(L"Settings", L"WeatherSound", L"", target, 32, ini)) settings.weatherSound = static_cast<float>(_wtof(target));
     settings.cinematicOnlyInReplays = GetPrivateProfileIntW(L"Settings", L"CinematicOnlyInReplays", 1, ini) != 0;
+    settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 1, ini) != 0;
     if (preset == kCustomPreset) {
         applyPreset(settings, Preset::Vibrant);
         readFields(settings, ini, L"Settings", false);

@@ -2432,20 +2432,23 @@ float3 historyCatmullRom(float2 uv) {
     return max(r / w, 0.0);
 }
 
+// u_Pass0.xy = this frame's jitter, u_Pass0.zw = the history's jitter (uv shift of the image;
+// 0 without jitter). The history is kept unjittered: the current frame is read back shifted.
 float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
-    float3 current = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
-    float z = tex2Dlod(s2, float4(uv, 0, 0)).w;
+    float2 cuv = uv + u_Pass0.xy;
+    float3 current = tex2Dlod(s0, float4(cuv, 0, 0)).rgb;
+    float z = tex2Dlod(s2, float4(cuv, 0, 0)).w;
     if (u_Temporal.y < 0.5) return float4(current, z);
 
     float prevZ;
-    float2 prevUV = reproject(worldPosition(viewPosition(uv, min(z, 20000.0))), prevZ);
+    float2 prevUV = reproject(worldPosition(viewPosition(cuv, min(z, 20000.0))), prevZ) - u_Pass0.zw;
     if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(current, z);
 
     // Neighbourhood statistics of the current frame (variance clipping in YCoCg).
     float3 m1 = 0, m2 = 0;
     [unroll] for (int k = 0; k < 5; k++) {
         float2 o = k == 0 ? float2(0, 0) : (k == 1 ? float2(1, 0) : (k == 2 ? float2(-1, 0) : (k == 3 ? float2(0, 1) : float2(0, -1))));
-        float3 s = toYCoCg(tex2Dlod(s0, float4(uv + o * u_Screen.zw, 0, 0)).rgb);
+        float3 s = toYCoCg(tex2Dlod(s0, float4(cuv + o * u_Screen.zw, 0, 0)).rgb);
         m1 += s;
         m2 += s * s;
     }

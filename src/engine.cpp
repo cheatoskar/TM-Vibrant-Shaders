@@ -68,6 +68,7 @@ using DoShootFn = void(__fastcall*)(void*, void*, void*);
 TracksUpdateFn g_tracksUpdate = nullptr;
 UpdateCamsFn g_updateCams = nullptr;
 DoShootFn g_doShoot = nullptr;
+float g_jitter[2] = {};          // NDC offset for perspective projections (TAA)
 DWORD g_lastCinematic = 0;      // GetTickCount of the last cinematic hook call
 unsigned g_cinematicSources = 0;
 
@@ -201,6 +202,16 @@ void __fastcall viewMatrixDetour(void* self, void* edx, void* location) {
 // SHmsCameraProjection: +0x00 GmMat4 projection, +0x40 transposed copy.
 void __fastcall projectionDetour(void* self, void* edx, void* projection, const void* frustum, void* camera) {
     g_projection(self, edx, projection, frustum, camera);
+    // TAA jitter: shift the image by a fraction of a pixel. In D3D's row-vector form P20/P21
+    // move x/y in NDC. The struct holds the matrix transposed first (P20 at [0][2]), then
+    // in D3D's own layout. Perspective only (shadow maps are orthographic).
+    float* m = static_cast<float*>(projection);
+    if ((g_jitter[0] != 0.0f || g_jitter[1] != 0.0f) && m[14] == 1.0f && m[16 + 11] == 1.0f) {
+        m[2] += g_jitter[0];
+        m[6] += g_jitter[1];
+        m[16 + 8] += g_jitter[0];
+        m[16 + 9] += g_jitter[1];
+    }
     memcpy(&g_camera.projection, projection, sizeof(Matrix4));
     g_camera.hasProjection = true;
 }
@@ -251,6 +262,11 @@ bool active() {
 
 const CameraInfo& currentCamera() {
     return g_camera;
+}
+
+void setProjectionJitter(float x, float y) {
+    g_jitter[0] = x;
+    g_jitter[1] = y;
 }
 
 bool cinematicActive() {

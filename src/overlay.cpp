@@ -151,7 +151,8 @@ const Field* findField(const char* key) {
 // Settings of the installation (not of a look): changing them keeps the preset.
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
-           !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays");
+           !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
+           !strcmp(f.key, "TAAJitter");
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -175,6 +176,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("LensDrops")) return s.rain > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("TargetFPS")) return s.autoQuality;
+    if (is("TAAJitter")) return s.taa;
     if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f;
     if (is("SunAzimuth")) return s.sunElevationOverride >= 0.0f;
     return true;

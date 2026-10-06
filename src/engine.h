@@ -44,6 +44,10 @@ const CameraInfo& currentCamera();
 // True while a MediaTracker clip plays (replays, intros, the replay editor) or the video
 // export runs: the moments for motion blur and depth of field. False while driving.
 bool cinematicActive();
+
+// Sub-pixel offset (NDC) added to every perspective projection the engine computes from now
+// on, for TAA: each frame samples the pixels at a slightly different spot. 0, 0 = off.
+void setProjectionJitter(float x, float y);
 // Which of the cinematic hooks fired since the last call (bit 0 clip player, 1 clip viewer,
 // 2 video export), for the log.
 unsigned cinematicSources();

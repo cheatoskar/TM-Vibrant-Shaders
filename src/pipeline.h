@@ -26,6 +26,8 @@ public:
         // false for extra cameras in the same frame (replay camera blends): they must not
         // touch temporal history (TAA, motion blur, exposure, focus).
         bool temporal = true;
+        // TAA jitter of this frame's projection, as the uv shift of the image content.
+        float jitter[2] = {};
     };
 
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.
@@ -216,6 +218,7 @@ private:
     IDirect3DIndexBuffer9* m_rainIB = nullptr;
     bool m_rainSupported = true;
     float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks)
+    float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
     int m_boltSlot = -1000000;                  // lightning strike the bolt direction belongs to
     float m_boltAzimuth = 0.0f;
     bool m_historyValid = false;

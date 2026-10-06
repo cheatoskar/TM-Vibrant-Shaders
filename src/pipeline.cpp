@@ -1424,13 +1424,16 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (taa) {
         const int previous = m_taaIndex;
         m_taaIndex ^= 1;
-        bind(device, 0, current, false);
+        bind(device, 0, current, in.jitter[0] != 0.0f || in.jitter[1] != 0.0f);
         bind(device, 1, m_taa[previous].texture, true);
         bind(device, 2, m_nd.texture, false);
         const float taaValid[4] = {1.0f, (m_taaValid && m_temporalValid) ? 1.0f : 0.0f, static_cast<float>(m_frame % 64),
                                    longConstants[3]};
         device->SetPixelShaderConstantF(34, taaValid, 1);
+        passConstants(device, in.jitter[0], in.jitter[1], m_prevJitter[0], m_prevJitter[1]);
         runPass(device, kTAA, m_taa[m_taaIndex]);
+        m_prevJitter[0] = in.jitter[0];
+        m_prevJitter[1] = in.jitter[1];
         m_taaValid = true;
         current = m_taa[m_taaIndex].texture;
     } else if (temporal) {

@@ -74,6 +74,8 @@ Pipeline g_pipeline;
 AutoQuality g_autoQuality;
 bool g_shadedThisFrame = false;
 bool g_gameplayThisFrame = false; // a gameplay camera (not a menu background) was shaded
+float g_jitterUV[2] = {};         // TAA jitter of this frame (uv shift of the image)
+UINT g_frameWidth = 0, g_frameHeight = 0;
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
 gfx::Target g_sceneCopy;
 
@@ -282,6 +284,10 @@ void processScene(IDirect3DDevice9* device) {
     memcpy(inputs.sunColor, g_scene.lightColor, sizeof(inputs.sunColor));
     inputs.time = seconds();
     inputs.temporal = temporal;
+    inputs.jitter[0] = g_jitterUV[0];
+    inputs.jitter[1] = g_jitterUV[1];
+    g_frameWidth = desc.Width;
+    g_frameHeight = desc.Height;
 
     if (g_captureRequested) {
         g_captureRequested = false;
@@ -312,8 +318,39 @@ void processScene(IDirect3DDevice9* device) {
 
 // --- Engine callbacks -------------------------------------------------------
 
+// TAA jitter: a Halton (2, 3) sequence of 8 sub-pixel offsets, one per frame. Only while
+// TAA runs: without it the image would visibly shake.
+
+float halton(int index, int base) {
+    float f = 1.0f, r = 0.0f;
+    for (int i = index; i > 0; i /= base) {
+        f /= static_cast<float>(base);
+        r += f * static_cast<float>(i % base);
+    }
+    return r;
+}
+
+void updateJitter() {
+    Settings effective = Config::get().settings;
+    g_autoQuality.apply(effective);
+    const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0;
+    if (!on) {
+        engine::setProjectionJitter(0.0f, 0.0f);
+        g_jitterUV[0] = g_jitterUV[1] = 0.0f;
+        return;
+    }
+    static int s_index = 0;
+    s_index = s_index % 8 + 1;
+    const float jx = (halton(s_index, 2) - 0.5f) * 2.0f / static_cast<float>(g_frameWidth);  // NDC, +-half a pixel
+    const float jy = (halton(s_index, 3) - 0.5f) * 2.0f / static_cast<float>(g_frameHeight);
+    engine::setProjectionJitter(jx, jy);
+    g_jitterUV[0] = jx * 0.5f;
+    g_jitterUV[1] = -jy * 0.5f;
+}
+
 void onFrameBegin() {
     tracer::event("## RenderFrameBegin");
+    updateJitter();
     g_cameraIndex = 0;
     g_scene.lastFrameCount = g_scene.processedCount;
     g_scene.processedCount = 0;

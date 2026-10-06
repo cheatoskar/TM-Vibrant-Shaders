@@ -24,6 +24,7 @@ struct Settings {
     bool disableGameMSAA = true; // required for the depth buffer; post AA replaces it
     int quality = 2;               // 0 low, 1 medium, 2 high (sample counts)
     bool readableGameDepth = true; // also hook the game's own depth buffers (menus, replay/video export)
+    bool taaJitter = true;         // TAA samples a different sub-pixel spot every frame (sharper, smoother)
     bool cinematicOnlyInReplays = true; // motion blur and DOF only in replays, intros and the video export
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;
