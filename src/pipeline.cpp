@@ -13,7 +13,9 @@ namespace {
 
 const char* const kEntryPoints[] = {
     "PS_LinearDepth", "PS_Prepare",  "PS_DownsampleND", "PS_HeightMerge", "PS_HeightSplat", "PS_OcclusionShadow", "PS_BilateralBlur",
-    "PS_Sky",         "PS_SkyAverage", "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
+    "PS_ShadowHeight", "PS_Volumetric",
+    "PS_SkyClear",    "PS_SkyStars", "PS_SkyBlackHole", "PS_SkyAurora",   "PS_SkyRing",     "PS_AuroraHalf",
+    "PS_SkyAverage",  "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
     "PS_RainDrop",    "PS_RainSplash",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
@@ -260,6 +262,7 @@ void Pipeline::destroyTargets() {
     for (auto& t : m_taa) t.destroy();
     m_heightFrame.destroy();
     for (auto& t : m_heightMap) t.destroy();
+    m_shadowHeight.destroy();
     gfx::release(m_heightDepth);
     gfx::release(m_splatPoints);
     gfx::release(m_cloudNoise);
@@ -487,6 +490,19 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[36][0] = s.neonLight;
     c[36][1] = in.sunKnown && len > 1e-5f ? 1.0f : 0.0f; // the game's sun, even under a night sky
     c[36][2] = weather::lightningFlash(in.time, s.lightning);
+    // The bolt of the current strike: its direction is picked once, near where the camera
+    // looks at that moment (a bolt behind you is a wasted strike), and then stays put.
+    weather::Strike strike;
+    c[36][3] = -1.0f;
+    if (weather::currentStrike(in.time, s.lightning, strike)) {
+        if (strike.slot != m_boltSlot) {
+            m_boltSlot = strike.slot;
+            m_boltAzimuth = atan2f(V[2], V[10]) + strike.side * 1.6f; // view forward (world x, z)
+            m_boltAzimuth = fmodf(m_boltAzimuth + 6.2831853f * 2.0f, 6.2831853f);
+        }
+        // Packed: azimuth (0..2pi) + 7 * distance step (0..50).
+        c[36][3] = m_boltAzimuth + 7.0f * floorf(strike.distance * 50.0f + 0.5f);
+    }
 
     device->SetPixelShaderConstantF(0, &c[0][0], 32);
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
@@ -558,6 +574,7 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
     bool ok = m_heightFrame.create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
     ok &= m_heightMap[0].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
     ok &= m_heightMap[1].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
+    ok &= m_shadowHeight.create(device, kHeightMapSize / 2, kHeightMapSize / 2, D3DFMT_R32F);
     if (ok && !m_heightDepth) {
         ok = SUCCEEDED(device->CreateDepthStencilSurface(kHeightMapSize, kHeightMapSize, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE,
                                                          &m_heightDepth, nullptr));
@@ -1082,7 +1099,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Extra cameras (replay blends) use the map as it is: it follows the main camera.
     // Rain splashes land on it too.
     const bool wantLong = s.longShadows > 0.0f && s.shadowStrength > 0.0f && m_sunKnown;
-    const bool heightMap = (wantLong || s.rain > 0.0f) && ensureHeightMap(device) && (temporal || m_heightValid);
+    const bool wantVolume = s.volumetricLight > 0.0f && m_sunKnown;
+    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f) && ensureHeightMap(device) && (temporal || m_heightValid);
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
     if (heightMap && temporal && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s);
     const bool longShadows = heightMap && wantLong;
@@ -1108,10 +1126,39 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         device->Clear(0, nullptr, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
     }
 
+    // 2b. Volumetric light: shadow heights from the height map, then the view rays through
+    // the haze at half resolution (the light shaft target is free until later).
+    const bool volume = heightMap && wantVolume;
+    if (volume) {
+        static const float kVolumeSteps[3] = {8.0f, 12.0f, 16.0f};
+        const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
+        bind(device, 0, m_heightMap[m_heightIndex].texture, false);
+        runPass(device, kShadowHeight, m_shadowHeight);
+        bind(device, 0, m_ndHalf.texture, false);
+        bind(device, 1, m_shadowHeight.texture, false); // R32F: no filtering on older GPUs
+        passConstants(device, kVolumeSteps[q], 0.0f);
+        runPass(device, kVolumetric, m_rays[1]);
+    }
+    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(37, volumeConstants, 1);
+
     // 3. Custom sky, the average sky colour (fog), volumetric clouds.
     if (s.skyMode > 0) {
         bind(device, 0, m_nd.texture, false);
-        runPass(device, kSky, m_sky);
+        if (s.skyMode == 4) {
+            // The aurora's curtains are the costliest sky: march them at half resolution
+            // (borrowing the light shaft target, which is only used later) and upscale with
+            // EASU in the sky pass. Stars stay at full resolution.
+            static const float kAuroraSlices[3] = {16.0f, 26.0f, 40.0f};
+            const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
+            passConstants(device, kAuroraSlices[q], 0.0f, 1.0f / in.width, 1.0f / in.height);
+            runPass(device, kAuroraHalf, m_rays[0]);
+            bind(device, 1, m_rays[0].texture, false);
+            passConstants(device, static_cast<float>(m_rays[0].width), static_cast<float>(m_rays[0].height),
+                          1.0f / m_rays[0].width, 1.0f / m_rays[0].height);
+        }
+        const int mode = s.skyMode < 1 ? 1 : (s.skyMode > 5 ? 5 : s.skyMode);
+        runPass(device, static_cast<Pass>(kSkyClear + mode - 1), m_sky);
     }
     bind(device, 0, in.color, false);
     bind(device, 1, m_nd.texture, false);
@@ -1163,7 +1210,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 6, m_clouds.texture, true);
     bind(device, 8, m_reflect.texture, true);
     bind(device, 9, m_spill[0].texture, true);
+    bind(device, 10, m_rays[1].texture, true);
     runPass(device, kLighting, m_hdr);
+    device->SetTexture(10, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
 

@@ -128,6 +128,7 @@ struct Job {
     std::string output;
     Settings settings;
     float move[3] = {}; // previous frame's camera offset (world), for motion blur tests
+    float time = -1.0f; // scene time of the last frame (s), -1 = the capture's
 };
 
 struct LoadedCapture {
@@ -157,6 +158,7 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
                 for (char& c : name) if (c == '_') c = ' ';
                 applyPresetByName(job.settings, name.c_str());
             } else if (!_strnicmp(w.c_str(), "move=", 5)) sscanf(w.c_str() + 5, "%f,%f,%f", &job.move[0], &job.move[1], &job.move[2]);
+            else if (!_strnicmp(w.c_str(), "time=", 5)) job.time = static_cast<float>(atof(w.c_str() + 5));
             else setByKey(job.settings, w.c_str());
         }
         jobs.push_back(job);
@@ -170,7 +172,7 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
 int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
-                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--bench] "
+                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--bench] "
                         "[--batch jobs.txt]\n");
         return 2;
     }
@@ -200,6 +202,8 @@ int main(int argc, char** argv) {
             before = argv[++i];
         } else if (!strcmp(argv[i], "--batch") && i + 1 < argc) {
             batch = argv[++i];
+        } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
+            defaults.time = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--move") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f,%f", &defaults.move[0], &defaults.move[1], &defaults.move[2]);
         } else if (!strcmp(argv[i], "--sun") && i + 1 < argc) {
@@ -315,7 +319,7 @@ int main(int argc, char** argv) {
         for (int frame = 0; frame < frames; frame++) {
             const bool previousFrame = moving && frame == frames - 2;
             Pipeline::Inputs& frameIn = previousFrame ? moved : in;
-            frameIn.time = cap.time + frame * 0.1f;
+            frameIn.time = job.time >= 0.0f ? job.time - (frames - 1 - frame) * 0.02f : cap.time + frame * 0.1f;
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
             pipeline.render(device, frameIn, job.settings, output.surface);
             if (bench) pipeline.collectProfile(true);

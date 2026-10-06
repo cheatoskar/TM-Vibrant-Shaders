@@ -97,7 +97,8 @@ void drawPerformance() {
         {"Depth & normals", {"LinearDepth", "Prepare", "DownsampleND"}},
         {"AO & sun shadows", {"OcclusionShadow", "BilateralBlur", nullptr}},
         {"Long-range shadows / rain map", {"HeightSplat", "HeightMerge", nullptr}},
-        {"Custom sky", {"Sky", "SkyAverage", nullptr}},
+        {"Volumetric light", {"ShadowHeight", "Volumetric", nullptr}},
+        {"Custom sky", {"Sky*", "AuroraHalf", nullptr}},
         {"Volumetric clouds", {"Clouds", nullptr, nullptr}},
         {"Reflections", {"Reflect", nullptr, nullptr}},
         {"Neon light", {"SpillDown", "SpillBlur", nullptr}},
@@ -125,7 +126,10 @@ void drawPerformance() {
         for (const char* name : g.passes) {
             if (!name) continue;
             for (int p = 0; p < pipeline->passCount(); p++) {
-                if (!strcmp(Pipeline::passName(p), name)) ms += pipeline->passTime(p);
+                // "Name*" matches every pass starting with Name.
+                const size_t n = strlen(name);
+                const bool match = name[n - 1] == '*' ? !strncmp(Pipeline::passName(p), name, n - 1) : !strcmp(Pipeline::passName(p), name);
+                if (match) ms += pipeline->passTime(p);
             }
         }
         if (ms < 0.005f) continue;

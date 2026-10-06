@@ -26,3 +26,8 @@ dist/
 
 # Third-party reference images (not ours to redistribute)
 references/
+
+# Local notes (not published)
+CLAUDE.md
+GOTCHA.md
+TODO.md

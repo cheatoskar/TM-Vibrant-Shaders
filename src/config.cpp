@@ -48,6 +48,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("FogHeightFalloff", "Haze height falloff", "Sky & Atmosphere", Float, fogHeightFalloff, 0.0f, 3.0f),
         TMVS_FIELD("FogSunScatter", "Haze sun scattering", "Sky & Atmosphere", Float, fogSunScatter, 0.0f, 2.0f),
         TMVS_FIELD("GodRays", "Light shafts", "Sky & Atmosphere", Float, godRays, 0.0f, 2.0f),
+        TMVS_FIELD("VolumetricLight", "Volumetric light (shadowed haze)", "Sky & Atmosphere", Float, volumetricLight, 0.0f, 2.0f),
         TMVS_FIELD("GodRayDecay", "Light shaft length", "Sky & Atmosphere", Float, godRayDecay, 0.9f, 0.995f),
 
         TMVS_FIELD("Bloom", "Bloom", "Bloom & Lens", Float, bloom, 0.0f, 0.4f),
@@ -358,6 +359,7 @@ void applyPreset(Settings& s, Preset preset) {
         case Preset::Vibrant:
             break; // Settings defaults are the Vibrant look.
         case Preset::Cinematic:
+            s.volumetricLight = 1.0f;
             s.aoStrength = 1.2f;
             s.shadowStrength = 0.8f;
             s.sunLight = 0.6f;
@@ -380,6 +382,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.filmGrain = 0.02f;
             break;
         case Preset::GoldenHour:
+            s.volumetricLight = 1.0f;
             s.skyMode = 1;
             s.cloudAmount = 0.6f;
             s.sunColor[0] = 1.0f; s.sunColor[1] = 0.74f; s.sunColor[2] = 0.45f;
@@ -403,6 +406,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.vignette = 0.3f;
             break;
         case Preset::Dreamy:
+            s.volumetricLight = 0.8f;
             s.sunColor[0] = 1.0f; s.sunColor[1] = 0.8f; s.sunColor[2] = 0.85f;
             s.skyColor[0] = 0.45f; s.skyColor[1] = 0.85f; s.skyColor[2] = 1.0f;
             s.gameSunColor = 0.3f;
@@ -489,6 +493,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.chromaticAberration = 0.0f;
             break;
         case Preset::Competition:
+            s.volumetricLight = 0.0f;
             s.aoStrength = 0.8f;
             s.shadowStrength = 0.4f;
             s.sunLight = 0.2f;
@@ -510,6 +515,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.sharpen = 0.5f;
             break;
         case Preset::Performance:
+            s.volumetricLight = 0.0f;
             // Same look, cheaper: fewer AO / shadow samples, no shafts, flare or extra passes.
             s.quality = 0;
             s.godRays = 0.0f;
@@ -523,6 +529,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.taa = false;
             break;
         case Preset::RainyDay:
+            s.volumetricLight = 0.0f;
             s.volumetricClouds = 1.0f;
             s.cloudCoverage = 0.95f;
             s.cloudHeight = 900.0f;
@@ -552,6 +559,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.vignette = 0.35f;
             break;
         case Preset::ReplayCinema:
+            s.volumetricLight = 1.0f;
             s.aoStrength = 1.2f;
             s.sunLight = 0.7f;
             s.ambientTint = 0.7f;
@@ -574,6 +582,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.chromaticAberration = 0.1f;
             break;
         case Preset::Thunderstorm:
+            s.volumetricLight = 0.0f;
             // Overcast: the day map's sun is taken out like for a night sky, only darker grey.
             s.skyNight = 0.45f;
             s.volumetricClouds = 1.0f;

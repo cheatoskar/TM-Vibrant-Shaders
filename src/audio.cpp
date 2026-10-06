@@ -242,18 +242,17 @@ void update(const Settings& s, float time, bool active, HWND window) {
     g_rain = s.rain;
     g_volume = s.weatherSound * g_fade;
 
-    // Thunder follows each lightning flash after a delay: about 3 s per kilometre.
+    // Thunder follows each lightning flash after a delay that grows with the distance
+    // (compressed: the real 3 s per kilometre would be up to 20 s).
     const int slot = static_cast<int>(floorf(time));
     if (g_lastSlot < 0 || slot < g_lastSlot || slot > g_lastSlot + 5) g_lastSlot = slot - 1;
     for (int k = g_lastSlot + 1; k <= slot; k++) {
-        float start = 0.0f;
-        if (!weather::lightningStrike(k, s.lightning, start)) continue;
-        uint32_t h = static_cast<uint32_t>(k) * 2246822519u;
-        h ^= h >> 13;
-        const float distance = (h & 0xFF) / 255.0f;       // 0 close .. 1 far
+        weather::Strike strike;
+        if (!weather::lightningStrike(k, s.lightning, strike)) continue;
+        const float distance = strike.distance;
         for (auto& p : g_pending) {
             if (p.at >= 0.0f) continue;
-            p.at = start + 0.4f + distance * 5.0f;
+            p.at = strike.start + 0.4f + distance * 5.0f;
             p.power = 1.0f - distance * 0.6f;
             p.distance = distance;
             break;

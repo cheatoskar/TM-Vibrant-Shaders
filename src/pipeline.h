@@ -70,7 +70,14 @@ private:
         kHeightSplat,
         kOcclusionShadow,
         kBilateralBlur,
-        kSky,
+        kShadowHeight,
+        kVolumetric,
+        kSkyClear, // one entry per sky mode (1..5), in mode order
+        kSkyStars,
+        kSkyBlackHole,
+        kSkyAurora,
+        kSkyRing,
+        kAuroraHalf,
         kSkyAverage,
         kClouds,
         kReflect,
@@ -180,6 +187,7 @@ private:
     static constexpr float kHeightMapWorld = 320.0f; // metres covered
     gfx::Target m_heightFrame;                       // this frame's splat
     gfx::Target m_heightMap[2];                         // accumulated, ping-pong
+    gfx::Target m_shadowHeight;                      // volumetric light: shadow height per column
     IDirect3DSurface9* m_heightDepth = nullptr;      // keeps the highest splat per texel
     IDirect3DVertexShader9* m_splatVS = nullptr;
     IDirect3DVertexDeclaration9* m_splatDecl = nullptr;
@@ -203,6 +211,8 @@ private:
     IDirect3DIndexBuffer9* m_rainIB = nullptr;
     bool m_rainSupported = true;
     float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks)
+    int m_boltSlot = -1000000;                  // lightning strike the bolt direction belongs to
+    float m_boltAzimuth = 0.0f;
     bool m_historyValid = false;
     bool m_profiling = false;
     ProfileFrame m_profile[kProfileFrames];

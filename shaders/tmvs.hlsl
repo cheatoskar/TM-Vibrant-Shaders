@@ -49,7 +49,8 @@ float4 u_Pass1 : register(c33);
 
 float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
-float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, 0
+float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
+float4 u_Volume    : register(c37); // volumetric light strength, march range (m), 0, 0
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -61,6 +62,7 @@ sampler2D s6 : register(s6);
 sampler3D s7 : register(s7); // tiling cloud noise (volume texture)
 sampler2D s8 : register(s8);
 sampler2D s9 : register(s9);
+sampler2D s10 : register(s10); // volumetric light (lighting pass)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -236,6 +238,77 @@ float longShadow(float3 pView, float3 nView, float noise) {
         }
     }
     return occlusion;
+}
+
+// ---------------------------------------------------------------------------------
+// Volumetric light: sun shafts with real shadows in the haze, also with the sun off screen.
+// 1. Shadow height map (256^2 over the height map's area): for every column, the height
+//    below which the sun is blocked. One walk towards the sun per column, so the march
+//    along the view ray below needs a single lookup per step.
+//    s0 = height map. out.r = shadow height + 10000 (0 = nothing known: lit)
+// ---------------------------------------------------------------------------------
+float4 PS_ShadowHeight(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 sun = u_SunWorld.xyz;
+    float hl = length(sun.xz);
+    if (sun.y < 0.02 || hl < 1e-3) return 0;
+    float2 dir = sun.xz / hl / u_HeightMap.z; // uv per metre towards the sun
+    float slope = sun.y / hl;                 // the sun ray climbs this much per metre
+    float best = 0.0;
+    [loop] for (int i = 0; i < 40; i++) {
+        float d = pow((i + 0.5) / 40.0, 1.5) * 160.0;
+        float2 m = uv + dir * d;
+        if (any(m < 0.0) || any(m > 1.0)) break;
+        float h = tex2Dlod(s0, float4(m, 0, 0)).r;
+        if (h > 0.0) best = max(best, h - d * slope);
+    }
+    return float4(best, 0, 0, 1);
+}
+
+// 2. March the view ray through the haze (half res). s0 = half normal/depth,
+//    s1 = shadow height map, u_Pass0.x = steps.
+//    out.r = lit fraction of the haze along the ray, out.g = lit path length / range
+float4 PS_Volumetric(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float z = tex2Dlod(s0, float4(uv, 0, 0)).w;
+    float3 rdView = normalize(viewPosition(uv, 1.0));
+    float dist = z >= SKY_Z ? 1e6 : z / max(rdView.z, 1e-3);
+    float range = min(dist, u_Volume.y);
+    float3 rd = viewToWorldDir(rdView);
+    float3 cam = cameraWorld();
+    float steps = u_Pass0.x;
+    float noise = ign(vpos);
+    float falloff = max(u_Atmo.y * 0.012, 1e-4);
+    float lit = 0.0, total = 0.0, prev = 0.0;
+    [loop] for (int i = 0; i < (int)steps; i++) {
+        // More samples close to the camera, where shafts are sharp and large.
+        float f = (i + noise) / steps;
+        float t = f * f * range;
+        float dt = t - prev;
+        prev = t;
+        float3 p = cam + rd * t;
+        float2 m = (p.xz - u_HeightMap.xy) / u_HeightMap.z;
+        float sh = (any(m < 0.0) || any(m > 1.0)) ? 0.0 : tex2Dlod(s1, float4(m, 0, 0)).r;
+        float l = sh > 0.0 ? saturate((p.y - (sh - 10000.0)) * 0.7 + 0.5) : 1.0;
+        float w = dt * exp(-max(p.y - cam.y, 0.0) * falloff); // thinner haze higher up
+        lit += l * w;
+        total += w;
+    }
+    // The rest of the ray up to `range` (after the last sample) counts as lit.
+    float rest = max(range - prev, 0.0);
+    lit += rest;
+    total += rest;
+    return float4(total > 0.0 ? lit / total : 1.0, lit / u_Volume.y, 0, 1);
+}
+
+// In-scattered sun light from the volumetric pass: dark gaps where shadows cross the haze,
+// bright shafts in between. Returns (extra light, lit fraction for the regular haze).
+float4 volumetricLight(float2 uv, float3 rd, float daylight) {
+    if (u_Volume.x <= 0.0) return float4(0, 0, 0, 1);
+    float2 v = tex2Dlod(s10, float4(uv, 0, 0)).rg;
+    float mu = dot(rd, u_SunWorld.xyz);
+    float phase = henyeyGreenstein(mu, 0.6) * 0.6 + 0.05;
+    float haze = 1.0 - exp(-v.y * u_Volume.y * (u_Atmo.x * 0.0009 + 0.0015) * 3.0);
+    float3 shaft = u_SunColor.rgb * daylight * phase * haze * u_Volume.x;
+    return float4(shaft, lerp(1.0, v.x, saturate(u_Volume.x)));
 }
 
 // ---------------------------------------------------------------------------------
@@ -849,26 +922,27 @@ float auroraCurtain(float2 p, float t) {
     return exp(-abs(n - 0.5) * 26.0) * activity;
 }
 
-float3 auroraSky(float3 rd) {
-    float3 col = spaceBackground(rd) * 0.7;
-    if (rd.y <= 0.0) return col;
+// The glowing curtains, marched through `slices` layers of height (40 = full quality).
+// Fewer slices take bigger steps through the same height range. jitter: 0..1 start offset,
+// changing every frame so TAA smooths the banding of the low slice counts.
+float3 auroraCurtains(float3 rd, float slices, float jitter) {
+    if (rd.y <= 0.0) return 0;
     float ca = cos(u_Sky.z), sa = sin(u_Sky.z);
     float2 flat = float2(rd.x * ca - rd.z * sa, rd.x * sa + rd.z * ca);
-    float jitter = hash13(rd * 4096.0);
     float t = u_Proj2.z * 0.02;
+    float stride = 40.0 / slices;
     float3 acc = 0, avg = 0;
-    [loop] for (int i = 0; i < 40; i++) {
-        float fi = i + jitter;
+    [loop] for (int i = 0; i < (int)slices; i++) {
+        float fi = (i + jitter) * stride;
         float height = 1.0 + pow(fi, 1.4) * 0.012;
         float2 p = flat * height / (rd.y * 1.6 + 0.12) * 1.6;
         float curtain = auroraCurtain(p, t);
         float3 tint = lerp(float3(0.12, 1.0, 0.4), float3(0.15, 0.65, 0.95), saturate((fi - 8.0) / 24.0));
         tint = lerp(tint, float3(0.75, 0.25, 0.9), saturate((fi - 22.0) / 18.0));
-        avg = lerp(avg, tint * curtain, 0.45);
-        acc += avg * exp2(-fi * 0.085) * smoothstep(0.0, 4.0, fi);
+        avg = lerp(avg, tint * curtain, 1.0 - pow(0.55, stride));
+        acc += avg * exp2(-fi * 0.085) * smoothstep(0.0, 4.0, fi) * stride;
     }
-    col += acc * 0.2 * smoothstep(0.0, 0.12, rd.y);
-    return col;
+    return acc * 0.2 * smoothstep(0.0, 0.12, rd.y);
 }
 
 // Procedural daytime atmosphere with drifting clouds (sky mode 1).
@@ -898,8 +972,91 @@ float3 clearSky(float3 rd) {
     return col;
 }
 
-float3 customSky(float3 rd) {
-    int mode = (int)(u_Sky.x + 0.5);
+// FSR 1 EASU (AMD FidelityFX Super Resolution, edge-adaptive spatial upsampling), for the
+// effects rendered at half resolution. 12 taps around the sample, an edge direction and
+// length from the luma gradients, then a Lanczos-like kernel stretched along the edge,
+// clamped to the 4 nearest texels so it never rings. size = input w, h, 1/w, 1/h.
+void easuSet(inout float2 dir, inout float len, float w, float lA, float lB, float lC, float lD, float lE) {
+    float dc = lD - lC, cb = lC - lB;
+    float lenX = max(abs(dc), abs(cb));
+    lenX = lenX > 0.0 ? 1.0 / lenX : 0.0;
+    float dirX = lD - lB;
+    dir.x += dirX * w;
+    lenX = saturate(abs(dirX) * lenX);
+    len += lenX * lenX * w;
+    float ec = lE - lC, ca = lC - lA;
+    float lenY = max(abs(ec), abs(ca));
+    lenY = lenY > 0.0 ? 1.0 / lenY : 0.0;
+    float dirY = lE - lA;
+    dir.y += dirY * w;
+    lenY = saturate(abs(dirY) * lenY);
+    len += lenY * lenY * w;
+}
+
+void easuTap(inout float3 aC, inout float aW, float2 off, float2 dir, float2 len2, float lob, float clp, float3 c) {
+    float2 v = float2(off.x * dir.x + off.y * dir.y, off.x * -dir.y + off.y * dir.x) * len2;
+    float d2 = min(dot(v, v), clp);
+    float wB = 0.4 * d2 - 1.0, wA = lob * d2 - 1.0;
+    wB *= wB;
+    wA *= wA;
+    wB = 1.5625 * wB - 0.5625;
+    float w = wB * wA;
+    aC += c * w;
+    aW += w;
+}
+
+float easuLuma(float3 c) { return c.g + 0.5 * (c.r + c.b); }
+
+float3 easuSample(sampler2D tex, float2 uv, float4 size) {
+    float2 pp = uv * size.xy - 0.5;
+    float2 fp = floor(pp);
+    float2 f = pp - fp;
+    float2 base = (fp + 0.5) * size.zw;
+    #define EASU_TAP(x, y) tex2Dlod(tex, float4(base + float2(x, y) * size.zw, 0, 0)).rgb
+    float3 b = EASU_TAP(0, -1), c = EASU_TAP(1, -1);
+    float3 e = EASU_TAP(-1, 0), F = EASU_TAP(0, 0), g = EASU_TAP(1, 0), h = EASU_TAP(2, 0);
+    float3 i = EASU_TAP(-1, 1), j = EASU_TAP(0, 1), k = EASU_TAP(1, 1), l = EASU_TAP(2, 1);
+    float3 n = EASU_TAP(0, 2), o = EASU_TAP(1, 2);
+    #undef EASU_TAP
+    float bL = easuLuma(b), cL = easuLuma(c), eL = easuLuma(e), fL = easuLuma(F), gL = easuLuma(g), hL = easuLuma(h);
+    float iL = easuLuma(i), jL = easuLuma(j), kL = easuLuma(k), lL = easuLuma(l), nL = easuLuma(n), oL = easuLuma(o);
+    float2 dir = 0;
+    float len = 0;
+    easuSet(dir, len, (1.0 - f.x) * (1.0 - f.y), bL, eL, fL, gL, jL);
+    easuSet(dir, len, f.x * (1.0 - f.y), cL, fL, gL, hL, kL);
+    easuSet(dir, len, (1.0 - f.x) * f.y, fL, iL, jL, kL, nL);
+    easuSet(dir, len, f.x * f.y, gL, jL, kL, lL, oL);
+    float dirR = dot(dir, dir);
+    bool zero = dirR < 1.0 / 32768.0;
+    dir = zero ? float2(1, 0) : dir * rsqrt(dirR);
+    len = len * 0.5;
+    len *= len;
+    float stretch = dot(dir, dir) / max(abs(dir.x), abs(dir.y));
+    float2 len2 = float2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+    float lob = 0.5 + (0.21 - 0.5) * len;
+    float clp = 1.0 / lob;
+    float3 aC = 0;
+    float aW = 0;
+    easuTap(aC, aW, float2(0, -1) - f, dir, len2, lob, clp, b);
+    easuTap(aC, aW, float2(1, -1) - f, dir, len2, lob, clp, c);
+    easuTap(aC, aW, float2(-1, 1) - f, dir, len2, lob, clp, i);
+    easuTap(aC, aW, float2(0, 1) - f, dir, len2, lob, clp, j);
+    easuTap(aC, aW, float2(0, 0) - f, dir, len2, lob, clp, F);
+    easuTap(aC, aW, float2(-1, 0) - f, dir, len2, lob, clp, e);
+    easuTap(aC, aW, float2(1, 1) - f, dir, len2, lob, clp, k);
+    easuTap(aC, aW, float2(2, 1) - f, dir, len2, lob, clp, l);
+    easuTap(aC, aW, float2(2, 0) - f, dir, len2, lob, clp, h);
+    easuTap(aC, aW, float2(1, 0) - f, dir, len2, lob, clp, g);
+    easuTap(aC, aW, float2(1, 2) - f, dir, len2, lob, clp, o);
+    easuTap(aC, aW, float2(0, 2) - f, dir, len2, lob, clp, n);
+    float3 lo = min(min(F, g), min(j, k)), hi = max(max(F, g), max(j, k));
+    return clamp(aC / max(aW, 1e-5), lo, hi);
+}
+
+// One sky mode. `mode` is a literal in every entry point, so each one only carries its own
+// sky (smaller shaders, faster to compile and to run). The aurora's curtains come from the
+// half-res pass in s1 (u_Pass0 = its size).
+float3 customSky(float3 rd, uniform int mode) {
     float3 c;
     if (mode == 1) {
         c = clearSky(rd);
@@ -921,21 +1078,94 @@ float3 customSky(float3 rd) {
         c = ringWorldSky(rd);
         c += meteors(rd, saturate(u_Sky2.y) * 0.6);
     } else {
-        c = auroraSky(rd);
+        c = spaceBackground(rd) * 0.7;
         c += meteors(rd, saturate(u_Sky2.y));
+        // Below the horizon: dark ground haze (the space skies go on: you're in space).
+        c = lerp(c, c * 0.15 + float3(0.01, 0.012, 0.02), smoothstep(0.0, -0.08, rd.y));
     }
-    // Below the horizon: dark ground haze instead of mirrored sky.
-    // Below the horizon: the space skies go on (you're in space), the aurora gets dark ground haze.
-    c = lerp(c, c * 0.15 + float3(0.01, 0.012, 0.02), smoothstep(0.0, -0.08, rd.y) * (mode == 4 ? 1.0 : 0.0));
     return c * u_Sky.w;
 }
 
 // Pass: custom sky (full res, only where depth = sky). s0 = full normal/depth
-float4 PS_Sky(float2 uv : TEXCOORD0) : COLOR0 {
+float4 skyPass(float2 uv, uniform int mode) {
     if (tex2Dlod(s0, float4(uv, 0, 0)).w < SKY_Z) return 0;
     float3 rd = viewToWorldDir(normalize(viewPosition(uv, 1.0)));
-    return float4(min(customSky(rd), 12.0), 1);
+    float3 c = customSky(rd, mode);
+    if (mode == 4) c += easuSample(s1, uv, u_Pass0) * u_Sky.w;
+    return float4(min(c, 12.0), 1);
 }
+float4 PS_SkyClear(float2 uv : TEXCOORD0) : COLOR0 { return skyPass(uv, 1); }
+float4 PS_SkyStars(float2 uv : TEXCOORD0) : COLOR0 { return skyPass(uv, 2); }
+float4 PS_SkyBlackHole(float2 uv : TEXCOORD0) : COLOR0 { return skyPass(uv, 3); }
+float4 PS_SkyAurora(float2 uv : TEXCOORD0) : COLOR0 { return skyPass(uv, 4); }
+float4 PS_SkyRing(float2 uv : TEXCOORD0) : COLOR0 { return skyPass(uv, 5); }
+
+// Pass: the aurora's curtains at half resolution. Only where one of the four full-res
+// pixels below is sky. s0 = full normal/depth, u_Pass0.x = slices, u_Pass0.zw = full texel
+float4 PS_AuroraHalf(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 o = u_Pass0.zw * 0.5;
+    float z = max(max(tex2Dlod(s0, float4(uv + float2(-o.x, -o.y), 0, 0)).w, tex2Dlod(s0, float4(uv + float2(o.x, -o.y), 0, 0)).w),
+                  max(tex2Dlod(s0, float4(uv + float2(-o.x, o.y), 0, 0)).w, tex2Dlod(s0, float4(uv + float2(o.x, o.y), 0, 0)).w));
+    if (z < SKY_Z) return 0;
+    float3 rd = viewToWorldDir(normalize(viewPosition(uv, 1.0)));
+    return float4(auroraCurtains(rd, u_Pass0.x, ign(vpos)), 1);
+}
+
+// Lightning bolt (u_Light2.w = azimuth + 7 * distance step 0..50, < 0 = none): a jagged
+// channel from the cloud base down to the ground, with two branches. Drawn in angular
+// space around the strike's direction; geometry hides its lower part like a real one.
+float boltWalk(float x, float seed) { // piecewise-linear random walk: the zigzag of a channel
+    float i = floor(x);
+    float a = hash12(float2(i, seed)) * 2.0 - 1.0;
+    float b = hash12(float2(i + 1.0, seed)) * 2.0 - 1.0;
+    return lerp(a, b, frac(x));
+}
+
+float boltPath(float h, float seed) {
+    return boltWalk(h * 6.0, seed) * 0.55 + boltWalk(h * 21.0, seed + 3.1) * 0.2 + boltWalk(h * 67.0, seed + 7.7) * 0.06;
+}
+
+float boltLine(float d, float width) {
+    return exp(-d * d / (width * width)) + 0.015 * exp(-abs(d) / (width * 6.0));
+}
+
+float3 lightningBolt(float3 rd) {
+    if (u_Light2.w < 0.0 || u_Light2.z <= 0.02) return 0;
+    float stepD = floor(u_Light2.w / 7.0);
+    float az = u_Light2.w - stepD * 7.0;
+    float distance = stepD / 50.0;
+    float range = lerp(900.0, 4500.0, distance);
+    // Storm clouds tower high: the channel starts well above the visible cloud base.
+    float base = max(u_Clouds.x > 0.0 ? u_Clouds.z : 650.0, 900.0) - u_UpView.w;
+    float top = atan(max(base, 100.0) / range); // elevation where the channel leaves the cloud
+    float da = atan2(rd.x, rd.z) - az;
+    da -= 6.2831853 * floor(da / 6.2831853 + 0.5);
+    float e = asin(clamp(rd.y, -1.0, 1.0));
+    float h = e / top; // 0 = ground .. 1 = cloud base
+    float2 q = float2(da * cos(e), e) / top;
+    if (h < -0.1 || h > 1.1 || abs(q.x) > 1.2) return 0;
+    // About 4 m of glowing channel, never thinner than a pixel.
+    float px = 2.0 / (u_Proj.y * u_Screen.y);
+    float width = max(4.0 / range, px * 0.8) / top;
+    float seed = az * 13.7;
+    float mainX = boltPath(h, seed) * 0.35;
+    float b = boltLine(q.x - mainX, width);
+    // Branches: split off the main channel and wander sideways, fading out.
+    for (int k = 0; k < 2; k++) {
+        float h0 = k == 0 ? 0.78 : 0.5;
+        float len = k == 0 ? 0.35 : 0.25;
+        float t = (h0 - h) / len; // 0 at the fork .. 1 at the tip
+        if (t < 0.0 || t > 1.0) continue;
+        float side = hash12(float2(seed, k)) > 0.5 ? 1.0 : -1.0;
+        float x = boltPath(h0, seed) * 0.35 + side * t * len * 0.8 + boltWalk(t * 9.0, seed + k * 5.3) * 0.05 * t;
+        b += boltLine(q.x - x, width * 0.7) * 0.5 * (1.0 - t);
+    }
+    // The channel fades into the cloud base and is dimmer and hazier far away.
+    b *= smoothstep(1.08, 0.92, h) * (1.0 - 0.55 * distance);
+    float strobe = saturate(u_Light2.z * 1.4 - 0.15);
+    return float3(0.82, 0.86, 1.0) * b * strobe * 10.0;
+}
+
 
 // ---------------------------------------------------------------------------------
 // Pass 3: average sky colour near the horizon (1x1), used as fog colour.
@@ -1347,10 +1577,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         if (u_Clouds.x > 0.0) {
             float4 cloud = tex2Dlod(s6, float4(uv, 0, 0));
             // Lightning lights the cloud layer from inside.
-            float3 inner = float3(0.75, 0.8, 1.0) * u_Light2.z * (1.0 - cloud.a) * 3.0;
+            float3 inner = float3(0.75, 0.8, 1.0) * u_Light2.z * (1.0 - cloud.a) * 1.4;
             c = c * lerp(1.0, cloud.a, u_Clouds.x) + (cloud.rgb * lerp(1.0, 0.45, u_Sky.y) + inner) * u_Clouds.x;
         }
-        c += float3(0.6, 0.65, 0.85) * u_Light2.z * 0.6 * saturate(rd.y * 3.0 + 0.3);
+        c += float3(0.6, 0.65, 0.85) * u_Light2.z * 0.3 * saturate(rd.y * 3.0 + 0.3);
+        c += lightningBolt(rd);
+        if (u_SunView.w > 0.5) c += volumetricLight(uv, rd, daylight).rgb;
         if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + 0.03) * rainStreaks(rd, SKY_Z) * 1.0;
         return float4(c, 1);
     }
@@ -1478,8 +1710,10 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (abs(rdy) <= 1e-4) fogAmount = density * exp(-camY * falloff) * dist;
     fogAmount = 1.0 - exp(-max(fogAmount, 0.0));
     float3 fogColor = lerp(u_SkyColor.rgb * 0.7 * (0.3 + 0.7 * daylight), skyAvg.rgb, skyAvg.a * 0.75);
-    if (u_SunView.w > 0.5) fogColor += sunScatter(rd, u_Atmo.z * 0.6) * daylight;
+    float4 volume = volumetricLight(uv, rd, daylight);
+    if (u_SunView.w > 0.5) fogColor += sunScatter(rd, u_Atmo.z * 0.6) * daylight * volume.a;
     c = lerp(c, fogColor, saturate(fogAmount));
+    if (u_SunView.w > 0.5) c += volume.rgb;
 
     // Day-for-night for the night skies: darker, cooler, less saturated - but lights keep glowing.
     float night = u_Sky.y;
