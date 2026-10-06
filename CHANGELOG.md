@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.2)
+## 1.2.0
 
 **Game support**
 - Setup: every TrackMania found (Nations and United Forever) gets its own install button, next to the ModLoader and "another game folder".
@@ -8,7 +8,8 @@
 - The replay camera hook (UpdateCams) also works when the game is loaded at another base address (it never did with the ModLoader).
 
 **Presets**
-- Shorter names: Neon Night is now **Neon**, Event Horizon **Horizon**, Thunderstorm **Storm**. Saved settings with the old names keep working.
+- New **Realistic** (replaces Cinematic, which looked almost like Vibrant): TrackMania's own colours and sky, no extra saturation or colour grading; only the light is new (shadows, ambient occlusion, bounce light, a little haze in the colour of the game's sun).
+- Shorter names: Neon Night is now **Neon**, Event Horizon **Horizon**, Thunderstorm **Storm**. Saved settings with the old names keep working (Cinematic becomes Realistic).
 - Night presets (Neon, Horizon, Aurora) show every star (3). Horizon turns the sky so Saturn and the black hole (up close, size 6) are in view from the start screen.
 
 **Menu**
@@ -23,7 +24,7 @@
 - Rain and thunder sound from real CC0 recordings (freesound.org): a seamless rain loop that follows the rain amount, ten thunders in three distance groups (never the same one twice in a row, pitch, loudness and dullness vary per strike, panned to the side of the flash). Volume up to 2, default 0.45. The log shows the output device and level.
 - Rain on every surface: streams running down steep wet surfaces, splash rings on the car and barrier tops.
 - Rain drops on the lens: clear drops that bend the image, small ones that dry off, big ones that run down. On/off in the simple menu.
-- Spray behind the car on wet roads: its own setting, off by default. It only flies while the tyres touch the road (checked in the depth buffer beside the rear tyres, so slopes keep it and jumps stop it) and varies in gusts per tyre.
+- Spray behind the car on wet roads: its own setting, off by default (0.25 in Storm). It only flies while the tyres touch the road (checked in the depth buffer beside the rear tyres, so slopes keep it and jumps stop it) and varies in gusts per tyre.
 - Water: found by height instead of colour (water blocks always sit at 7.94 m; the sea level comes from the map load), so pools and rivers (and the TMUF sea) get waves, refraction and reflections and nothing else does. On by default.
 
 **Neon trail**
@@ -49,7 +50,7 @@
 - Night presets (Neon, Horizon, Aurora) mirror at 1.3; auto quality steps back to 1 first when the frame rate drops.
 
 **Tools**
-- Previewer: `--time`, `--water`, `--drive` (moving camera, for the trail), `--sound out.wav` (the rain and thunder sound as a file), `--play seconds` (plays it live).
+- Previewer: `--time`, `--water`, `--drive` (moving camera, for the trail), `--sound out.wav` (the rain and thunder sound as a file), `--play seconds` (plays it live), `--decode in.mp3 out.wav`.
 
 **License**
 - MIT.

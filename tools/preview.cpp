@@ -1,7 +1,7 @@
 // Offline previewer: renders recorded game frames (.tmcap) through the shader pipeline.
 //
 //   tmvs_preview <capture.tmcap> <out.bmp> [options]
-//     --preset <name|index>   Vibrant, Cinematic, Golden Hour, Competition, Performance, ...
+//     --preset <name|index>   Vibrant, Realistic, Golden Hour, Competition, Performance, ...
 //     --set Key=Value         override a setting (keys as in settings.ini), repeatable
 //     --debug <n>             debug view (1 depth, 2 normals, 3 AO, 4 shadows, 5 shafts, 6 bloom)
 //     --shaders <dir>         load tmvs.hlsl from <dir> instead of the embedded copy

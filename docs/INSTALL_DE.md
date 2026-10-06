@@ -24,7 +24,7 @@ Startest du das Setup erneut, kannst du **aktualisieren** oder **deinstallieren*
 | `F7` | Shader an/aus (Vorher/Nachher-Vergleich) |
 | `F12` | Frame-Capture speichern (hilfreich bei Fehlerberichten) |
 
-- **Preset:** Vibrant, Cinematic, Golden Hour, Horizon (Ring World mit Schwarzem Loch), Neon, Storm, Aurora und weitere.
+- **Preset:** Vibrant, Realistic, Golden Hour, Horizon (Ring World mit Schwarzem Loch), Neon, Storm, Aurora und weitere.
 - **Preset per map mood:** Das Preset, das du auf einer Tag-, Abend- oder Nacht-Map wählst, wird für diese Stimmung gemerkt und dort automatisch gesetzt.
 - **Eigene Presets:** Werte anpassen, einen Namen eingeben und auf *Save as preset* klicken.
 - **Alles wird automatisch gespeichert.** Einstellungen, eigene Presets und das Log liegen in `Dokumente\TrackMania\TMVS\`.

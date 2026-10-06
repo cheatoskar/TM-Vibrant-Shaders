@@ -14,7 +14,7 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 | | |
 |---|---|
 | ![Sunset: original and Vibrant](docs/images/compare-sunset.jpg) | ![Day: original and Golden Hour](docs/images/compare-day.jpg) |
-| ![Original and Cinematic](docs/images/compare-cinematic.jpg) | ![Original and Storm](docs/images/compare-rain.jpg) |
+| ![Original and Realistic](docs/images/compare-realistic.jpg) | ![Original and Storm](docs/images/compare-rain.jpg) |
 | ![Night: original and Neon](docs/images/compare-night.jpg) | ![Horizon: the Ring World sky at night](docs/images/event-horizon.jpg) |
 | ![Black hole](docs/images/black-hole.jpg) | ![Aurora](docs/images/aurora.jpg) |
 
@@ -69,7 +69,7 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 | Preset | What it looks like |
 |---|---|
 | **Vibrant** | The default. Warm sun, saturated colours, glowing borders, light shafts. |
-| **Cinematic** | Dense sunlit haze, deep shadows, film contrast. |
+| **Realistic** | TrackMania's own colours and sky; only the light is new: shadows, ambient occlusion, bounce light and a little haze. |
 | **Golden Hour** | New clear sky, low warm sun, long light shafts. |
 | **Dreamy** | Soft pastel bloom, pink and teal. |
 | **Neon** | Starry sky with shooting stars, bright neon that lights up the whole track. |

@@ -7,7 +7,7 @@ namespace tmshaders {
 
 enum class Preset : int {
     Vibrant = 0,     // Sildur's Vibrant style: saturated, warm sun, strong shafts
-    Cinematic,       // IterationT style: dense sunlit haze, deep shadows, film contrast
+    Realistic,       // the game's own colours, only the light is new (was Cinematic until 1.1)
     GoldenHour,      // procedural clear sky, low warm sun, long shafts, warm film look
     Dreamy,          // soft pastel bloom, lifted shadows, pink/teal split toning
     Neon,            // starry night: day-for-night grading, glowing neon and floodlights

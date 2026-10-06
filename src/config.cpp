@@ -115,7 +115,7 @@ const std::vector<Field>& fields() {
 const char* presetName(Preset preset) {
     switch (preset) {
         case Preset::Vibrant: return "Vibrant";
-        case Preset::Cinematic: return "Cinematic";
+        case Preset::Realistic: return "Realistic";
         case Preset::GoldenHour: return "Golden Hour";
         case Preset::Dreamy: return "Dreamy";
         case Preset::Neon: return "Neon";
@@ -182,6 +182,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
     if (!_wcsicmp(text.c_str(), L"Neon Night")) return "Neon";
     if (!_wcsicmp(text.c_str(), L"Event Horizon")) return "Horizon";
     if (!_wcsicmp(text.c_str(), L"Thunderstorm")) return "Storm";
+    if (!_wcsicmp(text.c_str(), L"Cinematic")) return "Realistic";
     return narrow(text);
 }
 
@@ -389,28 +390,37 @@ void applyPreset(Settings& s, Preset preset) {
     switch (preset) {
         case Preset::Vibrant:
             break; // Settings defaults are the Vibrant look.
-        case Preset::Cinematic:
-            s.volumetricLight = 1.0f;
-            s.aoStrength = 1.2f;
-            s.shadowStrength = 0.8f;
-            s.sunLight = 0.6f;
-            s.ambientTint = 0.7f;
-            s.sunColor[0] = 1.0f; s.sunColor[1] = 0.82f; s.sunColor[2] = 0.58f;
-            s.skyColor[0] = 0.48f; s.skyColor[1] = 0.66f; s.skyColor[2] = 1.0f;
-            s.fogDensity = 1.1f;
-            s.fogSunScatter = 1.3f;
-            s.godRays = 1.5f;
-            s.godRayDecay = 0.99f;
-            s.sunGlow = 1.0f;
-            s.bloom = 0.11f;
-            s.lensFlare = 0.45f;
-            s.vignette = 0.38f;
-            s.contrast = 1.14f;
-            s.saturation = 1.05f;
-            s.vibrance = 0.2f;
-            s.temperature = 0.12f;
-            s.shadowTint = 0.45f;
-            s.filmGrain = 0.02f;
+        case Preset::Realistic:
+            // TrackMania's own colours and sky, only the light is new: shadows, contact
+            // shadows, bounce light and a little haze, in the colour of the game's sun.
+            s.saturation = 1.0f;
+            s.vibrance = 0.0f;
+            s.temperature = 0.0f;
+            s.tint = 0.0f;
+            s.shadowTint = 0.0f;
+            s.contrast = 1.06f;
+            s.gameSunColor = 1.0f;
+            s.sunColor[0] = 1.0f; s.sunColor[1] = 0.96f; s.sunColor[2] = 0.9f;
+            s.skyColor[0] = 0.66f; s.skyColor[1] = 0.74f; s.skyColor[2] = 0.88f;
+            s.sunLight = 0.55f;
+            s.ambientTint = 0.45f;
+            s.aoStrength = 1.1f;
+            s.shadowStrength = 0.9f;
+            s.globalIllumination = 0.7f;
+            s.volumetricLight = 0.4f;
+            s.skyEnhance = 0.0f;
+            s.sunGlow = 0.4f;
+            s.fogDensity = 0.2f;
+            s.fogSunScatter = 0.5f;
+            s.godRays = 0.7f;
+            s.neonLight = 0.35f;
+            s.highlightBoost = 2.5f;
+            s.bloom = 0.06f;
+            s.lensFlare = 0.0f;
+            s.chromaticAberration = 0.0f;
+            s.vignette = 0.12f;
+            s.filmGrain = 0.0f;
+            s.mowingStripes = 0.35f;
             break;
         case Preset::GoldenHour:
             s.volumetricLight = 1.0f;
@@ -630,6 +640,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.rain = 1.6f;
             s.puddles = 0.55f;
             s.lightning = 1.0f;
+            s.spray = 0.25f;
             s.wind = 0.9f;
             s.sunLight = 0.0f;
             s.shadowStrength = 0.1f;
