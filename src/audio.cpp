@@ -112,10 +112,12 @@ struct Rain {
 };
 
 // Thunder: a sharp crack for close strikes, then a long low rumble that rolls in a few
-// swells, louder and brighter the closer the strike.
+// swells, louder and brighter the closer the strike. The rumble alone sits below 100 Hz,
+// which laptop speakers and many headsets can't play: the "roll" (120 Hz - 1 kHz, with a
+// fluttering level like the crackle of a real roll of thunder) is what most people hear.
 struct Thunder {
     Noise noise{0xBADC0DEu};
-    OnePole low[2], body[2], crackHigh[2];
+    OnePole low[2], body[2], crackHigh[2], rollLow[2], rollHigh[2], flutter[2];
     float brown[2] = {};
     float t = -1.0f;      // seconds since start, < 0 = silent
     float power = 0.0f, distance = 0.0f;
@@ -134,6 +136,9 @@ struct Thunder {
             low[c].setCutoff(cutoff);
             body[c].setCutoff(cutoff * 3.0f);
             crackHigh[c].setCutoff(1500.0f);
+            rollLow[c].setCutoff(450.0f + (1.0f - d) * 550.0f); // far thunder is duller
+            rollHigh[c].setCutoff(120.0f);
+            flutter[c].setCutoff(9.0f);
         }
     }
 
@@ -146,13 +151,16 @@ struct Thunder {
                 const float x = (t - swellAt[k]) / swellWidth[k];
                 env += 0.7f * expf(-x * x);
             }
-            const float crack = distance < 0.4f ? expf(-t * 18.0f) * (1.0f - distance * 2.5f) : 0.0f;
+            const float crack = distance < 0.6f ? expf(-t * 14.0f) * (1.0f - distance * 1.6f) : 0.0f;
             for (int c = 0; c < 2; c++) {
                 const float w = noise.next();
                 brown[c] = brown[c] * 0.995f + w * 0.05f;
                 const float rumble = low[c].process(brown[c]) * 6.0f + (body[c].process(w) - low[c].y) * 0.6f;
                 const float snap = (w - crackHigh[c].process(w)) * crack;
-                out[i * 2 + c] += (rumble * env * 0.12f + snap * 0.3f) * power;
+                const float band = rollLow[c].process(noise.next());
+                const float roll = band - rollHigh[c].process(band);
+                const float level = 0.35f + fabsf(flutter[c].process(noise.next() * 40.0f)); // ~0.35 .. 1.5, wobbling ~9 Hz
+                out[i * 2 + c] += (rumble * env * 0.12f + roll * env * level * 1.6f + snap * 0.6f) * power;
             }
             t += dt;
         }

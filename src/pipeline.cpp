@@ -902,6 +902,29 @@ float4 trailPoint(float i) {
     return tex2Dlod(s_trail, float4(uv, 0, 0));
 }
 
+// The car is found anew in every frame, so the raw points wobble (most in jumps, when the
+// camera swings): each point is averaged with its neighbours on the same line (weights
+// 1 2 3 4 3 2 1), stopping at gaps and respawns.
+float3 smoothPoint(float i, float4 centre) {
+    float first = c_Trail.y - c_Trail.x, last = c_Trail.y - 1.0; // oldest / newest point
+    float3 sum = centre.xyz * 4.0;
+    float weight = 4.0;
+    bool open = centre.w > 0.0;  // backwards: stop at the start of this line
+    [unroll] for (int k = 1; k <= 3; k++) {
+        float4 q = trailPoint(i - k);
+        open = open && i - k >= first && q.w != 0.0 && distance(q.xyz, centre.xyz) < 12.0;
+        if (open) { sum += q.xyz * (4.0 - k); weight += 4.0 - k; }
+        open = open && q.w > 0.0;
+    }
+    open = true;                 // forwards: stop before the next line starts
+    [unroll] for (int k = 1; k <= 3; k++) {
+        float4 q = trailPoint(i + k);
+        open = open && i + k <= last && q.w > 0.0 && distance(q.xyz, centre.xyz) < 12.0;
+        if (open) { sum += q.xyz * (4.0 - k); weight += 4.0 - k; }
+    }
+    return sum / weight;
+}
+
 VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     VSOut o;
     o.pos = float4(0, 0, -2, 1);
@@ -912,9 +935,12 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float4 a = trailPoint(first + k), b = trailPoint(first + k + 1.0);
     // No car found at one end, or b starts a new line (respawn).
     if (a.w == 0.0 || b.w <= 0.0) return o;
+    if (distance(a.xyz, b.xyz) > 40.0) return o; // teleported
+    a.xyz = smoothPoint(first + k, a);
+    b.xyz = smoothPoint(first + k + 1.0, b);
     float3 d = b.xyz - a.xyz;
     float len = length(d);
-    if (len < 1e-3 || len > 40.0) return o; // teleported
+    if (len < 1e-3) return o;
     float age = c_Trail.z - lerp(abs(a.w), b.w, corner.y);
     float fade = c_Trail.w > 0.0 ? saturate(1.0 - age / c_Trail.w) : 1.0;
     if (fade <= 0.0) return o;
