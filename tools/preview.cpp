@@ -8,6 +8,10 @@
 //     --before <file.bmp>     also write the unprocessed frame
 //     --sun <x,y,z>           override the sun direction (world space, towards the sun)
 //     --suncolor <r,g,b>      override the game's light colour
+//     --move <x,y,z>          previous frame's camera offset in metres (motion blur test)
+//     --bench                 GPU time per pass
+//     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
+//                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
 #include "config.h"
 #include "framecap.h"
 #include "gfx.h"
@@ -107,54 +111,113 @@ bool setByKey(Settings& s, const char* assignment) {
     return false;
 }
 
+bool applyPresetByName(Settings& settings, const char* name) {
+    for (int p = 0; p < static_cast<int>(Preset::Custom); p++) {
+        if (!_stricmp(name, presetName(static_cast<Preset>(p))) || (isdigit(static_cast<unsigned char>(name[0])) && atoi(name) == p)) {
+            applyPreset(settings, static_cast<Preset>(p));
+            return true;
+        }
+    }
+    fprintf(stderr, "unknown preset %s\n", name);
+    return false;
+}
+
+// One image to render: capture, settings, output file.
+struct Job {
+    std::string capture;
+    std::string output;
+    Settings settings;
+    float move[3] = {}; // previous frame's camera offset (world), for motion blur tests
+};
+
+struct LoadedCapture {
+    std::string path;
+    FrameCapture cap;
+    IDirect3DTexture9* color = nullptr;
+    IDirect3DTexture9* depth = nullptr;
+};
+
+// Batch file: one job per line, "out.bmp [cap=file.tmcap] [preset=Name] [Key=Value ...]".
+// Lines starting with # are comments. Without cap= the command line capture is used.
+bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
+    FILE* f = fopen(path, "r");
+    if (!f) return false;
+    char line[2048];
+    while (fgets(line, sizeof(line), f)) {
+        std::vector<std::string> words;
+        for (char* tok = strtok(line, " \t\r\n"); tok; tok = strtok(nullptr, " \t\r\n")) words.push_back(tok);
+        if (words.empty() || words[0][0] == '#') continue;
+        Job job = defaults;
+        job.output = words[0];
+        for (size_t i = 1; i < words.size(); i++) {
+            const std::string& w = words[i];
+            if (!_strnicmp(w.c_str(), "cap=", 4)) job.capture = w.substr(4);
+            else if (!_strnicmp(w.c_str(), "preset=", 7)) {
+                std::string name = w.substr(7);
+                for (char& c : name) if (c == '_') c = ' ';
+                applyPresetByName(job.settings, name.c_str());
+            } else if (!_strnicmp(w.c_str(), "move=", 5)) sscanf(w.c_str() + 5, "%f,%f,%f", &job.move[0], &job.move[1], &job.move[2]);
+            else setByKey(job.settings, w.c_str());
+        }
+        jobs.push_back(job);
+    }
+    fclose(f);
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
-                        "[--shaders dir] [--before file.bmp] [--sun x,y,z]\n");
+                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--bench] "
+                        "[--batch jobs.txt]\n");
         return 2;
     }
 
-    FrameCapture cap;
-    if (!cap.load(widen(argv[1]))) {
-        fprintf(stderr, "cannot read %s\n", argv[1]);
-        return 1;
-    }
-
-    Settings settings;
-    applyPreset(settings, Preset::Vibrant);
+    Job defaults;
+    defaults.capture = argv[1];
+    defaults.output = argv[2];
+    applyPreset(defaults.settings, Preset::Vibrant);
     std::wstring shaderDir;
     const char* before = nullptr;
+    const char* batch = nullptr;
     std::vector<const char*> overrides;
     bool sunOverride = false, sunColorOverride = false, bench = false;
     float sun[3] = {}, sunColor[3] = {};
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
-            const char* name = argv[++i];
-            for (int p = 0; p < static_cast<int>(Preset::Custom); p++) {
-                if (!_stricmp(name, presetName(static_cast<Preset>(p))) || (isdigit(static_cast<unsigned char>(name[0])) && atoi(name) == p)) {
-                    applyPreset(settings, static_cast<Preset>(p));
-                    break;
-                }
-            }
+            applyPresetByName(defaults.settings, argv[++i]);
         } else if (!strcmp(argv[i], "--set") && i + 1 < argc) {
             overrides.push_back(argv[++i]);
         } else if (!strcmp(argv[i], "--debug") && i + 1 < argc) {
-            settings.debugView = atoi(argv[++i]);
+            defaults.settings.debugView = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--shaders") && i + 1 < argc) {
             shaderDir = widen(argv[++i]);
         } else if (!strcmp(argv[i], "--bench")) {
             bench = true;
         } else if (!strcmp(argv[i], "--before") && i + 1 < argc) {
             before = argv[++i];
+        } else if (!strcmp(argv[i], "--batch") && i + 1 < argc) {
+            batch = argv[++i];
+        } else if (!strcmp(argv[i], "--move") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f,%f", &defaults.move[0], &defaults.move[1], &defaults.move[2]);
         } else if (!strcmp(argv[i], "--sun") && i + 1 < argc) {
             sunOverride = sscanf(argv[++i], "%f,%f,%f", &sun[0], &sun[1], &sun[2]) == 3;
         } else if (!strcmp(argv[i], "--suncolor") && i + 1 < argc) {
             sunColorOverride = sscanf(argv[++i], "%f,%f,%f", &sunColor[0], &sunColor[1], &sunColor[2]) == 3;
         }
     }
-    for (const char* o : overrides) setByKey(settings, o);
+    for (const char* o : overrides) setByKey(defaults.settings, o);
+    std::vector<Job> jobs;
+    if (batch) {
+        if (!readBatch(batch, defaults, jobs)) {
+            fprintf(stderr, "cannot read %s\n", batch);
+            return 1;
+        }
+    } else {
+        jobs.push_back(defaults);
+    }
 
     WNDCLASSW wc{};
     wc.lpfnWndProc = DefWindowProcW;
@@ -180,82 +243,115 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    IDirect3DTexture9* color = upload(device, cap.width, cap.height, D3DFMT_A8R8G8B8, cap.color);
-    IDirect3DTexture9* depthTex = upload(device, cap.width, cap.height, D3DFMT_R32F, cap.depth);
-    gfx::Target output;
-    if (!color || !depthTex || !output.create(device, cap.width, cap.height, D3DFMT_A8R8G8B8)) {
-        fprintf(stderr, "cannot create textures\n");
-        return 1;
-    }
-
     Pipeline pipeline;
     if (!pipeline.init(device, shaderDir)) {
         fprintf(stderr, "shader compilation failed:\n%s\n", pipeline.lastError().c_str());
         return 1;
     }
 
-    Pipeline::Inputs in;
-    in.color = color;
-    in.depth = depthTex;
-    in.width = cap.width;
-    in.height = cap.height;
-    memcpy(in.view, cap.view, sizeof(in.view));
-    memcpy(in.projection, cap.projection, sizeof(in.projection));
-    if (sunOverride) {
-        memcpy(in.sunDirection, sun, sizeof(sun));
-        in.sunKnown = true;
-    } else {
-        memcpy(in.sunDirection, cap.sunDirection, sizeof(float) * 3);
-        in.sunKnown = cap.sunDirection[3] > 0.5f;
-    }
-
-    if (sunColorOverride) {
-        memcpy(in.sunColor, sunColor, sizeof(sunColor));
-        in.sunColorKnown = true;
-    } else {
-        memcpy(in.sunColor, cap.sunColor, sizeof(float) * 3);
-        in.sunColorKnown = cap.sunColor[3] > 0.5f;
-    }
-
-    // Several frames so auto exposure settles like it would in game.
-    LARGE_INTEGER t0, t1, freq;
-    QueryPerformanceFrequency(&freq);
-    pipeline.setProfiling(bench);
-    const int frames = bench ? 200 : 40;
-    device->BeginScene();
-    for (int frame = 0; frame < frames; frame++) {
-        in.time = cap.time + frame * 0.1f;
-        if (frame == frames - 1) QueryPerformanceCounter(&t0);
-        pipeline.render(device, in, settings, output.surface);
-        if (bench) pipeline.collectProfile(true);
-    }
-    device->EndScene();
-    if (bench) {
-        printf("GPU time per pass (ms, %ux%u):\n", cap.width, cap.height);
-        for (int p = 0; p < pipeline.passCount(); p++) {
-            if (pipeline.passTime(p) > 0.0f) printf("  %-16s %6.3f\n", Pipeline::passName(p), pipeline.passTime(p));
+    std::vector<LoadedCapture*> captures;
+    auto loadCapture = [&](const std::string& path) -> LoadedCapture* {
+        for (LoadedCapture* c : captures) {
+            if (c->path == path) return c;
         }
-        printf("  %-16s %6.3f\n", "TOTAL", pipeline.totalTime());
-    }
+        LoadedCapture* c = new LoadedCapture;
+        c->path = path;
+        if (!c->cap.load(widen(path.c_str()))) {
+            fprintf(stderr, "cannot read %s\n", path.c_str());
+            delete c;
+            return nullptr;
+        }
+        c->color = upload(device, c->cap.width, c->cap.height, D3DFMT_A8R8G8B8, c->cap.color);
+        c->depth = upload(device, c->cap.width, c->cap.height, D3DFMT_R32F, c->cap.depth);
+        captures.push_back(c);
+        return c;
+    };
 
-    std::vector<uint32_t> pixels;
-    if (!pipeline.readColor(device, output.surface, pixels)) {
-        fprintf(stderr, "readback failed\n");
-        return 1;
-    }
-    QueryPerformanceCounter(&t1);
-    writeBmp(argv[2], pixels, cap.width, cap.height);
-    if (before) writeBmp(before, cap.color, cap.width, cap.height);
-    printf("%s: %ux%u, sun %s (%.3f %.3f %.3f), last frame incl. readback %.1f ms\n", argv[2], cap.width, cap.height,
-           in.sunKnown ? "known" : "unknown", in.sunDirection[0], in.sunDirection[1], in.sunDirection[2],
-           1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));
+    pipeline.setProfiling(bench);
+    int failures = 0;
+    for (const Job& job : jobs) {
+        LoadedCapture* loaded = loadCapture(job.capture);
+        gfx::Target output;
+        if (!loaded || !loaded->color || !loaded->depth || !output.create(device, loaded->cap.width, loaded->cap.height, D3DFMT_A8R8G8B8)) {
+            failures++;
+            continue;
+        }
+        const FrameCapture& cap = loaded->cap;
+        Pipeline::Inputs in;
+        in.color = loaded->color;
+        in.depth = loaded->depth;
+        in.width = cap.width;
+        in.height = cap.height;
+        memcpy(in.view, cap.view, sizeof(in.view));
+        memcpy(in.projection, cap.projection, sizeof(in.projection));
+        if (sunOverride) {
+            memcpy(in.sunDirection, sun, sizeof(sun));
+            in.sunKnown = true;
+        } else {
+            memcpy(in.sunDirection, cap.sunDirection, sizeof(float) * 3);
+            in.sunKnown = cap.sunDirection[3] > 0.5f;
+        }
+        if (sunColorOverride) {
+            memcpy(in.sunColor, sunColor, sizeof(sunColor));
+            in.sunColorKnown = true;
+        } else {
+            memcpy(in.sunColor, cap.sunColor, sizeof(float) * 3);
+            in.sunColorKnown = cap.sunColor[3] > 0.5f;
+        }
+        // The previous frame's camera, moved by job.move (world space): view translation
+        // t' = t - move * R.
+        Pipeline::Inputs moved = in;
+        for (int j = 0; j < 3; j++) {
+            moved.view[12 + j] -= job.move[0] * in.view[0 * 4 + j] + job.move[1] * in.view[1 * 4 + j] + job.move[2] * in.view[2 * 4 + j];
+        }
+        const bool moving = job.move[0] != 0.0f || job.move[1] != 0.0f || job.move[2] != 0.0f;
 
-    output.destroy();
+        // Several frames so auto exposure and TAA settle like they would in game.
+        LARGE_INTEGER t0{}, t1{}, freq{};
+        QueryPerformanceFrequency(&freq);
+        pipeline.resetHistory();
+        const int frames = bench ? 200 : 40;
+        device->BeginScene();
+        for (int frame = 0; frame < frames; frame++) {
+            const bool previousFrame = moving && frame == frames - 2;
+            Pipeline::Inputs& frameIn = previousFrame ? moved : in;
+            frameIn.time = cap.time + frame * 0.1f;
+            if (frame == frames - 1) QueryPerformanceCounter(&t0);
+            pipeline.render(device, frameIn, job.settings, output.surface);
+            if (bench) pipeline.collectProfile(true);
+        }
+        device->EndScene();
+        if (bench) {
+            printf("GPU time per pass (ms, %ux%u):\n", cap.width, cap.height);
+            for (int p = 0; p < pipeline.passCount(); p++) {
+                if (pipeline.passTime(p) > 0.0f) printf("  %-16s %6.3f\n", Pipeline::passName(p), pipeline.passTime(p));
+            }
+            printf("  %-16s %6.3f\n", "TOTAL", pipeline.totalTime());
+        }
+
+        std::vector<uint32_t> pixels;
+        if (!pipeline.readColor(device, output.surface, pixels)) {
+            fprintf(stderr, "readback failed\n");
+            failures++;
+            continue;
+        }
+        QueryPerformanceCounter(&t1);
+        writeBmp(job.output.c_str(), pixels, cap.width, cap.height);
+        printf("%s: %ux%u, sun %s (%.3f %.3f %.3f), last frame incl. readback %.1f ms\n", job.output.c_str(), cap.width, cap.height,
+               in.sunKnown ? "known" : "unknown", in.sunDirection[0], in.sunDirection[1], in.sunDirection[2],
+               1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));
+        output.destroy();
+    }
+    if (before && !captures.empty()) writeBmp(before, captures[0]->cap.color, captures[0]->cap.width, captures[0]->cap.height);
+
     pipeline.release();
-    color->Release();
-    depthTex->Release();
+    for (LoadedCapture* c : captures) {
+        if (c->color) c->color->Release();
+        if (c->depth) c->depth->Release();
+        delete c;
+    }
     device->Release();
     d3d->Release();
     DestroyWindow(window);
-    return 0;
+    return failures ? 1 : 0;
 }

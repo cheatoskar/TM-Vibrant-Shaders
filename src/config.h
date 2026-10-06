@@ -16,6 +16,9 @@ enum class Preset : int {
     Aurora,          // aurora borealis night, green-teal grade
     Competition,     // clarity first: AO + contact shadows, no haze or lens effects
     Performance,     // lighter passes for weak GPUs
+    RainyDay,        // overcast, wet roads, puddles and falling rain
+    RingWorld,       // IterationT planets: a gas giant and its rings over the stadium
+    ReplayCinema,    // film look with motion blur and depth of field for replays
     Custom,
     Count
 };

@@ -40,9 +40,10 @@ configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
 # when the game starts. Keep this list in the same order as kEntryPoints in pipeline.cpp.
 set(TMVS_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tmvs.hlsl")
 set(TMVS_ENTRIES
-  PS_LinearDepth PS_Prepare PS_DownsampleND PS_OcclusionShadow PS_BilateralBlur PS_Sky PS_SkyAverage
-  PS_Lighting PS_RayMask PS_RayBlur PS_BloomDown PS_BloomUp PS_Luminance PS_Adapt PS_Final PS_FXAA
-  PS_Sharpen PS_CopyDepth)
+  PS_LinearDepth PS_Prepare PS_DownsampleND PS_HeightMerge PS_HeightSplat PS_OcclusionShadow PS_BilateralBlur
+  PS_Sky PS_SkyAverage PS_Clouds PS_Reflect PS_SpillDown PS_SpillBlur PS_Lighting PS_Focus PS_DofBlur PS_Cinematic
+  PS_RayMask PS_RayBlur PS_BloomDown PS_BloomUp PS_Luminance PS_Adapt PS_Final PS_FXAA PS_TAA PS_Sharpen PS_Copy
+  PS_CopyDepth)
 
 file(GLOB TMVS_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
 list(SORT TMVS_SDK_BINS ORDER DESCENDING)
@@ -91,6 +92,7 @@ configure_file("${CMAKE_CURRENT_BINARY_DIR}/tmvs_bytecode.h.in" "${CMAKE_CURRENT
 add_library(tmvs_core STATIC
   src/pipeline.cpp
   src/gfx.cpp
+  src/noise.cpp
   src/framecap.cpp
   src/config.cpp
   src/log.cpp

@@ -16,6 +16,9 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("AORadius", "AO radius (m)", "Lighting", Float, aoRadius, 0.3f, 5.0f),
         TMVS_FIELD("ShadowStrength", "Sun shadows", "Lighting", Float, shadowStrength, 0.0f, 1.0f),
         TMVS_FIELD("ShadowLength", "Shadow ray length (m)", "Lighting", Float, shadowLength, 1.0f, 30.0f),
+        TMVS_FIELD("LongShadows", "Long-range shadows", "Lighting", Float, longShadows, 0.0f, 1.0f),
+        TMVS_FIELD("LongShadowRange", "Long shadow range (m)", "Lighting", Float, longShadowRange, 30.0f, 250.0f),
+        TMVS_FIELD("NeonLight", "Neon light on surroundings", "Lighting", Float, neonLight, 0.0f, 2.0f),
         TMVS_FIELD("SunLight", "Sunlight warmth", "Lighting", Float, sunLight, 0.0f, 1.5f),
         TMVS_FIELD("AmbientTint", "Sky ambient tint", "Lighting", Float, ambientTint, 0.0f, 1.5f),
         TMVS_FIELD("SunColor", "Sun colour", "Lighting", Color, sunColor, 0.0f, 1.0f),
@@ -24,7 +27,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("SunElevation", "Sun elevation override (-1 = game)", "Lighting", Float, sunElevationOverride, -1.0f, 90.0f),
         TMVS_FIELD("SunAzimuth", "Sun azimuth override", "Lighting", Float, sunAzimuthOverride, 0.0f, 360.0f),
 
-        TMVS_FIELD("SkyMode", "Sky", "Sky & Atmosphere", Int, skyMode, 0.0f, 4.0f),
+        TMVS_FIELD("SkyMode", "Sky", "Sky & Atmosphere", Int, skyMode, 0.0f, 5.0f),
         TMVS_FIELD("SkyNight", "Night darkening (-1 = auto)", "Sky & Atmosphere", Float, skyNight, -1.0f, 1.0f),
         TMVS_FIELD("SkyRotation", "Sky rotation", "Sky & Atmosphere", Float, skyRotation, 0.0f, 360.0f),
         TMVS_FIELD("SkyBrightness", "Sky brightness", "Sky & Atmosphere", Float, skyBrightness, 0.2f, 3.0f),
@@ -32,6 +35,13 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("StarAmount", "Stars", "Sky & Atmosphere", Float, starAmount, 0.0f, 3.0f),
         TMVS_FIELD("SkyEffectSize", "Black hole size", "Sky & Atmosphere", Float, skyEffectSize, 0.3f, 3.0f),
         TMVS_FIELD("PlanetSize", "Ringed planet (0 = off)", "Sky & Atmosphere", Float, planetSize, 0.0f, 2.5f),
+        TMVS_FIELD("PlanetType", "Ring world planet", "Sky & Atmosphere", Int, planetType, 0.0f, 3.0f),
+        TMVS_FIELD("PlanetView", "Ring world view", "Sky & Atmosphere", Int, planetView, 0.0f, 1.0f),
+        TMVS_FIELD("PlanetAzimuth", "Planet direction", "Sky & Atmosphere", Float, planetAzimuth, 0.0f, 360.0f),
+        TMVS_FIELD("PlanetElevation", "Planet height", "Sky & Atmosphere", Float, planetElevation, -10.0f, 60.0f),
+        TMVS_FIELD("VolumetricClouds", "Volumetric clouds", "Sky & Atmosphere", Float, volumetricClouds, 0.0f, 1.0f),
+        TMVS_FIELD("CloudCoverage", "Cloud coverage", "Sky & Atmosphere", Float, cloudCoverage, 0.05f, 1.0f),
+        TMVS_FIELD("CloudHeight", "Cloud height (m)", "Sky & Atmosphere", Float, cloudHeight, 300.0f, 4000.0f),
         TMVS_FIELD("SkyEnhance", "Sky enhancement", "Sky & Atmosphere", Float, skyEnhance, 0.0f, 1.0f),
         TMVS_FIELD("SunGlow", "Sun glow", "Sky & Atmosphere", Float, sunGlow, 0.0f, 2.0f),
         TMVS_FIELD("FogDensity", "Haze density", "Sky & Atmosphere", Float, fogDensity, 0.0f, 3.0f),
@@ -60,7 +70,22 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Gain", "Gain", "Colour", Float, gain, 0.6f, 1.6f),
         TMVS_FIELD("SplitToning", "Split toning", "Colour", Float, shadowTint, 0.0f, 1.0f),
 
+        TMVS_FIELD("Wetness", "Wet roads", "Weather & Surfaces", Float, wetness, 0.0f, 1.0f),
+        TMVS_FIELD("Rain", "Rain", "Weather & Surfaces", Float, rain, 0.0f, 1.0f),
+        TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
+        TMVS_FIELD("WaterSurfaces", "Water surfaces (Island/Bay/Coast)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
+        TMVS_FIELD("Reflections", "Track reflections (dry)", "Weather & Surfaces", Float, reflections, 0.0f, 1.0f),
+        TMVS_FIELD("GrassDetail", "Grass detail", "Weather & Surfaces", Float, grassDetail, 0.0f, 1.0f),
+        TMVS_FIELD("MowingStripes", "Mowing stripes", "Weather & Surfaces", Float, mowingStripes, 0.0f, 1.0f),
+        TMVS_FIELD("Wind", "Wind", "Weather & Surfaces", Float, wind, 0.0f, 1.0f),
+
+        TMVS_FIELD("MotionBlur", "Motion blur", "Cinematic", Float, motionBlur, 0.0f, 1.5f),
+        TMVS_FIELD("DepthOfField", "Depth of field", "Cinematic", Float, depthOfField, 0.0f, 1.0f),
+        TMVS_FIELD("FocusDistance", "Focus distance (m, 0 = auto)", "Cinematic", Float, focusDistance, 0.0f, 200.0f),
+        TMVS_FIELD("BokehSize", "Max blur (px)", "Cinematic", Float, bokehSize, 2.0f, 24.0f),
+
         TMVS_FIELD("FXAA", "FXAA anti-aliasing", "Image", Bool, fxaa, 0.0f, 1.0f),
+        TMVS_FIELD("TAA", "Temporal anti-aliasing", "Image", Bool, taa, 0.0f, 1.0f),
         TMVS_FIELD("Sharpen", "Sharpening (CAS)", "Image", Float, sharpen, 0.0f, 1.0f),
         TMVS_FIELD("Quality", "Effect quality", "Image", Int, quality, 0.0f, 2.0f),
         TMVS_FIELD("DisableGameMSAA", "Disable game MSAA (restart)", "Image", Bool, disableGameMSAA, 0.0f, 1.0f),
@@ -83,6 +108,9 @@ const char* presetName(Preset preset) {
         case Preset::Aurora: return "Aurora";
         case Preset::Competition: return "Competition";
         case Preset::Performance: return "Performance";
+        case Preset::RainyDay: return "Rainy Day";
+        case Preset::RingWorld: return "Ring World";
+        case Preset::ReplayCinema: return "Replay Cinema";
         case Preset::Custom: return "Custom";
         default: return "?";
     }
@@ -130,7 +158,9 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
     if (text.empty()) return fallback;
     if (iswdigit(text[0])) {
         const int i = _wtoi(text.c_str());
-        return i >= 0 && i < static_cast<int>(Preset::Count) ? presetName(static_cast<Preset>(i)) : fallback;
+        // Index 10 was "Custom" before more presets were added.
+        if (i >= 10) return presetName(Preset::Custom);
+        return i >= 0 ? presetName(static_cast<Preset>(i)) : fallback;
     }
     if (!_wcsicmp(text.c_str(), L"Keep")) return {};
     return narrow(text);
@@ -419,6 +449,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.vignette = 0.3f;
             s.chromaticAberration = 0.1f;
             s.filmGrain = 0.01f;
+            s.neonLight = 1.0f;
+            s.reflections = 0.5f;
             break;
         case Preset::EventHorizon:
             s.skyMode = 3;
@@ -485,6 +517,80 @@ void applyPreset(Settings& s, Preset preset) {
             s.chromaticAberration = 0.0f;
             s.filmGrain = 0.0f;
             s.sharpen = 0.0f;
+            s.longShadows = 0.0f;
+            s.neonLight = 0.0f;
+            s.grassDetail = 0.0f;
+            s.taa = false;
+            break;
+        case Preset::RainyDay:
+            s.volumetricClouds = 1.0f;
+            s.cloudCoverage = 0.95f;
+            s.cloudHeight = 900.0f;
+            s.wetness = 1.0f;
+            s.rain = 0.7f;
+            s.puddles = 0.4f;
+            s.wind = 0.6f;
+            s.sunLight = 0.15f;
+            s.shadowStrength = 0.3f;
+            s.longShadows = 0.0f;
+            s.ambientTint = 0.8f;
+            s.skyColor[0] = 0.55f; s.skyColor[1] = 0.62f; s.skyColor[2] = 0.75f;
+            s.fogDensity = 1.6f;
+            s.fogSunScatter = 0.2f;
+            s.godRays = 0.0f;
+            s.sunGlow = 0.2f;
+            s.lensFlare = 0.0f;
+            s.highlightBoost = 4.0f;
+            s.neonLight = 1.0f;
+            s.bloom = 0.1f;
+            s.exposure = -0.15f;
+            s.contrast = 1.04f;
+            s.saturation = 0.85f;
+            s.vibrance = 0.1f;
+            s.temperature = -0.15f;
+            s.shadowTint = 0.3f;
+            s.vignette = 0.35f;
+            break;
+        case Preset::RingWorld:
+            s.skyMode = 5;
+            s.planetType = 1;
+            s.planetView = 1;
+            s.planetSize = 1.0f;
+            s.skyEffectSize = 1.0f;
+            s.starAmount = 1.5f;
+            s.skyColor[0] = 0.45f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
+            s.ambientTint = 0.7f;
+            s.fogDensity = 0.4f;
+            s.godRays = 0.5f;
+            s.sunGlow = 1.0f;
+            s.contrast = 1.12f;
+            s.saturation = 1.05f;
+            s.temperature = -0.05f;
+            s.shadowTint = 0.5f;
+            s.vignette = 0.35f;
+            s.filmGrain = 0.012f;
+            break;
+        case Preset::ReplayCinema:
+            s.aoStrength = 1.2f;
+            s.sunLight = 0.7f;
+            s.ambientTint = 0.7f;
+            s.sunColor[0] = 1.0f; s.sunColor[1] = 0.82f; s.sunColor[2] = 0.58f;
+            s.fogDensity = 1.0f;
+            s.fogSunScatter = 1.2f;
+            s.godRays = 1.1f;
+            s.godRayDecay = 0.975f;
+            s.bloom = 0.1f;
+            s.lensFlare = 0.35f;
+            s.reflections = 0.35f;
+            s.motionBlur = 0.35f;
+            s.depthOfField = 0.25f;
+            s.bokehSize = 10.0f;
+            s.vignette = 0.4f;
+            s.contrast = 1.12f;
+            s.temperature = 0.1f;
+            s.shadowTint = 0.45f;
+            s.filmGrain = 0.025f;
+            s.chromaticAberration = 0.1f;
             break;
         default:
             break;

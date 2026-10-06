@@ -32,11 +32,24 @@ float4 u_Post      : register(c18); // film grain, sharpen, fxaa, debug view
 float4 u_UpView    : register(c19); // world up in view space, camera height
 float4 u_Sky       : register(c20); // sky mode, night amount, sky rotation (rad), sky brightness
 float4 u_Sky2      : register(c21); // cloud amount, star amount, effect size, planet size
-float4 u_Quality   : register(c22); // AO samples, shadow steps, 0, 0
+float4 u_Quality   : register(c22); // AO samples, shadow steps, cloud steps, long shadow steps
+float4 u_Weather   : register(c23); // wetness, rain, puddles, water surfaces
+float4 u_Cine      : register(c24); // motion blur (shutter), depth of field, focus distance (0 = auto), max blur (px at 1080p)
+float4 u_Nature    : register(c25); // grass detail, mowing stripes, wind, dry reflections
+float4 u_Clouds    : register(c26); // volumetric clouds, coverage, base height (m), thickness (m)
+float4 u_Planet    : register(c27); // planet type, view (0 distant, 1 ring plane), azimuth, elevation (rad)
+float4 u_PrevView0 : register(c28); // world -> previous frame's view space: column 0 (rotation, translation)
+float4 u_PrevView1 : register(c29); // column 1
+float4 u_PrevView2 : register(c30); // column 2
+float4 u_PrevProj  : register(c31); // previous frame's P00, P11, P20, P21
 
 // Per-pass constants
 float4 u_Pass0 : register(c32);
 float4 u_Pass1 : register(c33);
+
+float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
+float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
+float4 u_Light2    : register(c36); // neon light spill, 0, 0, 0
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -45,6 +58,9 @@ sampler2D s3 : register(s3);
 sampler2D s4 : register(s4);
 sampler2D s5 : register(s5);
 sampler2D s6 : register(s6);
+sampler3D s7 : register(s7); // tiling cloud noise (volume texture)
+sampler2D s8 : register(s8);
+sampler2D s9 : register(s9);
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -77,10 +93,23 @@ float2 projectToUV(float3 p) {
 }
 
 float3 viewToWorldDir(float3 v) { return v.x * u_ViewToW0.xyz + v.y * u_ViewToW1.xyz + v.z * u_ViewToW2.xyz; }
+float3 worldToViewDir(float3 w) { return float3(dot(w, u_ViewToW0.xyz), dot(w, u_ViewToW1.xyz), dot(w, u_ViewToW2.xyz)); }
 float3 cameraWorld() { return float3(u_ViewToW0.w, u_ViewToW1.w, u_ViewToW2.w); }
+float3 worldPosition(float3 viewPos) { return cameraWorld() + viewToWorldDir(viewPos); }
+
+// Where a (static) world point was on screen in the previous frame. prevZ = its depth then.
+float2 reproject(float3 world, out float prevZ) {
+    float4 w = float4(world, 1.0);
+    float3 v = float3(dot(w, u_PrevView0), dot(w, u_PrevView1), dot(w, u_PrevView2));
+    prevZ = v.z;
+    float2 ndc = float2(v.x * u_PrevProj.x / v.z + u_PrevProj.z, v.y * u_PrevProj.y / v.z + u_PrevProj.w);
+    return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
 
 float ign(float2 pixel) {
-    // Interleaved gradient noise, animated per frame.
+    // Interleaved gradient noise. With TAA on it changes every frame, so the temporal
+    // filter averages it out (more effective samples for AO, shadows, clouds).
+    pixel += u_Temporal.z * 5.588238;
     return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
@@ -163,9 +192,56 @@ float4 PS_DownsampleND(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // ---------------------------------------------------------------------------------
+// Long-range shadows: a world-space height map (top view around the camera) is built
+// from the depth of every frame (pipeline.cpp splats the depth buffer into it). The sun
+// ray is traced through it, so shadows can be long and casters can be off screen.
+// Stored heights are offset by +10000 m; 0 = never seen.
+// ---------------------------------------------------------------------------------
+// s0 = previous height map, s1 = this frame's splat, u_Pass0.xy = uv shift of the map
+// origin since last frame, u_Pass0.z = 1 to drop the history, u_Pass0.w = decay (m)
+float4 PS_HeightMerge(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 puv = uv + u_Pass0.xy;
+    float previous = (u_Pass0.z > 0.5 || any(puv < 0.0) || any(puv > 1.0)) ? 0.0 : tex2Dlod(s0, float4(puv, 0, 0)).r;
+    float seen = tex2Dlod(s1, float4(uv, 0, 0)).r;
+    if (seen <= 0.0) return float4(previous, 0, 0, 1);
+    // Seen again: the new height wins, but walls only sink slowly. Points that hit a wall
+    // top in one frame may miss it in the next; moving cars must not leave a ridge behind.
+    return float4(previous > 0.0 ? max(seen, previous - u_Pass0.w) : seen, 0, 0, 1);
+}
+
+float4 PS_HeightSplat(float2 data : TEXCOORD0) : COLOR0 {
+    return float4(data.x, 0, 0, 1);
+}
+
+// s2 = height map. Returns 0 (lit) .. 1 (shadowed).
+float longShadow(float3 pView, float3 nView, float noise) {
+    float3 sun = u_SunWorld.xyz;
+    if (sun.y < 0.02) return 0.0;
+    float3 origin = worldPosition(pView) + viewToWorldDir(nView) * 0.2;
+    float range = u_HeightMap.w;
+    float steps = u_Quality.w;
+    float occlusion = 0.0;
+    [loop] for (int i = 0; i < (int)steps; i++) {
+        float t = (i + noise) / steps;
+        t = t * t * range + 0.7;
+        float3 q = origin + sun * t;
+        float2 m = (q.xz - u_HeightMap.xy) / u_HeightMap.z;
+        if (any(m < 0.0) || any(m > 1.0)) break;
+        float h = tex2Dlod(s2, float4(m, 0, 0)).r;
+        if (h > 0.0) {
+            // Soft edge that widens with distance (penumbra of the sun disc).
+            float above = h - 10000.0 - q.y - (0.35 + t * 0.012);
+            occlusion = max(occlusion, saturate(above / (0.3 + t * 0.04)));
+            if (occlusion > 0.99) break;
+        }
+    }
+    return occlusion;
+}
+
+// ---------------------------------------------------------------------------------
 // Pass 2: ambient occlusion + ray-marched sun shadows (half res)
-//   s0 = half normal/depth, s1 = full normal/depth
-//   out.r = AO visibility, out.g = sun visibility, out.a = 1
+//   s0 = half normal/depth, s1 = full normal/depth, s2 = height map (long shadows)
+//   out.r = AO visibility, out.g = sun visibility, out.b = long-shadow visibility
 // ---------------------------------------------------------------------------------
 float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float4 nd = tex2Dlod(s0, float4(uv, 0, 0));
@@ -224,14 +300,19 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         hit *= saturate(ndl * 6.0);
         sunVis = 1.0 - hit * saturate(1.5 - p.z / 300.0);
     }
-    return float4(ao, sunVis, 0, 1);
+    float longVis = 1.0;
+    if (u_Temporal.w > 0.0 && u_SunView.w > 0.5 && ndl > 0.0) {
+        longVis = 1.0 - longShadow(p, n, noise2) * u_Temporal.w;
+        sunVis = min(sunVis, longVis);
+    }
+    return float4(ao, sunVis, longVis, 1);
 }
 
 // Depth-aware separable blur of AO/shadow (half res).
 //   s0 = AO/shadow, s1 = half normal/depth, u_Pass0.xy = direction * texel
 float4 PS_BilateralBlur(float2 uv : TEXCOORD0) : COLOR0 {
     float4 centerND = tex2Dlod(s1, float4(uv, 0, 0));
-    float2 sum = 0;
+    float3 sum = 0;
     float wsum = 0;
     [unroll] for (int i = -4; i <= 4; i++) {
         float2 suv = uv + u_Pass0.xy * i;
@@ -239,10 +320,10 @@ float4 PS_BilateralBlur(float2 uv : TEXCOORD0) : COLOR0 {
         float w = exp(-i * i / 10.0);
         w *= exp(-abs(nd.w - centerND.w) / (0.02 * centerND.w + 0.05));
         w *= pow(saturate(dot(nd.xyz, centerND.xyz)), 4.0) + 0.001;
-        sum += tex2Dlod(s0, float4(suv, 0, 0)).rg * w;
+        sum += tex2Dlod(s0, float4(suv, 0, 0)).rgb * w;
         wsum += w;
     }
-    return float4(sum / max(wsum, 1e-4), 0, 1);
+    return float4(sum / max(wsum, 1e-4), 1);
 }
 
 // ---------------------------------------------------------------------------------
@@ -380,10 +461,9 @@ float4 diskSample(float3 x, float3 dir, float3 n, float3 e1, float3 e2) {
 // Black hole after Interstellar's Gargantua: light rays are traced through Schwarzschild
 // space-time, so the shadow, the photon ring and the disk lensed over and under the hole
 // all come out of the bending itself.
-float3 blackHoleSky(float3 rd) {
-    float3 bh = blackHoleDirection();
+//   bh = direction of the hole, dist = camera distance in Schwarzschild radii (size).
+float3 blackHoleSky(float3 rd, float3 bh, float dist) {
     float3x3 frame = skyFrame(bh);
-    float dist = 70.0 / u_Sky2.z;               // camera distance in Schwarzschild radii
     float cosA = dot(rd, bh);
     float angle = acos(clamp(cosA, -1.0, 1.0));
     // Disk plane: almost edge-on, the camera slightly above it, a little rolled.
@@ -501,6 +581,187 @@ float4 ringedPlanet(float3 rd, float3 light) {
     return result;
 }
 
+// ---------------------------------------------------------------------------------
+// Ring world (sky mode 5, after IterationT): a gas giant fills part of the sky, its rings
+// sweep over the stadium, moons hang in the distance and a black hole sits far away.
+// Units: planet radius = 1, camera at the origin. Lit by the game's sun.
+// ---------------------------------------------------------------------------------
+float3 dirFromAngles(float azimuth, float elevation) {
+    return float3(sin(azimuth) * cos(elevation), sin(elevation), cos(azimuth) * cos(elevation));
+}
+
+// Cloud bands of the planet. lat = -1..1 along the spin axis, lon = longitude (rad),
+// q = point on the unit sphere (for turbulence).
+float3 planetAlbedo(int type, float lat, float lon, float3 q) {
+    float t = u_Proj2.z * 0.004;
+    // Turbulent band edges: the latitude is warped by noise.
+    float warp = (noise3(q * 4.0 + float3(t, 0, 0)) - 0.5) * 0.09 + (noise3(q * 11.0 - float3(0, t, 0)) - 0.5) * 0.035;
+    float l = lat + warp;
+    float bands = noise3(float3(l * 9.0, 0.5, 1.5)) * 0.65 + noise3(float3(l * 27.0, 3.5, 0.5)) * 0.35;
+    float fine = noise3(float3(l * 70.0, lon * 0.4, 2.0));
+    float3 col;
+    if (type == 1) {
+        // Jupiter: cream zones, brown and rust belts, the Great Red Spot.
+        col = lerp(float3(0.55, 0.36, 0.24), float3(0.95, 0.88, 0.76), smoothstep(0.35, 0.65, bands));
+        col = lerp(col, float3(0.78, 0.5, 0.32), smoothstep(0.55, 0.8, fine) * 0.35);
+        float2 spot = float2((lon - 1.2) * 0.55, (lat + 0.38) * 2.2);
+        float swirl = noise3(float3(spot * 6.0, t * 3.0));
+        float oval = smoothstep(0.32, 0.18, length(spot) + (swirl - 0.5) * 0.08);
+        col = lerp(col, float3(0.8, 0.38, 0.24), oval * 0.85);
+    } else if (type == 2) {
+        // Ice giant: deep blue with faint bands, white methane streaks and a dark storm.
+        col = lerp(float3(0.13, 0.27, 0.72), float3(0.32, 0.52, 0.92), smoothstep(0.3, 0.7, bands));
+        float streak = smoothstep(0.72, 0.9, noise3(float3(l * 40.0, lon * 3.0, 7.0)));
+        col = lerp(col, float3(0.9, 0.95, 1.0), streak * 0.6);
+        float2 spot = float2((lon + 0.8) * 0.6, (lat + 0.25) * 2.4);
+        col *= 1.0 - smoothstep(0.22, 0.12, length(spot)) * 0.55;
+    } else if (type == 3) {
+        // Exotic: violet and rose bands with teal storms.
+        col = lerp(float3(0.42, 0.22, 0.62), float3(0.9, 0.6, 0.82), smoothstep(0.3, 0.7, bands));
+        col = lerp(col, float3(0.25, 0.7, 0.75), smoothstep(0.6, 0.85, fine) * 0.4);
+    } else {
+        // Saturn: pale gold, low-contrast bands, a bluish pole.
+        col = lerp(float3(0.78, 0.66, 0.45), float3(0.97, 0.9, 0.72), smoothstep(0.25, 0.75, bands));
+        col = lerp(col, float3(0.88, 0.8, 0.62), fine * 0.25);
+        col = lerp(col, float3(0.56, 0.64, 0.7), smoothstep(0.78, 0.95, abs(lat)));
+    }
+    return col;
+}
+
+float3 ringColor(int type) {
+    if (type == 1) return float3(0.75, 0.62, 0.5);
+    if (type == 2) return float3(0.62, 0.72, 0.85);
+    if (type == 3) return float3(0.7, 0.85, 1.0);
+    return float3(0.93, 0.84, 0.68);
+}
+
+// Ring particle density at radius rr (planet radii); x = position in the ring plane,
+// near = 0..1 how close the camera is (close up the rings break into clumps).
+float ringDensity(int type, float rr, float2 x, float near) {
+    float inner = 1.3, outer = type == 2 ? 2.0 : 2.45;
+    if (rr < inner || rr > outer) return 0.0;
+    float bands = 0.5 + 0.5 * noise3(float3(rr * 42.0, 0.0, 0.0)) * noise3(float3(rr * 11.0, 3.0, 0.0));
+    float d = bands * smoothstep(inner, inner + 0.06, rr) * smoothstep(outer, outer - 0.12, rr);
+    d *= 1.0 - 0.92 * smoothstep(0.02, 0.0, abs(rr - (inner + outer) * 0.5 - 0.17)); // Cassini division
+    d *= lerp(0.45, 1.0, smoothstep(1.55, 1.65, rr));                                 // faint inner ring
+    d *= lerp(1.0, 0.35 + 0.9 * noise3(float3(x * 600.0, rr * 300.0)), near);
+    if (type == 1) d *= 0.55; // Jupiter: dusty rings
+    if (type == 2) d *= 0.5;  // ice giant: thin rings
+    return saturate(d);
+}
+
+// Small rocky moon (direction, angular radius): colour and coverage.
+float4 moon(float3 rd, float3 dir, float radius, float3 light, float3 tint) {
+    float b = dot(rd, dir);
+    float disc = b * b - (1.0 - radius * radius);
+    if (disc <= 0.0 || b <= 0.0) return 0;
+    float3 x = rd * (b - sqrt(disc));
+    float3 nrm = normalize(x - dir);
+    float craters = noise3(nrm * 9.0) * 0.6 + noise3(nrm * 23.0) * 0.4;
+    float3 albedo = tint * (0.55 + 0.45 * craters);
+    return float4(albedo * (saturate(dot(nrm, light)) * 0.9 + 0.012), smoothstep(0.0, radius * radius * 0.08, disc));
+}
+
+float3 ringWorldSky(float3 rd) {
+    int type = (int)(u_Planet.x + 0.5);
+    float3 sun = u_SunWorld.xyz;
+    if (u_SunView.w < 0.5 || sun.y < -0.3) sun = normalize(float3(0.5, 0.35, -0.8)); // no usable game sun
+
+    // Background: stars, galaxy and a small, far black hole (with its lensing).
+    float3 bhDir = normalize(rotateY(float3(0.55, 0.22, -0.8), u_Sky.z));
+    float3 col = blackHoleSky(rd, bhDir, 70.0 / (u_Sky2.z * 0.28));
+    // The sun as a star.
+    float mu = dot(rd, sun);
+    col += u_SunColor.rgb * (smoothstep(0.99955, 0.9998, mu) * 6.0 + pow(saturate(mu), 300.0) * 0.6 + pow(saturate(mu), 20.0) * 0.03);
+
+    // Moons.
+    float4 m1 = moon(rd, normalize(rotateY(float3(-0.75, 0.38, -0.3), u_Sky.z)), 0.022, sun, float3(0.8, 0.78, 0.74));
+    col = lerp(col, m1.rgb, m1.a);
+    float4 m2 = moon(rd, normalize(rotateY(float3(0.2, 0.55, -0.9), u_Sky.z)), 0.009, sun, float3(0.85, 0.7, 0.55));
+    col = lerp(col, m2.rgb, m2.a);
+
+    // Planet placement. View 0: the classic distant view of a ringed planet. View 1: right
+    // next to the ring plane - the rings sweep towards the camera like a huge arch.
+    float3 dir = dirFromAngles(u_Planet.z, u_Planet.w);
+    float size = max(u_Sky2.w, 0.3);
+    bool ringPlane = u_Planet.y > 0.5;
+    float dist = ringPlane ? 2.75 : 5.5 / size;
+    float3 center = dir * dist;
+    // The ring plane contains the planet direction and leans over the sky.
+    float3 side = normalize(cross(float3(0, 1, 0), dir));
+    float lean = ringPlane ? 0.62 : 0.32;
+    float3 inPlane = normalize(side * cos(lean) + float3(0, 1, 0) * sin(lean));
+    float3 ringN = normalize(cross(inPlane, dir));
+    if (ringN.y < 0.0) ringN = -ringN;
+    // Camera slightly above the ring plane (ring-plane view) or well above it (distant).
+    float above = ringPlane ? 0.11 : dist * 0.22;
+    center -= ringN * (above + dot(center, ringN));
+    float3 axis = normalize(ringN + dir * 0.05);
+    // The planet's own star lights it from behind the viewer (a big gibbous planet, like in
+    // IterationT) instead of the game's sun, which is often behind it.
+    sun = normalize(-dir * 0.55 + side * 0.65 + float3(0, 0.5, 0));
+
+    // Planet sphere.
+    float b = dot(rd, center);
+    float disc = b * b - (dot(center, center) - 1.0);
+    float tPlanet = (disc > 0.0 && b > 0.0) ? b - sqrt(disc) : 1e9;
+    // Ring plane.
+    float denom = dot(rd, ringN);
+    float tRing = abs(denom) > 1e-6 ? dot(center, ringN) / denom : -1.0;
+
+    float3 planetCol = 0;
+    float planetA = 0.0;
+    if (tPlanet < 1e8) {
+        float3 x = rd * tPlanet;
+        float3 nrm = normalize(x - center);
+        float lat = dot(nrm, axis);
+        float3 e1 = normalize(cross(axis, float3(0.3, 0.1, 0.9)));
+        float lon = atan2(dot(nrm, cross(axis, e1)), dot(nrm, e1)) + u_Proj2.z * 0.01;
+        float cl = sqrt(saturate(1.0 - lat * lat));
+        float3 local = float3(cos(lon) * cl, lat, sin(lon) * cl);
+        float3 albedo = planetAlbedo(type, lat, lon, local);
+        float ndl = dot(nrm, sun);
+        float lit = smoothstep(-0.06, 0.4, ndl);
+        // Shadow of the rings on the planet.
+        float dl = dot(sun, ringN);
+        float tl = abs(dl) > 1e-4 ? dot(center - x, ringN) / dl : -1.0;
+        float3 sx = x + sun * tl - center;
+        float ringShadow = tl > 0.0 ? 1.0 - ringDensity(type, length(sx), sx.xz, 0.0) * 0.75 : 1.0;
+        float rim = pow(1.0 - saturate(dot(nrm, -rd)), 3.0);
+        float3 atmo = type == 2 ? float3(0.4, 0.6, 1.0) : (type == 3 ? float3(0.8, 0.5, 1.0) : float3(1.0, 0.85, 0.65));
+        planetCol = albedo * (lit * ringShadow * 0.7 + 0.012) + atmo * rim * saturate(ndl + 0.3) * 0.35;
+        planetA = smoothstep(0.0, 0.002 * dist, disc); // soft limb
+    }
+    float3 ringCol = 0;
+    float ringA = 0.0;
+    if (tRing > 0.0) {
+        float3 x = rd * tRing - center;
+        float rr = length(x);
+        float2 px = float2(dot(x, inPlane), dot(x, dir));
+        float d = ringDensity(type, rr, px, saturate(1.0 - tRing / 1.2));
+        if (d > 0.0) {
+            // Shadow of the planet on the rings.
+            float3 wp = rd * tRing;
+            float lb = dot(sun, center - wp);
+            float lc = dot(center - wp, center - wp) - 1.0;
+            float shadow = (lb > 0.0 && lb * lb - lc > 0.0) ? 0.06 : 1.0;
+            // Lit side, or back-lit with forward scattering through the ring.
+            bool litSide = dot(sun, ringN) * -denom > 0.0;
+            float front = 0.35 + 0.65 * saturate(abs(dot(sun, ringN)) * 2.0);
+            float forward = pow(saturate(dot(rd, sun)), 6.0) * 1.5;
+            ringCol = ringColor(type) * (litSide ? front : front * 0.35 + forward) * shadow * 0.65;
+            ringA = d * 0.9;
+        }
+    }
+    // Composite back to front.
+    if (tRing > 0.0 && tRing < tPlanet) {
+        col = lerp(lerp(col, planetCol, planetA), ringCol, ringA);
+    } else {
+        col = lerp(lerp(col, ringCol, ringA), planetCol, planetA);
+    }
+    return col;
+}
+
 // Aurora: a folded curtain line (level set of a warped noise field) sampled on stacked
 // altitude slices. Many jittered slices blend into smooth vertical veils.
 float noise2(float2 p) {
@@ -580,10 +841,12 @@ float3 customSky(float3 rd) {
         float4 planet = ringedPlanet(rd, moon);
         c = c * (1.0 - planet.a) + planet.rgb * 0.5;
     } else if (mode == 3) {
-        c = blackHoleSky(rd);
+        c = blackHoleSky(rd, blackHoleDirection(), 70.0 / u_Sky2.z);
         float3 pdir = normalize(rotateY(float3(-0.62, 0.14, 0.8), u_Sky.z));
         float4 planet = ringedPlanet(rd, normalize(blackHoleDirection() * 0.45 - pdir * 0.75 + float3(0, 0.35, 0)));
         c = c * (1.0 - planet.a) + planet.rgb;
+    } else if (mode == 5) {
+        c = ringWorldSky(rd);
     } else {
         c = auroraSky(rd);
     }
@@ -625,15 +888,279 @@ float4 PS_SkyAverage(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // ---------------------------------------------------------------------------------
+// Volumetric clouds (half res): a ray-marched cumulus layer, lit by the sun. Rendered
+// for every pixel as if it were sky; the lighting pass composites it over sky pixels.
+//   s7 = tiling cloud noise (r: Perlin-Worley, g/b/a: Worley octaves)
+//   out.rgb = in-scattered light, out.a = transmittance
+// ---------------------------------------------------------------------------------
+float cloudShape(float3 p, float heightFrac) {
+    float3 wind = float3(u_Proj2.z * 9.0, 0.0, u_Proj2.z * 3.5) * (0.4 + u_Nature.z);
+    float4 n = tex3Dlod(s7, float4((p + wind) / 5600.0, 0));
+    float shape = n.r * 0.75 + n.g * 0.25;
+    // Flat, dense bottoms and rounded, thinning tops.
+    float profile = smoothstep(0.0, 0.12, heightFrac) * smoothstep(1.0, 0.45, heightFrac);
+    float coverage = u_Clouds.y;
+    return saturate((shape * profile - (1.0 - coverage)) / max(coverage, 0.05));
+}
+
+float cloudDensity(float3 p, float heightFrac) {
+    float d = cloudShape(p, heightFrac);
+    if (d <= 0.0) return 0.0;
+    // Erode the edges with finer noise (wisps).
+    float3 wind = float3(u_Proj2.z * 16.0, -u_Proj2.z * 3.0, u_Proj2.z * 6.0) * (0.4 + u_Nature.z);
+    float4 n = tex3Dlod(s7, float4((p + wind) / 1300.0, 0));
+    float erode = (1.0 - (n.g * 0.5 + n.b * 0.3 + n.a * 0.2)) * 0.45;
+    return saturate((d - erode) / (1.0 - erode));
+}
+
+float4 PS_Clouds(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float3 rd = viewToWorldDir(normalize(viewPosition(uv, 1.0)));
+    float base = u_Clouds.z, thickness = u_Clouds.w;
+    float camY = u_UpView.w;
+    if (rd.y < 0.012 || camY > base) return float4(0, 0, 0, 1);
+    float t0 = (base - camY) / rd.y;
+    float t1 = min((base + thickness - camY) / rd.y, t0 + thickness * 5.0);
+    float steps = u_Quality.z;
+    float dt = (t1 - t0) / steps;
+    float t = t0 + dt * ign(vpos);
+    float3 cam = cameraWorld();
+
+    bool sunKnown = u_SunView.w > 0.5;
+    float3 sun = sunKnown ? u_SunWorld.xyz : float3(0, 1, 0);
+    float mu = dot(rd, sun);
+    // Dual-lobe phase: bright silver lining towards the sun, some back scattering.
+    float phase = (henyeyGreenstein(mu, 0.6) * 0.7 + henyeyGreenstein(mu, -0.2) * 0.3) * 4.0 * PI;
+    float day = sunKnown ? u_SunWorld.w : 0.2;
+    float3 sunLight = u_SunColor.rgb / max(luma(u_SunColor.rgb), 0.1) * 1.8 * day;
+    float4 skyAvg = tex2Dlod(s4, float4(0.5, 0.5, 0, 0));
+    float3 ambient = lerp(skyAvg.rgb, u_SkyColor.rgb * 0.45, 0.5) * (0.35 + 0.65 * day);
+
+    float transmittance = 1.0;
+    float3 scattered = 0;
+    [loop] for (int i = 0; i < (int)steps; i++) {
+        float3 pos = cam + rd * t;
+        float hf = (pos.y - base) / thickness;
+        float d = cloudDensity(pos, hf);
+        if (d > 0.003) {
+            // Optical depth towards the sun (4 growing steps through the coarse shape).
+            float od = 0.0;
+            [unroll] for (int j = 1; j <= 4; j++) {
+                float3 lp = pos + sun * (j * j * 55.0);
+                od += cloudShape(lp, (lp.y - base) / thickness) * (j * 2 - 1) * 55.0;
+            }
+            // Beer's law plus a softer term standing in for multiple scattering.
+            float lightT = max(exp(-od * 0.012), exp(-od * 0.003) * 0.35);
+            float powder = 1.0 - exp(-d * 6.0);
+            float3 light = sunLight * lightT * phase * lerp(0.6, 1.0, powder) + ambient * lerp(0.45, 1.1, hf);
+            float stepT = exp(-0.03 * d * dt);
+            scattered += transmittance * light * (1.0 - stepT);
+            transmittance *= stepT;
+            if (transmittance < 0.02) break;
+        }
+        t += dt;
+    }
+    // Far clouds dissolve into the horizon haze.
+    float fade = exp(-t0 / 22000.0) * smoothstep(0.012, 0.07, rd.y);
+    return float4(scattered * fade, lerp(1.0, transmittance, fade));
+}
+
+// ---------------------------------------------------------------------------------
+// Surfaces: grass, wet roads, puddles, water. The masks are shared by the reflection
+// pass and the lighting pass.
+// ---------------------------------------------------------------------------------
+float grassMask(float3 c, float3 nWorld, float emissive) {
+    float greenness = (c.g - max(c.r, c.b)) / max(c.g, 1e-3);
+    return smoothstep(0.22, 0.42, greenness) * smoothstep(0.55, 0.85, nWorld.y) * (1.0 - emissive) * step(c.g, 0.6);
+}
+
+float puddleMask(float3 world, float flatness, float grass) {
+    if (u_Weather.z <= 0.0) return 0.0;
+    float n = noise2(world.xz * 0.16) * 0.65 + noise2(world.xz * 0.55 + 13.0) * 0.35;
+    float threshold = 0.8 - u_Weather.z * 0.32;
+    return smoothstep(threshold, threshold + 0.18, n) * flatness * (1.0 - grass) * saturate(u_Weather.x * 2.0);
+}
+
+// Open water (TMUF Island/Bay/Coast): flat, blue.
+float waterMask(float3 c, float3 nWorld, float emissive) {
+    if (u_Weather.w <= 0.0) return 0.0;
+    float blue = (c.b - max(c.r, c.g * 0.8)) / max(c.b, 1e-3);
+    return smoothstep(0.15, 0.35, blue) * smoothstep(0.93, 0.99, nWorld.y) * (1.0 - emissive) * u_Weather.w;
+}
+
+// Expanding rings where raindrops hit standing water. Returns the surface slope.
+float2 rippleSlope(float2 xz, float t) {
+    float2 g = 0;
+    [unroll] for (int k = 0; k < 2; k++) {
+        float2 q = xz * 2.3 + k * 3.71;
+        float2 cell = floor(q);
+        float2 f = frac(q) - 0.5;
+        float h = hash12(cell + k * 17.0);
+        float2 center = (float2(h, hash12(cell + 5.3)) - 0.5) * 0.4;
+        float phase = frac(t * 1.2 + h * 7.0);
+        float2 d = f - center;
+        float dl = length(d);
+        float x = dl - phase * 0.5;
+        float wave = cos(x * 45.0) * exp(-x * x * 300.0) * (1.0 - phase);
+        g += d / max(dl, 1e-3) * wave;
+    }
+    return g * 0.3;
+}
+
+// Gentle swell plus fine chop for open water.
+float2 waveSlope(float2 xz, float t) {
+    float2 g = 0;
+    float2 d0 = float2(0.8, 0.6), d1 = float2(-0.4, 0.92), d2 = float2(0.97, -0.24), d3 = float2(-0.7, -0.7);
+    g += d0 * cos(dot(d0, xz) * 0.9 + t * 1.3) * 0.05;
+    g += d1 * cos(dot(d1, xz) * 1.7 + t * 1.9) * 0.035;
+    g += d2 * cos(dot(d2, xz) * 3.1 + t * 2.6) * 0.025;
+    g += d3 * cos(dot(d3, xz) * 5.3 + t * 3.4) * 0.015;
+    float2 q = xz * 2.0 + t * 0.6;
+    g += float2(noise2(q + float2(0.08, 0)) - noise2(q - float2(0.08, 0)), noise2(q + float2(0, 0.08)) - noise2(q - float2(0, 0.08))) * 0.35;
+    return g;
+}
+
+// Short grass blades seen through a few height layers (parallax), swaying in the wind.
+// Returns a brightness factor for the grass albedo.
+float grassBlades(float3 ground, float3 rd, float t) {
+    const float H = 0.09;
+    float cosView = max(-rd.y, 0.12);
+    [loop] for (int k = 0; k < 6; k++) {
+        float h = H * (1.0 - (k + 0.5) / 6.0);
+        float3 p = ground - rd * (h / cosView);
+        float2 q = p.xz / 0.04;
+        float2 cell = floor(q);
+        float2 f = frac(q);
+        float r1 = hash12(cell), r2 = hash12(cell + 7.31);
+        float bladeH = H * (0.5 + 0.5 * r1);
+        if (h < bladeH) {
+            float k01 = h / bladeH;
+            float2 sway = float2(sin(t * 1.9 + cell.x * 0.37 + cell.y * 0.11), cos(t * 1.4 + cell.y * 0.29)) * (0.1 + 0.25 * u_Nature.z) * k01 * k01;
+            float2 center = 0.5 + (float2(r1, r2) - 0.5) * 0.5 + sway;
+            float width = 0.3 * (1.0 - k01 * 0.85);
+            if (length(f - center) < width) return lerp(0.62, 1.22, k01) * (0.9 + 0.2 * r2);
+        }
+    }
+    return 0.5; // looking between the blades: shaded ground
+}
+
+float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
+    // Patches of fresher and drier grass.
+    float n = noise2(world.xz * 0.045) * 0.6 + noise2(world.xz * 0.17 + 7.0) * 0.4;
+    float3 g = c * lerp(0.86, 1.12, n);
+    g = lerp(g, g * float3(1.18, 1.06, 0.72), smoothstep(0.62, 0.85, n) * 0.35);
+    // Mowing stripes, 8 m wide along the block grid. Like real mowed grass they swap
+    // bright and dark depending on which way you look along them.
+    if (u_Nature.y > 0.0) {
+        float stripe = clamp(sin(world.x * PI / 8.0) * 4.0, -1.0, 1.0);
+        float2 v = normalize(rd.xz + 1e-4);
+        g *= 1.0 + (stripe * v.y * 0.15 + 0.02) * u_Nature.y;
+    }
+    // Blades close to the camera, faded out before they would shimmer.
+    if (u_Nature.x > 0.0) {
+        float footprint = dist * 2.0 / (abs(u_Proj.y) * u_Screen.y); // metres per pixel
+        float fade = smoothstep(0.03, 0.012, footprint);
+        if (fade > 0.0) g *= lerp(1.0, grassBlades(world, rd, u_Proj2.z), fade * u_Nature.x);
+    }
+    return lerp(c, g, mask);
+}
+
+// Rain streaks on three cylinders around the camera (1.5 - 9 m away), hidden behind
+// closer geometry. Returns the streak coverage.
+float rainStreaks(float3 rd, float sceneDist) {
+    float az = atan2(rd.x, rd.z);
+    float horiz = max(sqrt(saturate(1.0 - rd.y * rd.y)), 0.05);
+    float elevation = rd.y / horiz;
+    float mppScale = 2.0 / (abs(u_Proj.y) * u_Screen.y); // metres per pixel at 1 m
+    float acc = 0.0;
+    [unroll] for (int l = 0; l < 3; l++) {
+        float d = l == 0 ? 1.5 : (l == 1 ? 3.6 : 9.0);
+        if (sceneDist > d) {
+            float2 q = float2(az * d, elevation * d);
+            q.x += q.y * 0.12 * u_Nature.z;            // wind slant
+            q.y += u_Proj2.z * (7.5 + l * 0.6);        // falling
+            float2 cellSize = float2(0.16, 1.25);
+            float2 cell = floor(q / cellSize);
+            float2 f = frac(q / cellSize);
+            float h = hash12(cell + l * 31.0);
+            if (h < u_Weather.y * 0.85) {
+                // Everything else about the drop comes from the same hash.
+                float h2 = frac(h * 97.31), h3 = frac(h * 57.17), h4 = frac(h * 23.93);
+                float width = max(0.0012, d * mppScale * 0.75);
+                float dx = abs(f.x - (0.2 + 0.6 * h2)) * cellSize.x;
+                float len = 0.3 + 0.4 * h3;
+                float y0 = h4 * (1.0 - len);
+                float inY = smoothstep(y0, y0 + 0.08, f.y) * smoothstep(y0 + len, y0 + len - 0.12, f.y);
+                acc += saturate(1.0 - dx / width) * (0.0012 / width) * inY * (1.0 - l * 0.2);
+            }
+        }
+    }
+    return acc;
+}
+
+float3 skyReflection(float3 r, float4 skyAvg, float daylight) {
+    float3 zenith = u_SkyColor.rgb * (0.2 + 0.8 * daylight) * 0.8;
+    return lerp(skyAvg.rgb, zenith, saturate(r.y * 1.5));
+}
+
+// ---------------------------------------------------------------------------------
+// Screen-space reflections (half res) for wet roads, puddles and water.
+//   s0 = scene colour (sRGB), s1 = full normal/depth, s2 = half normal/depth
+//   out.rgb = reflected colour (linear), out.a = hit confidence
+// ---------------------------------------------------------------------------------
+float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float4 nd = tex2Dlod(s2, float4(uv, 0, 0));
+    if (nd.w >= SKY_Z) return 0;
+    float3 nWorld = viewToWorldDir(nd.xyz);
+    bool glossy = (u_Weather.x > 0.0 || u_Nature.w > 0.0) && nWorld.y > 0.5;
+    bool water = u_Weather.w > 0.0 && nWorld.y > 0.9;
+    if (!glossy && !water) return 0;
+
+    float3 p = viewPosition(uv, nd.w);
+    float3 r = reflect(normalize(p), nd.xyz);
+    float maxDist = min(120.0, nd.w * 1.5 + 25.0);
+    float noise = ign(vpos);
+    float tPrev = 0.05;
+    [loop] for (int i = 1; i <= 16; i++) {
+        float t = (i - 1 + noise) / 16.0;
+        t = t * t * maxDist + 0.1;
+        float3 q = p + r * t;
+        if (q.z < 0.25) break;
+        float2 quv = projectToUV(q);
+        if (any(quv < 0.0) || any(quv > 1.0)) break;
+        float delta = q.z - tex2Dlod(s1, float4(quv, 0, 0)).w;
+        if (delta > 0.0 && delta < 0.4 + t * 0.1) {
+            // Refine between the last two steps.
+            float a = tPrev, b = t;
+            [unroll] for (int k = 0; k < 4; k++) {
+                float m = (a + b) * 0.5;
+                float3 qm = p + r * m;
+                if (qm.z - tex2Dlod(s1, float4(projectToUV(qm), 0, 0)).w > 0.0) b = m; else a = m;
+            }
+            quv = projectToUV(p + r * b);
+            float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
+            float confidence = saturate(edge * 10.0) * saturate((1.0 - t / maxDist) * 3.0);
+            float3 hit = toLinear(tex2Dlod(s0, float4(quv, 0, 0)).rgb);
+            // Light sources stay bright in the reflection.
+            float peak = max(hit.r, max(hit.g, hit.b));
+            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak);
+            return float4(hit, confidence);
+        }
+        tPrev = t;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------------
 // Pass 4: lighting composite -> HDR (full res)
 //   s0 = scene colour (sRGB), s1 = full normal/depth, s2 = AO/shadow (half, blurred),
-//   s3 = half normal/depth, s4 = sky average (1x1), s5 = custom sky
+//   s3 = half normal/depth, s4 = sky average (1x1), s5 = custom sky, s6 = clouds,
+//   s8 = reflections (half), s9 = neon light spill (quarter)
 // ---------------------------------------------------------------------------------
-float2 upsampleOcclusion(float2 uv, float z, float3 n) {
+float3 upsampleOcclusion(float2 uv, float z, float3 n) {
     // Joint bilateral upsample from half resolution.
     float2 halfTexel = u_Screen.zw * 2.0;
     float2 base = (floor(uv / halfTexel - 0.5) + 0.5) * halfTexel;
-    float2 sum = 0;
+    float3 sum = 0;
     float wsum = 0;
     [unroll] for (int j = 0; j < 2; j++) {
         [unroll] for (int i = 0; i < 2; i++) {
@@ -643,65 +1170,80 @@ float2 upsampleOcclusion(float2 uv, float z, float3 n) {
             float w = max(f.x * f.y, 0.001);
             w *= exp(-abs(nd.w - z) / (0.03 * z + 0.05));
             w *= pow(saturate(dot(nd.xyz, n)), 8.0) + 0.002;
-            sum += tex2Dlod(s2, float4(suv, 0, 0)).rg * w;
+            sum += tex2Dlod(s2, float4(suv, 0, 0)).rgb * w;
             wsum += w;
         }
     }
     return wsum > 1e-4 ? sum / wsum : 1.0;
 }
 
-float4 PS_Lighting(float2 uv : TEXCOORD0) : COLOR0 {
+// Light sources in the game's LDR image: lamps and neon strips. Returns 0..1.
+//   c = linear colour, nWorld = world normal (for sun glare on the road)
+float emissiveAmount(float2 uv, float3 c, float3 nWorld) {
+    float peak = max(c.r, max(c.g, c.b));
+    if (peak <= 0.5) return 0.0;
+    float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
+    // Erode: a light covers a few pixels. Single bright texels (specular glints on
+    // asphalt lit by floodlights) are texture detail and must not turn into lights.
+    [unroll] for (int e = 0; e < 4; e++) {
+        float2 eo = float2(e == 0 || e == 2 ? -1.5 : 1.5, e < 2 ? -1.5 : 1.5) * u_Screen.zw;
+        float3 ec = toLinear(tex2Dlod(s0, float4(uv + eo, 0, 0)).rgb);
+        peak = min(peak, max(ec.r, max(ec.g, ec.b)));
+    }
+    float surround = 0.0;
+    float2 r = float2(0.012 * u_Screen.y * u_Screen.z, 0.012);
+    [unroll] for (int k = 0; k < 8; k++) {
+        float a = k * (PI / 4.0) + 0.39;
+        float3 sc = toLinear(tex2Dlod(s0, float4(uv + float2(cos(a), sin(a)) * r, 0, 0)).rgb);
+        surround += max(sc.r, max(sc.g, sc.b));
+    }
+    surround /= 8.0;
+    // Clearly brighter than the surroundings (lamps at night) ...
+    float contrast = saturate((peak - surround) * 3.0) * pow(smoothstep(0.75, 1.0, peak), 2.0);
+    // ... or a strongly coloured bright strip (neon), which glows in daylight too.
+    float neon = smoothstep(0.5, 0.8, sat) * smoothstep(0.5, 0.85, peak);
+    float amount = max(contrast, neon * 0.75);
+    // The sun's glare on the road is a reflection, not a light: white and facing up.
+    return amount * (1.0 - smoothstep(0.7, 0.9, nWorld.y) * (1.0 - smoothstep(0.3, 0.6, sat)));
+}
+
+float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 srgb = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
     float3 c = toLinear(srgb);
     float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
     float3 rdView = normalize(viewPosition(uv, 1.0));
     float3 rd = viewToWorldDir(rdView);
     float daylight = u_SunWorld.w;
+    float4 skyAvg = tex2Dlod(s4, float4(0.5, 0.5, 0, 0));
 
-    // Expand the LDR image back toward HDR: near-white geometry pixels are light sources
-    // (lamps, neon strips, reflections). The sky only gets this close to the sun.
-    // Large bright areas (sun glare on the road, white walls) are surfaces, not lights:
-    // only pixels clearly brighter than their surroundings (neon strips, lamps) qualify.
-    float peak = max(c.r, max(c.g, c.b));
-    float emissive = 0.0;
-    if (nd.w < SKY_Z && peak > 0.6) {
-        // Erode: a light covers a few pixels. Single bright texels (specular glints on
-        // asphalt lit by floodlights) are texture detail and must not turn into lights.
-        [unroll] for (int e = 0; e < 4; e++) {
-            float2 eo = float2(e == 0 || e == 2 ? -1.5 : 1.5, e < 2 ? -1.5 : 1.5) * u_Screen.zw;
-            float3 ec = toLinear(tex2Dlod(s0, float4(uv + eo, 0, 0)).rgb);
-            peak = min(peak, max(ec.r, max(ec.g, ec.b)));
-        }
-        float surround = 0.0;
-        float2 r = float2(0.012 * u_Screen.y * u_Screen.z, 0.012);
-        [unroll] for (int k = 0; k < 8; k++) {
-            float a = k * (PI / 4.0) + 0.39;
-            float3 sc = toLinear(tex2Dlod(s0, float4(uv + float2(cos(a), sin(a)) * r, 0, 0)).rgb);
-            surround += max(sc.r, max(sc.g, sc.b));
-        }
-        surround /= 8.0;
-        emissive = saturate((peak - surround) * 3.0) * pow(smoothstep(0.75, 1.0, peak), 2.0);
-    }
-    float3 glow = c * u_Rays.w * emissive;
-
-    if (nd.w >= SKY_Z && u_Sky.x > 0.5) return float4(tex2Dlod(s5, float4(uv, 0, 0)).rgb, 1);
     if (nd.w >= SKY_Z) {
-        // Sky: richer gradient, glow around the sun.
-        float horizon = 1.0 - saturate(rd.y * 3.0);
-        float3 graded = lerp(c, c * c / max(luma(c), 1e-3), 0.35); // deepen saturation
-        graded *= 1.0 + horizon * 0.25;
-        c = lerp(c, graded, u_Atmo.w);
-        if (u_SunView.w > 0.5) {
-            float mu = dot(rd, u_SunWorld.xyz);
-            c += sunScatter(rd, u_Rays.z * 0.5) * daylight;
-            c += u_SunColor.rgb * smoothstep(0.9994, 0.99975, mu) * 2.0 * u_Rays.z * daylight; // sun disk
+        if (u_Sky.x > 0.5) {
+            c = tex2Dlod(s5, float4(uv, 0, 0)).rgb;
+        } else {
+            // Game sky: richer gradient, glow around the sun.
+            float horizon = 1.0 - saturate(rd.y * 3.0);
+            float3 graded = lerp(c, c * c / max(luma(c), 1e-3), 0.35); // deepen saturation
+            graded *= 1.0 + horizon * 0.25;
+            c = lerp(c, graded, u_Atmo.w);
+            if (u_SunView.w > 0.5) {
+                float mu = dot(rd, u_SunWorld.xyz);
+                c += sunScatter(rd, u_Rays.z * 0.5) * daylight;
+                // Sun disc and a tight halo (feeds the bloom).
+                c += u_SunColor.rgb * (smoothstep(0.9994, 0.99975, mu) * 3.0 + pow(saturate(mu), 900.0) * 0.6) * u_Rays.z * daylight;
+            }
         }
+        if (u_Clouds.x > 0.0) {
+            float4 cloud = tex2Dlod(s6, float4(uv, 0, 0));
+            c = c * lerp(1.0, cloud.a, u_Clouds.x) + cloud.rgb * u_Clouds.x;
+        }
+        if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + 0.03) * rainStreaks(rd, SKY_Z) * 1.0;
         return float4(c, 1);
     }
 
     float3 n = nd.xyz;
     float3 p = viewPosition(uv, nd.w);
-    float2 occ = upsampleOcclusion(uv, nd.w, n);
+    float3 occ = upsampleOcclusion(uv, nd.w, n);
+    float dist = length(p);
 
     // Low-frequency normal for relighting: averages neighbours on the same surface so
     // reconstruction noise (z-fighting decals, mesh seams) doesn't flicker the sun term.
@@ -713,28 +1255,99 @@ float4 PS_Lighting(float2 uv : TEXCOORD0) : COLOR0 {
         nLight += s4.xyz * (abs(s4.w - nd.w) < 0.02 * nd.w ? 1.0 : 0.0);
     }
     nLight = normalize(nLight);
+    float3 nWorld = viewToWorldDir(nLight);
+    float3 world = worldPosition(p);
+    float flatness = smoothstep(0.8, 0.97, nWorld.y);
+
+    // Expand the LDR image back toward HDR: light sources glow.
+    float emissive = emissiveAmount(uv, c, nWorld);
+    float3 glow = c * u_Rays.w * emissive;
+
+    // The game bakes a bright sun glare into the asphalt; tame it so the road doesn't
+    // wash out to white (it's a reflection, it gets its sun highlight further down).
+    float sat = (max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3);
+    // Below the tonemapper's knee the asphalt keeps its texture contrast.
+    float glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, luma(c)) * (1.0 - smoothstep(0.25, 0.5, sat));
+    c *= lerp(1.0, 0.6, glare);
+
+    // --- Grass ---
+    float grass = grassMask(c, nWorld, emissive);
+    if (u_Nature.x + u_Nature.y > 0.0 && grass > 0.0) c = grassDetail(c, world, rd, dist, grass);
+
+    // --- Wet surfaces, puddles, water ---
+    float wet = u_Weather.x * (1.0 - grass * 0.5) * (1.0 - emissive);
+    float puddle = puddleMask(world, flatness, grass) * (1.0 - emissive);
+    float water = waterMask(c, nWorld, emissive);
+    float reflectivity = max(max(wet * lerp(0.12, 0.55, flatness), puddle), water);
+    reflectivity = max(reflectivity, u_Nature.w * flatness * (1.0 - grass) * (1.0 - emissive) * 0.35);
+    float2 slope = 0;
+    if (reflectivity > 0.0) {
+        float t = u_Proj2.z;
+        if (u_Weather.y > 0.0) slope = rippleSlope(world.xz, t) * u_Weather.y * (puddle + water + wet * 0.25);
+        if (water > 0.0) slope += waveSlope(world.xz, t) * water;
+        // Rough wet asphalt breaks the reflection up.
+        if (wet > 0.0) {
+            float2 q = world.xz * 6.0;
+            slope += (float2(noise2(q), noise2(q + 9.7)) - 0.5) * 0.12 * wet * (1.0 - puddle);
+        }
+    }
+    float3 nRefl = normalize(nWorld + float3(-slope.x, 0.0, -slope.y));
+    // Water fills the pores: wet asphalt and puddles are darker.
+    c *= lerp(1.0, 0.62, wet * lerp(0.4, 1.0, flatness)) * lerp(1.0, 0.6, puddle) * lerp(1.0, 0.55, water);
+
+    // --- Sun and sky light ---
     float ao = lerp(1.0, occ.r, u_Light.x);
     float sunVis = occ.g;
-
+    float shadow = 1.0;
     if (u_SunView.w > 0.5) {
         float ndl = saturate(dot(nLight, u_SunView.xyz));
-        float shadow = lerp(1.0, sunVis, u_Light.z * saturate(ndl * 4.0));
+        shadow = lerp(1.0, sunVis, u_Light.z * saturate(ndl * 4.0));
         // In shadow: lose direct light and take on the sky's colour.
         float3 skyTint = u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3);
         float shadowed = (1.0 - shadow);
-        c *= lerp(1.0, 0.36, shadowed);
+        c *= lerp(1.0, 0.32, shadowed);
         c *= lerp(float3(1, 1, 1), skyTint, u_SkyColor.w * saturate(shadowed + (1.0 - ndl) * 0.35));
         // In sunlight: warm directional light.
         float lit = ndl * shadow * daylight;
         float3 sunTint = u_SunColor.rgb / max(luma(u_SunColor.rgb), 1e-3);
-        c *= lerp(float3(1, 1, 1), sunTint * 1.12, u_SunColor.w * lit);
+        c *= lerp(float3(1, 1, 1), sunTint * 1.15, u_SunColor.w * lit);
+        // Grass is translucent: back-lit blades glow.
+        if (grass > 0.0) c += c * sunTint * pow(saturate(dot(rd, u_SunWorld.xyz)), 4.0) * grass * lit * 0.6;
     }
     c *= ao;
     // Ambient occlusion also tints toward the sky colour (bounce from the sky dome).
     c *= lerp(u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3), float3(1, 1, 1), lerp(1.0, ao, 0.5 * u_SkyColor.w));
 
+    // Neon light spilling onto nearby surfaces (screen-space, blurred light buffer).
+    if (u_Light2.x > 0.0) {
+        float3 spill = tex2Dlod(s9, float4(uv, 0, 0)).rgb;
+        c += spill * u_Light2.x * 4.0 * lerp(0.15, 1.0, saturate(luma(c) * 5.0)) * ao * (1.0 - emissive);
+    }
+
+    // --- Reflections ---
+    if (reflectivity > 0.0) {
+        float3 r = reflect(rd, nRefl);
+        float NdotV = saturate(dot(nRefl, -rd));
+        // Standing water reads as a mirror even from above (the eye adapts to it).
+        float F = max(0.02 + 0.98 * pow(1.0 - NdotV, 5.0), max(puddle, water) * 0.1);
+        float smoothness = max(max(puddle, water), wet * 0.35);
+        float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.04;
+        float4 ssr = tex2Dlod(s8, float4(uv + distort, 0, 0));
+        float3 refl = lerp(skyReflection(r, skyAvg, daylight), ssr.rgb, ssr.a);
+        c = lerp(c, refl, saturate(F * reflectivity * lerp(0.6, 1.0, smoothness)));
+        // Sun glint (GGX): sharp on puddles and water, broad on wet asphalt.
+        if (u_SunView.w > 0.5) {
+            float rough = lerp(0.35, 0.05, smoothness);
+            float a2 = rough * rough * rough * rough;
+            float3 h = normalize(u_SunWorld.xyz - rd);
+            float nh = saturate(dot(nRefl, h));
+            float dd = nh * nh * (a2 - 1.0) + 1.0;
+            float spec = min(a2 / (PI * dd * dd) * F * 0.25, 30.0) * saturate(dot(nRefl, u_SunWorld.xyz));
+            c += u_SunColor.rgb * spec * reflectivity * shadow * daylight * 0.5;
+        }
+    }
+
     // Aerial perspective: exponential height fog lit by the sky and the sun.
-    float dist = length(p);
     float density = u_Atmo.x * 0.0009;
     float falloff = max(u_Atmo.y * 0.012, 1e-4);
     float camY = u_UpView.w;
@@ -742,7 +1355,6 @@ float4 PS_Lighting(float2 uv : TEXCOORD0) : COLOR0 {
     float fogAmount = density * exp(-camY * falloff) * (1.0 - exp(-dist * rdy * falloff)) / (abs(rdy) > 1e-4 ? rdy * falloff : 1e-4 * falloff);
     if (abs(rdy) <= 1e-4) fogAmount = density * exp(-camY * falloff) * dist;
     fogAmount = 1.0 - exp(-max(fogAmount, 0.0));
-    float4 skyAvg = tex2Dlod(s4, float4(0.5, 0.5, 0, 0));
     float3 fogColor = lerp(u_SkyColor.rgb * 0.7 * (0.3 + 0.7 * daylight), skyAvg.rgb, skyAvg.a * 0.75);
     if (u_SunView.w > 0.5) fogColor += sunScatter(rd, u_Atmo.z * 0.6) * daylight;
     c = lerp(c, fogColor, saturate(fogAmount));
@@ -752,7 +1364,149 @@ float4 PS_Lighting(float2 uv : TEXCOORD0) : COLOR0 {
     c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55) * lerp(1.0, 0.16, night);
     c += glow * (1.0 - saturate(fogAmount));
 
+    if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + u_SunColor.rgb * daylight * 0.15 + 0.03) * rainStreaks(rd, dist) * 1.0;
     return float4(c, 1);
+}
+
+// ---------------------------------------------------------------------------------
+// Neon light spill: coloured light sources light up the surfaces around them.
+// Quarter-res light buffer, blurred over a world-space radius, depth-aware.
+// ---------------------------------------------------------------------------------
+// s0 = scene colour (sRGB), s1 = full normal/depth. out.rgb = light, out.a = view z
+float4 PS_SpillDown(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 sum = 0;
+    float zmin = SKY_Z;
+    [unroll] for (int j = 0; j < 2; j++) {
+        [unroll] for (int i = 0; i < 2; i++) {
+            float2 suv = uv + (float2(i, j) - 0.5) * u_Screen.zw * 2.0;
+            float3 c = toLinear(tex2Dlod(s0, float4(suv, 0, 0)).rgb);
+            float4 nd = tex2Dlod(s1, float4(suv, 0, 0));
+            float peak = max(c.r, max(c.g, c.b));
+            float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
+            // Strongly coloured, bright: neon. (White lamps light things too, but white
+            // also means sun glare and white paint - leave those out.)
+            float e = smoothstep(0.45, 0.8, sat) * smoothstep(0.45, 0.85, peak) * (nd.w < SKY_Z ? 1.0 : 0.0);
+            sum += c * e;
+            zmin = min(zmin, nd.w);
+        }
+    }
+    return float4(sum * 0.25, zmin);
+}
+
+// s0 = light buffer, u_Pass0.xy = direction * texel. Radius scales with 1/z (about 3 m).
+float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
+    float4 center = tex2Dlod(s0, float4(uv, 0, 0));
+    float z = min(center.a, 2000.0);
+    float pxPerMetre = abs(u_Proj.y) * u_Screen.y * 0.25 * 0.5 / z;  // quarter-res pixels
+    float stepPx = clamp(3.0 * pxPerMetre / 6.0, 0.5, 12.0);
+    float3 sum = 0;
+    float wsum = 0;
+    [unroll] for (int i = -6; i <= 6; i++) {
+        float4 s = tex2Dlod(s0, float4(uv + u_Pass0.xy * i * stepPx, 0, 0));
+        float w = exp(-i * i / 18.0) * exp(-abs(s.a - center.a) / (0.25 * z + 0.5));
+        sum += s.rgb * w;
+        wsum += w;
+    }
+    // Normalised by the kernel, not by the depth-rejected weights: light from a strip
+    // must fall off, not be renormalised up.
+    return float4(sum / 6.4, center.a);
+}
+
+// ---------------------------------------------------------------------------------
+// Cinematic: depth of field and camera motion blur (HDR, before bloom).
+// ---------------------------------------------------------------------------------
+// Auto focus (1x1): what's in the middle of the frame, a little below the centre (the car
+// or the road ahead), smoothed over time.
+//   s0 = full normal/depth, s1 = previous focus, u_Pass0.x = blend, u_Pass0.y = reset
+float4 PS_Focus(float2 uv : TEXCOORD0) : COLOR0 {
+    float focus = u_Cine.z;
+    if (focus <= 0.0) {
+        float inv = 0.0;
+        [unroll] for (int j = -1; j <= 1; j++) {
+            [unroll] for (int i = -1; i <= 1; i++) {
+                float z = tex2Dlod(s0, float4(0.5 + i * 0.05, 0.56 + j * 0.05, 0, 0)).w;
+                inv += 1.0 / min(z, 3000.0);
+            }
+        }
+        focus = 9.0 / inv;
+    }
+    float previous = tex2Dlod(s1, float4(0.5, 0.5, 0, 0)).r;
+    if (u_Pass0.y > 0.5 || !(previous > 0.0 && previous < 1e5)) previous = focus;
+    return float4(lerp(previous, focus, u_Pass0.x), 0, 0, 1);
+}
+
+// Signed blur radius in pixels (negative = in front of the focus plane).
+float circleOfConfusion(float z, float focus) {
+    float maxPx = u_Cine.w * u_Screen.y / 1080.0;
+    return clamp((1.0 - focus / max(z, 0.1)) * u_Cine.y * 2.5, -1.0, 1.0) * maxPx;
+}
+
+// Gathered bokeh (half res). s0 = HDR, s1 = half normal/depth, s2 = focus (1x1)
+// out.rgb = blurred colour, out.a = how much blur covers this pixel (0..1)
+float4 PS_DofBlur(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float focus = tex2Dlod(s2, float4(0.5, 0.5, 0, 0)).r;
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float coc = abs(circleOfConfusion(z, focus));
+    float maxPx = u_Cine.w * u_Screen.y / 1080.0;
+    float3 sum = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float wsum = 1.0;
+    float foreground = 0.0;
+    float rot = ign(vpos) * 6.2832;
+    const int N = 16;
+    // Golden-angle spiral; the direction is rotated incrementally (no sin/cos per tap).
+    float2 dir = float2(cos(rot), sin(rot));
+    const float2x2 golden = float2x2(-0.737369, -0.675490, 0.675490, -0.737369);
+    [loop] for (int i = 0; i < N; i++) {
+        float r = sqrt((i + 0.5) / N) * maxPx;
+        dir = mul(golden, dir);
+        float2 suv = uv + dir * r * u_Screen.zw;
+        float sz = tex2Dlod(s1, float4(suv, 0, 0)).w;
+        float scoc = abs(circleOfConfusion(sz, focus));
+        // A sample counts if its blur disc reaches this pixel. Sharp foreground can't be
+        // pulled over by blurry background.
+        bool inFront = sz < z;
+        float reach = inFront ? scoc : min(scoc, coc);
+        float w = saturate(reach - r + 1.0);
+        if (inFront) foreground = max(foreground, w * saturate(scoc / maxPx * 4.0));
+        sum += tex2Dlod(s0, float4(suv, 0, 0)).rgb * w;
+        wsum += w;
+    }
+    return float4(sum / wsum, max(saturate(coc / maxPx * 4.0), foreground));
+}
+
+float3 dofComposite(float2 uv) {
+    float3 sharp = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    if (u_Cine.y <= 0.0) return sharp;
+    float4 blur = tex2Dlod(s1, float4(uv, 0, 0));
+    return lerp(sharp, blur.rgb, smoothstep(0.05, 0.35, blur.a));
+}
+
+// DOF composite + camera motion blur (full res).
+//   s0 = HDR (sharp), s1 = DOF (half), s2 = full normal/depth
+float4 PS_Cinematic(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float3 c = dofComposite(uv);
+    if (u_Cine.x <= 0.0 || u_Temporal.y < 0.5) return float4(c, 1);
+    float z = tex2Dlod(s2, float4(uv, 0, 0)).w;
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, min(z, 20000.0))), prevZ);
+    // Velocity from the camera motion; anything close to a chase camera (the car) moves
+    // with it and stays sharp.
+    float2 vel = (uv - prevUV) * u_Cine.x * smoothstep(5.0, 14.0, z);
+    float len = length(vel);
+    if (len > 0.025) vel *= 0.025 / len;
+    if (len * u_Screen.x < 0.75) return float4(c, 1);
+    float jitter = ign(vpos) - 0.5;
+    float3 sum = c;
+    float wsum = 1.0;
+    [loop] for (int i = 0; i < 10; i++) {
+        float2 suv = saturate(uv + vel * ((i + 0.5 + jitter) / 10.0 - 0.5));
+        float sz = tex2Dlod(s2, float4(suv, 0, 0)).w;
+        // Don't smear the (sharp) car into the moving background.
+        float w = (sz < z * 0.8 && sz < 14.0) ? 0.0 : 1.0;
+        sum += dofComposite(suv) * w;
+        wsum += w;
+    }
+    return float4(sum / wsum, 1);
 }
 
 // ---------------------------------------------------------------------------------
@@ -946,6 +1700,7 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (debugView == 4) return float4(tex2D(s5, uv).ggg, 1);
     if (debugView == 5) return float4(toSRGB(tex2D(s2, uv).rgb), 1);
     if (debugView == 6) return float4(toSRGB(tex2D(s1, uv).rgb), 1);
+    if (debugView == 7) return float4(tex2D(s5, uv).bbb, 1);
 
     // Chromatic aberration toward the screen edges.
     float2 d = uv - 0.5;
@@ -1097,4 +1852,85 @@ float4 PS_Sharpen(float2 uv : TEXCOORD0) : COLOR0 {
 // Utility: raw depth (INTZ) -> R32F, used for frame captures.
 float4 PS_CopyDepth(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(tex2Dlod(s0, float4(uv, 0, 0)).r, 0, 0, 1);
+}
+
+// ---------------------------------------------------------------------------------
+// Temporal anti-aliasing / stabilisation (full res, after FXAA, before sharpening).
+// The game's projection can't be jittered, so this mainly calms flicker (thin lines,
+// AO/shadow noise, specular sparkle); camera motion adds sub-pixel samples on its own.
+//   s0 = current (sRGB), s1 = history (rgb, a = view z), s2 = full normal/depth
+//   out.rgb = resolved colour, out.a = view z (for the next frame's depth check)
+// ---------------------------------------------------------------------------------
+float3 toYCoCg(float3 c) { return float3(dot(c, float3(0.25, 0.5, 0.25)), dot(c, float3(0.5, 0.0, -0.5)), dot(c, float3(-0.25, 0.5, -0.25))); }
+float3 fromYCoCg(float3 c) { return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+
+// 5-tap Catmull-Rom history fetch (sharper than bilinear, s1 must be filtered).
+float3 historyCatmullRom(float2 uv) {
+    float2 pos = uv * u_Screen.xy;
+    float2 p1 = floor(pos - 0.5) + 0.5;
+    float2 f = pos - p1;
+    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    float2 w3 = f * f * (-0.5 + 0.5 * f);
+    float2 w12 = w1 + w2;
+    float2 t0 = (p1 - 1.0) * u_Screen.zw;
+    float2 t3 = (p1 + 2.0) * u_Screen.zw;
+    float2 t12 = (p1 + w2 / w12) * u_Screen.zw;
+    float3 r = tex2Dlod(s1, float4(t12.x, t0.y, 0, 0)).rgb * (w12.x * w0.y);
+    r += tex2Dlod(s1, float4(t0.x, t12.y, 0, 0)).rgb * (w0.x * w12.y);
+    r += tex2Dlod(s1, float4(t12.x, t12.y, 0, 0)).rgb * (w12.x * w12.y);
+    r += tex2Dlod(s1, float4(t3.x, t12.y, 0, 0)).rgb * (w3.x * w12.y);
+    r += tex2Dlod(s1, float4(t12.x, t3.y, 0, 0)).rgb * (w12.x * w3.y);
+    float w = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    return max(r / w, 0.0);
+}
+
+float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 current = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float z = tex2Dlod(s2, float4(uv, 0, 0)).w;
+    if (u_Temporal.y < 0.5) return float4(current, z);
+
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, min(z, 20000.0))), prevZ);
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(current, z);
+
+    // Neighbourhood statistics of the current frame (variance clipping in YCoCg).
+    float3 m1 = 0, m2 = 0;
+    [unroll] for (int k = 0; k < 5; k++) {
+        float2 o = k == 0 ? float2(0, 0) : (k == 1 ? float2(1, 0) : (k == 2 ? float2(-1, 0) : (k == 3 ? float2(0, 1) : float2(0, -1))));
+        float3 s = toYCoCg(tex2Dlod(s0, float4(uv + o * u_Screen.zw, 0, 0)).rgb);
+        m1 += s;
+        m2 += s * s;
+    }
+    m1 /= 5.0;
+    m2 /= 5.0;
+    float3 sigma = sqrt(max(m2 - m1 * m1, 0.0));
+    float3 boxMin = m1 - sigma * 1.25, boxMax = m1 + sigma * 1.25;
+
+    float3 history = toYCoCg(historyCatmullRom(prevUV));
+    // Clip towards the box centre.
+    float3 centre = (boxMin + boxMax) * 0.5, extent = (boxMax - boxMin) * 0.5 + 1e-4;
+    float3 v = history - centre;
+    float3 a = abs(v / extent);
+    float m = max(a.x, max(a.y, a.z));
+    if (m > 1.0) history = centre + v / m;
+
+    float weight = 0.1;
+    // Disocclusion and moving objects (the car, opponents): the history must have seen
+    // this surface at the depth the reprojection expects.
+    if (z < SKY_Z) {
+        float historyZ = tex2Dlod(s1, float4(prevUV, 0, 0)).a;
+        float error = abs(historyZ - prevZ) / max(prevZ, 0.1);
+        weight = lerp(weight, 1.0, smoothstep(0.02, 0.08, error));
+    }
+    // Fast motion: favour the current frame (less smearing).
+    float speed = length((uv - prevUV) * u_Screen.xy);
+    weight = max(weight, saturate(speed / 60.0) * 0.4);
+    return float4(fromYCoCg(lerp(history, toYCoCg(current), weight)), z);
+}
+
+// Plain copy (TAA history -> output when nothing else follows).
+float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR0 {
+    return float4(tex2Dlod(s0, float4(uv, 0, 0)).rgb, 1);
 }

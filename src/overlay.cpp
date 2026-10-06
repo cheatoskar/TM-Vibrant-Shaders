@@ -18,8 +18,10 @@ WNDPROC g_originalWndProc = nullptr;
 Status g_status;
 bool g_reloadRequested = false;
 
-const char* kSkyModes[] = {"Game sky", "Clear sky + clouds", "Starry night", "Black hole", "Aurora"};
-const char* kDebugViews[] = {"Final image", "Depth", "Normals", "Ambient occlusion", "Sun shadows", "Light shafts", "Bloom"};
+const char* kSkyModes[] = {"Game sky", "Clear sky + clouds", "Starry night", "Black hole", "Aurora", "Ring world"};
+const char* kPlanetTypes[] = {"Saturn", "Jupiter", "Ice giant", "Exotic"};
+const char* kPlanetViews[] = {"Distant", "Next to the rings"};
+const char* kDebugViews[] = {"Final image", "Depth", "Normals", "Ambient occlusion", "Sun shadows", "Light shafts", "Bloom", "Long shadows"};
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     Config& config = Config::get();
@@ -172,6 +174,10 @@ void drawMenu() {
                     changed |= ImGui::Combo(f.label, reinterpret_cast<int*>(base + f.offset), kQualities, IM_ARRAYSIZE(kQualities));
                 } else if (strcmp(f.key, "SkyMode") == 0) {
                     changed |= ImGui::Combo(f.label, reinterpret_cast<int*>(base + f.offset), kSkyModes, IM_ARRAYSIZE(kSkyModes));
+                } else if (strcmp(f.key, "PlanetType") == 0) {
+                    changed |= ImGui::Combo(f.label, reinterpret_cast<int*>(base + f.offset), kPlanetTypes, IM_ARRAYSIZE(kPlanetTypes));
+                } else if (strcmp(f.key, "PlanetView") == 0) {
+                    changed |= ImGui::Combo(f.label, reinterpret_cast<int*>(base + f.offset), kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
                 } else {
                     changed |= ImGui::SliderInt(f.label, reinterpret_cast<int*>(base + f.offset), static_cast<int>(f.min), static_cast<int>(f.max));
                 }

@@ -11,6 +11,7 @@ enum class DebugView : int {
     SunShadows,
     GodRays,
     Bloom,
+    LongShadows,
     Count
 };
 
@@ -27,9 +28,12 @@ struct Settings {
     // Lighting (screen-space, reconstructed from depth)
     float aoStrength = 1.0f;
     float aoRadius = 1.6f;          // metres
-    float shadowStrength = 0.75f;   // screen-space sun shadows
+    float shadowStrength = 0.85f;   // screen-space sun shadows
     float shadowLength = 9.0f;      // metres
-    float sunLight = 0.45f;         // directional sun relighting (N.L)
+    float longShadows = 0.8f;       // world-space height map shadows (long, off-screen casters)
+    float longShadowRange = 120.0f; // metres
+    float neonLight = 0.6f;         // coloured light sources light up their surroundings
+    float sunLight = 0.6f;          // directional sun relighting (N.L)
     float ambientTint = 0.55f;      // sky-coloured fill in shadow
     float sunColor[3] = {1.00f, 0.86f, 0.66f};
     float gameSunColor = 0.7f;      // how much of the game's own light colour (time of day) to use
@@ -38,7 +42,7 @@ struct Settings {
     float sunAzimuthOverride = 0.0f;
 
     // Sky & atmosphere
-    int skyMode = 0;               // 0 game, 1 clear sky, 2 starry night, 3 black hole, 4 aurora
+    int skyMode = 0;               // 0 game, 1 clear sky, 2 starry night, 3 black hole, 4 aurora, 5 ring world
     float skyNight = -1.0f;        // scene darkening for night skies (< 0 = automatic)
     float skyRotation = 0.0f;      // degrees: rotates galaxy / black hole / aurora
     float skyBrightness = 1.0f;
@@ -46,20 +50,27 @@ struct Settings {
     float starAmount = 1.0f;
     float skyEffectSize = 1.0f;    // black hole size
     float planetSize = 0.0f;       // ringed planet in the space skies (0 = none)
+    int planetType = 0;            // ring world: 0 Saturn, 1 Jupiter, 2 ice giant, 3 exotic
+    int planetView = 1;            // ring world: 0 distant, 1 next to the ring plane
+    float planetAzimuth = 35.0f;   // degrees
+    float planetElevation = 14.0f; // degrees
+    float volumetricClouds = 0.0f; // ray-marched cloud layer (0 = off)
+    float cloudCoverage = 0.45f;
+    float cloudHeight = 1600.0f;   // metres above the stadium floor
     float skyEnhance = 0.6f;
-    float sunGlow = 0.7f;
+    float sunGlow = 0.9f;
     float fogDensity = 0.35f;
     float fogHeightFalloff = 0.6f;
     float fogSunScatter = 0.7f;
 
     // Volumetric light shafts
-    float godRays = 0.55f;
+    float godRays = 0.8f;
     float godRayDecay = 0.965f;
 
     // Bloom & lens
-    float bloom = 0.07f;
+    float bloom = 0.08f;
     float bloomRadius = 0.85f;
-    float highlightBoost = 3.0f;   // LDR -> HDR expansion of light sources
+    float highlightBoost = 3.5f;   // LDR -> HDR expansion of light sources
     float lensFlare = 0.25f;
     float chromaticAberration = 0.05f;
     float vignette = 0.25f;
@@ -78,8 +89,25 @@ struct Settings {
     float gain = 1.0f;
     float shadowTint = 0.25f;      // split toning: cool shadows / warm highlights
 
+    // Weather & surfaces
+    float wetness = 0.0f;          // wet roads: darker, glossy, reflective
+    float rain = 0.0f;             // falling rain and ripples
+    float puddles = 0.0f;          // standing water on flat ground
+    float waterSurfaces = 0.0f;    // reflective, wavy open water (TMUF Island/Bay/Coast)
+    float reflections = 0.0f;      // dry glossy reflections on the track
+    float grassDetail = 0.7f;      // grass blades and patches
+    float mowingStripes = 0.5f;    // stadium mowing pattern
+    float wind = 0.5f;
+
+    // Cinematic (replays, video export)
+    float motionBlur = 0.0f;       // fraction of the frame-to-frame camera motion
+    float depthOfField = 0.0f;
+    float focusDistance = 0.0f;    // metres, 0 = auto focus
+    float bokehSize = 12.0f;       // max blur radius in pixels at 1080p
+
     // Anti-aliasing & sharpening
     bool fxaa = true;
+    bool taa = true;               // temporal anti-aliasing / stabilisation
     float sharpen = 0.35f;
 };
 

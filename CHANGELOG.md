@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (1.0.0-beta.2)
+
+- Long-range shadows from a height map of the track that builds up while you drive: long evening shadows, shadows from off-screen objects
+- Neon light: coloured borders and signs light up the surfaces around them
+- Wet roads, puddles with ripples, rain, screen-space reflections, water surfaces (TMUF, experimental)
+- Grass detail: patches, mowing stripes, blades near the camera
+- Volumetric clouds
+- Ring World sky: Saturn, Jupiter, ice giant or exotic gas giant, distant or next to the rings, with a far black hole
+- Temporal anti-aliasing, motion blur and depth of field (cinematic)
+- Replay camera blends: every camera of a frame is shaded, temporal effects pause during cuts and blends
+- New presets: Rainy Day, Ring World, Replay Cinema
+- Vibrant: more sun, stronger shadows and light shafts, neon glows in daylight too
+- Fixed: the sun's glare on the road counted as a light source (blotchy glow, washed-out road)
+- Previewer: `--batch` for many variants per run, `--move` to test motion blur
+
 ## 1.0.0-beta.1
 
 First public beta. This is a complete rewrite of the earlier colour-filter prototype as a real lighting pipeline.

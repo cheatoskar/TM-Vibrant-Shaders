@@ -57,7 +57,13 @@ struct SceneState {
     float lightDirection[3] = {};
     float lightColor[3] = {1.0f, 1.0f, 1.0f};
     bool haveLight = false;
-    bool processedThisFrame = false;
+    // Replay camera blends render two main cameras per frame (one into a texture that is
+    // blended over the other). Both get the shaders, or the blend shows a "ghost" of the
+    // unprocessed image.
+    int processedCount = 0;                  // main cameras processed this frame
+    IDirect3DSurface9* processedTarget = nullptr; // identity only, not referenced
+    int lastFrameCount = 0;
+    bool loggedMultiCamera = false;
 } g_scene;
 
 bool g_captureRequested = false;
@@ -207,10 +213,8 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs) {
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
 void processScene(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
-    if (g_scene.processedThisFrame) return;
     if (!settings.enabled && !g_captureRequested) return;
     if (!g_scene.haveView || !g_scene.haveProjection) return;
-    g_scene.processedThisFrame = true;
     if (g_sceneStart < 0.0f && g_scene.projection[14] > -1.0f) {
         g_sceneStart = seconds();
         TMVS_LOG("scene: first gameplay camera");
@@ -222,6 +226,19 @@ void processScene(IDirect3DDevice9* device) {
     IDirect3DSurface9* target = nullptr;
     IDirect3DSurface9* savedDepth = nullptr;
     if (FAILED(device->GetRenderTarget(0, &target)) || !target) return;
+    // The same target twice in a frame would be shaded twice.
+    if (g_scene.processedCount > 0 && target == g_scene.processedTarget) {
+        target->Release();
+        return;
+    }
+    // Only the first camera of a single-camera frame continues the temporal history.
+    const bool temporal = g_scene.processedCount == 0 && g_scene.lastFrameCount <= 1;
+    if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera) {
+        g_scene.loggedMultiCamera = true;
+        TMVS_LOG("scene: several main cameras in one frame (camera blend) - shading each, temporal effects paused");
+    }
+    g_scene.processedCount++;
+    g_scene.processedTarget = target;
     device->GetDepthStencilSurface(&savedDepth);
     IDirect3DTexture9* sceneDepth = depth::textureFor(savedDepth);
     if (!sceneDepth) {
@@ -259,6 +276,7 @@ void processScene(IDirect3DDevice9* device) {
     inputs.sunColorKnown = g_scene.haveLight;
     memcpy(inputs.sunColor, g_scene.lightColor, sizeof(inputs.sunColor));
     inputs.time = seconds();
+    inputs.temporal = temporal;
 
     if (g_captureRequested) {
         g_captureRequested = false;
@@ -279,7 +297,8 @@ void processScene(IDirect3DDevice9* device) {
 void onFrameBegin() {
     tracer::event("## RenderFrameBegin");
     g_cameraIndex = 0;
-    g_scene.processedThisFrame = false;
+    g_scene.lastFrameCount = g_scene.processedCount;
+    g_scene.processedCount = 0;
 }
 
 void onCameraBegin(void* camera) {
