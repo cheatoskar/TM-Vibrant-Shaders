@@ -393,29 +393,30 @@ void applyPreset(Settings& s, Preset preset) {
         case Preset::Realistic:
             // TrackMania's own colours and sky, only the light is new: shadows, contact
             // shadows, bounce light and a little haze, in the colour of the game's sun.
-            s.saturation = 1.0f;
+            s.saturation = 0.88f;
             s.vibrance = 0.0f;
             s.temperature = 0.0f;
             s.tint = 0.0f;
             s.shadowTint = 0.0f;
             s.contrast = 1.06f;
+            s.exposure = -0.23f;
             s.gameSunColor = 1.0f;
             s.sunColor[0] = 1.0f; s.sunColor[1] = 0.96f; s.sunColor[2] = 0.9f;
             s.skyColor[0] = 0.66f; s.skyColor[1] = 0.74f; s.skyColor[2] = 0.88f;
             s.sunLight = 0.55f;
             s.ambientTint = 0.45f;
             s.aoStrength = 1.1f;
-            s.shadowStrength = 0.9f;
+            s.shadowStrength = 1.0f;
             s.globalIllumination = 0.7f;
             s.volumetricLight = 0.4f;
             s.skyEnhance = 0.0f;
             s.sunGlow = 0.4f;
             s.fogDensity = 0.2f;
             s.fogSunScatter = 0.5f;
-            s.godRays = 0.7f;
-            s.neonLight = 0.35f;
+            s.godRays = 1.55f;
+            s.neonLight = 0.05f;
             s.highlightBoost = 2.5f;
-            s.bloom = 0.06f;
+            s.bloom = 0.05f;
             s.lensFlare = 0.0f;
             s.chromaticAberration = 0.0f;
             s.vignette = 0.12f;
