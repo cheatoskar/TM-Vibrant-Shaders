@@ -98,7 +98,8 @@ void drawPerformance() {
         {"AO & sun shadows", {"OcclusionShadow", "BilateralBlur", nullptr}},
         {"Long-range shadows / rain map", {"HeightSplat", "HeightMerge", nullptr}},
         {"Volumetric light", {"ShadowHeight", "Volumetric", nullptr}},
-        {"Bounce light (GI)", {"GI", nullptr, nullptr}},
+        {"Bounce light (GI)", {"GI", "GITemporal", nullptr}},
+        {"Neon trail", {"TrailPoint", "Trail", nullptr}},
         {"Custom sky", {"Sky*", "AuroraHalf", nullptr}},
         {"Volumetric clouds", {"Clouds", nullptr, nullptr}},
         {"Reflections", {"Reflect", nullptr, nullptr}},
@@ -150,7 +151,7 @@ const Field* findField(const char* key) {
 
 // Settings of the installation (not of a look): changing them keeps the preset.
 bool isMachineSetting(const Field& f) {
-    return !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
+    return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "TAAJitter");
 }
@@ -177,6 +178,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("TargetFPS")) return s.autoQuality;
     if (is("TAAJitter")) return s.taa;
+    if (!strncmp(f.key, "Trail", 5)) return s.neonTrail > 0.0f;
     if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f;
     if (is("SunAzimuth")) return s.sunElevationOverride >= 0.0f;
     return true;

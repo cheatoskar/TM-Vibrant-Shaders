@@ -24,7 +24,13 @@ struct Settings {
     bool disableGameMSAA = true; // required for the depth buffer; post AA replaces it
     int quality = 2;               // 0 low, 1 medium, 2 high (sample counts)
     bool readableGameDepth = true; // also hook the game's own depth buffers (menus, replay/video export)
-    bool taaJitter = true;         // TAA samples a different sub-pixel spot every frame (sharper, smoother)
+    // Neon light trail behind the car, kept for the whole run (0 = off).
+    float neonTrail = 0.0f;
+    float trailColor[3] = {0.1f, 0.65f, 1.0f};
+    float trailWidth = 0.2f;       // m
+    bool trailTyres = true;        // two lines from the rear tyres, else one from the middle
+    float trailDuration = 0.0f;    // s until a piece fades out, 0 = the whole run
+    bool taaJitter = false;         // TAA samples a different sub-pixel spot every frame (sharper, smoother)
     bool cinematicOnlyInReplays = true; // motion blur and DOF only in replays, intros and the video export
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;

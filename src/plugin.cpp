@@ -292,6 +292,22 @@ void processScene(IDirect3DDevice9* device) {
             inputs.water[2] = 1.0f;
         }
     }
+    inputs.driving = !engine::cinematicActive();
+    {
+        // Neon trail: a restart or a new map starts it over, a respawn starts a new line.
+        static int s_resets = -1, s_respawns = -1;
+        const int resets = engine::raceResets(), respawns = engine::respawns();
+        if (resets != s_resets) {
+            if (s_resets >= 0) TMVS_LOG("engine: race reset (trail cleared)");
+            s_resets = resets;
+            g_pipeline.resetTrail();
+        }
+        if (respawns != s_respawns) {
+            if (s_respawns >= 0) TMVS_LOG("engine: respawn");
+            s_respawns = respawns;
+            g_pipeline.breakTrail();
+        }
+    }
     inputs.jitter[0] = g_jitterUV[0];
     inputs.jitter[1] = g_jitterUV[1];
     g_frameWidth = desc.Width;

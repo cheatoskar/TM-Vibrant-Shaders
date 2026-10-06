@@ -31,7 +31,13 @@ public:
         // Water surfaces from the game: block water height, sea level, state 1 = known,
         // -1 = unknown (guess from the colour).
         float water[3] = {0.0f, 0.0f, -1.0f};
+        // The player drives (not a replay / intro): the neon trail records the car.
+        bool driving = true;
     };
+
+    // Neon trail: start over (race restart, new map) / start a new line (respawn).
+    void resetTrail() { m_trailReset = true; }
+    void breakTrail() { m_trailBreak = true; }
 
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.
     bool init(IDirect3DDevice9* device, const std::wstring& shaderDir);
@@ -78,6 +84,7 @@ private:
         kShadowHeight,
         kVolumetric,
         kGI,
+        kGITemporal,
         kSkyClear, // one entry per sky mode (1..5), in mode order
         kSkyStars,
         kSkyBlackHole,
@@ -93,6 +100,8 @@ private:
         kRainDrop,
         kRainSplash,
         kSpray,
+        kTrailPoint,
+        kTrail,
         kFocus,
         kDofBlur,
         kCinematic,
@@ -125,6 +134,8 @@ private:
     void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings);
     bool ensureCloudNoise(IDirect3DDevice9* device);
     bool ensureRain(IDirect3DDevice9* device);
+    bool ensureTrail(IDirect3DDevice9* device);
+    void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
     void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool splashes,
                   IDirect3DSurface9* target);
     bool detectCameraCut(const Inputs& inputs) const;
@@ -161,6 +172,9 @@ private:
     gfx::Target m_occlusionTmp; // half
     gfx::Target m_sky;          // full: custom sky (HDR)
     gfx::Target m_gi[2];        // quarter: one-bounce global illumination, ping-pong for the blur
+    gfx::Target m_giHistory[2]; // quarter: GI accumulated over frames (rgb, view z in a)
+    int m_giIndex = 0;
+    bool m_giValid = false;
     gfx::Target m_skyAverage;   // 1x1
     gfx::Target m_hdr;          // full HDR
     gfx::Target m_rays[2];      // half
@@ -220,6 +234,22 @@ private:
     IDirect3DVertexBuffer9* m_rainVB = nullptr; // drops, then splashes
     IDirect3DIndexBuffer9* m_rainIB = nullptr;
     bool m_rainSupported = true;
+    // Neon trail: the car's positions in a ring buffer texture (xyz, time stamp; < 0 = a new
+    // line starts here, 0 = no car found), drawn as a glowing ribbon.
+    static constexpr UINT kTrailWidth = 128, kTrailHeight = 64;
+    static constexpr UINT kTrailPoints = kTrailWidth * kTrailHeight; // 4.5 min at 30 points/s
+    gfx::Target m_trailPoints;
+    IDirect3DVertexShader9* m_trailVS = nullptr;
+    IDirect3DVertexDeclaration9* m_trailDecl = nullptr;
+    IDirect3DVertexBuffer9* m_trailVB = nullptr;
+    IDirect3DIndexBuffer9* m_trailIB = nullptr;
+    bool m_trailSupported = true;
+    bool m_trailReset = true;
+    bool m_trailBreak = true;
+    UINT m_trailHead = 0;       // next point to write
+    UINT m_trailCount = 0;      // points written (up to kTrailPoints)
+    float m_trailClock = 0.0f;  // time since the last point
+    float m_trailTime = 0.0f;   // time since the reset (s)
     float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks)
     float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
     int m_boltSlot = -1000000;                  // lightning strike the bolt direction belongs to

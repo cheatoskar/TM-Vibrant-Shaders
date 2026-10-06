@@ -40,8 +40,8 @@ configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
 # when the game starts. Keep this list in the same order as kEntryPoints in pipeline.cpp.
 set(TMVS_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tmvs.hlsl")
 set(TMVS_ENTRIES
-  PS_LinearDepth PS_Prepare PS_DownsampleND PS_HeightMerge PS_HeightSplat PS_OcclusionShadow PS_BilateralBlur PS_ShadowHeight PS_Volumetric PS_GI
-  PS_SkyClear PS_SkyStars PS_SkyBlackHole PS_SkyAurora PS_SkyRing PS_AuroraHalf PS_SkyAverage PS_Clouds PS_Reflect PS_SpillDown PS_SpillBlur PS_Lighting PS_RainDrop PS_RainSplash PS_Spray
+  PS_LinearDepth PS_Prepare PS_DownsampleND PS_HeightMerge PS_HeightSplat PS_OcclusionShadow PS_BilateralBlur PS_ShadowHeight PS_Volumetric PS_GI PS_GITemporal
+  PS_SkyClear PS_SkyStars PS_SkyBlackHole PS_SkyAurora PS_SkyRing PS_AuroraHalf PS_SkyAverage PS_Clouds PS_Reflect PS_SpillDown PS_SpillBlur PS_Lighting PS_RainDrop PS_RainSplash PS_Spray PS_TrailPoint PS_Trail
   PS_Focus PS_DofBlur PS_Cinematic
   PS_RayMask PS_RayBlur PS_BloomDown PS_BloomUp PS_Luminance PS_Adapt PS_Final PS_FXAA PS_TAA PS_Sharpen PS_Copy
   PS_CopyDepth)

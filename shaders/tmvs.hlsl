@@ -413,8 +413,10 @@ float4 PS_GI(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (nd.w >= SKY_Z) return 0;
     float3 p = viewPosition(uv, nd.w);
     float3 n = nd.xyz;
-    float noise = ign(vpos);
-    float noise2 = hash12(vpos + 41.7);
+    // u_Pass0.z: frame (0..63), the noise changes every frame; PS_GITemporal averages it.
+    float2 seed = vpos + u_Pass0.z * 5.588238;
+    float noise = frac(52.9829189 * frac(dot(seed, float2(0.06711056, 0.00583715))));
+    float noise2 = frac(hash12(vpos + 41.7) + u_Pass0.z * 0.618034);
     float radius = u_Pass0.y;
     float projScale = abs(u_Proj.y) * 0.5 * u_Screen.y * 0.25; // quarter-res pixels per metre at z = 1
     float radiusPx = clamp(radius * projScale / p.z, 2.0, u_Screen.y * 0.08);
@@ -440,6 +442,21 @@ float4 PS_GI(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Fades out far away, where the radius is below a pixel.
     float fade = saturate(2.0 - p.z / 120.0);
     return float4(min(sum / samples * fade, 4.0), 1);
+}
+
+// GI history: s0 = this frame's GI (blurred), s1 = history (rgb, view z), s2 = half
+// normal/depth, u_Pass0.x = history valid. Moving surfaces and disocclusions start over.
+float4 PS_GITemporal(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 current = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float z = tex2Dlod(s2, float4(uv, 0, 0)).w;
+    if (u_Pass0.x < 0.5 || z >= SKY_Z) return float4(current, z);
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(current, z);
+    float4 history = tex2Dlod(s1, float4(prevUV, 0, 0));
+    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
+    float weight = lerp(0.1, 1.0, smoothstep(0.03, 0.1, error));
+    return float4(lerp(history.rgb, current, weight), z);
 }
 
 // ---------------------------------------------------------------------------------
@@ -2573,6 +2590,32 @@ float4 PS_Spray(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     puff *= puff;
     float a = puff * pow(1.0 - data.w, 2.0) * u_Pass0.x * 0.05; // hundreds overlap: each one is faint
     return float4(rainLight(uv) * a, 0);
+}
+
+// Neon trail, one point: where the car is (found in the depth buffer below the screen
+// centre, like the spray), lowered to the middle of the tyres.
+//   s0 = full normal/depth, u_Pass0.x = time stamp (< 0: a new line starts here)
+float4 PS_TrailPoint(float2 uv : TEXCOORD0) : COLOR0 {
+    float z0 = tex2Dlod(s0, float4(0.5, 0.6, 0, 0)).w;
+    float z1 = tex2Dlod(s0, float4(0.5, 0.65, 0, 0)).w;
+    float z2 = tex2Dlod(s0, float4(0.5, 0.7, 0, 0)).w;
+    float z = min(z0, min(z1, z2));
+    if (z < 1.5 || z > 16.0) return 0; // no car in front of the camera
+    float y = z == z0 ? 0.6 : (z == z1 ? 0.65 : 0.7);
+    float3 car = worldPosition(viewPosition(float2(0.5, y), z));
+    float3 up = viewToWorldDir(float3(0, 1, 0));
+    float3 fwd = viewToWorldDir(float3(0, 0, 1));
+    return float4(car - up * 0.5 - fwd * 0.25, u_Pass0.x);
+}
+
+// The trail ribbon: a bright core with a soft glow, additive in HDR (it blooms).
+//   s0 = full normal/depth, u_Pass0.rgb = colour * strength
+float4 PS_Trail(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 uv = (vpos + 0.5) * u_Screen.zw;
+    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - data.z * 0.995);
+    float x = data.x;
+    float light = exp(-x * x * 10.0) * 2.5 + exp(-x * x * 2.5) * 0.4;
+    return float4(u_Pass0.rgb * light * data.y, 0);
 }
 
 float4 PS_RainSplash(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {

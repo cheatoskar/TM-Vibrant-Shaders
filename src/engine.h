@@ -49,6 +49,10 @@ bool cinematicActive();
 // on, for TAA: each frame samples the pixels at a slightly different spot. 0, 0 = off.
 void setProjectionJitter(float x, float y);
 
+// Counters of race (re)starts / map loads and of respawns (for the neon trail).
+int raceResets();
+int respawns();
+
 // The two water heights of this map: the water blocks' (always the same) and the sea level
 // (from the map load or the plane the game renders the water reflection for; = blockY without
 // a sea). False until a map load was seen (hooks unavailable): the shaders then guess by colour.

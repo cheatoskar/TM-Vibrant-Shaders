@@ -9,6 +9,8 @@
 //     --sun <x,y,z>           override the sun direction (world space, towards the sun)
 //     --suncolor <r,g,b>      override the game's light colour
 //     --move <x,y,z>          previous frame's camera offset in metres (motion blur test)
+//     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
+//                             view, 0.1 s apart (neon trail test)
 //     --bench                 GPU time per pass
 //     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
 //                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
@@ -128,6 +130,7 @@ struct Job {
     std::string output;
     Settings settings;
     float move[3] = {}; // previous frame's camera offset (world), for motion blur tests
+    float drive[3] = {}; // camera motion per frame (camera axes), for trail tests
     float time = -1.0f; // scene time of the last frame (s), -1 = the capture's
 };
 
@@ -158,6 +161,7 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
                 for (char& c : name) if (c == '_') c = ' ';
                 applyPresetByName(job.settings, name.c_str());
             } else if (!_strnicmp(w.c_str(), "move=", 5)) sscanf(w.c_str() + 5, "%f,%f,%f", &job.move[0], &job.move[1], &job.move[2]);
+            else if (!_strnicmp(w.c_str(), "drive=", 6)) sscanf(w.c_str() + 6, "%f,%f,%f", &job.drive[0], &job.drive[1], &job.drive[2]);
             else if (!_strnicmp(w.c_str(), "time=", 5)) job.time = static_cast<float>(atof(w.c_str() + 5));
             else setByKey(job.settings, w.c_str());
         }
@@ -207,6 +211,8 @@ int main(int argc, char** argv) {
             waterHeight = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             defaults.time = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--drive") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f,%f", &defaults.drive[0], &defaults.drive[1], &defaults.drive[2]);
         } else if (!strcmp(argv[i], "--move") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f,%f", &defaults.move[0], &defaults.move[1], &defaults.move[2]);
         } else if (!strcmp(argv[i], "--sun") && i + 1 < argc) {
@@ -326,9 +332,14 @@ int main(int argc, char** argv) {
         for (int frame = 0; frame < frames; frame++) {
             const bool previousFrame = moving && frame == frames - 2;
             Pipeline::Inputs& frameIn = previousFrame ? moved : in;
-            frameIn.time = job.time >= 0.0f ? job.time - (frames - 1 - frame) * 0.02f : cap.time + frame * 0.1f;
+            Pipeline::Inputs driven = frameIn;
+            const float back = static_cast<float>(frames - 1 - frame);
+            // The view translation is in camera axes: earlier frames see everything shifted by
+            // the distance still to drive.
+            for (int j = 0; j < 3; j++) driven.view[12 + j] += back * job.drive[j];
+            driven.time = job.time >= 0.0f ? job.time - (frames - 1 - frame) * 0.02f : cap.time + frame * 0.1f;
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
-            pipeline.render(device, frameIn, job.settings, output.surface);
+            pipeline.render(device, driven, job.settings, output.surface);
             if (bench) pipeline.collectProfile(true);
         }
         device->EndScene();

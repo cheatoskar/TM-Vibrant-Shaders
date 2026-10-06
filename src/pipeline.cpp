@@ -13,10 +13,10 @@ namespace {
 
 const char* const kEntryPoints[] = {
     "PS_LinearDepth", "PS_Prepare",  "PS_DownsampleND", "PS_HeightMerge", "PS_HeightSplat", "PS_OcclusionShadow", "PS_BilateralBlur",
-    "PS_ShadowHeight", "PS_Volumetric", "PS_GI",
+    "PS_ShadowHeight", "PS_Volumetric", "PS_GI", "PS_GITemporal",
     "PS_SkyClear",    "PS_SkyStars", "PS_SkyBlackHole", "PS_SkyAurora",   "PS_SkyRing",     "PS_AuroraHalf",
     "PS_SkyAverage",  "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
-    "PS_RainDrop",    "PS_RainSplash", "PS_Spray",
+    "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",
@@ -145,6 +145,8 @@ void Pipeline::release() {
     gfx::release(m_splashVS);
     gfx::release(m_sprayVS);
     gfx::release(m_rainDecl);
+    gfx::release(m_trailVS);
+    gfx::release(m_trailDecl);
     m_quad.destroy();
     destroyTargets();
 }
@@ -203,6 +205,8 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_sky.create(device, width, height, D3DFMT_A16B16G16R16F);
     ok &= m_gi[0].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
     ok &= m_gi[1].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
+    for (auto& t : m_giHistory) ok &= t.create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
+    m_giValid = false;
     ok &= m_hdr.create(device, width, height, D3DFMT_A16B16G16R16F);
     ok &= m_rays[0].create(device, hw, hh, D3DFMT_A16B16G16R16F);
     ok &= m_rays[1].create(device, hw, hh, D3DFMT_A16B16G16R16F);
@@ -248,6 +252,7 @@ void Pipeline::destroyTargets() {
     m_skyAverage.destroy();
     m_sky.destroy();
     for (auto& t : m_gi) t.destroy();
+    for (auto& t : m_giHistory) t.destroy();
     m_hdr.destroy();
     for (auto& t : m_rays) t.destroy();
     for (auto& t : m_bloomDown) t.destroy();
@@ -272,6 +277,10 @@ void Pipeline::destroyTargets() {
     gfx::release(m_cloudNoise);
     gfx::release(m_rainVB);
     gfx::release(m_rainIB);
+    gfx::release(m_trailVB);
+    gfx::release(m_trailIB);
+    m_trailPoints.destroy();
+    m_trailReset = true;
     m_taaValid = false;
     m_heightValid = false;
     m_width = m_height = 0;
@@ -538,6 +547,9 @@ VSOut main(float2 uv : TEXCOORD0) {
     float2 m = (w.xz - c_Map.xy) * c_Map.z;
     // Beyond ~400 m the depth is too coarse to be useful.
     bool valid = z > 0.3 && z < 400.0 && all(m > 0.0) && all(m < 1.0);
+    // The player's car (close, in the middle of the lower screen) must not cast long
+    // shadows: it moves on and would leave stale blotches behind and below it.
+    if (z < 16.0 && uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.35) valid = false;
     o.pos = valid ? float4(m.x * 2.0 - 1.0 + c_Half.x, 1.0 - m.y * 2.0 + c_Half.y, saturate(0.5 - (w.y - c_Map.w) / 1000.0), 1.0)
                   : float4(-10.0, -10.0, 0.0, 1.0);
     o.data = float2(w.y + 10000.0, 0.0);
@@ -874,9 +886,232 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     o.data = float4(corner.x, corner.y * 2.0 - 1.0, view.z, age);
     return o;
 }
+
+// Neon trail: quad k joins point k and k + 1 of the ring buffer, widened towards the camera.
+float4 c_Trail  : register(c16); // points written, next index, now (s), fade after (s, 0 = never)
+float4 c_Trail2 : register(c17); // sideways offset (m), half width (m), 0, 0
+sampler2D s_trail : register(s2);
+#ifndef TRAIL_W
+#define TRAIL_W 128.0
+#define TRAIL_POINTS 8192.0
+#endif
+
+float4 trailPoint(float i) {
+    i = fmod(i + 2.0 * TRAIL_POINTS, TRAIL_POINTS);
+    float2 uv = float2((fmod(i, TRAIL_W) + 0.5) / TRAIL_W, (floor(i / TRAIL_W) + 0.5) / (TRAIL_POINTS / TRAIL_W));
+    return tex2Dlod(s_trail, float4(uv, 0, 0));
+}
+
+VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
+    VSOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    float k = seed.x;
+    if (k >= c_Trail.x - 1.0) return o;
+    float first = c_Trail.y - c_Trail.x;
+    float4 a = trailPoint(first + k), b = trailPoint(first + k + 1.0);
+    // No car found at one end, or b starts a new line (respawn).
+    if (a.w == 0.0 || b.w <= 0.0) return o;
+    float3 d = b.xyz - a.xyz;
+    float len = length(d);
+    if (len < 1e-3 || len > 40.0) return o; // teleported
+    float age = c_Trail.z - lerp(abs(a.w), b.w, corner.y);
+    float fade = c_Trail.w > 0.0 ? saturate(1.0 - age / c_Trail.w) : 1.0;
+    if (fade <= 0.0) return o;
+    float3 dir = d / len;
+    float3 right = cross(float3(0, 1, 0), dir);
+    float rl = length(right);
+    right = rl > 0.1 ? right / rl : float3(1, 0, 0);
+    float3 p = lerp(a.xyz, b.xyz, corner.y) + right * c_Trail2.x;
+    float3 v = toView(p);
+    if (v.z < 0.3) return o;
+    float3 dv = toView(p + dir) - v;
+    float3 side = cross(dv, v);
+    float sl = length(side);
+    if (sl < 1e-5) return o;
+    // At least a pixel wide (no flicker far away); thinner lines are dimmed instead.
+    float pixel = v.z * c_Proj2.z / c_Proj.x;
+    float halfWidth = max(c_Trail2.y, pixel * 1.2);
+    fade *= c_Trail2.y / halfWidth;
+    o.pos = toClip(v + side / sl * halfWidth * corner.x);
+    o.data = float4(corner.x, fade, v.z, age);
+    return o;
+}
 )";
 
 } // namespace
+
+bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
+    if (!m_trailSupported) return false;
+    if (m_trailVB && m_trailIB && m_trailPoints.valid()) return true;
+    if (!m_trailVS) {
+        // The points are read in the vertex shader (A32B32G32R32F vertex texture) and the
+        // ribbon is blended into the FP16 HDR target.
+        IDirect3D9* d3d = nullptr;
+        device->GetDirect3D(&d3d);
+        D3DDEVICE_CREATION_PARAMETERS cp{};
+        device->GetCreationParameters(&cp);
+        D3DDISPLAYMODE mode{};
+        device->GetDisplayMode(0, &mode);
+        const bool ok = d3d &&
+                        SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format,
+                                                         D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_VERTEXTEXTURE, D3DRTYPE_TEXTURE,
+                                                         D3DFMT_A32B32G32R32F)) &&
+                        SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format,
+                                                         D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING,
+                                                         D3DRTYPE_TEXTURE, D3DFMT_A16B16G16R16F));
+        if (d3d) d3d->Release();
+        char defines[96];
+        snprintf(defines, sizeof(defines), "#define TRAIL_W %u.0\n#define TRAIL_POINTS %u.0\n", kTrailWidth, kTrailPoints);
+        const std::string source = std::string(defines) + kRainVS;
+        m_trailVS = ok ? gfx::compileVertexShader(device, source.c_str(), "trailVS", "TrailVS") : nullptr;
+        const D3DVERTEXELEMENT9 elements[] = {
+            {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+            {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
+            D3DDECL_END(),
+        };
+        if (m_trailVS) device->CreateVertexDeclaration(elements, &m_trailDecl);
+        if (!m_trailVS || !m_trailDecl) {
+            TMVS_LOG("pipeline: neon trail unavailable (no float vertex textures or FP16 blending)");
+            m_trailSupported = false;
+            return false;
+        }
+    }
+    bool ok = m_trailPoints.create(device, kTrailWidth, kTrailHeight, D3DFMT_A32B32G32R32F) &&
+              SUCCEEDED(device->CreateVertexBuffer(kTrailPoints * 4 * 24, D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &m_trailVB, nullptr)) &&
+              SUCCEEDED(device->CreateIndexBuffer(kTrailPoints * 6 * 2, D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_trailIB, nullptr));
+    float* v = nullptr;
+    if (ok && SUCCEEDED(m_trailVB->Lock(0, 0, reinterpret_cast<void**>(&v), 0))) {
+        static const float kCorners[4][2] = {{-1.0f, 0.0f}, {1.0f, 0.0f}, {-1.0f, 1.0f}, {1.0f, 1.0f}};
+        for (UINT q = 0; q < kTrailPoints; q++) {
+            for (const auto& corner : kCorners) {
+                *v++ = static_cast<float>(q);
+                *v++ = 0.0f;
+                *v++ = 0.0f;
+                *v++ = 0.0f;
+                *v++ = corner[0];
+                *v++ = corner[1];
+            }
+        }
+        m_trailVB->Unlock();
+    } else {
+        ok = false;
+    }
+    WORD* index = nullptr;
+    if (ok && SUCCEEDED(m_trailIB->Lock(0, 0, reinterpret_cast<void**>(&index), 0))) {
+        for (UINT q = 0; q < kTrailPoints; q++) {
+            const WORD b = static_cast<WORD>(q * 4);
+            const WORD tri[6] = {b, static_cast<WORD>(b + 1), static_cast<WORD>(b + 2), static_cast<WORD>(b + 2), static_cast<WORD>(b + 1),
+                                 static_cast<WORD>(b + 3)};
+            memcpy(index, tri, sizeof(tri));
+            index += 6;
+        }
+        m_trailIB->Unlock();
+    } else {
+        ok = false;
+    }
+    if (!ok) {
+        gfx::release(m_trailVB);
+        gfx::release(m_trailIB);
+        m_trailPoints.destroy();
+        TMVS_LOG("pipeline: neon trail buffers failed");
+        m_trailSupported = false;
+    }
+    m_trailReset = true;
+    return ok;
+}
+
+void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt) {
+    if (m_trailReset) {
+        m_trailReset = false;
+        m_trailBreak = true;
+        m_trailHead = m_trailCount = 0;
+        m_trailClock = m_trailTime = 0.0f;
+        device->SetRenderTarget(0, m_trailPoints.surface);
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 0.0f, 0);
+    }
+    m_trailTime += dt;
+    m_trailClock += dt;
+    // Record the car 30 times a second while you drive (not in replays and intros).
+    if (in.driving && dt > 0.0f && m_temporalValid && m_trailClock >= 1.0f / 30.0f) {
+        m_trailClock = fmodf(m_trailClock, 1.0f / 30.0f);
+        bind(device, 0, m_nd.texture, false);
+        const float stamp = m_trailTime + 1.0f; // never 0 (= no car)
+        passConstants(device, m_trailBreak ? -stamp : stamp, 0.0f);
+        // One pixel of the ring buffer. (SetRenderTarget resets the scissor rect: set it after.)
+        device->SetRenderTarget(0, m_trailPoints.surface);
+        const RECT pixel = {static_cast<LONG>(m_trailHead % kTrailWidth), static_cast<LONG>(m_trailHead / kTrailWidth),
+                            static_cast<LONG>(m_trailHead % kTrailWidth) + 1, static_cast<LONG>(m_trailHead / kTrailWidth) + 1};
+        device->SetScissorRect(&pixel);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+        device->SetPixelShader(m_shaders[kTrailPoint]);
+        m_quad.draw(device, kTrailWidth, kTrailHeight);
+        profileMark(kTrailPoint);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+        m_trailBreak = false;
+        m_trailHead = (m_trailHead + 1) % kTrailPoints;
+        if (m_trailCount < kTrailPoints) m_trailCount++;
+    }
+    if (m_trailCount < 2) return;
+
+    const float* V = in.view;
+    const float* P = in.projection;
+    float vc[6][4] = {};
+    for (int j = 0; j < 3; j++) {
+        vc[j][0] = V[0 * 4 + j];
+        vc[j][1] = V[1 * 4 + j];
+        vc[j][2] = V[2 * 4 + j];
+        vc[j][3] = V[12 + j];
+    }
+    vc[3][0] = P[0];
+    vc[3][1] = P[5];
+    vc[3][2] = P[8];
+    vc[3][3] = P[9];
+    vc[4][0] = P[10];
+    vc[4][1] = P[14];
+    vc[4][2] = 2.0f / in.width;
+    vc[4][3] = 2.0f / in.height;
+    device->SetVertexShaderConstantF(0, &vc[0][0], 6);
+    const float trail[4] = {static_cast<float>(m_trailCount), static_cast<float>(m_trailHead), m_trailTime + 1.0f, s.trailDuration};
+    device->SetVertexShaderConstantF(16, trail, 1);
+
+    device->SetRenderTarget(0, m_hdr.surface);
+    D3DVIEWPORT9 viewport = {0, 0, in.width, in.height, 0.0f, 1.0f};
+    device->SetViewport(&viewport);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x7);
+    bind(device, 0, m_nd.texture, false);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailPoints.texture);
+    device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+    device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+    device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    device->SetVertexDeclaration(m_trailDecl);
+    device->SetStreamSource(0, m_trailVB, 0, 24);
+    device->SetIndices(m_trailIB);
+    device->SetVertexShader(m_trailVS);
+    device->SetPixelShader(m_shaders[kTrail]);
+    const float strength = s.neonTrail * 2.0f;
+    passConstants(device, s.trailColor[0] * strength, s.trailColor[1] * strength, s.trailColor[2] * strength, 0.0f);
+    const float halfWidth = s.trailWidth * 0.5f;
+    const UINT quads = m_trailCount - 1;
+    // Two lines from the rear tyres, or one from the middle of the car.
+    const float offsets[2] = {s.trailTyres ? -0.75f : 0.0f, 0.75f};
+    for (int line = 0; line < (s.trailTyres ? 2 : 1); line++) {
+        const float trail2[4] = {offsets[line], halfWidth, 0.0f, 0.0f};
+        device->SetVertexShaderConstantF(17, trail2, 1);
+        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, quads * 4, 0, quads * 2);
+    }
+    profileMark(kTrail);
+
+    device->SetStreamSource(0, nullptr, 0, 0);
+    device->SetIndices(nullptr);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER2, nullptr);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+}
 
 bool Pipeline::ensureRain(IDirect3DDevice9* device) {
     if (!m_rainSupported) return false;
@@ -1215,7 +1450,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
         bind(device, 0, m_ndHalf.texture, false);
         bind(device, 1, in.color, true);
-        passConstants(device, kGISamples[q], 10.0f);
+        // Own noise sequence (also without TAA): the history below averages it out.
+        passConstants(device, kGISamples[q], 10.0f, static_cast<float>(m_frame % 64));
         runPass(device, kGI, m_gi[0]);
         bind(device, 0, m_gi[0].texture, false);
         bind(device, 1, m_ndHalf.texture, false);
@@ -1224,6 +1460,17 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 0, m_gi[1].texture, false);
         passConstants(device, 0.0f, 1.0f / m_gi[0].height);
         runPass(device, kBilateralBlur, m_gi[0]);
+        // Accumulate over frames: few rays per pixel would otherwise boil into blotches.
+        const int previous = m_giIndex;
+        m_giIndex ^= 1;
+        bind(device, 0, m_gi[0].texture, false);
+        bind(device, 1, m_giHistory[previous].texture, true);
+        bind(device, 2, m_ndHalf.texture, false);
+        passConstants(device, (m_giValid && m_temporalValid) ? 1.0f : 0.0f, 0.0f);
+        runPass(device, kGITemporal, m_giHistory[m_giIndex]);
+        m_giValid = true;
+    } else {
+        m_giValid = false;
     }
     const float lensDrops = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f;
     const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
@@ -1298,7 +1545,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 8, m_reflect.texture, true);
     bind(device, 9, m_spill[0].texture, true);
     bind(device, 10, m_rays[1].texture, true);
-    bind(device, 11, m_gi[0].texture, false);
+    bind(device, 11, m_giHistory[m_giIndex].texture, false);
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
@@ -1307,6 +1554,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 
     const float dt = m_historyValid ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
     if (temporal) m_lastTime = in.time;
+
+    // 4b. Neon trail behind the car, into the HDR image so it blooms.
+    if (s.neonTrail > 0.0f && ensureTrail(device)) drawTrail(device, in, s, temporal ? dt : 0.0f);
+    else m_trailReset = true;
 
     // 5. Depth of field and motion blur (cinematic, HDR).
     gfx::Target* hdr = &m_hdr;

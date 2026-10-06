@@ -53,6 +53,7 @@ TM Vibrant Shaders hooks into the game's renderer, reads the depth buffer, the c
 - HDR glow, bloom, auto exposure and a filmic tone curve.
 - Temporal anti-aliasing with sub-pixel jitter (real TAA, the edges get supersampled over a few frames) plus FXAA, and AMD CAS sharpening.
 - Motion blur and depth of field that switch on by themselves in replays, intros and the video export, and stay off while you drive.
+- **Neon trail:** a glowing light trail behind your car (from both rear tyres or the middle), kept for the whole run or fading after a few seconds. Restarting clears it, a respawn starts a new line.
 
 **Made to be used**
 - An `F8` menu with a **Simple** view for the everyday settings and an **Advanced** view with every value.
@@ -274,6 +275,10 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 | Motion blur | Blur from camera movement. 1 = one full frame of movement. Your car stays sharp in the chase camera. |
 | Depth of field | Background and foreground blur. |
 | Only in replays and video export | Motion blur and depth of field switch off while you drive (on by default). |
+| Neon trail behind the car | Brightness of the light trail (0 = off). Advanced menu, section *Neon trail*. |
+| Trail colour / width | Colour and width (m) of the trail. |
+| Two lines from the rear tyres | Two lines, or one from the middle of the car. |
+| Fade after | Seconds until a piece of the trail fades out; 0 keeps it for the whole run. |
 | Focus distance (m) | 0 = auto focus on what's in the middle of the screen. |
 | Max blur (px) | Largest blur size, at 1080p. |
 
@@ -316,7 +321,7 @@ Presets are plain text files in `Documents\TrackMania\TMVS\presets\`, one `.ini`
 |---|---|
 | FXAA anti-aliasing | Smooths edges within a frame. |
 | Temporal anti-aliasing | Smooths edges and flicker over several frames. Some softness on fast movement. |
-| TAA: sub-pixel jitter | Every frame samples a slightly different spot inside each pixel, so TAA supersamples the edges. |
+| TAA: sub-pixel jitter | Every frame samples a slightly different spot inside each pixel, so TAA supersamples the edges. Off by default: fine grates can shimmer with it. |
 | Sharpening (CAS) | Gets back detail after anti-aliasing. |
 | Effect quality | Number of samples for AO, shadows and clouds. Low is noticeably faster. |
 | Auto quality | Lowers the effect quality on its own when the frame rate drops below the target. |

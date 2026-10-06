@@ -43,6 +43,9 @@ constexpr InlineSite kVideoShoot = {0x006f4510, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0
 // Map load (CGameCtnApp::ChallengeCreateSceneGraph): the zone gets the sea level of the
 // environment's decoration, -1 when it has none.
 constexpr InlineSite kWaterTileHeight = {0x0054e100, {0x55, 0x8b, 0xe9, 0xd9, 0x85, 0x08, 0x01, 0x00, 0x00}, 9, "CHmsZone::WaterRenderTileHeightSet"};
+// Race (re)start: the race HUD is reset. Respawn: back to the last checkpoint (or the start).
+constexpr InlineSite kRaceReset = {0x004bedd0, {0x56, 0x8b, 0xf1, 0x83, 0xbe, 0xa4, 0x01, 0x00, 0x00, 0x00}, 10, "CTrackManiaRaceInterface::RaceOnReset"};
+constexpr InlineSite kRespawn = {0x0047c0d0, {0x53, 0x8b, 0x5c, 0x24, 0x08}, 5, "CTrackManiaRace::RespawnPlayer"};
 // Water blocks (Stadium pools and rivers) are terrain blocks: their surface is always here,
 // 1.06 m below the ground (measured in game: 7.937 +- 0.003).
 constexpr float kBlockWaterY = 7.94f;
@@ -80,6 +83,12 @@ WaterPlaneFn g_waterPlane = nullptr;
 float g_waterPlaneEq[4] = {};
 DWORD g_lastWater = 0;          // GetTickCount of the last water reflection render
 using TileHeightFn = void(__fastcall*)(void*, void*, float);
+using RaceResetFn = void(__fastcall*)(void*, void*);
+using RespawnFn = void(__fastcall*)(void*, void*, void*, int);
+RaceResetFn g_raceReset = nullptr;
+RespawnFn g_respawn = nullptr;
+volatile LONG g_raceResets = 0; // counters: the plugin compares them every frame
+volatile LONG g_respawns = 0;
 TileHeightFn g_tileHeight = nullptr;
 bool g_mapLoaded = false;       // a map load was seen, so its sea level is known
 float g_seaLevel = -1.0f;       // -1 = no sea
@@ -183,7 +192,18 @@ bool levelPlaneHeight(const float* p, float& y) {
     return y > -5000.0f && y < 5000.0f;
 }
 
+void __fastcall raceResetDetour(void* self, void* edx) {
+    InterlockedIncrement(&g_raceResets);
+    g_raceReset(self, edx);
+}
+
+void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
+    InterlockedIncrement(&g_respawns);
+    g_respawn(self, edx, player, flag);
+}
+
 void __fastcall tileHeightDetour(void* self, void* edx, float height) {
+    InterlockedIncrement(&g_raceResets); // a new map
     g_tileHeight(self, edx, height);
     g_mapLoaded = true;
     g_seaLevel = height;
@@ -296,6 +316,8 @@ bool install(const Callbacks& callbacks) {
     g_doShoot = reinterpret_cast<DoShootFn>(inlineHook(kVideoShoot, reinterpret_cast<void*>(&doShootDetour)));
     g_waterPlane = reinterpret_cast<WaterPlaneFn>(inlineHook(kWaterPlane, reinterpret_cast<void*>(&waterPlaneDetour)));
     g_tileHeight = reinterpret_cast<TileHeightFn>(inlineHook(kWaterTileHeight, reinterpret_cast<void*>(&tileHeightDetour)));
+    g_raceReset = reinterpret_cast<RaceResetFn>(inlineHook(kRaceReset, reinterpret_cast<void*>(&raceResetDetour)));
+    g_respawn = reinterpret_cast<RespawnFn>(inlineHook(kRespawn, reinterpret_cast<void*>(&respawnDetour)));
     g_active = true;
     TMVS_LOG("engine: CVisionViewportDx9 hooks installed (module base %p)", GetModuleHandleW(nullptr));
     return true;
@@ -316,6 +338,14 @@ bool waterHeights(float& blockY, float& seaY) {
     if (g_lastWater != 0 && GetTickCount() - g_lastWater < 2000 && levelPlaneHeight(g_waterPlaneEq, y)) seaY = y;
     else if (g_seaLevel != -1.0f) seaY = g_seaLevel;
     return true;
+}
+
+int raceResets() {
+    return static_cast<int>(g_raceResets);
+}
+
+int respawns() {
+    return static_cast<int>(g_respawns);
 }
 
 void setProjectionJitter(float x, float y) {

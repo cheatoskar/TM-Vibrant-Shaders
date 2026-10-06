@@ -14,6 +14,9 @@
 - Spray behind the car on wet roads.
 - Water: found by height instead of colour (water blocks always sit at 7.94 m; the sea level comes from the map load), so pools and rivers (and the TMUF sea) get waves, refraction and reflections and nothing else does. On by default.
 
+**Neon trail**
+- A glowing light trail behind the car (advanced menu, off by default): two lines from the rear tyres or one from the middle, colour, width, whole run or fading. Recorded on the GPU (the car is found in the depth buffer, 30 points a second, 4.5 minutes); a restart clears it, a respawn starts a new line. Not recorded in replays.
+
 **Camera**
 - Jittered TAA: the game's projection gets a sub-pixel offset each frame, TAA supersamples the edges.
 - Motion blur and depth of field only in replays, intros and the video export (detected from the game), not while driving.
@@ -25,7 +28,9 @@
 - Spray no longer appears when climbing a quarter pipe, flying or falling.
 - Aurora: no moiré (grid and ring patterns) near the horizon; the curtains soften where they get smaller than a pixel.
 - Advanced menu: Lighting and Sky had a second, duplicate section.
-- TAA: 3x3 neighbourhood and a looser history clamp while the image stands still: fine grates and reflections no longer shimmer with the jitter.
+- TAA: 3x3 neighbourhood and a looser history clamp while the image stands still. The sub-pixel jitter is off by default (fine grates shimmered with it).
+- Bounce light (GI) has its own history: no more blotches on the road, also with TAA off.
+- Long-range shadows: the player's car no longer goes into the height map (it left blotchy shadows behind and below the car).
 - Reflections on wet and polished tracks are softly blurred instead of speckled.
 
 **Reflections**
@@ -33,7 +38,7 @@
 - Night presets (Neon Night, Event Horizon, Aurora) mirror at 1.3; auto quality steps back to 1 first when the frame rate drops.
 
 **Tools**
-- Previewer: `--time`, `--water`.
+- Previewer: `--time`, `--water`, `--drive` (moving camera, for the trail).
 
 **License**
 - MIT.

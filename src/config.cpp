@@ -99,6 +99,12 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("TargetFPS", "Auto quality: target FPS", "Image", Float, targetFps, 30.0f, 240.0f),
         TMVS_FIELD("DisableGameMSAA", "Disable game MSAA (restart)", "Image", Bool, disableGameMSAA, 0.0f, 1.0f),
         TMVS_FIELD("ReadableGameDepth", "Effects in replay/video export (restart)", "Image", Bool, readableGameDepth, 0.0f, 1.0f),
+
+        TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
+        TMVS_FIELD("TrailColor", "Trail colour", "Neon trail", Color, trailColor, 0.0f, 1.0f),
+        TMVS_FIELD("TrailWidth", "Trail width (m)", "Neon trail", Float, trailWidth, 0.05f, 1.0f),
+        TMVS_FIELD("TrailTyres", "Two lines from the rear tyres", "Neon trail", Bool, trailTyres, 0.0f, 1.0f),
+        TMVS_FIELD("TrailDuration", "Fade after (s, 0 = whole run)", "Neon trail", Float, trailDuration, 0.0f, 120.0f),
     };
     return table;
 }
@@ -174,17 +180,19 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
     return narrow(text);
 }
 
-// Machine settings that belong to the installation, not to a look.
+// Machine settings that belong to the installation, not to a look. The neon trail is yours
+// too: it stays when you switch presets.
 bool isSystemField(const Field& f) {
-    return !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
+    return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "TAAJitter");
 }
 
-void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem) {
+void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {
     char* base = reinterpret_cast<char*>(&settings);
     for (const Field& f : fields()) {
         if (!includeSystem && isSystemField(f)) continue;
+        if (onlyTrail && strcmp(f.key, "NeonTrail") != 0 && strncmp(f.key, "Trail", 5) != 0) continue;
         wchar_t key[64], value[128];
         swprintf(key, 64, L"%hs", f.key);
         if (!GetPrivateProfileStringW(section, key, L"", value, 128, ini)) continue;
@@ -354,8 +362,17 @@ void applyPreset(Settings& s, Preset preset) {
     const float keepSound = s.weatherSound;
     const bool keepReplayOnly = s.cinematicOnlyInReplays;
     const bool keepJitter = s.taaJitter;
+    const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
+    const bool keepTrailTyres = s.trailTyres;
+    float keepTrailColor[3];
+    memcpy(keepTrailColor, s.trailColor, sizeof(keepTrailColor));
     if (preset == Preset::Custom) return;
     s = Settings();
+    s.neonTrail = keepTrail;
+    s.trailWidth = keepTrailWidth;
+    s.trailDuration = keepTrailDuration;
+    s.trailTyres = keepTrailTyres;
+    memcpy(s.trailColor, keepTrailColor, sizeof(keepTrailColor));
     s.disableGameMSAA = keepMSAA;
     s.readableGameDepth = keepDepth;
     s.enabled = keepEnabled;
@@ -665,7 +682,8 @@ void Config::load() {
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
     if (GetPrivateProfileStringW(L"Settings", L"WeatherSound", L"", target, 32, ini)) settings.weatherSound = static_cast<float>(_wtof(target));
     settings.cinematicOnlyInReplays = GetPrivateProfileIntW(L"Settings", L"CinematicOnlyInReplays", 1, ini) != 0;
-    settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 1, ini) != 0;
+    settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
+    readFields(settings, ini, L"Settings", true, true);
     if (preset == kCustomPreset) {
         applyPreset(settings, Preset::Vibrant);
         readFields(settings, ini, L"Settings", false);
