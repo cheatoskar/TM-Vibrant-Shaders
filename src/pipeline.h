@@ -87,6 +87,7 @@ private:
         kLighting,
         kRainDrop,
         kRainSplash,
+        kSpray,
         kFocus,
         kDofBlur,
         kCinematic,
@@ -206,8 +207,10 @@ private:
     static constexpr UINT kRainDrops = 24000;    // at rain 2 (downpour)
     static constexpr UINT kRainSplashes = 5200;
     static constexpr UINT kRainChunk = 12000;    // quads per draw (16-bit indices)
+    static constexpr UINT kSprayParticles = 700;  // borrowed from the drop quads
     IDirect3DVertexShader9* m_dropVS = nullptr;
     IDirect3DVertexShader9* m_splashVS = nullptr;
+    IDirect3DVertexShader9* m_sprayVS = nullptr;
     IDirect3DVertexDeclaration9* m_rainDecl = nullptr;
     IDirect3DVertexBuffer9* m_rainVB = nullptr; // drops, then splashes
     IDirect3DIndexBuffer9* m_rainIB = nullptr;

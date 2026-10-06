@@ -2512,6 +2512,17 @@ float4 PS_RainDrop(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     return float4(rainLight(uv) * (across * along * data.w * u_Pass0.x), 0);
 }
 
+// Spray mist behind the car: soft puffs that thin out as they spread. u_Pass0.x = amount
+float4 PS_Spray(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 uv = (vpos + 0.5) * u_Screen.zw;
+    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - (data.z * 0.985 - 0.05));
+    float r2 = dot(data.xy, data.xy);
+    float puff = saturate(1.0 - r2);
+    puff *= puff;
+    float a = puff * pow(1.0 - data.w, 2.0) * u_Pass0.x * 0.05; // hundreds overlap: each one is faint
+    return float4(rainLight(uv) * a, 0);
+}
+
 float4 PS_RainSplash(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float2 uv = (vpos + 0.5) * u_Screen.zw;
     clip(tex2Dlod(s0, float4(uv, 0, 0)).w - (data.z * 0.985 - 0.05));

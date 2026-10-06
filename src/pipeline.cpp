@@ -16,7 +16,7 @@ const char* const kEntryPoints[] = {
     "PS_ShadowHeight", "PS_Volumetric", "PS_GI",
     "PS_SkyClear",    "PS_SkyStars", "PS_SkyBlackHole", "PS_SkyAurora",   "PS_SkyRing",     "PS_AuroraHalf",
     "PS_SkyAverage",  "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
-    "PS_RainDrop",    "PS_RainSplash",
+    "PS_RainDrop",    "PS_RainSplash", "PS_Spray",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",
@@ -143,6 +143,7 @@ void Pipeline::release() {
     gfx::release(m_splatDecl);
     gfx::release(m_dropVS);
     gfx::release(m_splashVS);
+    gfx::release(m_sprayVS);
     gfx::release(m_rainDecl);
     m_quad.destroy();
     destroyTargets();
@@ -735,6 +736,7 @@ float4 c_Prev1  : register(c11);
 float4 c_Prev2  : register(c12);
 float4 c_PrevP  : register(c13); // previous P00, P11, P20, P21
 float4 c_Motion : register(c14); // shutter (frames), previous frame valid, frame time (s), max streak (ndc)
+float4 c_Spray  : register(c15); // speed (m/s), spray amount, 0, 0
 sampler2D s_height : register(s0);
 sampler2D s_depth  : register(s1);
 struct VSOut { float4 pos : POSITION; float4 data : TEXCOORD0; };
@@ -824,6 +826,51 @@ VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     o.data = float4(corner.x, corner.y, v.z, age);
     return o;
 }
+
+// Spray: water thrown up by the rear tyres on a wet road. The car is found in the depth
+// buffer where the chase camera keeps it (low in the middle of the screen); every particle
+// leaves a tyre, rises, falls and hangs in the air while the car drives on.
+float3 viewRay(float2 uv, float z) {
+    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    return float3((ndc.x - c_Proj.z) / c_Proj.x * z, (ndc.y - c_Proj.w) / c_Proj.y * z, z);
+}
+
+VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
+    VSOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    float speed = c_Spray.x;
+    if (speed < 4.0 || c_Spray.y <= 0.0) return o;
+    // The car: the closest surface on three points below the screen centre.
+    // (The road right below the car would be closer still: stay above it.)
+    float z0 = tex2Dlod(s_depth, float4(0.5, 0.6, 0, 0)).r;
+    float z1 = tex2Dlod(s_depth, float4(0.5, 0.65, 0, 0)).r;
+    float z2 = tex2Dlod(s_depth, float4(0.5, 0.7, 0, 0)).r;
+    float bestZ = min(z0, min(z1, z2));
+    float2 bestUV = float2(0.5, bestZ == z0 ? 0.6 : (bestZ == z1 ? 0.65 : 0.7));
+    if (bestZ < 1.5 || bestZ > 16.0) return o; // no car in front of the camera
+    float3 v = viewRay(bestUV, bestZ);
+    float3 car = c_Cam.xyz + c_V0.xyz * v.x + c_V1.xyz * v.y + c_V2.xyz * v.z;
+    float3 fwd = normalize(float3(c_V2.x, 0.0, c_V2.z) + 1e-5); // camera forward, level
+    float3 right = float3(fwd.z, 0.0, -fwd.x);
+    float life = 0.6;
+    float age = frac(c_Cam.w / life * (0.85 + 0.3 * seed.w) + seed.z);
+    float ts = age * life;
+    float side = seed.x < 0.5 ? -1.0 : 1.0;
+    // The point found is the car's tail (rear wing / engine cover): the tyres sit below it.
+    float3 tyre = car + right * side * 0.8 - fwd * 0.2;
+    tyre.y = car.y - 0.8;
+    float3 vel = -fwd * (1.5 + 3.0 * seed.y) + float3(0, 1.2 + 2.8 * frac(seed.y * 7.1), 0) + right * side * (0.3 + 1.5 * frac(seed.x * 13.3));
+    // Thrown backwards and swept along in the car's wake, so it trails close behind.
+    float3 p = tyre - fwd * speed * ts * 0.25 + vel * ts;
+    p.y = max(p.y - 4.9 * ts * ts, tyre.y - 0.05);
+    float3 view = toView(p);
+    if (view.z < 0.5) return o;
+    float size = lerp(0.15, 1.1, sqrt(age)) * (0.7 + 0.6 * frac(seed.w * 3.7));
+    o.pos = toClip(view + float3(corner.x, corner.y * 2.0 - 1.0, 0.0) * size);
+    o.data = float4(corner.x, corner.y * 2.0 - 1.0, view.z, age);
+    return o;
+}
 )";
 
 } // namespace
@@ -845,13 +892,14 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
         if (d3d) d3d->Release();
         m_dropVS = blend ? gfx::compileVertexShader(device, kRainVS, "dropVS", "RainVS") : nullptr;
         m_splashVS = blend ? gfx::compileVertexShader(device, kRainVS, "splashVS", "RainVS") : nullptr;
+        m_sprayVS = blend ? gfx::compileVertexShader(device, kRainVS, "sprayVS", "RainVS") : nullptr;
         const D3DVERTEXELEMENT9 elements[] = {
             {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
             {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
             D3DDECL_END(),
         };
         if (m_dropVS) device->CreateVertexDeclaration(elements, &m_rainDecl);
-        if (!m_dropVS || !m_splashVS || !m_rainDecl) {
+        if (!m_dropVS || !m_splashVS || !m_sprayVS || !m_rainDecl) {
             TMVS_LOG("pipeline: rain particles unavailable (no FP16 blending or vertex shader failed)");
             m_rainSupported = false;
             return false;
@@ -980,6 +1028,9 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     pc[4][3] = 0.25f; // longest streak: 1/8 of the screen
     device->SetVertexShaderConstantF(0, &vc[0][0], 10);
     device->SetVertexShaderConstantF(10, &pc[0][0], 5);
+    const float speed = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
+    const float spray[4] = {speed, s.wetness * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
+    device->SetVertexShaderConstantF(15, spray, 1);
 
     device->SetRenderTarget(0, target);
     D3DVIEWPORT9 viewport = {0, 0, in.width, in.height, 0.0f, 1.0f};
@@ -1005,6 +1056,15 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         device->SetSamplerState(sampler, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
         device->SetSamplerState(sampler, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
         device->SetSamplerState(sampler, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    }
+
+    // Spray behind the car (wet roads, also after the rain has stopped).
+    if (spray[1] > 0.0f) {
+        device->SetVertexShader(m_sprayVS);
+        device->SetPixelShader(m_shaders[kSpray]);
+        passConstants(device, spray[1], 0.0f);
+        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, kSprayParticles * 4, 0, kSprayParticles * 2);
+        profileMark(kSpray);
     }
 
     // Rain 1 = steady rain, 2 = downpour (the buffers hold the downpour).
@@ -1383,7 +1443,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     // Rain particles go on top of the finished image: TAA would erase thin, fast drops as
     // flicker, and keeping them out of its history avoids trails.
-    if (s.rain > 0.0f && post && ensureRain(device)) drawRain(device, in, s, dt, heightMap && m_heightValid, output);
+    if ((s.rain > 0.0f || s.wetness > 0.0f) && post && ensureRain(device)) drawRain(device, in, s, dt, heightMap && m_heightValid, output);
     profileEnd();
 
     if (temporal) {
