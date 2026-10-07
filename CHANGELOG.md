@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+- Storm: the dry track also reflects (1.3), so the wet road and the stadium mirror more clearly.
+- Simple menu: the Sky section and the Sky choice inside it no longer share an ID (ImGui showed a conflict warning).
+- Log: when the game fails to create a texture or buffer, `tmvs.log` says so, with the error (process address space or video memory) and the memory left. The free memory is also logged at every map load and device reset. TmForever.exe is 32-bit and has 2 GB of address space; when that runs out, the game draws its surfaces untextured (white).
+
 ## 1.2.0
 
 **Game support**

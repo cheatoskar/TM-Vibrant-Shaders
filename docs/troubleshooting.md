@@ -41,6 +41,14 @@ Grates and thin lines can shimmer with *TAA: sub-pixel jitter*. It is off by def
 
 Long-range shadows build up a height map of the track while you drive. It starts over on every restart and respawn. If you still see odd shadow blotches somewhere, take an `F12` capture there and report it.
 
+## White surfaces without textures
+
+If roads, stands and other parts of the stadium turn plain white while flags and banners look normal, the game failed to load its textures. `F7` doesn't change it: it isn't an effect of the shaders. TmForever.exe is a 32-bit program with 2 GB of address space, shared by the game, every map and texture it loads, the mod and any overlay or recorder hooked into it (Medal, OBS game capture, Discord overlay). When that runs out, new textures can't be created.
+
+- Restart the game.
+- If it comes back: close recorders and overlays you don't need, or lower the texture quality in the TrackMania launcher.
+- Report it with `tmvs.log` from that session. Lines starting with `memory:` show what failed and how much memory was left (`E_OUTOFMEMORY` = address space, `D3DERR_OUTOFVIDEOMEMORY` = video memory). The free memory is also logged at every map load.
+
 ## Water in the wrong place
 
 Water is found by the height the game gives. On a map that changes heights or uses water in unusual ways it can go wrong. Lower *Water* in the weather settings, or set it to 0, and report the map.

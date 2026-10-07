@@ -65,6 +65,7 @@ Im TrackMania-Launcher unter *Erweitert*: **Kantenglättung aus** (der Mod schal
 | Effekte liegen über dem HUD | Unbekannte Spielversion. Unterstützt sind TMNF und TMUF 2.11.26. |
 | Kein Regen- oder Donner-Sound | Nur bei Regen oder Blitzen, im Rennen und wenn das Spiel im Vordergrund ist. Lautstärke im Menü (*Rain & thunder sound*, bis 2) und im Windows-Lautstärkemixer (*TmForever*). Die Sound- und Musikregler im Spiel wirken nicht darauf. |
 | Zu wenig FPS | *Auto quality* an lassen, Preset *Performance* oder *Effect quality: Low*. In *Advanced → Performance* steht, was am meisten kostet. |
+| Straßen und Stadion weiß ohne Texturen, Flaggen normal | Das Spiel konnte seine Texturen nicht laden (32-Bit-Spiel, 2 GB Adressraum, geteilt mit Overlays und Recordern wie Medal). Spiel neu starten, unnötige Overlays schließen oder die Texturqualität im Launcher senken. Mit `tmvs.log` melden: Zeilen mit `memory:` zeigen, was fehlschlug. |
 | Kanten zackiger als vorher | Absicht: Die Kantenglättung des Spiels muss für die Tiefeneffekte aus sein. FXAA und TAA ersetzen sie. |
 
 Fehler melden: [GitHub Issues](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues), mit `tmvs.log` und bei Bildfehlern einem `F12`-Capture (`screen_*.bmp` und `capture_*.tmcap`). Mehr in [troubleshooting.md](troubleshooting.md).

@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "hook.h"
 #include "log.h"
 #include <windows.h>
 #include <cstring>
@@ -260,6 +261,7 @@ void __fastcall tileHeightDetour(void* self, void* edx, float height) {
     g_seaLevel = height;
     if (height != -1.0f) TMVS_LOG("engine: sea level %.2f", height);
     else TMVS_LOG("engine: no sea on this map");
+    hook::logMemory("at map load");
 }
 
 int g_loggedShadowMode = -2;

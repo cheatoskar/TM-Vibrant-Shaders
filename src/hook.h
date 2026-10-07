@@ -24,6 +24,10 @@ struct DeviceCallbacks {
 bool install(const DeviceCallbacks& callbacks);
 void remove();
 
+// Free address space and video memory, to the log (failed resource creations are
+// logged by themselves).
+void logMemory(const char* when);
+
 // Calls made by the plugin itself between these are not traced or intercepted.
 void beginInternal();
 void endInternal();

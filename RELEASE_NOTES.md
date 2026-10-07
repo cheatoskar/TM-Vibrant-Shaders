@@ -1,6 +1,13 @@
-## TM Vibrant Shaders 1.2
+## TM Vibrant Shaders 1.2.1
 
 Real-time lighting, weather and skies for TrackMania Nations Forever and United Forever.
+
+**New in 1.2.1**
+- Storm: the track mirrors the stadium more clearly.
+- Simple menu: fixed an ID conflict warning in the Sky section.
+- Better bug reports: if the game runs out of memory and draws white, untextured surfaces, `Documents\TrackMania\TMVS\tmvs.log` now shows it. If that happens to you, please open an issue with the log.
+
+Everything below is new since 1.1.
 
 This release brings full TrackMania United Forever support, real rain and thunder sound, volumetric light, bounce light, lightning bolts, water that is found by its height, a neon light trail and the new **Realistic** preset.
 
@@ -14,7 +21,7 @@ This release brings full TrackMania United Forever support, real rain and thunde
 - **for the [TrackMania ModLoader](https://tomashu.dev/software/tmloader/)**, then tick the mod in the ModLoader, or
 - **into TrackMania Nations Forever or United Forever without the ModLoader**: the setup lists every TrackMania it finds, each with its own button, and adds a `d3d9.dll` next to `TmForever.exe`.
 
-Updating from 1.1: run the new setup, it replaces the old version. Your settings and presets in `Documents\TrackMania\TMVS` stay.
+Updating from 1.1 or 1.2: run the new setup, it replaces the old version. Your settings and presets in `Documents\TrackMania\TMVS` stay.
 
 In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the best result set *Antialiasing: off* and *Anisotropic filtering: 16x* in TrackMania's options.
 

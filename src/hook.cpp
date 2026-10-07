@@ -16,6 +16,10 @@ enum Slot : int {
     kReset = 16,
     kPresent = 17,
     kCreateTexture = 23,
+    kCreateVolumeTexture = 24,
+    kCreateCubeTexture = 25,
+    kCreateVertexBuffer = 26,
+    kCreateIndexBuffer = 27,
     kCreateRenderTarget = 28,
     kCreateDepthStencilSurface = 29,
     kStretchRect = 34,
@@ -44,6 +48,7 @@ void** g_vtable = nullptr;
 void* g_original[kSlotCount] = {};
 DeviceCallbacks g_callbacks;
 int g_internal = 0;
+IDirect3DDevice9* g_device = nullptr; // the game's device, for the memory report
 
 template <typename Fn>
 Fn original(Slot slot) {
@@ -78,6 +83,52 @@ void traceDrawState(IDirect3DDevice9* device, const char* kind, UINT primitives)
     if (ps) ps->Release();
 }
 
+// --- Memory report ---------------------------------------------------------
+// TmForever.exe is 32-bit without the large-address-aware flag: everything in the
+// process (the game's textures, every DLL, overlays like recorders) shares 2 GB of
+// address space. When it runs out, the game's textures fail to load and it draws
+// untextured (white) surfaces. Failed creations are logged with the memory left.
+
+const char* resultName(HRESULT hr) {
+    switch (hr) {
+        case E_OUTOFMEMORY: return "E_OUTOFMEMORY (process address space)";
+        case D3DERR_OUTOFVIDEOMEMORY: return "D3DERR_OUTOFVIDEOMEMORY (video memory)";
+        case D3DERR_INVALIDCALL: return "D3DERR_INVALIDCALL";
+        case D3DERR_NOTAVAILABLE: return "D3DERR_NOTAVAILABLE";
+        case D3DERR_DEVICELOST: return "D3DERR_DEVICELOST";
+        default: return "error";
+    }
+}
+
+void formatMemory(char* out, size_t size, IDirect3DDevice9* device) {
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    // Fragmentation matters as much as the total: a texture needs one contiguous block.
+    size_t largest = 0;
+    MEMORY_BASIC_INFORMATION info{};
+    for (const char* p = nullptr; VirtualQuery(p, &info, sizeof(info)) == sizeof(info);) {
+        if (info.State == MEM_FREE && info.RegionSize > largest) largest = info.RegionSize;
+        const char* next = static_cast<const char*>(info.BaseAddress) + info.RegionSize;
+        if (next <= p) break;
+        p = next;
+    }
+    const unsigned textureMem = device ? device->GetAvailableTextureMem() : 0;
+    snprintf(out, size, "address space %llu of %llu MB free (largest block %zu MB), video memory ~%u MB free (D3D estimate)",
+             status.ullAvailVirtual >> 20, status.ullTotalVirtual >> 20, largest >> 20, textureMem >> 20);
+}
+
+void logCreateFailure(IDirect3DDevice9* device, const char* what, HRESULT hr) {
+    static LONG s_failures = 0;
+    const LONG n = InterlockedIncrement(&s_failures);
+    // The first ones tell the story; after that, a reminder now and then.
+    if (n > 20 && n % 200 != 0) return;
+    char memory[200];
+    formatMemory(memory, sizeof(memory), device);
+    TMVS_LOG("memory: %s %s failed: 0x%08lx %s; %s; %ld failures so far", g_internal ? "mod" : "game", what, hr, resultName(hr),
+             memory, n);
+}
+
 // --- Detours ---------------------------------------------------------------
 
 HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
@@ -87,6 +138,8 @@ HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* pa
     TMVS_LOG("Reset -> 0x%08lx (%ux%u fmt=%s ms=%d autoDepth=%d %s windowed=%d)", hr, params->BackBufferWidth,
              params->BackBufferHeight, tracer::formatName(params->BackBufferFormat), params->MultiSampleType,
              params->EnableAutoDepthStencil, tracer::formatName(params->AutoDepthStencilFormat), params->Windowed);
+    g_device = device; // the first reset comes before the first Present
+    logMemory("after reset");
     if (SUCCEEDED(hr) && g_callbacks.postReset) {
         g_internal++;
         g_callbacks.postReset(device);
@@ -96,6 +149,7 @@ HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* pa
 }
 
 HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const RECT* dst, HWND window, const RGNDATA* dirty) {
+    g_device = device;
     if (g_callbacks.present) {
         g_internal++;
         g_callbacks.present(device);
@@ -111,9 +165,63 @@ HRESULT APIENTRY createTextureDetour(IDirect3DDevice9* device, UINT w, UINT h, U
                                      D3DPOOL pool, IDirect3DTexture9** out, HANDLE* shared) {
     HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9**,
                                              HANDLE*)>(kCreateTexture)(device, w, h, levels, usage, format, pool, out, shared);
+    if (FAILED(hr)) {
+        char what[96];
+        snprintf(what, sizeof(what), "CreateTexture %ux%u %s pool=%d", w, h, tracer::formatName(format), pool);
+        logCreateFailure(device, what, hr);
+    }
     if (g_internal == 0 && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
         TMVS_LOG("CreateTexture %ux%u levels=%u usage=0x%lx fmt=%s -> %p", w, h, levels, usage, tracer::formatName(format),
                  SUCCEEDED(hr) && out ? static_cast<void*>(*out) : nullptr);
+    }
+    return hr;
+}
+
+HRESULT APIENTRY createVolumeTextureDetour(IDirect3DDevice9* device, UINT w, UINT h, UINT d, UINT levels, DWORD usage,
+                                           D3DFORMAT format, D3DPOOL pool, IDirect3DVolumeTexture9** out, HANDLE* shared) {
+    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL,
+                                             IDirect3DVolumeTexture9**, HANDLE*)>(kCreateVolumeTexture)(device, w, h, d, levels, usage,
+                                                                                                      format, pool, out, shared);
+    if (FAILED(hr)) {
+        char what[96];
+        snprintf(what, sizeof(what), "CreateVolumeTexture %ux%ux%u %s pool=%d", w, h, d, tracer::formatName(format), pool);
+        logCreateFailure(device, what, hr);
+    }
+    return hr;
+}
+
+HRESULT APIENTRY createCubeTextureDetour(IDirect3DDevice9* device, UINT edge, UINT levels, DWORD usage, D3DFORMAT format,
+                                         D3DPOOL pool, IDirect3DCubeTexture9** out, HANDLE* shared) {
+    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DCubeTexture9**,
+                                             HANDLE*)>(kCreateCubeTexture)(device, edge, levels, usage, format, pool, out, shared);
+    if (FAILED(hr)) {
+        char what[96];
+        snprintf(what, sizeof(what), "CreateCubeTexture %u %s pool=%d", edge, tracer::formatName(format), pool);
+        logCreateFailure(device, what, hr);
+    }
+    return hr;
+}
+
+HRESULT APIENTRY createVertexBufferDetour(IDirect3DDevice9* device, UINT length, DWORD usage, DWORD fvf, D3DPOOL pool,
+                                          IDirect3DVertexBuffer9** out, HANDLE* shared) {
+    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, DWORD, DWORD, D3DPOOL, IDirect3DVertexBuffer9**, HANDLE*)>(
+        kCreateVertexBuffer)(device, length, usage, fvf, pool, out, shared);
+    if (FAILED(hr)) {
+        char what[96];
+        snprintf(what, sizeof(what), "CreateVertexBuffer %u bytes pool=%d", length, pool);
+        logCreateFailure(device, what, hr);
+    }
+    return hr;
+}
+
+HRESULT APIENTRY createIndexBufferDetour(IDirect3DDevice9* device, UINT length, DWORD usage, D3DFORMAT format, D3DPOOL pool,
+                                         IDirect3DIndexBuffer9** out, HANDLE* shared) {
+    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DIndexBuffer9**, HANDLE*)>(
+        kCreateIndexBuffer)(device, length, usage, format, pool, out, shared);
+    if (FAILED(hr)) {
+        char what[96];
+        snprintf(what, sizeof(what), "CreateIndexBuffer %u bytes pool=%d", length, pool);
+        logCreateFailure(device, what, hr);
     }
     return hr;
 }
@@ -297,6 +405,10 @@ const Detour kDetours[] = {
     {kReset, reinterpret_cast<void*>(&resetDetour)},
     {kPresent, reinterpret_cast<void*>(&presentDetour)},
     {kCreateTexture, reinterpret_cast<void*>(&createTextureDetour)},
+    {kCreateVolumeTexture, reinterpret_cast<void*>(&createVolumeTextureDetour)},
+    {kCreateCubeTexture, reinterpret_cast<void*>(&createCubeTextureDetour)},
+    {kCreateVertexBuffer, reinterpret_cast<void*>(&createVertexBufferDetour)},
+    {kCreateIndexBuffer, reinterpret_cast<void*>(&createIndexBufferDetour)},
     {kCreateRenderTarget, reinterpret_cast<void*>(&createRenderTargetDetour)},
     {kCreateDepthStencilSurface, reinterpret_cast<void*>(&createDepthStencilDetour)},
     {kStretchRect, reinterpret_cast<void*>(&stretchRectDetour)},
@@ -475,6 +587,12 @@ void remove() {
         if (g_original[d.slot]) writePointer(&g_vtable[d.slot], g_original[d.slot]);
     }
     g_vtable = nullptr;
+}
+
+void logMemory(const char* when) {
+    char memory[200];
+    formatMemory(memory, sizeof(memory), g_device);
+    TMVS_LOG("memory %s: %s", when, memory);
 }
 
 void beginInternal() {
