@@ -51,7 +51,7 @@ float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
 float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
 float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
-float4 u_Snow      : register(c39); // snowfall, snow cover, height map shelters (1 = valid), 0
+float4 u_Snow      : register(c39); // snowfall, snow cover, 0, 0
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -66,7 +66,6 @@ sampler2D s8 : register(s8);
 sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
-sampler2D s12 : register(s12); // height map (lighting pass, snow cover)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -1450,63 +1449,45 @@ float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
     return lerp(c, g, mask);
 }
 
-// Snow lying on everything that faces up: full on grass and open ground (snow fields with
-// drifts), a thinner, patchy layer on the track so the road stays readable, nothing on
-// lights, water, steep walls, or under bridges and roofs (the height map knows what is
-// above). Returns the coverage; `snow` is the snow's colour before the scene's lighting.
+// Snow lying on everything that faces up: snow fields on the grass and open ground, a
+// thin, even layer on the track and everything built (thicker in soft drifts) so the road
+// stays readable, little on painted surfaces (cars, coloured borders), none on lights,
+// water and steep walls. Returns the coverage; `snow` is the snow's colour before the
+// scene's lighting. Only the surface itself decides: nothing pops in while driving.
 float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, float emissive, float water, out float3 snow) {
     snow = 0;
     float cover = u_Snow.y;
     if (cover <= 0.0) return 0.0;
     float up = smoothstep(0.35, 0.8, nWorld.y);
     if (up <= 0.0) return 0.0;
-    // Under something (bridge, roof, tunnel): no snow. The map holds the highest surface
-    // seen from above at each spot.
-    if (u_Snow.z > 0.5) {
-        float2 m = (world.xz - u_HeightMap.xy) / u_HeightMap.z;
-        if (all(m > 0.0) && all(m < 1.0)) {
-            float h = tex2Dlod(s12, float4(m, 0, 0)).r;
-            if (h > 0.0 && h - 10000.0 > world.y + 1.2) return 0.0;
-            // Above the highest static surface: a car (kept out of the map), not the track.
-            if (h > 0.0 && world.y > h - 10000.0 + 0.4) return 0.0;
-        }
-    }
-    // The player's car (found in the depth buffer like the trail): no snow on it, also before
-    // the height map has seen the road under it.
-    float z0 = tex2Dlod(s1, float4(0.5, 0.6, 0, 0)).w, z1 = tex2Dlod(s1, float4(0.5, 0.65, 0, 0)).w, z2 = tex2Dlod(s1, float4(0.5, 0.7, 0, 0)).w;
-    float zc = min(z0, min(z1, z2));
-    float yc = zc == z0 ? 0.6 : (zc == z1 ? 0.65 : 0.7);
-    // The tail of a car faces backwards; ground there (no car in view) faces up.
-    if (zc > 1.5 && zc < 16.0 && viewToWorldDir(tex2Dlod(s1, float4(0.5, yc, 0, 0)).xyz).y < 0.8) {
-        float3 car = worldPosition(viewPosition(float2(0.5, yc), zc));
-        if (length(world.xz - car.xz) < 2.8 && world.y > car.y - 0.7) return 0.0;
-    }
-    // The track and everything grey and built (not grass): a thinner, patchy layer, so the
-    // road stays readable. Coloured borders and markings stay clearer too.
     float peak = max(c.r, max(c.g, c.b));
     float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
-    float asphalt = (1.0 - smoothstep(0.15, 0.3, sat)) * (1.0 - grass);
-    float colourful = smoothstep(0.35, 0.6, sat) * (1.0 - grass);
-    float patches = noise2(world.xz * 0.3) * 0.6 + noise2(world.xz * 1.9 + 7.0) * 0.4;
-    // Far away the patches would shimmer: they blend into their average.
-    patches = lerp(patches, 0.5, smoothstep(60.0, 160.0, dist));
-    float amount = cover * lerp(1.0, 0.55, asphalt) * lerp(1.0, 0.6, colourful);
-    float field = smoothstep(1.0 - amount * 1.3, 1.25 - amount * 1.3, patches + up * 0.25 + grass * 0.35);
-    // A fine dusting on the track instead of solid patches.
-    if (asphalt > 0.0) {
-        float dust = noise2(world.xz * 9.0) * 0.5 + noise2(world.xz * 23.0) * 0.5;
-        field *= lerp(1.0, smoothstep(0.75 - amount * 0.5, 0.95 - amount * 0.5, dust) * 0.85 + 0.15 * amount, asphalt * (1.0 - smoothstep(30.0, 90.0, dist)));
-    }
-    float mask = saturate(field * up * (1.0 - emissive) * (1.0 - water));
+    float built = 1.0 - grass;
+    float colourful = smoothstep(0.3, 0.55, sat) * built;
+    // Fields: closed at full cover, bare patches below. Far away the noise blends into its
+    // average (no shimmer).
+    float patches = noise2(world.xz * 0.25) * 0.65 + noise2(world.xz * 1.3 + 7.0) * 0.35;
+    patches = lerp(patches, 0.5, smoothstep(80.0, 200.0, dist));
+    float field = smoothstep(0.85 - cover, 1.15 - cover, patches + 0.3);
+    // Built surfaces: an even layer, thicker where the wind piled it up. Only slow noise,
+    // so it never turns into a speckle pattern.
+    float drift = noise2(world.xz * 0.12 + 3.0) * 0.6 + noise2(world.xz * 0.45) * 0.4;
+    float thin = cover * (0.45 + 0.35 * smoothstep(0.3, 0.8, drift));
+    float mask = saturate(lerp(field, thin, built) * lerp(1.0, 0.15, colourful) * up * (1.0 - emissive) * (1.0 - water));
     if (mask <= 0.0) return 0.0;
     // Drifts: soft dunes and wind ripples shade the fields a little.
     float dune = noise2(world.xz * 0.07 + float2(3.1, 1.7)) - noise2(world.xz * 0.07 + float2(3.4, 1.7));
     float ripple = sin(dot(world.xz, float2(0.8, 0.6)) * 3.0 + noise2(world.xz * 0.5) * 6.0);
-    float shade = 1.0 + dune * 0.6 + ripple * 0.02 * (1.0 - smoothstep(10.0, 40.0, dist));
+    float shade = 1.0 + dune * 0.35 + ripple * 0.02 * (1.0 - smoothstep(10.0, 40.0, dist)) * grass;
     // The game's own light and shadow on the surface carry over (dimmed snow in its shade).
     shade *= lerp(0.72, 1.0, saturate(luma(c) * 4.0));
     snow = float3(0.86, 0.9, 0.96) * shade;
     return mask;
+}
+
+// The colour of driving snow: the overcast light, whitened.
+float3 snowHaze(float3 sky) {
+    return luma(sky) * float3(0.95, 0.97, 1.0) * 1.25 + 0.02;
 }
 
 // Snow glinting in the sun: single crystals catch it, a few at a time, changing with the
@@ -1821,7 +1802,10 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         c += lightningBolt(rd);
         if (u_SunView.w > 0.5) c += volumetricLight(uv, rd, daylight).rgb;
         if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + 0.03) * rainStreaks(rd, SKY_Z) * 1.0;
-        if (u_Snow.x > 0.0) c = lerp(c, luma(skyAvg.rgb) * float3(0.95, 0.97, 1.0) * 1.25 + 0.02, snowVeil(rd, SKY_Z) * 0.7);
+        if (u_Snow.x > 0.0) {
+            c = lerp(c, snowHaze(skyAvg.rgb), saturate(u_Snow.x * 0.35) * (1.0 - saturate(rd.y * 1.5)));
+            c = lerp(c, snowHaze(skyAvg.rgb), snowVeil(rd, SKY_Z) * 0.7);
+        }
         return float4(c, 1);
     }
 
@@ -1978,7 +1962,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (u_Volume.z > 0.0) c += albedo * upsampleGI(uv, nd.w, n) * u_Volume.z * 2.5 * lerp(0.5, 1.0, occ.r);
 
     // Aerial perspective: exponential height fog lit by the sky and the sun.
-    float density = u_Atmo.x * 0.0009;
+    float density = u_Atmo.x * 0.0009 + u_Snow.x * 0.005;
     float falloff = max(u_Atmo.y * 0.012, 1e-4);
     float camY = u_UpView.w;
     float rdy = rd.y;
@@ -1986,6 +1970,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (abs(rdy) <= 1e-4) fogAmount = density * exp(-camY * falloff) * dist;
     fogAmount = 1.0 - exp(-max(fogAmount, 0.0));
     float3 fogColor = lerp(u_SkyColor.rgb * 0.7 * (0.3 + 0.7 * daylight), skyAvg.rgb, skyAvg.a * 0.75);
+    fogColor = lerp(fogColor, snowHaze(skyAvg.rgb), saturate(u_Snow.x * 0.6));
     float4 volume = volumetricLight(uv, rd, daylight);
     if (u_SunView.w > 0.5) fogColor += sunScatter(rd, u_Atmo.z * 0.6) * daylight * volume.a;
     c = lerp(c, fogColor, saturate(fogAmount));
@@ -2008,7 +1993,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (u_Light2.z > 0.0) c += (c * 2.5 + fogColor * 0.4 * fogAmount + 0.01) * float3(0.8, 0.85, 1.0) * u_Light2.z * (0.6 + 0.4 * saturate(nWorld.y));
 
     if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + u_SunColor.rgb * daylight * 0.15 + 0.03) * rainStreaks(rd, dist) * 1.0;
-    if (u_Snow.x > 0.0) c = lerp(c, luma(skyAvg.rgb) * float3(0.95, 0.97, 1.0) * 1.25 + 0.02, snowVeil(rd, dist) * 0.7);
+    if (u_Snow.x > 0.0) c = lerp(c, snowHaze(skyAvg.rgb), snowVeil(rd, dist) * 0.7);
     return float4(c, 1);
 }
 

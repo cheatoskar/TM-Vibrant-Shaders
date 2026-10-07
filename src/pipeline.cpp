@@ -522,7 +522,6 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
     const float water[4] = {in.water[0], in.water[1], in.water[2], 0.0f};
     device->SetPixelShaderConstantF(38, water, 1);
-    // z (whether the height map shelters surfaces from the snow) is set with the height map.
     const float snow[4] = {s.snow, s.snowCover, 0.0f, 0.0f};
     device->SetPixelShaderConstantF(39, snow, 1);
 }
@@ -1559,15 +1558,13 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     if (in.driving || in.time > m_heightHoldUntil) m_heightHoldUntil = -1.0f;
     const bool splat = temporal && m_heightHoldUntil < 0.0f;
-    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f || s.snowCover > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
+    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
     if (heightMap && splat && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s);
     const bool longShadows = heightMap && wantLong;
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
                                     longShadows ? s.longShadows : 0.0f};
     device->SetPixelShaderConstantF(34, longConstants, 1);
-    const float snowConstants[4] = {s.snow, s.snowCover, heightMap && m_heightValid ? 1.0f : 0.0f, 0.0f};
-    device->SetPixelShaderConstantF(39, snowConstants, 1);
 
     // 2. AO + sun shadows, bilateral blur.
     if (s.aoStrength > 0.0f || s.shadowStrength > 0.0f || s.debugView == 3 || s.debugView == 4 || s.debugView == 7) {
@@ -1703,11 +1700,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 9, m_spill[0].texture, true);
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
-    bind(device, 12, s.snowCover > 0.0f && m_heightMap[m_heightIndex].texture ? m_heightMap[m_heightIndex].texture : nullptr, false);
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
-    device->SetTexture(12, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
 
