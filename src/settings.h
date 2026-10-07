@@ -58,6 +58,7 @@ struct Settings {
     float skyBrightness = 1.0f;
     float cloudAmount = 0.5f;
     float starAmount = 1.0f;
+    float auroraSpeed = 1.0f;      // how fast the aurora curtains move
     float skyEffectSize = 1.0f;    // black hole size (above ~3 the camera is right at its disk, 0 = none)
     float blackHoleAzimuth = 0.0f;    // degrees, turns with the sky; the black hole lights the scene
     float blackHoleElevation = 15.6f; // degrees
@@ -115,6 +116,7 @@ struct Settings {
     bool lensDrops = false;        // rain drops on the lens (only while it rains)
     float weatherSound = 0.45f;    // volume of rain and thunder (only plays with rain or lightning)
     float reflections = 0.0f;      // dry glossy reflections on the track
+    float reflectionBlur = 0.35f;  // 0 = a mirror, 1 = a soft sheen (dry track)
     float grassDetail = 0.7f;      // grass blades and patches
     float mowingStripes = 0.5f;    // stadium mowing pattern
     float wind = 0.5f;

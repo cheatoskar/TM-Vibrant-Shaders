@@ -7,6 +7,8 @@
 #include "backends/imgui_impl_dx9.h"
 #include "backends/imgui_impl_win32.h"
 #include "tm_shaders_version.h"
+#include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -23,7 +25,7 @@ Status g_status;
 bool g_reloadRequested = false;
 
 const char* kSkyModes[] = {"Game sky", "Clear sky + clouds", "Starry night", "Black hole", "Aurora", "Ring world"};
-const char* kPlanetTypes[] = {"Saturn", "Jupiter", "Ice giant", "Exotic"};
+const char* kPlanetChoices[] = {"None", "Saturn", "Jupiter", "Ice giant", "Exotic"};
 const char* kPlanetViews[] = {"Distant", "Next to the rings", "On the rings"};
 const char* kDebugViews[] = {"Final image", "Depth", "Normals", "Ambient occlusion", "Sun shadows", "Light shafts", "Bloom", "Long shadows"};
 
@@ -65,11 +67,25 @@ void init(IDirect3DDevice9* device) {
 
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
+    style.WindowRounding = 8.0f;
     style.FrameRounding = 4.0f;
     style.GrabRounding = 4.0f;
+    style.PopupRounding = 6.0f;
+    style.ScrollbarRounding = 6.0f;
+    style.WindowPadding = ImVec2(12.0f, 10.0f);
+    style.FramePadding = ImVec2(7.0f, 4.0f);
+    style.ItemSpacing = ImVec2(8.0f, 6.0f);
+    style.WindowBorderSize = 1.0f;
+    style.GrabMinSize = 9.0f;
     ImVec4* colors = style.Colors;
     colors[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.07f, 0.09f, 0.94f);
+    colors[ImGuiCol_Border] = ImVec4(1.0f, 1.0f, 1.0f, 0.08f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.08f, 0.09f, 0.11f, 1.0f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.12f, 0.10f, 0.09f, 1.0f);
+    colors[ImGuiCol_Separator] = ImVec4(1.0f, 1.0f, 1.0f, 0.10f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.20f, 0.21f, 0.26f, 0.95f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.24f, 0.25f, 0.31f, 1.0f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.09f, 0.11f, 0.98f);
     colors[ImGuiCol_Header] = ImVec4(0.85f, 0.55f, 0.20f, 0.45f);
     colors[ImGuiCol_HeaderHovered] = ImVec4(0.95f, 0.62f, 0.25f, 0.65f);
     colors[ImGuiCol_HeaderActive] = ImVec4(0.95f, 0.62f, 0.25f, 0.85f);
@@ -143,6 +159,74 @@ void drawPerformance() {
     ImGui::TextDisabled("Measured on your GPU. Switching an effect off gains about its time.");
 }
 
+// Each part of the menu has its own muted colour (header, slider grab, check mark), so you
+// find your way around; the orange accent stays for everything else.
+ImVec4 sectionColour(const char* name) {
+    struct Entry {
+        const char* name;
+        ImVec4 colour;
+    };
+    static const Entry kColours[] = {
+        {"Lighting", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},       {"Look", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},
+        {"Sky", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},            {"Sky & Atmosphere", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},
+        {"Bloom & Lens", ImVec4(0.64f, 0.50f, 0.88f, 1.0f)},   {"Colour", ImVec4(0.88f, 0.48f, 0.58f, 1.0f)},
+        {"Weather", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},        {"Weather & Surfaces", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},
+        {"Cinematic", ImVec4(0.58f, 0.62f, 0.70f, 1.0f)},      {"Image", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},
+        {"Performance", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},    {"Neon trail", ImVec4(0.26f, 0.74f, 0.90f, 1.0f)},
+        {"Author's Shader", ImVec4(0.88f, 0.76f, 0.36f, 1.0f)},
+    };
+    for (const Entry& e : kColours) {
+        if (!strcmp(e.name, name)) return e.colour;
+    }
+    return ImVec4(0.85f, 0.55f, 0.20f, 1.0f);
+}
+
+struct SectionStyle {
+    explicit SectionStyle(const char* name) {
+        const ImVec4 c = sectionColour(name);
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(c.x, c.y, c.z, 0.28f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(c.x, c.y, c.z, 0.45f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(c.x, c.y, c.z, 0.60f));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(c.x, c.y, c.z, 0.90f));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, c);
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, c);
+    }
+    ~SectionStyle() { ImGui::PopStyleColor(6); }
+    SectionStyle(const SectionStyle&) = delete;
+    SectionStyle& operator=(const SectionStyle&) = delete;
+};
+
+// A small round "reset" arrow in front of a setting, shown only while it differs from the
+// preset it started from. Without it, the same space stays empty (the rows stay aligned).
+bool resetButton(bool show, const char* tooltipPreset) {
+    const float size = ImGui::GetFrameHeight();
+    if (!show) {
+        ImGui::Dummy(ImVec2(size, size));
+        ImGui::SameLine(0.0f, 4.0f);
+        return false;
+    }
+    const bool clicked = ImGui::InvisibleButton("reset", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 corner = ImGui::GetItemRectMin();
+    const ImVec2 centre(corner.x + size * 0.5f, corner.y + size * 0.5f);
+    if (hovered) draw->AddCircleFilled(centre, size * 0.46f, ImGui::GetColorU32(ImGuiCol_FrameBgHovered));
+    const ImU32 colour = ImGui::GetColorU32(hovered ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+    // A circular arrow, turning clockwise.
+    const float r = size * 0.24f, a0 = -2.2f, a1 = a0 + 4.9f;
+    draw->PathArcTo(centre, r, a0, a1, 18);
+    draw->PathStroke(colour, 0, 1.7f);
+    const ImVec2 end(centre.x + cosf(a1) * r, centre.y + sinf(a1) * r);
+    const ImVec2 along(-sinf(a1), cosf(a1)), out(cosf(a1), sinf(a1));
+    const float head = size * 0.15f;
+    draw->AddTriangleFilled(ImVec2(end.x + along.x * head, end.y + along.y * head),
+                            ImVec2(end.x + out.x * head * 0.9f - along.x * head * 0.3f, end.y + out.y * head * 0.9f - along.y * head * 0.3f),
+                            ImVec2(end.x - out.x * head * 0.9f - along.x * head * 0.3f, end.y - out.y * head * 0.9f - along.y * head * 0.3f), colour);
+    if (hovered) ImGui::SetTooltip("Reset to %s", tooltipPreset);
+    ImGui::SameLine(0.0f, 4.0f);
+    return clicked;
+}
+
 const Field* findField(const char* key) {
     for (const Field& f : fields()) {
         if (!strcmp(f.key, key)) return &f;
@@ -169,23 +253,63 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("SkyEnhance")) return sky == 0;
     if (is("SkyEffectSize")) return sky == 3 || sky == 5;
     if (is("BlackHoleAzimuth") || is("BlackHoleElevation")) return (sky == 3 || sky == 5) && s.skyEffectSize > 0.0f;
-    if (is("PlanetSize")) return sky == 2 || sky == 3 || sky == 5;
-    if (is("PlanetType")) return (sky == 2 || sky == 3 || sky == 5) && s.planetSize > 0.0f;
+    if (is("AuroraSpeed")) return sky == 4;
+    if (is("PlanetType")) return sky == 2 || sky == 3 || sky == 5; // "None" switches the planet off
+    if (is("PlanetSize")) return (sky == 2 || sky == 3 || sky == 5) && s.planetSize > 0.0f;
     if (is("PlanetAzimuth") || is("PlanetElevation")) return (sky == 3 || sky == 5) && s.planetSize > 0.0f;
     if (is("PlanetView")) return sky == 5 && s.planetSize > 0.0f;
     if (is("CloudCoverage") || is("CloudHeight")) return s.volumetricClouds > 0.0f;
     if (is("LongShadowRange")) return s.longShadows > 0.0f;
     if (is("ShadowLength")) return s.shadowStrength > 0.0f;
     if (is("GodRayDecay")) return s.godRays > 0.0f;
-    if (is("Puddles") || is("Spray")) return s.wetness > 0.0f;
-    if (is("LensDrops")) return s.rain > 0.0f;
+    if (is("Puddles")) return s.wetness > 0.0f;
+    if (is("Spray")) return s.wetness > 0.0f || s.snowCover > 0.0f;
+    if (is("LensDrops")) return s.rain > 0.0f || s.snow > 0.0f;
+    if (is("ReflectionBlur")) return s.reflections > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("TargetFPS")) return s.autoQuality;
     if (is("TAAJitter")) return s.taa;
     if (!strncmp(f.key, "Trail", 5)) return s.neonTrail > 0.0f;
-    if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f;
+    if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f || s.snow > 0.0f;
     if (is("SunAzimuth")) return s.sunElevationOverride >= 0.0f;
     return true;
+}
+
+// Choosing a sky brings the settings that make it look right (the planet with the space
+// skies, the black hole's light, a darker night for the stars).
+void applySkyDefaults(Settings& s, int sky) {
+    if (sky == 3 || sky == 5) {
+        s.skyEffectSize = 4.0f;
+        s.godRays = 1.35f;
+        s.godRayDecay = 0.9f;
+        if (s.planetSize <= 0.0f) s.planetSize = 1.0f;
+        if (sky == 5) s.planetView = 1; // next to the rings
+    } else if (sky == 2) {
+        s.skyNight = 0.5f;
+        s.skyBrightness = 1.0f;
+        s.reflections = 1.1f;
+    } else if (sky == 4) {
+        s.skyRotation = 150.0f;
+    }
+}
+
+size_t fieldSize(const Field& f) {
+    return f.kind == Field::Bool ? sizeof(bool) : (f.kind == Field::Color ? sizeof(float) * 3 : sizeof(float));
+}
+
+// Whether a setting differs from the preset it started from.
+bool differsFromBase(const Field& f, const Settings& s, const Settings& base) {
+    const char* a = reinterpret_cast<const char*>(&s) + f.offset;
+    const char* b = reinterpret_cast<const char*>(&base) + f.offset;
+    if (!strcmp(f.key, "PlanetType") && (s.planetSize > 0.0f) != (base.planetSize > 0.0f)) return true;
+    if (f.kind == Field::Float || f.kind == Field::Color) {
+        for (int i = 0; i < (f.kind == Field::Color ? 3 : 1); i++) {
+            const float x = reinterpret_cast<const float*>(a)[i], y = reinterpret_cast<const float*>(b)[i];
+            if (fabsf(x - y) > 1e-4f * (fabsf(y) + 1.0f)) return true;
+        }
+        return false;
+    }
+    return memcmp(a, b, fieldSize(f)) != 0;
 }
 
 // One setting as a widget. Returns true when the look changed (-> preset becomes Custom).
@@ -193,36 +317,60 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
     char* base = reinterpret_cast<char*>(&s);
     if (!label) label = f.label;
     bool changed = false;
+    ImGui::PushID(f.key);
+    // Machine settings (FPS target, sound volume, ...) are not part of a preset: no reset.
+    const Config& config = Config::get();
+    if (!isMachineSetting(f)) {
+        if (resetButton(differsFromBase(f, s, config.baseline()), config.basePreset().c_str())) {
+            memcpy(base + f.offset, reinterpret_cast<const char*>(&config.baseline()) + f.offset, fieldSize(f));
+            if (!strcmp(f.key, "PlanetType")) s.planetSize = config.baseline().planetSize;
+            changed = true;
+        }
+    } else {
+        resetButton(false, "");
+    }
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() - ImGui::GetFrameHeight() - 4.0f);
     switch (f.kind) {
         case Field::Bool:
-            changed = ImGui::Checkbox(label, reinterpret_cast<bool*>(base + f.offset));
+            changed |= ImGui::Checkbox(label, reinterpret_cast<bool*>(base + f.offset));
             break;
         case Field::Int: {
             int* value = reinterpret_cast<int*>(base + f.offset);
             if (!strcmp(f.key, "Quality")) {
                 static const char* kQualities[] = {"Low (fast)", "Medium", "High"};
-                changed = ImGui::Combo(label, value, kQualities, IM_ARRAYSIZE(kQualities));
+                changed |= ImGui::Combo(label, value, kQualities, IM_ARRAYSIZE(kQualities));
             } else if (!strcmp(f.key, "SkyMode")) {
-                changed = ImGui::Combo(label, value, kSkyModes, IM_ARRAYSIZE(kSkyModes));
-                // The black hole and ring world skies come with their planet.
-                if (changed && (*value == 3 || *value == 5) && s.planetSize <= 0.0f) s.planetSize = 1.0f;
+                if (ImGui::Combo(label, value, kSkyModes, IM_ARRAYSIZE(kSkyModes))) {
+                    applySkyDefaults(s, *value);
+                    changed = true;
+                }
             } else if (!strcmp(f.key, "PlanetType")) {
-                changed = ImGui::Combo(label, value, kPlanetTypes, IM_ARRAYSIZE(kPlanetTypes));
+                int choice = s.planetSize > 0.0f ? *value + 1 : 0;
+                if (ImGui::Combo(label, &choice, kPlanetChoices, IM_ARRAYSIZE(kPlanetChoices))) {
+                    if (choice == 0) {
+                        s.planetSize = 0.0f;
+                    } else {
+                        *value = choice - 1;
+                        if (s.planetSize <= 0.0f) s.planetSize = 1.0f;
+                    }
+                    changed = true;
+                }
             } else if (!strcmp(f.key, "PlanetView")) {
-                changed = ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
+                changed |= ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
             } else {
-                changed = ImGui::SliderInt(label, value, static_cast<int>(f.min), static_cast<int>(f.max));
+                changed |= ImGui::SliderInt(label, value, static_cast<int>(f.min), static_cast<int>(f.max));
             }
             break;
         }
         case Field::Color:
-            changed = ImGui::ColorEdit3(label, reinterpret_cast<float*>(base + f.offset), ImGuiColorEditFlags_NoInputs);
+            changed |= ImGui::ColorEdit3(label, reinterpret_cast<float*>(base + f.offset), ImGuiColorEditFlags_NoInputs);
             break;
         default:
-            changed = ImGui::SliderFloat(label, reinterpret_cast<float*>(base + f.offset), f.min, f.max,
-                                         !strcmp(f.key, "TargetFPS") ? "%.0f" : "%.2f");
+            changed |= ImGui::SliderFloat(label, reinterpret_cast<float*>(base + f.offset), f.min, f.max,
+                                          !strcmp(f.key, "TargetFPS") ? "%.0f" : "%.2f");
             break;
     }
+    ImGui::PopID();
     if (!changed) return false;
     Config::get().markDirty();
     return !isMachineSetting(f);
@@ -287,58 +435,104 @@ void drawStatus(const Settings& s) {
     }
 }
 
+// A section of the simple menu in its colour; `body` draws its settings (returns whether
+// the look changed).
+template <typename Body>
+bool simpleSection(Config& config, const char* label, int bit, Body body) {
+    SectionStyle style(label);
+    return section(config, label, bit) && body();
+}
+
 // The everyday menu: the handful of things a player wants.
 bool drawSimple(Config& config, Settings& s) {
     bool look = false;
-    if (section(config, "Sky", 0)) {
-        look |= drawKey(s, "SkyMode", "Sky");
-        look |= drawKey(s, "SkyRotation", "Turn the sky");
-        look |= drawKey(s, "StarAmount", "Stars");
-        look |= drawKey(s, "PlanetSize", "Planet size (0 = off)");
-        look |= drawKey(s, "PlanetType", "Planet");
-        look |= drawKey(s, "PlanetView", "View");
-        look |= drawKey(s, "PlanetAzimuth", "Planet direction");
-        look |= drawKey(s, "PlanetElevation", "Planet height");
-        look |= drawKey(s, "SkyEffectSize", "Black hole size (0 = off)");
-        look |= drawKey(s, "BlackHoleAzimuth", "Black hole direction");
-        look |= drawKey(s, "BlackHoleElevation", "Black hole height");
-    }
-
-    if (section(config, "Look", 1)) {
-        look |= drawKey(s, "ShadowStrength", "Shadows");
-        look |= drawKey(s, "GodRays", "Light shafts");
-        look |= drawKey(s, "Bloom", "Glow");
-        look |= drawKey(s, "NeonLight", "Neon light");
-        look |= drawKey(s, "Exposure", "Brightness");
-        look |= drawKey(s, "Saturation", "Colour");
-        look |= drawKey(s, "MotionBlur", "Motion blur");
-    }
-
-    if (section(config, "Weather", 2)) {
-        look |= drawKey(s, "Rain", "Rain");
-        look |= drawKey(s, "Snow", "Snow");
-        look |= drawKey(s, "SnowCover", "Snow on the ground");
-        look |= drawKey(s, "Wetness", "Wet roads");
-        look |= drawKey(s, "VolumetricClouds", "Clouds");
-        look |= drawKey(s, "Lightning", "Lightning");
-        look |= drawKey(s, "LensDrops", "Drops on the lens");
-        look |= drawKey(s, "Spray", "Spray behind the car");
-        if (s.rain > 0.0f || s.lightning > 0.0f) look |= drawKey(s, "WeatherSound", "Rain & thunder sound");
-        look |= drawKey(s, "WaterSurfaces", "Water");
-        look |= drawKey(s, "Reflections", "Reflections (dry track)");
-    }
-
-    if (section(config, "Performance", 3)) {
-        look |= drawKey(s, "AutoQuality", "Adapt quality to my GPU");
+    look |= simpleSection(config, "Sky", 0, [&s] {
+        bool l = drawKey(s, "SkyMode", "Sky");
+        l |= drawKey(s, "SkyRotation", "Turn the sky");
+        l |= drawKey(s, "StarAmount", "Stars");
+        l |= drawKey(s, "AuroraSpeed", "Aurora movement");
+        l |= drawKey(s, "PlanetType", "Planet");
+        l |= drawKey(s, "PlanetSize", "Planet size");
+        l |= drawKey(s, "PlanetView", "View");
+        l |= drawKey(s, "PlanetAzimuth", "Planet direction");
+        l |= drawKey(s, "PlanetElevation", "Planet height");
+        l |= drawKey(s, "SkyEffectSize", "Black hole size (0 = off)");
+        l |= drawKey(s, "BlackHoleAzimuth", "Black hole direction");
+        l |= drawKey(s, "BlackHoleElevation", "Black hole height");
+        return l;
+    });
+    look |= simpleSection(config, "Look", 1, [&s] {
+        bool l = drawKey(s, "ShadowStrength", "Shadows");
+        l |= drawKey(s, "GodRays", "Light shafts");
+        l |= drawKey(s, "Bloom", "Glow");
+        l |= drawKey(s, "NeonLight", "Neon light");
+        l |= drawKey(s, "Exposure", "Brightness");
+        l |= drawKey(s, "Saturation", "Colour");
+        l |= drawKey(s, "MotionBlur", "Motion blur");
+        return l;
+    });
+    look |= simpleSection(config, "Weather", 2, [&s] {
+        bool l = drawKey(s, "Rain", "Rain");
+        l |= drawKey(s, "Snow", "Snow");
+        l |= drawKey(s, "SnowCover", "Snow on the ground");
+        l |= drawKey(s, "Wetness", "Wet roads");
+        l |= drawKey(s, "VolumetricClouds", "Clouds");
+        l |= drawKey(s, "Lightning", "Lightning");
+        l |= drawKey(s, "LensDrops", "Drops on the lens");
+        l |= drawKey(s, "Spray", "Spray behind the car");
+        l |= drawKey(s, "WeatherSound", "Weather sound");
+        l |= drawKey(s, "WaterSurfaces", "Water");
+        l |= drawKey(s, "Reflections", "Reflections (dry track)");
+        l |= drawKey(s, "ReflectionBlur", "Reflection blur");
+        return l;
+    });
+    look |= simpleSection(config, "Performance", 3, [&s] {
+        bool l = drawKey(s, "AutoQuality", "Adapt quality to my GPU");
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Turns effects down when the frame rate drops below the target, and back up when there is room.\n"
                               "Your settings and presets stay as they are.");
         }
-        look |= drawKey(s, "TargetFPS", "Target FPS");
-        look |= drawKey(s, "Quality", "Effect quality");
+        l |= drawKey(s, "TargetFPS", "Target FPS");
+        l |= drawKey(s, "Quality", "Effect quality");
+        return l;
+    });
+    return look;
+}
+
+bool containsNoCase(const char* text, const char* query) {
+    for (; *text; text++) {
+        size_t i = 0;
+        while (query[i] && text[i] && tolower(static_cast<unsigned char>(text[i])) == tolower(static_cast<unsigned char>(query[i]))) i++;
+        if (!query[i]) return true;
     }
+    return false;
+}
+
+// Search over every setting: the matches of all sections in one list. A match that does
+// nothing with the current choices is shown greyed out.
+bool drawSearchResults(Settings& s, const char* query) {
+    bool look = false;
+    const char* lastCategory = nullptr;
+    int matches = 0;
+    for (const Field& f : fields()) {
+        if (!containsNoCase(f.label, query) && !containsNoCase(f.key, query) && !containsNoCase(f.category, query)) continue;
+        matches++;
+        if (!lastCategory || strcmp(lastCategory, f.category) != 0) {
+            lastCategory = f.category;
+            ImGui::PushStyleColor(ImGuiCol_Text, sectionColour(f.category));
+            ImGui::SeparatorText(f.category);
+            ImGui::PopStyleColor();
+        }
+        SectionStyle style(f.category);
+        const bool relevant = isRelevant(f, s);
+        ImGui::BeginDisabled(!relevant);
+        look |= drawField(f, s);
+        ImGui::EndDisabled();
+        if (!relevant && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("No effect with the current settings");
+    }
+    if (!matches) ImGui::TextDisabled("Nothing found.");
     return look;
 }
 
@@ -357,19 +551,35 @@ bool drawAdvanced(Config& config, Settings& s, const std::vector<std::string>& n
     ImGui::TextDisabled("Sun: %s (%.2f %.2f %.2f)", g_status.sunKnown ? "from game" : "unknown", g_status.sunDirection[0],
                         g_status.sunDirection[1], g_status.sunDirection[2]);
 
+    static char query[48] = "";
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##search", "Search settings", query, sizeof(query));
+
     bool look = false;
-    const char* openCategory = nullptr;
-    bool categoryOpen = false;
-    for (const Field& f : fields()) {
-        if (!openCategory || strcmp(openCategory, f.category) != 0) {
-            openCategory = f.category;
-            categoryOpen = ImGui::CollapsingHeader(f.category);
+    if (query[0]) {
+        look = drawSearchResults(s, query);
+    } else {
+        const char* openCategory = nullptr;
+        bool categoryOpen = false;
+        for (const Field& f : fields()) {
+            if (!openCategory || strcmp(openCategory, f.category) != 0) {
+                openCategory = f.category;
+                SectionStyle style(f.category);
+                categoryOpen = ImGui::CollapsingHeader(f.category);
+            }
+            if (categoryOpen && isRelevant(f, s)) {
+                SectionStyle style(f.category);
+                look |= drawField(f, s);
+            }
         }
-        if (categoryOpen && isRelevant(f, s)) look |= drawField(f, s);
     }
-    drawPerformance();
+    {
+        SectionStyle style("Image");
+        drawPerformance();
+    }
 
     // Author's Shader: a look stored in a map (its comments), for everyone with the mod.
+    SectionStyle authorStyle("Author's Shader");
     if (ImGui::CollapsingHeader("Author's Shader")) {
         bool mapLooks = config.useMapLooks;
         if (ImGui::Checkbox("Load Author's Shaders", &mapLooks)) config.setUseMapLooks(mapLooks);
@@ -391,12 +601,17 @@ bool drawAdvanced(Config& config, Settings& s, const std::vector<std::string>& n
 
     ImGui::Separator();
     if (ImGui::Button("Reset preset")) {
-        std::string base = config.preset;
-        if (base == kCustomPreset) {
-            base = config.mood != Mood::Unknown ? config.moodPreset[static_cast<int>(config.mood)] : std::string();
-            if (base.empty()) base = "Vibrant";
+        // Back to the preset your changes started from (a map's look: its own look again).
+        if (config.basePreset() == kMapLookPreset) {
+            const Settings base = config.baseline();
+            const bool enabled = s.enabled;
+            s = base;
+            s.enabled = enabled;
+            config.preset = kMapLookPreset;
+            config.markDirty();
+        } else {
+            config.selectPreset(config.basePreset());
         }
-        config.selectPreset(base);
     }
     ImGui::SameLine();
     if (ImGui::Button("Reload shaders (F9)")) g_reloadRequested = true;
@@ -444,7 +659,18 @@ void drawMenu() {
     drawStatus(s);
 
     const bool look = config.advancedMenu ? drawAdvanced(config, s, names) : drawSimple(config, s);
-    if (look) config.preset = kCustomPreset;
+    if (look) {
+        config.preset = kCustomPreset;
+        // Every setting reset by hand: it is the preset again.
+        bool same = true;
+        for (const Field& f : fields()) {
+            if (!isMachineSetting(f) && differsFromBase(f, s, config.baseline())) {
+                same = false;
+                break;
+            }
+        }
+        if (same) config.preset = config.basePreset();
+    }
 
     ImGui::Spacing();
     ImGui::TextDisabled(config.advancedMenu ? "Saved automatically.   F12 frame capture"

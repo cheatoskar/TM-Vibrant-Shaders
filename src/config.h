@@ -71,6 +71,10 @@ public:
     bool selectPreset(const std::string& name); // from the menu: also becomes the current mood's preset
     bool saveUserPreset(const std::string& name);
     void deleteUserPreset(const std::string& name);
+    // The preset your look started from (also after your own changes) and its values: the
+    // menu offers to reset each setting to it.
+    const Settings& baseline() const { return m_baseline; }
+    const std::string& basePreset() const { return m_basePreset; }
 
     // Automatic preset per map mood (day / sunrise + sunset / night). "" = keep current.
     bool autoMood = true;
@@ -92,6 +96,7 @@ public:
 private:
     Config() = default;
     bool applyNamed(const std::string& name);
+    bool namedSettings(const std::string& name, Settings& out) const;
     Settings ownSettings() const;
     void leaveMapLook();
     void scanUserPresets();
@@ -104,6 +109,10 @@ private:
     Settings m_ownSettings;       // your look while a map look is shown
     std::string m_ownPreset;
     std::string m_mapComments;    // of the current map, to apply its look when switched on
+    Settings m_baseline;
+    std::string m_basePreset = "Vibrant";
+    Settings m_ownBaseline;       // yours while a map look is shown
+    std::string m_ownBasePreset;
     bool m_dirty = false;
     unsigned long m_dirtySince = 0;
 };

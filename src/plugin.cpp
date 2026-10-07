@@ -217,6 +217,47 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs) {
     g_screenshotRequested = true;
 }
 
+// Switching presets (or a map bringing its own look) glides over about a second instead of
+// jumping: every number and colour eases toward its new value. Switches (sky, on/off) change
+// at once. Angles take the short way round.
+Settings g_shown;
+float g_shownTime = -1.0f;
+
+void smoothLook(Settings& s, float now) {
+    const float dt = now - g_shownTime;
+    if (g_shownTime < 0.0f || dt > 0.5f) {
+        g_shown = s; // first frame, or after a pause (loading): no glide
+        g_shownTime = now;
+        return;
+    }
+    if (dt > 0.0f) { // several cameras in one frame share one step
+        g_shownTime = now;
+        const float k = 1.0f - expf(-dt / 0.3f);
+        char* shown = reinterpret_cast<char*>(&g_shown);
+        const char* target = reinterpret_cast<const char*>(&s);
+        for (const Field& f : fields()) {
+            float* a = reinterpret_cast<float*>(shown + f.offset);
+            const float* b = reinterpret_cast<const float*>(target + f.offset);
+            if (f.kind == Field::Float || f.kind == Field::Color) {
+                const bool angle = strstr(f.key, "Azimuth") || !strcmp(f.key, "SkyRotation");
+                for (int i = 0; i < (f.kind == Field::Color ? 3 : 1); i++) {
+                    float d = b[i] - a[i];
+                    if (angle) d = fmodf(d + 540.0f, 360.0f) - 180.0f;
+                    a[i] = fabsf(d) < 1e-4f * (fabsf(b[i]) + 1.0f) ? b[i] : a[i] + d * k;
+                    if (angle) a[i] = fmodf(a[i] + 360.0f, 360.0f);
+                }
+            } else {
+                memcpy(shown + f.offset, target + f.offset, f.kind == Field::Bool ? sizeof(bool) : sizeof(int));
+            }
+        }
+    }
+    const bool enabled = s.enabled;
+    const int debugView = s.debugView;
+    s = g_shown;
+    s.enabled = enabled;
+    s.debugView = debugView;
+}
+
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
 void processScene(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
@@ -330,6 +371,7 @@ void processScene(IDirect3DDevice9* device) {
     if (settings.enabled) {
         // Auto quality renders a reduced copy; your settings stay untouched.
         Settings effective = settings;
+        smoothLook(effective, seconds());
         g_autoQuality.apply(effective);
         // Motion blur and depth of field are for watching, not for driving (the auto focus
         // would blur the track ahead of you).

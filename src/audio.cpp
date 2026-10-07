@@ -35,6 +35,7 @@ constexpr int kThunderClips[3][4] = {
 
 // Shared with the mixer thread.
 std::atomic<float> g_rain{0.0f};      // 0 .. 2
+std::atomic<float> g_wind{0.0f};      // snow storm wind, 0 .. 2
 std::atomic<float> g_volume{0.0f};    // master, already faded for focus / menus
 std::atomic<int> g_thunderSerial{0};  // bumped for every new thunder
 std::atomic<float> g_thunderDistance{0.0f}; // 0 close .. 1 far
@@ -128,6 +129,18 @@ struct OnePole {
     float process(float x) { return y += a * (x - y); }
 };
 
+// State-variable band pass (Chamberlin), for the wind.
+struct BandPass {
+    float low = 0.0f, band = 0.0f;
+    float process(float x, float hz, float damping) {
+        const float f = 2.0f * sinf(kPi * fminf(hz, kRate / 8.0f) / kRate);
+        low += f * band;
+        const float high = x - low - damping * band;
+        band += f * high;
+        return band;
+    }
+};
+
 struct Random {
     uint32_t state;
     explicit Random(uint32_t seed) : state(seed | 1u) {}
@@ -199,10 +212,32 @@ public:
         TMVS_LOG("audio: thunder (distance %.2f, sound %d, decoded in %u ms)", distance, kThunderClips[group][pick], GetTickCount() - start);
     }
 
+    // Wind of a snow storm, synthesised: noise through a band pass that rises and falls with
+    // the gusts (the howl), over a low rumble. Each ear gets its own noise (wide, not mono).
+    void wind(float* out, float amount) {
+        m_windLevel += (amount - m_windLevel) * 0.00003f; // ~1 s glide
+        if (m_windLevel < 1e-3f) return;
+        m_windTime += 1.0f / kRate;
+        const float t = m_windTime;
+        // Gusts: slow waves plus a wandering random part.
+        m_windDrift += ((m_random.uniform() - 0.5f) * 2.0f - m_windDrift) * 0.00002f;
+        const float gust = fmaxf(0.45f, 0.65f + 0.22f * sinf(t * 0.45f) + 0.13f * sinf(t * 1.27f + 1.0f) + m_windDrift * 3.0f);
+        const float level = powf(fminf(m_windLevel, 2.0f), 0.8f) * gust * gust;
+        for (int c = 0; c < 2; c++) {
+            const float noise = m_random.uniform() * 2.0f - 1.0f;
+            const float howl = m_howl[c].process(noise, (230.0f + 380.0f * gust) * (c ? 1.07f : 1.0f), 0.35f);
+            const float rush = m_rush[c].process(noise, 900.0f + 700.0f * gust, 1.2f);
+            const float rumble = m_rumble[c].process(noise);
+            out[c] += (howl * 0.18f + rush * 0.07f + rumble * 1.0f) * level;
+        }
+    }
+
     // Adds `frames` stereo frames to out.
-    void render(float* out, int frames, float rain) {
+    void render(float* out, int frames, float rain, float windAmount = 0.0f) {
         const size_t rainFrames = m_rain.frames();
+        for (int c = 0; c < 2; c++) m_rumble[c].setCutoff(110.0f);
         for (int i = 0; i < frames; i++) {
+            wind(out + i * 2, windAmount);
             float thunder[2] = {0.0f, 0.0f};
             for (auto& v : m_voices) {
                 if (!v.active) continue;
@@ -248,6 +283,9 @@ private:
         bool active = false;
     };
     Clip m_rain;
+    BandPass m_howl[2], m_rush[2];
+    OnePole m_rumble[2];
+    float m_windLevel = 0.0f, m_windTime = 0.0f, m_windDrift = 0.0f;
     size_t m_rainPosition = 0;
     float m_rainLevel = 0.0f, m_thunderLevel = 0.0f;
     Voice m_voices[2];
@@ -311,7 +349,7 @@ void mixer() {
                 mix.startThunder(g_thunderDistance.load(), g_thunderPan.load());
             }
             std::fill(buffer.begin(), buffer.end(), 0.0f);
-            mix.render(buffer.data(), kBufferFrames, g_rain.load());
+            mix.render(buffer.data(), kBufferFrames, g_rain.load(), g_wind.load());
             const float target = g_volume.load();
             int16_t* out = reinterpret_cast<int16_t*>(h.lpData);
             for (int i = 0; i < kBufferFrames * 2; i++) {
@@ -388,7 +426,7 @@ void setAlwaysInFront(bool on) {
 }
 
 void update(const Settings& s, float time, bool active, HWND window) {
-    const bool wanted = s.enabled && s.weatherSound > 0.0f && (s.rain > 0.0f || s.lightning > 0.0f);
+    const bool wanted = s.enabled && s.weatherSound > 0.0f && (s.rain > 0.0f || s.lightning > 0.0f || s.snow > 0.0f);
     // Fade with the scene: silent in menus and while the game is in the background. The game
     // counts as in front when any of its windows is (the device's focus window can be a
     // child window that is never the foreground window itself).
@@ -413,6 +451,7 @@ void update(const Settings& s, float time, bool active, HWND window) {
     }
     if (!g_running) return;
     g_rain = s.rain;
+    g_wind = s.snow > 0.0f ? fminf(s.snow, 2.0f) * (0.4f + s.wind) : 0.0f;
     g_volume = s.weatherSound * g_fade;
 
     // Thunder follows each lightning flash after a delay that grows with the distance
@@ -457,7 +496,7 @@ bool decodeToWav(const wchar_t* mp3Path, const wchar_t* wavPath) {
     return decodeMp3(data.data(), data.size(), clip) && writeWav(wavPath, clip.samples);
 }
 
-bool renderWav(const wchar_t* path, float rainAmount, float volume) {
+bool renderWav(const wchar_t* path, float rainAmount, float volume, float windAmount) {
     // Rain with six thunders, close to far, from both sides.
     const float thunderAt[6] = {2.0f, 11.0f, 20.0f, 29.0f, 37.0f, 46.0f};
     const float thunderDistance[6] = {0.1f, 0.5f, 0.9f, 0.2f, 0.75f, 0.0f};
@@ -471,12 +510,12 @@ bool renderWav(const wchar_t* path, float rainAmount, float volume) {
     pcm.reserve(static_cast<size_t>(kRate) * seconds * 2);
     for (int frame = 0; frame < kRate * seconds; frame += kBufferFrames) {
         const float t = static_cast<float>(frame) / kRate;
-        if (started < 6 && t >= thunderAt[started]) {
+        if (started < 6 && t >= thunderAt[started] && rainAmount > 0.0f) {
             mix.startThunder(thunderDistance[started], thunderPan[started]);
             started++;
         }
         std::fill(buffer.begin(), buffer.end(), 0.0f);
-        mix.render(buffer.data(), kBufferFrames, rainAmount);
+        mix.render(buffer.data(), kBufferFrames, rainAmount, windAmount);
         for (float v : buffer) pcm.push_back(static_cast<int16_t>(tanhf(v * volume) * 32000.0f));
     }
     return writeWav(path, pcm);

@@ -53,6 +53,7 @@ float4 u_Light2    : register(c36); // neon light spill, game sun direction know
 float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
 float4 u_Snow      : register(c39); // snowfall, snow cover, 0, 0
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
+float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 0
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -708,28 +709,30 @@ float3 dirFromAngles(float azimuth, float elevation) {
 
 // Cloud bands of the planet. lat = -1..1 along the spin axis, lon = longitude (rad),
 // q = point on the unit sphere (for turbulence).
+float wrapAngle(float a) { return a - 6.2831853 * floor(a / 6.2831853 + 0.5); }
+
 float3 planetAlbedo(int type, float lat, float lon, float3 q) {
     float t = u_Proj2.z * 0.004;
     // Turbulent band edges: the latitude is warped by noise.
     float warp = (noise3(q * 4.0 + float3(t, 0, 0)) - 0.5) * 0.09 + (noise3(q * 11.0 - float3(0, t, 0)) - 0.5) * 0.035;
     float l = lat + warp;
     float bands = noise3(float3(l * 9.0, 0.5, 1.5)) * 0.65 + noise3(float3(l * 27.0, 3.5, 0.5)) * 0.35;
-    float fine = noise3(float3(l * 70.0, lon * 0.4, 2.0));
+    float fine = noise3(float3(l * 70.0, 2.0, 0.0) + float3(0.0, q.x, q.z) * 0.4);
     float3 col;
     if (type == 1) {
         // Jupiter: cream zones, brown and rust belts, the Great Red Spot.
         col = lerp(float3(0.55, 0.36, 0.24), float3(0.95, 0.88, 0.76), smoothstep(0.35, 0.65, bands));
         col = lerp(col, float3(0.78, 0.5, 0.32), smoothstep(0.55, 0.8, fine) * 0.35);
-        float2 spot = float2((lon - 1.2) * 0.55, (lat + 0.38) * 2.2);
+        float2 spot = float2(wrapAngle(lon - 1.2) * 0.55, (lat + 0.38) * 2.2);
         float swirl = noise3(float3(spot * 6.0, t * 3.0));
         float oval = smoothstep(0.32, 0.18, length(spot) + (swirl - 0.5) * 0.08);
         col = lerp(col, float3(0.8, 0.38, 0.24), oval * 0.85);
     } else if (type == 2) {
         // Ice giant: deep blue with faint bands, white methane streaks and a dark storm.
         col = lerp(float3(0.13, 0.27, 0.72), float3(0.32, 0.52, 0.92), smoothstep(0.3, 0.7, bands));
-        float streak = smoothstep(0.72, 0.9, noise3(float3(l * 40.0, lon * 3.0, 7.0)));
+        float streak = smoothstep(0.72, 0.9, noise3(float3(l * 40.0, 7.0, 0.0) + float3(0.0, q.x, q.z) * 3.0));
         col = lerp(col, float3(0.9, 0.95, 1.0), streak * 0.6);
-        float2 spot = float2((lon + 0.8) * 0.6, (lat + 0.25) * 2.4);
+        float2 spot = float2(wrapAngle(lon + 0.8) * 0.6, (lat + 0.25) * 2.4);
         col *= 1.0 - smoothstep(0.22, 0.12, length(spot)) * 0.55;
     } else if (type == 3) {
         // Exotic: violet and rose bands with teal storms.
@@ -752,11 +755,15 @@ float3 ringColor(int type) {
 }
 
 // Ring particle density at radius rr (planet radii); x = position in the ring plane,
-// near = 0..1 how close the camera is (close up the rings break into clumps).
-float ringDensity(int type, float rr, float2 x, float near) {
+// near = 0..1 how close the camera is (close up the rings break into clumps), foot = size of
+// a pixel on the ring in planet radii (fine grooves only where they are bigger than a pixel).
+float ringDensity(int type, float rr, float2 x, float near, float foot) {
     float inner = 1.3, outer = type == 2 ? 2.0 : 2.45;
     if (rr < inner || rr > outer) return 0.0;
     float bands = 0.5 + 0.5 * noise3(float3(rr * 42.0, 0.0, 0.0)) * noise3(float3(rr * 11.0, 3.0, 0.0));
+    // Thousands of thin ringlets: crisp grooves instead of soft bands.
+    bands *= lerp(1.0, 0.45 + 0.9 * smoothstep(0.25, 0.75, noise3(float3(rr * 300.0, 5.1, 0.7))), saturate(1.0 - foot * 300.0) * 0.6);
+    bands *= lerp(1.0, 0.6 + 0.8 * noise3(float3(rr * 1100.0, 2.3, 8.1)), saturate(1.0 - foot * 1100.0) * 0.5);
     float d = bands * smoothstep(inner, inner + 0.06, rr) * smoothstep(outer, outer - 0.12, rr);
     d *= 1.0 - 0.92 * smoothstep(0.02, 0.0, abs(rr - (inner + outer) * 0.5 - 0.17)); // Cassini division
     d *= lerp(0.45, 1.0, smoothstep(1.55, 1.65, rr));                                 // faint inner ring
@@ -880,7 +887,7 @@ float3 ringWorldSky(float3 rd) {
     int view = (int)(u_Planet.y + 0.5);
     float3 dir = dirFromAngles(u_Planet.z, u_Planet.w);
     float size = max(u_Sky2.w, 0.3);
-    float dist = view == 2 ? 2.2 : (view == 1 ? 2.6 : 5.5 / size);
+    float dist = (view == 2 ? 2.8 : (view == 1 ? 2.6 : 5.5)) / size;
     float3 center = dir * dist;
     float3 side = normalize(cross(float3(0, 1, 0), dir));
     float3 inPlane, ringN;
@@ -898,7 +905,7 @@ float3 ringWorldSky(float3 rd) {
         float3 up = normalize(cross(dir, side));
         ringN = normalize(up * cos(roll) + side * sin(roll));
         inPlane = normalize(cross(dir, ringN));
-        float offset = view == 2 ? -0.035 : 0.15; // > 0: plane above the camera
+        float offset = view == 2 ? -0.06 : 0.15; // > 0: plane above the camera
         center -= ringN * (dot(center, ringN) - offset);
     }
     float3 axis = normalize(ringN + dir * 0.05);
@@ -932,7 +939,7 @@ float3 ringWorldSky(float3 rd) {
         float dl = dot(sun, ringN);
         float tl = abs(dl) > 1e-4 ? dot(center - x, ringN) / dl : -1.0;
         float3 sx = x + sun * tl - center;
-        float ringShadow = tl > 0.0 ? 1.0 - ringDensity(type, length(sx), sx.xz, 0.0) * 0.75 : 1.0;
+        float ringShadow = tl > 0.0 ? 1.0 - ringDensity(type, length(sx), sx.xz, 0.0, 1.0) * 0.75 : 1.0;
         float rim = pow(1.0 - saturate(dot(nrm, -rd)), 3.0);
         float3 atmo = type == 2 ? float3(0.4, 0.6, 1.0) : (type == 3 ? float3(0.8, 0.5, 1.0) : float3(1.0, 0.85, 0.65));
         planetCol = albedo * (lit * ringShadow * 0.7 + 0.012) + atmo * rim * saturate(ndl + 0.3) * 0.35;
@@ -944,7 +951,8 @@ float3 ringWorldSky(float3 rd) {
         float3 x = rd * tRing - center;
         float rr = length(x);
         float2 px = float2(dot(x, inPlane), dot(x, dir));
-        float d = ringDensity(type, rr, px, saturate(1.0 - tRing / 1.2));
+        float foot = tRing * 2.0 / (abs(u_Proj.y) * u_Screen.y) / max(abs(denom), 0.02);
+        float d = ringDensity(type, rr, px, saturate(1.0 - tRing / 1.2), foot);
         if (d > 0.0) {
             // Shadow of the planet on the rings.
             float3 wp = rd * tRing;
@@ -983,7 +991,8 @@ float noise2(float2 p) {
 float auroraCurtain(float2 p, float t, float footprint) {
     float2 w = float2(noise2(p * 0.45 + float2(t, 0.0)), noise2(p * 0.45 + float2(5.2, 1.3 - t)));
     p += (w - 0.5) * 3.2;
-    float activity = smoothstep(0.4, 0.75, noise2(p * 0.12 + float2(3.7, t * 0.5)));  // patches, not a full sky
+    // Patches, not a full sky; more of them far out over the horizon than straight overhead.
+    float activity = smoothstep(0.4 - 0.12 * saturate(length(p) / 25.0), 0.75, noise2(p * 0.12 + float2(3.7, t * 0.5)));
     float k = 26.0 / (1.0 + footprint * 12.0);
     // The fine octave is the first to alias: it fades out first.
     float fine = saturate(1.0 - footprint * 3.0);
@@ -998,7 +1007,7 @@ float3 auroraCurtains(float3 rd, float slices, float jitter, float pixAngle) {
     if (rd.y <= 0.0) return 0;
     float ca = cos(u_Sky.z), sa = sin(u_Sky.z);
     float2 flat = float2(rd.x * ca - rd.z * sa, rd.x * sa + rd.z * ca);
-    float t = u_Proj2.z * 0.02;
+    float t = u_Proj2.z * 0.02 * u_Sky3.x;
     float stride = 40.0 / slices;
     float3 acc = 0, avg = 0;
     [loop] for (int i = 0; i < (int)slices; i++) {
@@ -1015,7 +1024,7 @@ float3 auroraCurtains(float3 rd, float slices, float jitter, float pixAngle) {
         avg = lerp(avg, tint * curtain, 1.0 - pow(0.55, stride));
         acc += avg * exp2(-fi * 0.085) * smoothstep(0.0, 4.0, fi) * stride;
     }
-    return acc * 0.2 * smoothstep(0.0, 0.12, rd.y);
+    return acc * 0.2 * smoothstep(0.0, 0.06, rd.y);
 }
 
 // Procedural daytime atmosphere with drifting clouds (sky mode 1).
@@ -1273,7 +1282,7 @@ float4 PS_SkyAverage(float2 uv : TEXCOORD0) : COLOR0 {
 //   out.rgb = in-scattered light, out.a = transmittance
 // ---------------------------------------------------------------------------------
 float cloudShape(float3 p, float heightFrac) {
-    float3 wind = float3(u_Proj2.z * 9.0, 0.0, u_Proj2.z * 3.5) * (0.4 + u_Nature.z);
+    float3 wind = float3(u_Proj2.z * 32.0, u_Proj2.z * 4.0, u_Proj2.z * 12.0) * (0.15 + u_Nature.z);
     float4 n = tex3Dlod(s7, float4((p + wind) / 5600.0, 0));
     float shape = n.r * 0.75 + n.g * 0.25;
     // Flat, dense bottoms and rounded, thinning tops.
@@ -1286,7 +1295,7 @@ float cloudDensity(float3 p, float heightFrac) {
     float d = cloudShape(p, heightFrac);
     if (d <= 0.0) return 0.0;
     // Erode the edges with finer noise (wisps).
-    float3 wind = float3(u_Proj2.z * 16.0, -u_Proj2.z * 3.0, u_Proj2.z * 6.0) * (0.4 + u_Nature.z);
+    float3 wind = float3(u_Proj2.z * 50.0, -u_Proj2.z * 9.0, u_Proj2.z * 19.0) * (0.15 + u_Nature.z);
     float4 n = tex3Dlod(s7, float4((p + wind) / 1300.0, 0));
     float erode = (1.0 - (n.g * 0.5 + n.b * 0.3 + n.a * 0.2)) * 0.45;
     return saturate((d - erode) / (1.0 - erode));
@@ -1443,10 +1452,14 @@ float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
         float2 v = normalize(rd.xz + 1e-4);
         g *= 1.0 + (stripe * v.y * 0.15 + 0.02) * u_Nature.y;
     }
-    // Blades close to the camera, faded out before they would shimmer.
     if (u_Nature.x > 0.0) {
         float footprint = dist * 2.0 / (abs(u_Proj.y) * u_Screen.y); // metres per pixel
-        float fade = smoothstep(0.03, 0.012, footprint);
+        // Tufts and clumps (visible from the chase camera, out to ~90 m), faded out before
+        // they would shimmer.
+        float tufts = noise2(world.xz * 2.2 + 3.3) * 0.6 + noise2(world.xz * 7.0 + 1.1) * 0.4;
+        g *= lerp(1.0, lerp(0.74, 1.18, tufts), u_Nature.x * smoothstep(0.09, 0.03, footprint));
+        // Blades close to the camera.
+        float fade = smoothstep(0.045, 0.018, footprint);
         if (fade > 0.0) g *= lerp(1.0, grassBlades(world, rd, u_Proj2.z), fade * u_Nature.x);
     }
     return lerp(c, g, mask);
@@ -1476,7 +1489,8 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     // so it never turns into a speckle pattern.
     float drift = noise2(world.xz * 0.12 + 3.0) * 0.6 + noise2(world.xz * 0.45) * 0.4;
     float thin = cover * (0.45 + 0.35 * smoothstep(0.3, 0.8, drift));
-    float mask = saturate(lerp(field, thin, built) * lerp(1.0, 0.15, colourful) * up * (1.0 - emissive) * (1.0 - water));
+    // Painted surfaces (the blue track edges, signs) get a thinner layer, not none.
+    float mask = saturate(lerp(field, thin, built) * lerp(1.0, 0.6, colourful) * up * (1.0 - emissive) * (1.0 - water));
     if (mask <= 0.0) return 0.0;
     // Drifts: soft dunes and wind ripples shade the fields a little.
     float dune = noise2(world.xz * 0.07 + float2(3.1, 1.7)) - noise2(world.xz * 0.07 + float2(3.4, 1.7));
@@ -1486,6 +1500,24 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     shade *= lerp(0.72, 1.0, saturate(luma(c) * 4.0));
     snow = float3(0.86, 0.9, 0.96) * shade;
     return mask;
+}
+
+// The player's car, found like the spray does (the closest surface just below the screen
+// centre, where the chase camera keeps it): 1 inside a car-sized box above the road. Snow
+// doesn't settle on a car doing 300 km/h, and the road under it keeps its snow.
+float onCar(float3 world) {
+    float z0 = tex2Dlod(s1, float4(0.5, 0.6, 0, 0)).w;
+    float z1 = tex2Dlod(s1, float4(0.5, 0.65, 0, 0)).w;
+    float z2 = tex2Dlod(s1, float4(0.5, 0.7, 0, 0)).w;
+    float z = min(z0, min(z1, z2));
+    float3 fwd = viewToWorldDir(float3(0, 0, 1));
+    if (z < 1.5 || z > 16.0 || abs(fwd.y) > 0.45) return 0.0;
+    float3 tail = worldPosition(viewPosition(float2(0.5, z == z0 ? 0.6 : (z == z1 ? 0.65 : 0.7)), z));
+    fwd = normalize(float3(fwd.x, 0.0, fwd.z));
+    float3 d = world - (tail + fwd * 1.6);
+    float along = abs(dot(d, fwd)), across = abs(dot(d, float3(fwd.z, 0.0, -fwd.x)));
+    return smoothstep(2.7, 2.3, along) * smoothstep(1.4, 1.1, across) * smoothstep(-0.72, -0.6, world.y - tail.y)
+           * smoothstep(-2.0, -1.6, -(world.y - tail.y));
 }
 
 // The colour of driving snow: the overcast light, whitened.
@@ -1682,6 +1714,22 @@ float3 rainOnSurfaces(float3 c, float3 world, float3 nWorld, float dist, float3 
     return c;
 }
 
+// Neon light from quarter res: only from texels at this pixel's depth (a plain bilinear
+// upsample leaves 4x4 blocks along every edge, a chessboard around the car).
+float3 upsampleSpill(float2 uv, float z) {
+    float2 t = u_Screen.zw * 4.0;
+    float3 sum = 0;
+    float wsum = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 o = float2(k == 1 || k == 3 ? 0.5 : -0.5, k >= 2 ? 0.5 : -0.5) * t; // no bit ops in ps_3_0
+        float4 s = tex2Dlod(s9, float4(uv + o, 0, 0));
+        float w = exp(-abs(s.a - z) / (0.06 * z + 0.15));
+        sum += s.rgb * w;
+        wsum += w;
+    }
+    return sum / max(wsum, 0.5);
+}
+
 float3 upsampleGI(float2 uv, float z, float3 n) { // from quarter res, depths from s3 (half res)
     float2 halfTexel = u_Screen.zw * 4.0;
     float2 base = (floor(uv / halfTexel - 0.5) + 0.5) * halfTexel;
@@ -1857,6 +1905,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
+    if (snow > 0.0) snow *= 1.0 - onCar(world);
     if (snow > 0.0) {
         c = lerp(c, snowColour, snow);
         albedo = lerp(albedo, snowColour, snow);
@@ -1917,7 +1966,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 
     // Neon light spilling onto nearby surfaces (screen-space, blurred light buffer).
     if (u_Light2.x > 0.0) {
-        float3 spill = tex2Dlod(s9, float4(uv, 0, 0)).rgb;
+        float3 spill = upsampleSpill(uv, nd.w);
         // Far away the glow would shrink to nothing: it gets stronger with distance.
         c += spill * u_Light2.x * 4.0 * lerp(1.0, 2.0, saturate(dist / 120.0)) * lerp(0.15, 1.0, saturate(luma(c) * 5.0)) * ao * (1.0 - emissive);
     }
@@ -1932,11 +1981,21 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         // Rough wet asphalt and the polished dry track blur the reflection (5 taps): no
         // speckles from the half-res ray hits. Puddles and water stay sharp.
         float soften = max(polish, wet * (1.0 - max(puddle, water)));
+        // Reflection blur (u_Sky3.z): the dry track becomes a glossy sheen instead of a mirror.
+        float blurDry = u_Sky3.z * dry;
+        soften = max(soften, blurDry);
         if (soften > 0.0) {
-            float2 o = u_Screen.zw * 3.0;
-            float4 soft = ssr * 2.0 + tex2Dlod(s8, float4(uv + float2(o.x, 0), 0, 0)) + tex2Dlod(s8, float4(uv - float2(o.x, 0), 0, 0)) +
-                          tex2Dlod(s8, float4(uv + float2(0, o.y), 0, 0)) + tex2Dlod(s8, float4(uv - float2(0, o.y), 0, 0));
-            ssr = lerp(ssr, soft / 6.0, soften);
+            // A disc of 8 taps, turned per pixel (TAA averages the turns into a smooth blur,
+            // no offset copies of what is reflected).
+            float radius = 3.0 + 22.0 * blurDry * blurDry;
+            float turn = ign(vpos) * 6.2831853;
+            float4 soft = ssr * 2.0;
+            [unroll] for (int k = 0; k < 8; k++) {
+                float a = turn + k * 2.3999632; // golden angle
+                float rr = radius * sqrt((k + 0.5) / 8.0);
+                soft += tex2Dlod(s8, float4(uv + float2(cos(a), sin(a)) * rr * u_Screen.zw, 0, 0));
+            }
+            ssr = lerp(ssr, soft / 10.0, soften);
         }
         // Standing water reads as a mirror even from above (the eye adapts to it): strongly
         // where it mirrors objects and lights, gently where it only mirrors the sky (a pale
@@ -2020,6 +2079,8 @@ float4 PS_SpillDown(float2 uv : TEXCOORD0) : COLOR0 {
             // also means sun glare and white paint - leave those out.)
             float low = lerp(0.45, 0.28, saturate((nd.w - 20.0) / 150.0));
             float e = smoothstep(0.45, 0.8, sat) * smoothstep(low, low + 0.4, peak) * (nd.w < SKY_Z ? 1.0 : 0.0);
+            // The car's paint is bright and coloured too, but it is no lamp.
+            if (e > 0.0) e *= 1.0 - onCar(worldPosition(viewPosition(suv, nd.w)));
             sum += c * e;
             strongest = max(strongest, c * e);
             zmin = min(zmin, nd.w);
@@ -2535,8 +2596,43 @@ float3 lensDrops(float2 uv) {
     return r;
 }
 
+// Snow flakes on the lens: they land, sit out of focus (soft six-armed blurs) and melt away.
+// Returns the flake's colour (rgb) and coverage (a).
+float4 lensSnow(float2 uv) {
+    float amount = u_Sky3.y;
+    if (amount <= 0.0) return 0;
+    float aspect = u_Screen.x * u_Screen.w;
+    float2 p = float2(uv.x * aspect, uv.y);
+    float t = u_Proj2.z;
+    float4 result = 0;
+    [unroll] for (int layer = 0; layer < 2; layer++) {
+        float scale = layer == 0 ? 7.0 : 13.0;
+        float2 q = p * scale + layer * 17.3;
+        float2 cell = floor(q);
+        float h = hash12(cell + 23.1 + layer * 5.0);
+        float cycle = t * (0.12 + 0.1 * h) + h * 13.0;
+        float life = frac(cycle);
+        if (hash12(cell + floor(cycle) * 5.3) < amount * (layer == 0 ? 0.06 : 0.1)) {
+            float2 centre = (float2(hash12(cell + 2.9), hash12(cell + 6.1)) - 0.5) * 0.5;
+            float2 d = frac(q) - 0.5 - centre;
+            float ang = atan2(d.y, d.x) + h * 6.0;
+            // Melting: shrinks and fades; the arms go first.
+            float melt = smoothstep(0.35, 1.0, life);
+            float radius = lerp(0.14, 0.3, hash12(cell + 3.3)) * (1.0 - 0.6 * melt);
+            float arms = 1.0 + 0.07 * (1.0 - melt) * cos(ang * 6.0);
+            float k = length(d) / radius * arms;
+            float a = smoothstep(1.0, 0.0, k) * (1.0 - melt) * smoothstep(0.0, 0.02, life) * 0.55;
+            result = max(result, float4(0, 0, 0, a));
+        }
+    }
+    // White in daylight, dim at night (it is lit by the scene, not glowing).
+    result.rgb = float3(0.9, 0.93, 0.97) * lerp(0.95, 0.3, saturate(u_Sky.y));
+    return result;
+}
+
 float4 PS_Sharpen(float2 uv : TEXCOORD0) : COLOR0 {
     float3 drop = lensDrops(uv);
+    float4 flake = lensSnow(uv);
     uv += drop.xy;
     float2 t = u_Pass0.xy;
     float3 b = tex2Dlod(s0, float4(uv + float2(0, -t.y), 0, 0)).rgb;
@@ -2544,7 +2640,7 @@ float4 PS_Sharpen(float2 uv : TEXCOORD0) : COLOR0 {
     float3 e = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
     float3 f = tex2Dlod(s0, float4(uv + float2(t.x, 0), 0, 0)).rgb;
     float3 h = tex2Dlod(s0, float4(uv + float2(0, t.y), 0, 0)).rgb;
-    if (u_Post.y <= 0.001) return float4(e * drop.z, 1);
+    if (u_Post.y <= 0.001) return float4(lerp(e * drop.z, flake.rgb, flake.a), 1);
     float3 mn = min(min(min(d, e), min(f, b)), h);
     float3 mx = max(max(max(d, e), max(f, b)), h);
     float3 amp = saturate(min(mn, 2.0 - mx) / max(mx, 1e-4));
@@ -2552,7 +2648,7 @@ float4 PS_Sharpen(float2 uv : TEXCOORD0) : COLOR0 {
     float peak = -1.0 / lerp(8.0, 5.0, saturate(u_Post.y));
     float3 w = amp * peak;
     float3 c = (b * w + d * w + f * w + h * w + e) / (1.0 + 4.0 * w);
-    return float4(saturate(c * drop.z), 1);
+    return float4(lerp(saturate(c * drop.z), flake.rgb, flake.a), 1);
 }
 
 // Utility: raw depth (INTZ) -> R32F, used for frame captures.
@@ -2648,7 +2744,8 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
 // Plain copy (TAA history -> output when nothing else follows).
 float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR0 {
     float3 drop = lensDrops(uv);
-    return float4(tex2Dlod(s0, float4(uv + drop.xy, 0, 0)).rgb * drop.z, 1);
+    float4 flake = lensSnow(uv);
+    return float4(lerp(tex2Dlod(s0, float4(uv + drop.xy, 0, 0)).rgb * drop.z, flake.rgb, flake.a), 1);
 }
 
 // ---------------------------------------------------------------------------------

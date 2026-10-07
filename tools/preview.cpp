@@ -178,11 +178,12 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
 
 int main(int argc, char** argv) {
     tmshaders::log::setFileName(L"preview.log"); // never truncate the game's tmvs.log
-    // tmvs_preview --sound out.wav [rain] [volume]: the weather sound, without a capture.
+    // tmvs_preview --sound out.wav [rain] [volume] [wind]: the weather sound, without a capture.
     if (argc >= 3 && !strcmp(argv[1], "--sound")) {
         const float rain = argc > 3 ? static_cast<float>(atof(argv[3])) : 1.0f;
         const float volume = argc > 4 ? static_cast<float>(atof(argv[4])) : 1.0f;
-        return tmshaders::audio::renderWav(widen(argv[2]).c_str(), rain, volume) ? 0 : 1;
+        const float wind = argc > 5 ? static_cast<float>(atof(argv[5])) : 0.0f;
+        return tmshaders::audio::renderWav(widen(argv[2]).c_str(), rain, volume, wind) ? 0 : 1;
     }
     // tmvs_preview --decode in.mp3 out.wav
     if (argc >= 4 && !strcmp(argv[1], "--decode")) return tmshaders::audio::decodeToWav(widen(argv[2]).c_str(), widen(argv[3]).c_str()) ? 0 : 1;
@@ -206,11 +207,14 @@ int main(int argc, char** argv) {
         printf("%s\n", config.mapTag().c_str());
         return 0;
     }
-    // tmvs_preview --play <seconds> [volume]: plays the weather sound live, as in the game.
+    // tmvs_preview --play <seconds> [volume] [snow]: plays the weather sound live, as in the
+    // game (with snow: the snow storm wind instead of rain and thunder).
     if (argc >= 3 && !strcmp(argv[1], "--play")) {
         tmshaders::Settings s;
-        s.rain = 1.6f;
-        s.lightning = 1.0f;
+        s.snow = argc > 4 ? static_cast<float>(atof(argv[4])) : 0.0f;
+        s.rain = s.snow > 0.0f ? 0.0f : 1.6f;
+        s.lightning = s.snow > 0.0f ? 0.0f : 1.0f;
+        s.wind = 1.0f;
         s.weatherSound = argc > 3 ? static_cast<float>(atof(argv[3])) : 1.0f;
         tmshaders::audio::setAlwaysInFront(true);
         const DWORD start = GetTickCount();
@@ -227,7 +231,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
                         "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--bench] "
                         "[--batch jobs.txt]\n"
-                        "       tmvs_preview --sound <out.wav> [rain] [volume] | --play <seconds> [volume] | --decode <in.mp3> <out.wav>\n");
+                        "       tmvs_preview --sound <out.wav> [rain] [volume] [wind] | --play <seconds> [volume] [snow] | --decode <in.mp3> <out.wav>\n");
         return 2;
     }
 

@@ -39,6 +39,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("SkyBrightness", "Sky brightness", "Sky & Atmosphere", Float, skyBrightness, 0.2f, 3.0f),
         TMVS_FIELD("CloudAmount", "Clouds (clear sky)", "Sky & Atmosphere", Float, cloudAmount, 0.0f, 1.0f),
         TMVS_FIELD("StarAmount", "Stars", "Sky & Atmosphere", Float, starAmount, 0.0f, 3.0f),
+        TMVS_FIELD("AuroraSpeed", "Aurora movement", "Sky & Atmosphere", Float, auroraSpeed, 0.0f, 4.0f),
         TMVS_FIELD("SkyEffectSize", "Black hole size (0 = off, > 3: up close)", "Sky & Atmosphere", Float, skyEffectSize, 0.0f, 6.0f),
         TMVS_FIELD("BlackHoleAzimuth", "Black hole direction", "Sky & Atmosphere", Float, blackHoleAzimuth, 0.0f, 360.0f),
         TMVS_FIELD("BlackHoleElevation", "Black hole height", "Sky & Atmosphere", Float, blackHoleElevation, -10.0f, 60.0f),
@@ -85,14 +86,15 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("SnowCover", "Snow on the ground", "Weather & Surfaces", Float, snowCover, 0.0f, 1.0f),
         TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
         TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
-        TMVS_FIELD("LensDrops", "Rain drops on the lens", "Weather & Surfaces", Bool, lensDrops, 0.0f, 1.0f),
+        TMVS_FIELD("LensDrops", "Drops and flakes on the lens", "Weather & Surfaces", Bool, lensDrops, 0.0f, 1.0f),
         TMVS_FIELD("WeatherSound", "Sound volume: rain and thunder", "Weather & Surfaces", Float, weatherSound, 0.0f, 2.0f),
         TMVS_FIELD("WaterSurfaces", "Water (pools, sea)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
         TMVS_FIELD("Reflections", "Track reflections (dry, >1 = mirror)", "Weather & Surfaces", Float, reflections, 0.0f, 2.0f),
+        TMVS_FIELD("ReflectionBlur", "Reflection blur", "Weather & Surfaces", Float, reflectionBlur, 0.0f, 1.0f),
         TMVS_FIELD("GrassDetail", "Grass detail", "Weather & Surfaces", Float, grassDetail, 0.0f, 1.0f),
         TMVS_FIELD("MowingStripes", "Mowing stripes", "Weather & Surfaces", Float, mowingStripes, 0.0f, 1.0f),
         TMVS_FIELD("Wind", "Wind", "Weather & Surfaces", Float, wind, 0.0f, 1.0f),
-        TMVS_FIELD("Spray", "Spray behind the car (wet roads)", "Weather & Surfaces", Float, spray, 0.0f, 1.0f),
+        TMVS_FIELD("Spray", "Spray behind the car (wet roads, snow)", "Weather & Surfaces", Float, spray, 0.0f, 1.0f),
 
         TMVS_FIELD("MotionBlur", "Motion blur", "Cinematic", Float, motionBlur, 0.0f, 1.5f),
         TMVS_FIELD("DepthOfField", "Depth of field", "Cinematic", Float, depthOfField, 0.0f, 1.0f),
@@ -132,7 +134,7 @@ const char* presetName(Preset preset) {
         case Preset::Aurora: return "Aurora";
         case Preset::Competition: return "Competition";
         case Preset::Performance: return "Performance";
-        case Preset::RainyDay: return "Rainy Day";
+        case Preset::RainyDay: return "Rainy";
         case Preset::ReplayCinema: return "Replay Cinema";
         case Preset::Storm: return "Storm";
         case Preset::Snowstorm: return "Snowstorm";
@@ -193,6 +195,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
     if (!_wcsicmp(text.c_str(), L"Event Horizon")) return "Horizon";
     if (!_wcsicmp(text.c_str(), L"Thunderstorm")) return "Storm";
     if (!_wcsicmp(text.c_str(), L"Cinematic")) return "Realistic";
+    if (!_wcsicmp(text.c_str(), L"Rainy Day")) return "Rainy"; // 1.3
     return narrow(text);
 }
 
@@ -310,6 +313,7 @@ int builtInIndex(const std::string& name) {
     for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
         if (!_stricmp(name.c_str(), presetName(static_cast<Preset>(i)))) return i;
     }
+    if (!_stricmp(name.c_str(), "Rainy Day")) return static_cast<int>(Preset::RainyDay); // renamed in 1.3
     return -1;
 }
 
@@ -327,11 +331,11 @@ const char* const kTagKeys[] = {
     "AutoExposure", "Contrast", "Saturation", "Vibrance", "Temperature", "Tint", "Lift", "Gamma", "Gain", "SplitToning",
     "Wetness", "Rain", "Snow", "SnowCover", "Puddles", "Lightning", "LensDrops", "WaterSurfaces", "Reflections",
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
-    "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation",
+    "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
-    "Rainy Day", "Replay Cinema", "Storm", "Snowstorm",
+    "Rainy", "Replay Cinema", "Storm", "Snowstorm",
 };
 constexpr unsigned char kTagVersion = 1;
 const char kBase64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -505,16 +509,26 @@ void Config::scanUserPresets() {
     FindClose(find);
 }
 
-bool Config::applyNamed(const std::string& name) {
+// A preset's values (built-in or your own); the machine settings stay those of `out`.
+bool Config::namedSettings(const std::string& name, Settings& out) const {
     for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
         if (name == presetName(static_cast<Preset>(i))) {
-            applyPreset(settings, static_cast<Preset>(i));
+            applyPreset(out, static_cast<Preset>(i));
             return true;
         }
     }
     if (!isUserPreset(name)) return false;
-    applyPreset(settings, Preset::Vibrant); // anything the file doesn't set
-    readFields(settings, presetFile(name).c_str(), L"Preset", false);
+    applyPreset(out, Preset::Vibrant); // anything the file doesn't set
+    readFields(out, presetFile(name).c_str(), L"Preset", false);
+    return true;
+}
+
+bool Config::applyNamed(const std::string& name) {
+    Settings out = settings;
+    if (!namedSettings(name, out)) return false;
+    settings = out;
+    m_baseline = out;
+    m_basePreset = name;
     return true;
 }
 
@@ -538,6 +552,8 @@ bool Config::saveUserPreset(const std::string& requested) {
     TMVS_LOG("config: saved preset \"%s\"", name.c_str());
     m_mapLook = false;
     preset = name;
+    m_baseline = settings;
+    m_basePreset = name;
     if (autoMood && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
     markDirty();
     return true;
@@ -590,6 +606,8 @@ void Config::leaveMapLook() {
     if (!m_mapLook) return;
     settings = ownSettings();
     preset = m_ownPreset;
+    m_baseline = m_ownBaseline;
+    m_basePreset = m_ownBasePreset;
     m_mapLook = false;
     TMVS_LOG("config: back to your look (%s)", preset.c_str());
 }
@@ -605,10 +623,14 @@ void Config::onMapComments(const std::string& comments) {
     if (!m_mapLook) {
         m_ownSettings = settings;
         m_ownPreset = preset;
+        m_ownBaseline = m_baseline;
+        m_ownBasePreset = m_basePreset;
     }
     look.enabled = settings.enabled;
     look.debugView = settings.debugView;
     settings = look;
+    m_baseline = look;
+    m_basePreset = kMapLookPreset;
     preset = kMapLookPreset;
     m_mapLook = true;
     TMVS_LOG("config: this map brings its own look (based on %s)", base.c_str());
@@ -705,11 +727,19 @@ void applyPreset(Settings& s, Preset preset) {
     s.taaJitter = keepJitter;
     switch (preset) {
         case Preset::Vibrant:
-            break; // Settings defaults are the Vibrant look.
+            // The Settings defaults are the base of every preset; Vibrant's own tuning on top.
+            s.godRays = 2.0f;
+            s.godRayDecay = 0.9f;
+            s.fogDensity = 0.05f;
+            s.neonLight = 0.15f;
+            s.ambientTint = 0.0f;
+            s.volumetricClouds = 0.5f;
+            s.reflections = 0.65f;
+            break;
         case Preset::Realistic:
             // TrackMania's own colours and sky, only the light is new: shadows, contact
             // shadows, bounce light and a little haze, in the colour of the game's sun.
-            s.saturation = 0.88f;
+            s.saturation = 0.93f;
             s.vibrance = 0.0f;
             s.temperature = 0.0f;
             s.tint = 0.0f;
@@ -752,14 +782,15 @@ void applyPreset(Settings& s, Preset preset) {
             s.fogDensity = 0.7f;
             s.fogSunScatter = 1.4f;
             s.godRays = 1.5f;
-            s.godRayDecay = 0.99f;
+            s.godRayDecay = 0.91f;
             s.sunGlow = 1.0f;
             s.bloom = 0.09f;
             s.lensFlare = 0.4f;
+            s.reflections = 0.5f;
             s.contrast = 1.1f;
-            s.saturation = 1.12f;
+            s.saturation = 1.1f;
             s.vibrance = 0.3f;
-            s.temperature = 0.22f;
+            s.temperature = 0.75f;
             s.shadowTint = 0.4f;
             s.vignette = 0.3f;
             break;
@@ -797,7 +828,10 @@ void applyPreset(Settings& s, Preset preset) {
             s.bloom = 0.4f;
             s.godRays = 2.0f;
             s.exposure = 1.5f;
-            s.bloomRadius = 0.9f;
+            s.bloomRadius = 0.65f;
+            s.globalIllumination = 2.0f;
+            s.skyNight = 0.5f;
+            s.skyBrightness = 1.0f;
             s.fogDensity = 0.6f;
             s.contrast = 1.08f;
             s.saturation = 1.08f;
@@ -807,21 +841,28 @@ void applyPreset(Settings& s, Preset preset) {
             s.vignette = 0.3f;
             s.chromaticAberration = 0.0f;
             s.filmGrain = 0.01f;
-            s.neonLight = 2.0f;
-            s.reflections = 1.3f;   // night: the lit stadium mirrors in the dry track
+            s.neonLight = 0.35f;
+            s.reflections = 1.1f;   // night: the lit stadium mirrors in the dry track
             break;
         case Preset::Horizon:
-            s.skyMode = 5;      // the ring world sky: planet, rings and a black hole
-            s.reflections = 1.3f;
+            s.skyMode = 3;      // black hole sky: the hole lights the stadium, Saturn next to it
+            s.reflections = 1.1f;
             s.planetType = 0;
-            s.planetView = 0;
-            // Saturn and the black hole up close, both in view from the start screen.
+            s.planetView = 1;
+            // Saturn and the black hole, both in view from the start screen.
             s.planetAzimuth = 150.0f;
+            s.planetElevation = 14.0f;
             s.skyRotation = 263.0f;
-            s.skyEffectSize = 6.0f;
-            s.blackHoleAzimuth = 145.5f; // where the ring world has always had it
+            s.skyEffectSize = 4.0f;
+            s.blackHoleAzimuth = 145.5f;
             s.blackHoleElevation = 12.8f;
             s.planetSize = 1.0f;
+            s.godRays = 1.35f;
+            s.godRayDecay = 0.9f;
+            s.neonLight = 0.35f;
+            s.longShadows = 0.9f;
+            s.shadowLength = 25.0f;
+            s.aoRadius = 4.0f;
             s.starAmount = 3.0f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.48f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.4f;
@@ -840,7 +881,8 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Aurora:
             s.skyMode = 4;
-            s.reflections = 1.3f;
+            s.skyRotation = 150.0f;
+            s.reflections = 1.1f;
             s.starAmount = 3.0f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.85f; s.skyColor[2] = 0.75f;
             s.ambientTint = 0.9f;
@@ -878,19 +920,20 @@ void applyPreset(Settings& s, Preset preset) {
             s.temperature = 0.0f;
             s.shadowTint = 0.0f;
             s.sharpen = 0.5f;
+            s.neonLight = 0.35f;
             break;
         case Preset::Performance:
             s.volumetricLight = 0.0f;
             s.globalIllumination = 0.0f;
             // Same look, cheaper: fewer AO / shadow samples, no shafts, flare or extra passes.
             s.quality = 0;
-            s.godRays = 0.0f;
+            s.godRays = 0.75f;
             s.lensFlare = 0.0f;
             s.chromaticAberration = 0.0f;
             s.filmGrain = 0.0f;
             s.sharpen = 0.0f;
             s.longShadows = 0.0f;
-            s.neonLight = 0.0f;
+            s.neonLight = 0.35f;
             s.grassDetail = 0.0f;
             s.taa = false;
             break;
@@ -899,9 +942,11 @@ void applyPreset(Settings& s, Preset preset) {
             s.volumetricClouds = 1.0f;
             s.cloudCoverage = 0.95f;
             s.cloudHeight = 900.0f;
-            s.wetness = 1.0f;
+            s.wetness = 0.85f;
             s.rain = 0.7f;
             s.puddles = 0.4f;
+            s.reflections = 0.9f;
+            s.spray = 0.15f;
             s.wind = 0.6f;
             s.sunLight = 0.15f;
             s.shadowStrength = 0.3f;
@@ -910,7 +955,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyColor[0] = 0.55f; s.skyColor[1] = 0.62f; s.skyColor[2] = 0.75f;
             s.fogDensity = 1.6f;
             s.fogSunScatter = 0.2f;
-            s.godRays = 0.0f;
+            s.godRays = 1.5f;
+            s.godRayDecay = 0.9f;
             s.sunGlow = 0.2f;
             s.lensFlare = 0.0f;
             s.highlightBoost = 4.0f;
@@ -956,9 +1002,9 @@ void applyPreset(Settings& s, Preset preset) {
             s.cloudCoverage = 1.0f;
             s.cloudHeight = 650.0f;
             s.wetness = 1.0f;
-            s.rain = 1.6f;
+            s.rain = 1.9f;
             s.puddles = 0.55f;
-            s.reflections = 1.3f;
+            s.reflections = 1.5f;
             s.lightning = 1.0f;
             s.spray = 0.25f;
             s.wind = 0.9f;
@@ -993,7 +1039,9 @@ void applyPreset(Settings& s, Preset preset) {
             s.cloudCoverage = 1.0f;
             s.cloudHeight = 600.0f;
             s.snow = 1.5f;
-            s.snowCover = 1.0f;
+            s.snowCover = 0.85f;
+            s.lensDrops = true;
+            s.spray = 0.5f;
             s.wind = 1.0f;
             s.sunLight = 0.0f;
             s.shadowStrength = 0.15f;
@@ -1010,7 +1058,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.highlightBoost = 3.0f;
             s.neonLight = 0.8f;
             s.bloom = 0.1f;
-            s.exposure = 0.0f;
+            s.exposure = -0.3f;
             s.contrast = 1.04f;
             s.saturation = 0.72f;
             s.vibrance = 0.0f;
@@ -1061,7 +1109,12 @@ void Config::load() {
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
     readFields(settings, ini, L"Settings", true, true);
     if (preset == kCustomPreset) {
+        // Your changes, on top of the preset they started from.
+        GetPrivateProfileStringW(L"General", L"BasePreset", L"Vibrant", text, 128, ini);
+        m_basePreset = presetFromText(text, "Vibrant");
         applyPreset(settings, Preset::Vibrant);
+        m_baseline = settings;
+        if (!namedSettings(m_basePreset, m_baseline)) m_basePreset = "Vibrant";
         readFields(settings, ini, L"Settings", false);
     } else if (!applyNamed(preset)) {
         preset = "Vibrant";
@@ -1076,6 +1129,7 @@ void Config::save() {
     // A map's look is never saved as yours.
     const Settings own = ownSettings();
     WritePrivateProfileStringW(L"General", L"Preset", widen(m_mapLook ? m_ownPreset : preset).c_str(), ini);
+    WritePrivateProfileStringW(L"General", L"BasePreset", widen(m_mapLook ? m_ownBasePreset : m_basePreset).c_str(), ini);
     WritePrivateProfileStringW(L"General", L"Enabled", settings.enabled ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"UseMapLooks", useMapLooks ? L"1" : L"0", ini);
