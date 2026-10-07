@@ -74,7 +74,9 @@ foreach(entry ${TMVS_ENTRIES})
   add_custom_command(
     OUTPUT "${out}"
     COMMAND "${TMVS_FXC}" /nologo /O3 /T ps_3_0 /E ${entry} /Vn g_${entry} /Fh "${out}" "${TMVS_SHADER}"
-    DEPENDS "${TMVS_SHADER}"
+    # Stay below the 4096 instruction slots many drivers allow (with a little headroom).
+    COMMAND "${CMAKE_COMMAND}" -DHEADER=${out} -DLIMIT=3900 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shader_slots.cmake"
+    DEPENDS "${TMVS_SHADER}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shader_slots.cmake"
     COMMENT "fxc ${entry}"
     VERBATIM)
   list(APPEND TMVS_SHADER_HEADERS "${out}")

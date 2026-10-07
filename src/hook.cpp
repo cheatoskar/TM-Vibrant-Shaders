@@ -49,6 +49,10 @@ void* g_original[kSlotCount] = {};
 DeviceCallbacks g_callbacks;
 int g_internal = 0;
 IDirect3DDevice9* g_device = nullptr; // the game's device, for the memory report
+// The device the game created (null until then). Other devices that share the driver's
+// vtable (another mod's helper device) pass through Reset and Present untouched.
+IDirect3DDevice9* g_gameDevice = nullptr;
+bool foreignDevice(IDirect3DDevice9* device) { return g_gameDevice && device != g_gameDevice; }
 
 template <typename Fn>
 Fn original(Slot slot) {
@@ -132,6 +136,7 @@ void logCreateFailure(IDirect3DDevice9* device, const char* what, HRESULT hr) {
 // --- Detours ---------------------------------------------------------------
 
 HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
+    if (foreignDevice(device)) return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*)>(kReset)(device, params);
     if (g_callbacks.preReset) g_callbacks.preReset();
     if (params && g_callbacks.adjustPresentParams) g_callbacks.adjustPresentParams(params);
     HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*)>(kReset)(device, params);
@@ -149,6 +154,10 @@ HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* pa
 }
 
 HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const RECT* dst, HWND window, const RGNDATA* dirty) {
+    if (foreignDevice(device)) {
+        return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(kPresent)(
+            device, src, dst, window, dirty);
+    }
     g_device = device;
     if (g_callbacks.present) {
         g_internal++;
@@ -458,7 +467,19 @@ CreateDeviceFn g_realCreateDevice = nullptr;
 
 HRESULT APIENTRY createDeviceDetour(IDirect3D9* self, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags,
                                     D3DPRESENT_PARAMETERS* params, IDirect3DDevice9** out) {
-    if (params && g_callbacks.adjustPresentParams) g_callbacks.adjustPresentParams(params);
+    // The game renders with a hardware device that has a depth buffer. Other mods in the same
+    // process (overlays such as Twinkie) create helper devices of their own - no depth, often
+    // 0x0 or a reference device. Taking one of those for the game's moved every hook onto it:
+    // no readable depth, F7/F8 dead.
+    const bool gameDevice = type == D3DDEVTYPE_HAL && params && params->EnableAutoDepthStencil;
+    if (!gameDevice) {
+        HRESULT hr = g_realCreateDevice(self, adapter, type, window, flags, params, out);
+        TMVS_LOG("CreateDevice -> 0x%08lx flags=0x%lx type=%d %ux%u autoDepth=%d: not the game's device, left alone", hr, flags,
+                 static_cast<int>(type), params ? params->BackBufferWidth : 0, params ? params->BackBufferHeight : 0,
+                 params ? params->EnableAutoDepthStencil : 0);
+        return hr;
+    }
+    if (g_callbacks.adjustPresentParams) g_callbacks.adjustPresentParams(params);
     HRESULT hr = g_realCreateDevice(self, adapter, type, window, flags, params, out);
     if (params) {
         TMVS_LOG("CreateDevice -> 0x%08lx flags=0x%lx %ux%u fmt=%s ms=%d autoDepth=%d %s windowed=%d", hr, flags,
@@ -467,6 +488,7 @@ HRESULT APIENTRY createDeviceDetour(IDirect3D9* self, UINT adapter, D3DDEVTYPE t
                  params->Windowed);
     }
     if (SUCCEEDED(hr) && out && *out) {
+        g_gameDevice = *out;
         patchDevice(*out);
         if (g_callbacks.deviceCreated) {
             g_internal++;

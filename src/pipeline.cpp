@@ -174,21 +174,30 @@ bool Pipeline::compileAll(IDirect3DDevice9* device) {
         if (fromDisk) {
             compiled[i] = gfx::compilePixelShader(device, source, kEntryPoints[i], "tmvs.hlsl", &m_lastError);
         } else {
-            device->CreatePixelShader(reinterpret_cast<const DWORD*>(kPrecompiledShaders[i].code), &compiled[i]);
+            const HRESULT hr = device->CreatePixelShader(reinterpret_cast<const DWORD*>(kPrecompiledShaders[i].code), &compiled[i]);
+            if (FAILED(hr)) TMVS_LOG("pipeline: CreatePixelShader(%s) failed: 0x%08lX", kEntryPoints[i], static_cast<unsigned long>(hr));
         }
         if (!compiled[i]) ok = false;
     }
     if (!ok) {
         for (auto& shader : compiled) gfx::release(shader);
         if (m_lastError.empty()) m_lastError = "CreatePixelShader failed";
-        TMVS_LOG("pipeline: shader creation failed");
+        // The usual cause: a shader longer than the driver allows (ps_3_0: at least 512 slots,
+        // many drivers 4096, some 32768).
+        D3DCAPS9 caps{};
+        device->GetDeviceCaps(&caps);
+        TMVS_LOG("pipeline: shader creation failed (driver allows %lu pixel shader instruction slots, PS version %lu.%lu)",
+                 caps.MaxPixelShader30InstructionSlots, (caps.PixelShaderVersion >> 8) & 0xFF, caps.PixelShaderVersion & 0xFF);
         return false;
     }
     for (int i = 0; i < kPassCount; i++) {
         gfx::release(m_shaders[i]);
         m_shaders[i] = compiled[i];
     }
-    TMVS_LOG("pipeline: %d passes ready (%s)", kPassCount, fromDisk ? "compiled from disk" : "precompiled");
+    D3DCAPS9 caps{};
+    device->GetDeviceCaps(&caps);
+    TMVS_LOG("pipeline: %d passes ready (%s, driver allows %lu pixel shader instruction slots)", kPassCount,
+             fromDisk ? "compiled from disk" : "precompiled", caps.MaxPixelShader30InstructionSlots);
     return true;
 }
 

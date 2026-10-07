@@ -568,7 +568,7 @@ float3 spaceBackground(float3 rd) {
 float3 meteors(float3 rd, float amount) {
     float3 sum = 0;
     float t = u_Proj2.z / 2.7;
-    [unroll] for (int k = 0; k < 2; k++) {
+    [loop] for (int k = 0; k < 2; k++) {
         float slot = floor(t + k * 0.5) - k * 0.5;
         float age = (t - slot) * 2.7;                       // seconds since this slot began
         float h1 = hash12(float2(slot, 1.7 + k)), h2 = hash12(float2(slot, 9.3 + k)), h3 = hash12(float2(slot, 4.1 + k));
@@ -650,11 +650,14 @@ float3 blackHoleSky(float3 rd, float3 bh, float dist) {
     float alpha = 0.0;
     float closest = 1e4;
     float3 outDir;
+    // The star background is looked up once, at the end, in the bent direction (each copy of
+    // it costs hundreds of instruction slots).
+    float background = 1.0;
     const float traceRadius = 26.0;
     // Close up (camera inside the trace sphere) every ray is traced from the camera.
     bool inside = dist < traceRadius;
     float cone = inside ? 4.0 : asin(min(traceRadius / dist, 0.99));
-    if (angle < cone) {
+    if (dist > 0.0 && angle < cone) {
         // Straight to the trace sphere, then integrate the bent ray inside it.
         float3 p = -bh * dist;
         if (!inside) {
@@ -689,15 +692,16 @@ float3 blackHoleSky(float3 rd, float3 bh, float dist) {
         float impact = dist * sin(angle);
         float outside = 2.0 / max(impact, 1.0) * (1.0 - sqrt(max(1.0 - impact * impact / (traceRadius * traceRadius), 0.0)));
         outDir = normalize(outDir + normalize(bh - outDir * dot(outDir, bh) + 1e-5) * outside);
-        if (!captured) col += (1.0 - alpha) * spaceBackground(outDir);
+        background = captured ? 0.0 : 1.0 - alpha;
         // Photon ring: light that circled the hole, a thin sharp line around the shadow.
         if (!captured) col += float3(1.0, 0.92, 0.82) * exp(-abs(closest - 2.65) * 9.0) * 1.6 * (1.0 - alpha);
     } else {
-        // Weak field: background bent toward the hole by 2 rs / b.
-        float deflect = 2.0 / (dist * sin(angle));
-        outDir = normalize(rd + normalize(bh - rd * cosA) * deflect);
-        col = spaceBackground(outDir);
+        // Weak field: background bent toward the hole by 2 rs / b. No hole (dist = 0): none.
+        float deflect = dist > 0.0 ? 2.0 / (dist * max(sin(angle), 1e-4)) : 0.0;
+        outDir = deflect > 0.0 ? normalize(rd + normalize(bh - rd * cosA + 1e-5) * deflect) : rd;
     }
+    col += background * spaceBackground(outDir);
+    if (dist <= 0.0) return col;
     // Soft glow of the inner disk scattered around the hole (feeds the bloom).
     // Light of the inner disk scattered around the hole: a tight hot glow and a wide halo
     // that spills into the sky (it is a light source, not a sticker).
@@ -872,7 +876,8 @@ float3 ringWorldSky(float3 rd) {
     if (u_SunView.w < 0.5 || sun.y < -0.3) sun = normalize(float3(0.5, 0.35, -0.8)); // no usable game sun
 
     // Background: stars, galaxy and a small, far black hole (with its lensing).
-    float3 col = u_BlackHole.w > 0.0 ? blackHoleSky(rd, blackHoleDirection(), 70.0 / (u_BlackHole.w * 0.55)) : spaceBackground(rd);
+    // (No black hole: distance 0, just the stars - one copy of the background either way.)
+    float3 col = blackHoleSky(rd, blackHoleDirection(), u_BlackHole.w > 0.0 ? 70.0 / (u_BlackHole.w * 0.55) : 0.0);
     // The sun as a star (with a black hole, the hole is the light).
     if (u_BlackHole.w <= 0.0) {
         float mu = dot(rd, sun);
@@ -1159,7 +1164,7 @@ float3 customSky(float3 rd, uniform int mode) {
         c = c * (1.0 - planet.a) + planet.rgb * 0.5;
         c += meteors(rd, saturate(u_Sky2.y));
     } else if (mode == 3) {
-        c = u_BlackHole.w > 0.0 ? blackHoleSky(rd, blackHoleDirection(), 70.0 / u_BlackHole.w) : spaceBackground(rd);
+        c = blackHoleSky(rd, blackHoleDirection(), u_BlackHole.w > 0.0 ? 70.0 / u_BlackHole.w : 0.0);
         float3 pdir = dirFromAngles(u_Planet.z, u_Planet.w);
         float4 planet = ringedPlanet(rd, normalize(blackHoleDirection() * 0.45 - pdir * 0.75 + float3(0, 0.35, 0)), pdir);
         c = c * (1.0 - planet.a) + planet.rgb;
@@ -1242,7 +1247,7 @@ float3 lightningBolt(float3 rd) {
     float mainX = boltPath(h, seed) * 0.35;
     float b = boltLine(q.x - mainX, width);
     // Branches: split off the main channel and wander sideways, fading out.
-    for (int k = 0; k < 2; k++) {
+    [loop] for (int k = 0; k < 2; k++) {
         float h0 = k == 0 ? 0.78 : 0.5;
         float len = k == 0 ? 0.35 : 0.25;
         float t = (h0 - h) / len; // 0 at the fork .. 1 at the tip
@@ -1415,7 +1420,7 @@ float waterMask(float3 c, float3 nWorld, float3 world, float z, float emissive) 
 // Expanding rings where raindrops hit standing water. Returns the surface slope.
 float2 rippleSlope(float2 xz, float t) {
     float2 g = 0;
-    [unroll] for (int k = 0; k < 2; k++) {
+    [loop] for (int k = 0; k < 2; k++) {
         float2 q = xz * 2.3 + k * 3.71;
         float2 cell = floor(q);
         float2 f = frac(q) - 0.5;
@@ -1590,7 +1595,7 @@ float carBody(float3 world) {
     if (box <= 0.0 || d.y > 2.0) return 0.0;
     float none = -1e5;
     float road = none, roadAtTail = none;
-    [unroll] for (int k = 0; k < 4; k++) {
+    [loop] for (int k = 0; k < 4; k++) {
         float3 q = centre + side * (k == 0 || k == 2 ? -2.2 : 2.2) + fwd * (k < 2 ? -1.0 : 1.8);
         q.y = tail.y - 0.8;
         float3 v = worldToViewDir(q - cameraWorld());
@@ -1653,7 +1658,7 @@ float snowVeil(float3 rd, float sceneDist) {
     float mppScale = 2.0 / (abs(u_Proj.y) * u_Screen.y); // metres per pixel at 1 m
     float t = u_Proj2.z;
     float acc = 0.0;
-    [unroll] for (int l = 0; l < 3; l++) {
+    [loop] for (int l = 0; l < 3; l++) {
         float d = l == 0 ? 12.0 : (l == 1 ? 19.0 : 30.0);
         if (sceneDist > d) {
             float2 q = float2(az * d, elevation * d);
@@ -1682,7 +1687,7 @@ float rainStreaks(float3 rd, float sceneDist) {
     float elevation = rd.y / horiz;
     float mppScale = 2.0 / (abs(u_Proj.y) * u_Screen.y); // metres per pixel at 1 m
     float acc = 0.0;
-    [unroll] for (int l = 0; l < 3; l++) {
+    [loop] for (int l = 0; l < 3; l++) {
         float d = l == 0 ? 13.0 : (l == 1 ? 20.0 : 32.0);
         if (sceneDist > d) {
             float2 q = float2(az * d, elevation * d);
@@ -1786,8 +1791,8 @@ float3 upsampleOcclusion(float2 uv, float z, float3 n) {
     float2 base = (floor(uv / halfTexel - 0.5) + 0.5) * halfTexel;
     float3 sum = 0;
     float wsum = 0;
-    [unroll] for (int j = 0; j < 2; j++) {
-        [unroll] for (int i = 0; i < 2; i++) {
+    [loop] for (int j = 0; j < 2; j++) {
+        [loop] for (int i = 0; i < 2; i++) {
             float2 suv = base + float2(i, j) * halfTexel;
             float4 nd = tex2Dlod(s3, float4(suv, 0, 0));
             float2 f = 1.0 - abs(uv - suv) / halfTexel;
@@ -1842,7 +1847,7 @@ float3 upsampleSpill(float2 uv, float z) {
     float2 t = u_Screen.zw * 4.0;
     float3 sum = 0;
     float wsum = 0.0;
-    [unroll] for (int k = 0; k < 4; k++) {
+    [loop] for (int k = 0; k < 4; k++) {
         float2 o = float2(k == 1 || k == 3 ? 0.5 : -0.5, k >= 2 ? 0.5 : -0.5) * t; // no bit ops in ps_3_0
         float4 s = tex2Dlod(s9, float4(uv + o, 0, 0));
         float w = exp(-abs(s.a - z) / (0.06 * z + 0.15));
@@ -1857,8 +1862,8 @@ float3 upsampleGI(float2 uv, float z, float3 n) { // from quarter res, depths fr
     float2 base = (floor(uv / halfTexel - 0.5) + 0.5) * halfTexel;
     float3 sum = 0;
     float wsum = 0;
-    [unroll] for (int j = 0; j < 2; j++) {
-        [unroll] for (int i = 0; i < 2; i++) {
+    [loop] for (int j = 0; j < 2; j++) {
+        [loop] for (int i = 0; i < 2; i++) {
             float2 suv = base + float2(i, j) * halfTexel;
             float4 nd = tex2Dlod(s3, float4(suv, 0, 0));
             float2 f = 1.0 - abs(uv - suv) / halfTexel;
@@ -1885,7 +1890,7 @@ float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist) 
     // texture detail, not lights. A pixel survives if it continues along some axis, so
     // thin lines - the neon strips far down the track - stay lights.
     float along = 0.0;
-    [unroll] for (int e = 0; e < 4; e++) {
+    [loop] for (int e = 0; e < 4; e++) {
         float2 eo = (e == 0 ? float2(1, 0) : (e == 1 ? float2(0, 1) : (e == 2 ? float2(1, 1) : float2(1, -1)))) * u_Screen.zw;
         float3 ea = toLinear(tex2Dlod(s0, float4(uv + eo, 0, 0)).rgb);
         float3 eb = toLinear(tex2Dlod(s0, float4(uv - eo, 0, 0)).rgb);
@@ -1894,7 +1899,7 @@ float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist) 
     peak = min(peak, along);
     float surround = 0.0;
     float2 r = float2(0.012 * u_Screen.y * u_Screen.z, 0.012);
-    [unroll] for (int k = 0; k < 8; k++) {
+    [loop] for (int k = 0; k < 8; k++) {
         float a = k * (PI / 4.0) + 0.39;
         float3 sc = toLinear(tex2Dlod(s0, float4(uv + float2(cos(a), sin(a)) * r, 0, 0)).rgb);
         surround += max(sc.r, max(sc.g, sc.b));
@@ -1946,6 +1951,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 rd = viewToWorldDir(rdView);
     float daylight = u_SunWorld.w;
     float4 skyAvg = tex2Dlod(s4, float4(0.5, 0.5, 0, 0));
+    // Shared by the sky and the ground below, computed once: every call is inlined, and two
+    // copies pushed this shader over the 4096 instruction slots many D3D9 drivers allow.
+    float sceneDist = nd.w >= SKY_Z ? SKY_Z : length(viewPosition(uv, nd.w));
+    float streaks = u_Weather.y > 0.0 ? rainStreaks(rd, sceneDist) : 0.0;
+    float veil = u_Snow.x > 0.0 ? snowVeil(rd, sceneDist) : 0.0;
+    float4 volume = volumetricLight(uv, rd, daylight);
 
     if (nd.w >= SKY_Z) {
         if (u_Sky.x > 0.5) {
@@ -1973,11 +1984,11 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         }
         c += float3(0.6, 0.65, 0.85) * u_Light2.z * 0.3 * saturate(rd.y * 3.0 + 0.3);
         c += lightningBolt(rd);
-        if (u_SunView.w > 0.5) c += volumetricLight(uv, rd, daylight).rgb;
-        if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + 0.03) * rainStreaks(rd, SKY_Z) * 1.0;
+        if (u_SunView.w > 0.5) c += volume.rgb;
+        if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + 0.03) * streaks;
         if (u_Snow.x > 0.0) {
             c = lerp(c, snowHaze(skyAvg.rgb), saturate(u_Snow.x * 0.35) * (1.0 - saturate(rd.y * 1.5)));
-            c = lerp(c, snowHaze(skyAvg.rgb), snowVeil(rd, SKY_Z) * 0.7);
+            c = lerp(c, snowHaze(skyAvg.rgb), veil * 0.7);
         }
         return float4(c, 1);
     }
@@ -1991,7 +2002,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // reconstruction noise (z-fighting decals, mesh seams) doesn't flicker the sun term.
     float3 nLight = n;
     float2 o = u_Screen.zw * 3.0;
-    [unroll] for (int k = 0; k < 4; k++) {
+    [loop] for (int k = 0; k < 4; k++) {
         float2 dir = k == 0 ? float2(1, 1) : (k == 1 ? float2(-1, 1) : (k == 2 ? float2(1, -1) : float2(-1, -1)));
         float4 s4 = tex2Dlod(s3, float4(uv + dir * o, 0, 0));
         nLight += s4.xyz * (abs(s4.w - nd.w) < 0.02 * nd.w ? 1.0 : 0.0);
@@ -2120,7 +2131,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             float radius = 3.0 + 22.0 * blurDry * blurDry;
             float turn = ign(vpos) * 6.2831853;
             float4 soft = ssr * 2.0;
-            [unroll] for (int k = 0; k < 8; k++) {
+            [loop] for (int k = 0; k < 8; k++) {
                 float a = turn + k * 2.3999632; // golden angle
                 float rr = radius * sqrt((k + 0.5) / 8.0);
                 soft += tex2Dlod(s8, float4(uv + float2(cos(a), sin(a)) * rr * u_Screen.zw, 0, 0));
@@ -2163,7 +2174,6 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     fogAmount = 1.0 - exp(-max(fogAmount, 0.0));
     float3 fogColor = lerp(u_SkyColor.rgb * 0.7 * (0.3 + 0.7 * daylight), skyAvg.rgb, skyAvg.a * 0.75);
     fogColor = lerp(fogColor, snowHaze(skyAvg.rgb), saturate(u_Snow.x * 0.6));
-    float4 volume = volumetricLight(uv, rd, daylight);
     if (u_SunView.w > 0.5) fogColor += sunScatter(rd, u_Atmo.z * 0.6) * daylight * volume.a;
     c = lerp(c, fogColor, saturate(fogAmount));
     if (u_SunView.w > 0.5) c += volume.rgb;
@@ -2184,8 +2194,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Lightning: a cold flash over everything (surfaces facing up and the haze most).
     if (u_Light2.z > 0.0) c += (c * 2.5 + fogColor * 0.4 * fogAmount + 0.01) * float3(0.8, 0.85, 1.0) * u_Light2.z * (0.6 + 0.4 * saturate(nWorld.y));
 
-    if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + u_SunColor.rgb * daylight * 0.15 + 0.03) * rainStreaks(rd, dist) * 1.0;
-    if (u_Snow.x > 0.0) c = lerp(c, snowHaze(skyAvg.rgb), snowVeil(rd, dist) * 0.7);
+    if (u_Weather.y > 0.0) c += (skyAvg.rgb * 0.8 + u_SunColor.rgb * daylight * 0.15 + 0.03) * streaks;
+    if (u_Snow.x > 0.0) c = lerp(c, snowHaze(skyAvg.rgb), veil * 0.7);
     return float4(c, 1);
 }
 

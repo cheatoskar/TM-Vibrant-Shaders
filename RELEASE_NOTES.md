@@ -38,6 +38,8 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 - Presets tuned. *Rainy Day* is now **Rainy**, **Horizon** uses the black hole sky.
 
 **Fixes**
+- Works again on GPUs whose drivers allow at most 4096 shader instructions (many NVIDIA cards showed "shader creation failed").
+- Other mods with their own Direct3D device (for example Twinkie) no longer turn the shaders off.
 - Far fewer horizontal stripes on pools and the sea seen from mid distance.
 - No more black rectangles in the snow around the car.
 - Long-range shadows no longer leave blotches that slide with the camera.

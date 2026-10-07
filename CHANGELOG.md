@@ -39,6 +39,8 @@
 **Fixes**
 - Water: far fewer horizontal stripes on pools seen from mid distance (a few faint lines can remain). The water was found by its height with a fixed tolerance, which the depth's precision couldn't hold far away; the tolerance now grows with the camera's height, and waves and reflections use the exact water plane.
 - Snow: no more black rectangles in the snow around the car (next to pools, on grass edges, in banked turns or with replay cameras).
+- The mod no longer switches itself off on many GPUs (for example NVIDIA): two shaders had grown past the 4096 instructions those drivers accept ("shader creation failed" in the log). The build now checks every shader against that limit, and the log names the failing shader and the driver's limit.
+- Other mods that create their own Direct3D device (for example Twinkie) no longer take the mod's hooks away from the game.
 - Frame captures (`F12`) on maps with water saved an empty depth buffer. Captures never overwrite earlier ones.
 
 **Known issues**
