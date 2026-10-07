@@ -235,7 +235,7 @@ private:
     static constexpr UINT kRainSplashes = 5200;
     static constexpr UINT kRainChunk = 12000;    // quads per draw (16-bit indices)
     static constexpr UINT kSprayParticles = 700;  // borrowed from the drop quads
-    static constexpr UINT kSnowFlakes = 40000;    // at snow 2 (blizzard), the same quads as the drops
+    static constexpr UINT kSnowFlakes = 64000;    // at snow 2 (blizzard), the same quads as the drops
     IDirect3DVertexShader9* m_dropVS = nullptr;
     IDirect3DVertexShader9* m_splashVS = nullptr;
     IDirect3DVertexShader9* m_sprayVS = nullptr;

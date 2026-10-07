@@ -598,7 +598,9 @@ VSOut main(float2 uv : TEXCOORD0) {
         float3 tail = float3(c_V0.w, c_V1.w, c_V2.w) + cv.x * c_V0.xyz + cv.y * c_V1.xyz + cv.z * c_V2.xyz;
         float3 f = normalize(float3(fwd.x, 0.0, fwd.z) + 1e-5);
         float3 d = w - (tail + f * 1.6);
-        if (abs(dot(d, f)) < 3.0 && abs(dot(d, float3(f.z, 0.0, -f.x))) < 1.6 && d.y > -0.75 && d.y < 2.0) valid = false;
+        // Only at the height of the point found (the car's body): the road around it stays in
+        // the map, also when that point is the car's nose and the box reaches over the road.
+        if (abs(dot(d, f)) < 3.0 && abs(dot(d, float3(f.z, 0.0, -f.x))) < 1.6 && d.y > -0.25 && d.y < 2.0) valid = false;
     }
     o.pos = valid ? float4(m.x * 2.0 - 1.0 + c_Half.x, 1.0 - m.y * 2.0 + c_Half.y, saturate(0.5 - (w.y - c_Map.w) / 1000.0), 1.0)
                   : float4(-10.0, -10.0, 0.0, 1.0);
@@ -1456,7 +1458,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     device->SetVertexShaderConstantF(10, &pc[0][0], 5);
     const float speed = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
     // Whether the tyres touch the road is checked per particle in the depth buffer.
-    const float thrown = s.spray * fmaxf(s.wetness, s.snowCover); // water, or powder snow
+    const float thrown = s.spray * fmaxf(s.wetness, s.snowCover * 2.0f); // water, or powder snow (a lot of it)
     const float spray[4] = {speed, thrown * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
     device->SetVertexShaderConstantF(15, spray, 1);
 
@@ -1616,7 +1618,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     if (in.driving || in.time > m_heightHoldUntil) m_heightHoldUntil = -1.0f;
     const bool splat = temporal && m_heightHoldUntil < 0.0f;
-    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
+    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f || s.snowCover > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
     if (heightMap && splat && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s);
     const bool longShadows = heightMap && wantLong;
@@ -1759,9 +1761,15 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 9, m_spill[0].texture, true);
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
+    // The static world's heights: snow keeps off the car (it is not in the map).
+    const bool snowMap = s.snowCover > 0.0f && heightMap && m_heightValid;
+    bind(device, 12, snowMap ? m_heightMap[m_heightIndex].texture : nullptr, false);
+    const float sky3[4] = {s.auroraSpeed, s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f, s.reflectionBlur, snowMap ? 1.0f : 0.0f};
+    device->SetPixelShaderConstantF(41, sky3, 1);
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
+    device->SetTexture(12, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
 

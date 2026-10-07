@@ -53,7 +53,7 @@ float4 u_Light2    : register(c36); // neon light spill, game sun direction know
 float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
-float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 0
+float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, height map valid (s12)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -68,6 +68,7 @@ sampler2D s8 : register(s8);
 sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
+sampler2D s12 : register(s12); // height map of the static world (lighting pass, snow)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -1479,12 +1480,28 @@ float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
 // stays readable, little on painted surfaces (cars, coloured borders), none on lights,
 // water and steep walls. Returns the coverage; `snow` is the snow's colour before the
 // scene's lighting. Only the surface itself decides: nothing pops in while driving.
-// Height of the snow's surface (m): long dunes, wind ripples and, close up, small lumps.
+// How deep the wind piled the snow here (0..1): long drifts, heaps and smaller mounds.
+float snowPile(float2 xz) {
+    return noise2(xz * 0.06 + 3.0) * 0.5 + noise2(xz * 0.21 + 7.0) * 0.32 + noise2(xz * 0.8 + 1.0) * 0.18;
+}
+
+// Height of the snow's surface (m): the piles, wind ripples and, close up, small lumps.
 float snowHeight(float2 xz, float near) {
-    float h = noise2(xz * 0.07 + float2(3.1, 1.7)) * 0.5;
-    h += sin(dot(xz, float2(0.8, 0.6)) * 3.0 + noise2(xz * 0.5) * 6.0) * 0.01 * near;
-    h += (noise2(xz * 2.5 + 5.0) - 0.5) * 0.06 * near + (noise2(xz * 9.0 + 2.0) - 0.5) * 0.005 * near;
+    float h = snowPile(xz) * 0.8;
+    h += sin(dot(xz, float2(0.8, 0.6)) * 3.0 + noise2(xz * 0.5) * 6.0) * 0.008 * near;
+    h += (noise2(xz * 2.5 + 5.0) - 0.5) * 0.03 * near;
     return h;
+}
+
+// How far a point is above the static world (the height map keeps the player's car out):
+// > 0.3 m is the car (or another moving car), which keeps its paint. -1 = not known (never
+// seen, e.g. the road right under the car).
+float aboveWorld(float3 world) {
+    if (u_Sky3.w < 0.5) return -1.0;
+    float2 m = (world.xz - u_HeightMap.xy) / u_HeightMap.z;
+    if (any(m < 0.0) || any(m > 1.0)) return -1.0;
+    float h = tex2Dlod(s12, float4(m, 0, 0)).r;
+    return h > 0.0 ? max(world.y - (h - 10000.0), 0.0) : -1.0;
 }
 
 float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, float emissive, float water, out float3 snow) {
@@ -1496,10 +1513,11 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     float facing = saturate(-dot(nWorld.xz, u_Snow.zw) * 1.4) * (1.0 - up) * (1.0 - emissive) * smoothstep(-0.5, 0.0, nWorld.y);
     if (facing > 0.0) {
         float along = dot(world.xz, float2(u_Snow.w, -u_Snow.z));
-        float streak = noise2(float2(along * 0.45, world.y * 1.6)) * 0.7 + noise2(float2(along * 1.7, world.y * 4.0) + 7.0) * 0.3;
+        float streak = noise2(float2(along * 0.13, world.y * 0.4) + 3.7) * 0.5 + noise2(float2(along * 0.5, world.y * 1.3)) * 0.3 +
+                       noise2(float2(along * 1.9, world.y * 2.9) + 7.0) * 0.2;
         float pk = max(c.r, max(c.g, c.b));
         float painted = smoothstep(0.3, 0.55, (pk - min(c.r, min(c.g, c.b))) / max(pk, 1e-3)); // flags, signs
-        float crust = smoothstep(0.3, 0.85, streak) * facing * cover * 0.45 * (1.0 - 0.6 * painted);
+        float crust = smoothstep(0.45, 0.9, streak) * facing * cover * 0.3 * (1.0 - 0.6 * painted);
         if (up <= 0.0) {
             snow = float3(0.84, 0.88, 0.95) * lerp(0.7, 1.0, saturate(luma(c) * 4.0));
             return crust;
@@ -1510,17 +1528,14 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
     float built = 1.0 - grass;
     float colourful = smoothstep(0.3, 0.55, sat) * built;
-    // Fields: closed at full cover, bare patches below. Far away the noise blends into its
-    // average (no shimmer).
-    float patches = noise2(world.xz * 0.25) * 0.65 + noise2(world.xz * 1.3 + 7.0) * 0.35;
-    patches = lerp(patches, 0.5, smoothstep(80.0, 200.0, dist));
-    float field = smoothstep(0.85 - cover, 1.15 - cover, patches + 0.3);
-    // Built surfaces: an even layer, thicker where the wind piled it up. Only slow noise,
-    // so it never turns into a speckle pattern.
-    float drift = noise2(world.xz * 0.12 + 3.0) * 0.6 + noise2(world.xz * 0.45) * 0.4;
-    float thin = cover * (0.45 + 0.35 * smoothstep(0.3, 0.8, drift));
-    // Painted surfaces (the blue track edges, signs) get a thinner layer, not none.
-    float mask = saturate(lerp(field, thin, built) * lerp(1.0, 0.6, colourful) * up * (1.0 - emissive) * (1.0 - water));
+    // Piles: below full cover the wind heaps the snow into drifts and mounds with bare
+    // ground between them (a little more bare on the track than on the grass); at 1 it
+    // closes into a blanket. Far away the piles blend into their average (no shimmer).
+    float pile = lerp(snowPile(world.xz), 0.5, smoothstep(80.0, 200.0, dist));
+    float t = 1.0 - cover * 0.95 + 0.06 * built;
+    float depth = saturate((pile - t) / 0.2);
+    // Painted surfaces (the blue track edges, signs) get less, not none.
+    float mask = saturate(smoothstep(0.0, 0.45, depth) * lerp(1.0, 0.6, colourful) * up * (1.0 - emissive) * (1.0 - water));
     if (mask <= 0.0) return 0.0;
     // Relief: the snow surface lit from the light's side (the sun, or the sky's brighter side),
     // the small lumps only close up (no shimmer far away).
@@ -1530,8 +1545,8 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     float2 grad = float2(snowHeight(world.xz + e.xy, near) - h0, snowHeight(world.xz + e.yx, near) - h0) / e.x;
     float2 light = u_SunView.w > 0.5 && length(u_SunWorld.xz) > 0.05 ? normalize(u_SunWorld.xz) : float2(0.6, 0.8);
     float relief = clamp(dot(grad, light) * lerp(1.2, 3.0, near), -0.35, 0.3);
-    // Thickness: where a field ends the snow has an edge, its lit rim and its shaded flank.
-    float edge = mask * (1.0 - mask) * 4.0 * (1.0 - built);
+    // Thickness: where a pile ends the snow has an edge, its lit rim and its shaded flank.
+    float edge = mask * (1.0 - mask) * 4.0;
     float shade = 1.0 + relief - edge * 0.18;
     // The game's own light and shadow on the surface carry over (dimmed snow in its shade).
     shade *= lerp(0.72, 1.0, saturate(luma(c) * 4.0));
@@ -1539,22 +1554,11 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     return saturate(mask + edge * 0.15);
 }
 
-// A light layer of snow on the player's car (the top surfaces): patches that keep the
-// car's own shading, so it doesn't turn into a flat white shape. local = position in the
-// car's frame (along, across, up), so the pattern rides with the car.
-float carSnow(float3 c, float3 nWorld, float3 local, out float3 snow) {
-    float up = smoothstep(0.45, 0.85, nWorld.y);
-    float patches = noise3(local * float3(2.2, 2.2, 3.0) + 4.0) * 0.65 + noise3(local * 7.0 + 1.3) * 0.35;
-    float mask = smoothstep(0.62 - 0.2 * u_Snow.y, 0.8 - 0.2 * u_Snow.y, patches) * up * u_Snow.y * 0.75;
-    snow = float3(0.88, 0.91, 0.96) * lerp(0.55, 1.1, saturate(luma(c) * 2.5));
-    return mask;
-}
 
 // The player's car, found like the spray does (the closest surface just below the screen
 // centre, where the chase camera keeps it): 1 inside a car-sized box above the road. Snow
 // doesn't settle on a car doing 300 km/h, and the road under it keeps its snow.
-float onCar(float3 world, out float3 local) {
-    local = 0;
+float onCar(float3 world) {
     float z0 = tex2Dlod(s1, float4(0.5, 0.6, 0, 0)).w;
     float z1 = tex2Dlod(s1, float4(0.5, 0.65, 0, 0)).w;
     float z2 = tex2Dlod(s1, float4(0.5, 0.7, 0, 0)).w;
@@ -1564,14 +1568,8 @@ float onCar(float3 world, out float3 local) {
     float3 tail = worldPosition(viewPosition(float2(0.5, z == z0 ? 0.6 : (z == z1 ? 0.65 : 0.7)), z));
     fwd = normalize(float3(fwd.x, 0.0, fwd.z));
     float3 d = world - (tail + fwd * 1.6);
-    local = float3(dot(d, fwd), dot(d, float3(fwd.z, 0.0, -fwd.x)), world.y - tail.y);
-    return smoothstep(2.7, 2.3, abs(local.x)) * smoothstep(1.4, 1.1, abs(local.y)) * smoothstep(-0.72, -0.6, local.z)
-           * smoothstep(-2.0, -1.6, -local.z);
-}
-
-float onCar(float3 world) {
-    float3 local;
-    return onCar(world, local);
+    float along = abs(dot(d, fwd)), across = abs(dot(d, float3(fwd.z, 0.0, -fwd.x)));
+    return smoothstep(2.7, 2.3, along) * smoothstep(1.4, 1.1, across) * smoothstep(-0.72, -0.6, d.y) * smoothstep(-2.0, -1.6, -d.y);
 }
 
 // The colour of driving snow: the overcast light, whitened.
@@ -1959,15 +1957,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
-    if (u_Snow.y > 0.0) {
-        float3 local;
-        float car = onCar(world, local);
-        if (car > 0.0) {
-            float3 carColour;
-            float onIt = carSnow(c, nWorld, local, carColour);
-            snow = lerp(snow, onIt, car);
-            snowColour = lerp(snowColour, carColour, car);
-        }
+    if (snow > 0.0) {
+        // The car keeps its paint: above the known world, or (where the map knows nothing yet,
+        // under the car) in the part of the screen the height map leaves out for the car.
+        float lift = aboveWorld(world);
+        bool carArea = nd.w < 16.0 && uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.35;
+        snow *= 1.0 - (lift >= 0.0 ? smoothstep(0.3, 0.5, lift) : (carArea ? 1.0 : 0.0));
     }
     if (snow > 0.0) {
         c = lerp(c, snowColour, snow);
@@ -2803,12 +2798,14 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     }
     // Fast motion: favour the current frame (less smearing).
     weight = max(weight, saturate(speed / 60.0) * 0.4);
-    // Water mirrors and refracts what is around it, which moves differently from its surface:
-    // its history would smear into streaks while the camera moves.
+    // Water mirrors and refracts what is around it, which moves differently from its surface,
+    // and its depth may be the pool floor under it: the history slid there and reset in
+    // steps (horizontal stripes, even with the camera almost still).
     if (u_Water.z > 0.5 && z < SKY_Z) {
         float y = worldPosition(viewPosition(cuv, z)).y;
-        float onWater = max(1.0 - abs(y - u_Water.x) / 0.15, 1.0 - abs(y - u_Water.y) / 0.15);
-        weight = lerp(weight, max(weight, 0.6), saturate(onWater) * saturate(speed / 2.0));
+        float level = abs(y - u_Water.x) < abs(y - u_Water.y) ? u_Water.x : u_Water.y;
+        float onWater = saturate(1.0 - (y - level) / 0.15) * saturate((y - level + 3.0) / 0.3);
+        weight = lerp(weight, max(weight, 0.5), onWater);
     }
     return float4(fromYCoCg(lerp(history, toYCoCg(current), weight)), z);
 }

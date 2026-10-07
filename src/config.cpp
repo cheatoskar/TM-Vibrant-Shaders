@@ -53,7 +53,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("CloudHeight", "Cloud height (m)", "Sky & Atmosphere", Float, cloudHeight, 300.0f, 4000.0f),
         TMVS_FIELD("SkyEnhance", "Sky enhancement", "Sky & Atmosphere", Float, skyEnhance, 0.0f, 1.0f),
         TMVS_FIELD("SunGlow", "Sun glow", "Sky & Atmosphere", Float, sunGlow, 0.0f, 2.0f),
-        TMVS_FIELD("FogDensity", "Haze density", "Sky & Atmosphere", Float, fogDensity, 0.0f, 3.0f),
+        TMVS_FIELD("FogDensity", "Haze density", "Sky & Atmosphere", Float, fogDensity, 0.0f, 6.0f),
         TMVS_FIELD("FogHeightFalloff", "Haze height falloff", "Sky & Atmosphere", Float, fogHeightFalloff, 0.0f, 3.0f),
         TMVS_FIELD("FogSunScatter", "Haze sun scattering", "Sky & Atmosphere", Float, fogSunScatter, 0.0f, 2.0f),
         TMVS_FIELD("GodRays", "Light shafts", "Sky & Atmosphere", Float, godRays, 0.0f, 2.0f),
@@ -1038,10 +1038,10 @@ void applyPreset(Settings& s, Preset preset) {
             s.volumetricClouds = 1.0f;
             s.cloudCoverage = 1.0f;
             s.cloudHeight = 600.0f;
-            s.snow = 1.5f;
-            s.snowCover = 0.85f;
+            s.snow = 2.0f;
+            s.snowCover = 0.7f;   // drifts and heaps, bare ground between
             s.lensDrops = true;
-            s.spray = 0.5f;
+            s.spray = 0.8f;
             s.wind = 1.0f;
             s.sunLight = 0.0f;
             s.shadowStrength = 0.15f;

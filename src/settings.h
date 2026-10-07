@@ -117,7 +117,7 @@ struct Settings {
     float weatherSound = 0.45f;    // volume of rain and thunder (only plays with rain or lightning)
     float reflections = 0.0f;      // dry glossy reflections on the track
     float reflectionBlur = 0.35f;  // 0 = a mirror, 1 = a soft sheen (dry track)
-    float grassDetail = 0.7f;      // grass blades and patches
+    float grassDetail = 0.0f;      // grass blades and patches
     float mowingStripes = 0.5f;    // stadium mowing pattern
     float wind = 0.5f;
 
