@@ -352,19 +352,38 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
         c[3 + i][3] = camera[i];
     }
 
+    // The black hole of the space skies (it turns with the sky). Where there is one it is the
+    // light of the scene instead of the sun: shafts, shadows, flare and glow come from it.
+    const bool blackHole = (s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f;
+    float hole[3];
+    {
+        const float az = s.blackHoleAzimuth * 3.14159265f / 180.0f, el = s.blackHoleElevation * 3.14159265f / 180.0f;
+        const float rot = s.skyRotation * 3.14159265f / 180.0f;
+        const float d[3] = {sinf(az) * cosf(el), sinf(el), cosf(az) * cosf(el)};
+        hole[0] = cosf(rot) * d[0] - sinf(rot) * d[2];
+        hole[1] = d[1];
+        hole[2] = sinf(rot) * d[0] + cosf(rot) * d[2];
+    }
+    const float holeConstants[4] = {hole[0], hole[1], hole[2], blackHole ? s.skyEffectSize : 0.0f};
+    device->SetPixelShaderConstantF(40, holeConstants, 1);
+
     // Sun: world -> view is the row-vector product with the view rotation.
     float sw[3] = {in.sunDirection[0], in.sunDirection[1], in.sunDirection[2]};
+    if (blackHole) memcpy(sw, hole, sizeof(sw));
     float len = sqrtf(sw[0] * sw[0] + sw[1] * sw[1] + sw[2] * sw[2]);
     if (len > 1e-5f) for (float& v : sw) v /= len;
     float sv[3];
     for (int j = 0; j < 3; j++) sv[j] = sw[0] * V[0 * 4 + j] + sw[1] * V[1 * 4 + j] + sw[2] * V[2 * 4 + j];
-    // Night skies replace the sun: no sun light, shadows or shafts. On night maps the game's
-    // "sun" is the moon: soft light, no shafts or flare.
-    const bool ringWorld = s.skyMode == 5; // space sky, but lit by the game's sun
+    // Night skies replace the sun: no sun light, shadows or shafts (the black hole brings its
+    // own). On night maps the game's "sun" is the moon: soft light, no shafts or flare.
+    const bool ringWorld = s.skyMode == 5; // space sky, lit by the game's sun without a black hole
     const bool nightSky = s.skyMode >= 2 && !ringWorld;
-    const bool gameNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night;
-    const bool sunKnown = in.sunKnown && len > 1e-5f && !nightSky;
-    const float daylight = smoothstepf(-0.08f, 0.18f, sw[1]) * (gameNight ? 0.35f : 1.0f);
+    const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night;
+    const bool gameNight = mapNight && !blackHole; // the moon lights the scene
+    const bool sunKnown = blackHole || (in.sunKnown && len > 1e-5f && !nightSky);
+    // A bigger (closer) black hole shines brighter.
+    const float daylight = blackHole ? fminf(0.3f + 0.12f * s.skyEffectSize, 1.0f)
+                                     : smoothstepf(-0.08f, 0.18f, sw[1]) * (gameNight ? 0.35f : 1.0f);
     c[6][0] = sv[0];
     c[6][1] = sv[1];
     c[6][2] = sv[2];
@@ -401,6 +420,11 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
         const float game = gameLuma > 1e-3f ? gameSun[i] * presetLuma / gameLuma : s.sunColor[i];
         c[9][i] = s.sunColor[i] + (game - s.sunColor[i]) * w;
     }
+    // The black hole's light: the warm white of its inner disk.
+    if (blackHole) {
+        const float disk[3] = {1.0f, 0.8f, 0.6f};
+        for (int i = 0; i < 3; i++) c[9][i] = disk[i] * presetLuma / 0.83f;
+    }
     c[9][3] = s.sunLight;
     for (int i = 0; i < 3; i++) c[10][i] = s.skyColor[i];
     c[10][3] = s.ambientTint;
@@ -422,7 +446,7 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[14][2] = s.lensFlare;
     c[14][3] = s.chromaticAberration;
     c[15][0] = exp2f(s.exposure);
-    c[15][1] = s.autoExposure * (nightSky || gameNight ? 0.3f : 1.0f); // night stays dark
+    c[15][1] = s.autoExposure * (nightSky || mapNight ? 0.3f : 1.0f); // night stays dark
     c[15][2] = s.contrast;
     c[15][3] = s.saturation;
     c[16][0] = s.vibrance;
@@ -444,7 +468,9 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
 
     c[20][0] = static_cast<float>(s.skyMode);
     // Day-for-night only when the map itself isn't already a night map.
-    c[20][1] = s.skyNight >= 0.0f ? s.skyNight : (nightSky ? (gameNight ? 0.35f : 0.95f) : (ringWorld && !gameNight ? 0.35f : 0.0f));
+    // A black hole lights the scene like a dim, warm sun: less dark than a starry night.
+    c[20][1] = s.skyNight >= 0.0f ? s.skyNight
+                                  : (nightSky ? (mapNight || blackHole ? 0.35f : 0.95f) : (ringWorld && !mapNight ? 0.35f : 0.0f));
     c[20][2] = s.skyRotation * 3.14159265f / 180.0f;
     c[20][3] = s.skyBrightness;
     c[21][0] = s.cloudAmount;

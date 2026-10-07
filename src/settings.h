@@ -58,7 +58,9 @@ struct Settings {
     float skyBrightness = 1.0f;
     float cloudAmount = 0.5f;
     float starAmount = 1.0f;
-    float skyEffectSize = 1.0f;    // black hole size (above ~3 the camera is right at its disk)
+    float skyEffectSize = 1.0f;    // black hole size (above ~3 the camera is right at its disk, 0 = none)
+    float blackHoleAzimuth = 0.0f;    // degrees, turns with the sky; the black hole lights the scene
+    float blackHoleElevation = 15.6f; // degrees
     float planetSize = 0.0f;       // ringed planet in the space skies (0 = none)
     int planetType = 0;            // ring world: 0 Saturn, 1 Jupiter, 2 ice giant, 3 exotic
     int planetView = 1;            // ring world: 0 distant, 1 next to the rings, 2 on the rings

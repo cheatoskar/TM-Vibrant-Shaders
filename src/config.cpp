@@ -39,7 +39,9 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("SkyBrightness", "Sky brightness", "Sky & Atmosphere", Float, skyBrightness, 0.2f, 3.0f),
         TMVS_FIELD("CloudAmount", "Clouds (clear sky)", "Sky & Atmosphere", Float, cloudAmount, 0.0f, 1.0f),
         TMVS_FIELD("StarAmount", "Stars", "Sky & Atmosphere", Float, starAmount, 0.0f, 3.0f),
-        TMVS_FIELD("SkyEffectSize", "Black hole size (> 3: up close)", "Sky & Atmosphere", Float, skyEffectSize, 0.3f, 6.0f),
+        TMVS_FIELD("SkyEffectSize", "Black hole size (0 = off, > 3: up close)", "Sky & Atmosphere", Float, skyEffectSize, 0.0f, 6.0f),
+        TMVS_FIELD("BlackHoleAzimuth", "Black hole direction", "Sky & Atmosphere", Float, blackHoleAzimuth, 0.0f, 360.0f),
+        TMVS_FIELD("BlackHoleElevation", "Black hole height", "Sky & Atmosphere", Float, blackHoleElevation, -10.0f, 60.0f),
         TMVS_FIELD("PlanetSize", "Ringed planet (0 = off)", "Sky & Atmosphere", Float, planetSize, 0.0f, 2.5f),
         TMVS_FIELD("PlanetType", "Ring world planet", "Sky & Atmosphere", Int, planetType, 0.0f, 3.0f),
         TMVS_FIELD("PlanetView", "Ring world view", "Sky & Atmosphere", Int, planetView, 0.0f, 2.0f),
@@ -325,7 +327,7 @@ const char* const kTagKeys[] = {
     "AutoExposure", "Contrast", "Saturation", "Vibrance", "Temperature", "Tint", "Lift", "Gamma", "Gain", "SplitToning",
     "Wetness", "Rain", "Snow", "SnowCover", "Puddles", "Lightning", "LensDrops", "WaterSurfaces", "Reflections",
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
-    "TAA", "Sharpen", "Quality",
+    "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
@@ -817,6 +819,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.planetAzimuth = 150.0f;
             s.skyRotation = 263.0f;
             s.skyEffectSize = 6.0f;
+            s.blackHoleAzimuth = 145.5f; // where the ring world has always had it
+            s.blackHoleElevation = 12.8f;
             s.planetSize = 1.0f;
             s.starAmount = 3.0f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.48f; s.skyColor[2] = 1.0f;

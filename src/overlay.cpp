@@ -168,8 +168,11 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("SkyBrightness")) return sky >= 1;
     if (is("SkyEnhance")) return sky == 0;
     if (is("SkyEffectSize")) return sky == 3 || sky == 5;
-    if (is("PlanetSize") || is("PlanetType")) return sky == 2 || sky == 3 || sky == 5;
-    if (is("PlanetView") || is("PlanetAzimuth") || is("PlanetElevation")) return sky == 5;
+    if (is("BlackHoleAzimuth") || is("BlackHoleElevation")) return (sky == 3 || sky == 5) && s.skyEffectSize > 0.0f;
+    if (is("PlanetSize")) return sky == 2 || sky == 3 || sky == 5;
+    if (is("PlanetType")) return (sky == 2 || sky == 3 || sky == 5) && s.planetSize > 0.0f;
+    if (is("PlanetAzimuth") || is("PlanetElevation")) return (sky == 3 || sky == 5) && s.planetSize > 0.0f;
+    if (is("PlanetView")) return sky == 5 && s.planetSize > 0.0f;
     if (is("CloudCoverage") || is("CloudHeight")) return s.volumetricClouds > 0.0f;
     if (is("LongShadowRange")) return s.longShadows > 0.0f;
     if (is("ShadowLength")) return s.shadowStrength > 0.0f;
@@ -201,6 +204,8 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
                 changed = ImGui::Combo(label, value, kQualities, IM_ARRAYSIZE(kQualities));
             } else if (!strcmp(f.key, "SkyMode")) {
                 changed = ImGui::Combo(label, value, kSkyModes, IM_ARRAYSIZE(kSkyModes));
+                // The black hole and ring world skies come with their planet.
+                if (changed && (*value == 3 || *value == 5) && s.planetSize <= 0.0f) s.planetSize = 1.0f;
             } else if (!strcmp(f.key, "PlanetType")) {
                 changed = ImGui::Combo(label, value, kPlanetTypes, IM_ARRAYSIZE(kPlanetTypes));
             } else if (!strcmp(f.key, "PlanetView")) {
@@ -287,12 +292,16 @@ bool drawSimple(Config& config, Settings& s) {
     bool look = false;
     if (section(config, "Sky", 0)) {
         look |= drawKey(s, "SkyMode", "Sky");
+        look |= drawKey(s, "SkyRotation", "Turn the sky");
+        look |= drawKey(s, "StarAmount", "Stars");
+        look |= drawKey(s, "PlanetSize", "Planet size (0 = off)");
         look |= drawKey(s, "PlanetType", "Planet");
         look |= drawKey(s, "PlanetView", "View");
         look |= drawKey(s, "PlanetAzimuth", "Planet direction");
-        look |= drawKey(s, "SkyEffectSize", "Black hole size");
-        look |= drawKey(s, "SkyRotation", "Turn the sky");
-        look |= drawKey(s, "StarAmount", "Stars");
+        look |= drawKey(s, "PlanetElevation", "Planet height");
+        look |= drawKey(s, "SkyEffectSize", "Black hole size (0 = off)");
+        look |= drawKey(s, "BlackHoleAzimuth", "Black hole direction");
+        look |= drawKey(s, "BlackHoleElevation", "Black hole height");
     }
 
     if (section(config, "Look", 1)) {

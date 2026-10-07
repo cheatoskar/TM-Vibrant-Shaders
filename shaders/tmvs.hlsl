@@ -52,6 +52,7 @@ float4 u_HeightMap : register(c35); // world x/z of the height map corner, world
 float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
 float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
 float4 u_Snow      : register(c39); // snowfall, snow cover, 0, 0
+float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -587,7 +588,7 @@ float3x3 skyFrame(float3 f) {
 }
 
 float3 blackHoleDirection() {
-    return normalize(rotateY(float3(0.0, 0.28, 1.0), u_Sky.z));
+    return u_BlackHole.xyz;
 }
 
 // Accretion disk emission where a light ray crosses the disk plane.
@@ -772,16 +773,16 @@ float ringDensity(int type, float rr, float2 x, float near) {
 // Direction (xyz) and light strength (w) of the black hole of the current sky, if any.
 float4 blackHoleLight() {
     int mode = (int)(u_Sky.x + 0.5);
-    if (mode == 3) return float4(blackHoleDirection(), saturate(u_Sky2.z * 0.45));
-    if (mode == 5) return float4(normalize(rotateY(float3(0.55, 0.22, -0.8), u_Sky.z)), saturate(u_Sky2.z * 0.25));
+    if (u_BlackHole.w <= 0.0) return 0;
+    if (mode == 3) return float4(blackHoleDirection(), saturate(u_BlackHole.w * 0.45));
+    if (mode == 5) return float4(blackHoleDirection(), saturate(u_BlackHole.w * 0.25));
     return 0;
 }
 
 // Ringed gas giant (sky detail for the space skies). Returns rgb and coverage.
-float4 ringedPlanet(float3 rd, float3 light) {
+float4 ringedPlanet(float3 rd, float3 light, float3 dir) {
     float size = u_Sky2.w;
     if (size <= 0.0) return 0;
-    float3 dir = normalize(rotateY(float3(-0.62, 0.14, 0.8), u_Sky.z));
     float radius = sin(0.16 * size);
     float3 center = dir;                          // planet at distance 1
     float3 ringN = normalize(float3(0.18, 1.0, -0.12));
@@ -856,11 +857,12 @@ float3 ringWorldSky(float3 rd) {
     if (u_SunView.w < 0.5 || sun.y < -0.3) sun = normalize(float3(0.5, 0.35, -0.8)); // no usable game sun
 
     // Background: stars, galaxy and a small, far black hole (with its lensing).
-    float3 bhDir = normalize(rotateY(float3(0.55, 0.22, -0.8), u_Sky.z));
-    float3 col = blackHoleSky(rd, bhDir, 70.0 / (u_Sky2.z * 0.55));
-    // The sun as a star.
-    float mu = dot(rd, sun);
-    col += u_SunColor.rgb * (smoothstep(0.99955, 0.9998, mu) * 6.0 + pow(saturate(mu), 300.0) * 0.6 + pow(saturate(mu), 20.0) * 0.03);
+    float3 col = u_BlackHole.w > 0.0 ? blackHoleSky(rd, blackHoleDirection(), 70.0 / (u_BlackHole.w * 0.55)) : spaceBackground(rd);
+    // The sun as a star (with a black hole, the hole is the light).
+    if (u_BlackHole.w <= 0.0) {
+        float mu = dot(rd, sun);
+        col += u_SunColor.rgb * (smoothstep(0.99955, 0.9998, mu) * 6.0 + pow(saturate(mu), 300.0) * 0.6 + pow(saturate(mu), 20.0) * 0.03);
+    }
 
     // Moons.
     float4 m1 = moon(rd, normalize(rotateY(float3(-0.75, 0.38, -0.3), u_Sky.z)), 0.022, sun, float3(0.8, 0.78, 0.74));
@@ -874,9 +876,10 @@ float3 ringWorldSky(float3 rd) {
     //           planet and sweep over the stadium.
     //   View 2: on the rings - floating just above them, the banded ring plane stretches
     //           to the horizon and rises over the stadium on one side.
+    if (u_Sky2.w <= 0.0) return col; // no planet
     int view = (int)(u_Planet.y + 0.5);
     float3 dir = dirFromAngles(u_Planet.z, u_Planet.w);
-    float size = u_Sky2.w > 0.0 ? max(u_Sky2.w, 0.3) : 1.0;
+    float size = max(u_Sky2.w, 0.3);
     float dist = view == 2 ? 2.2 : (view == 1 ? 2.6 : 5.5 / size);
     float3 center = dir * dist;
     float3 side = normalize(cross(float3(0, 1, 0), dir));
@@ -1135,13 +1138,13 @@ float3 customSky(float3 rd, uniform int mode) {
         float3 moon = normalize(rotateY(float3(0.4, 0.5, -0.75), u_Sky.z));
         float m = dot(rd, moon);
         c += float3(0.9, 0.95, 1.0) * (smoothstep(0.9993, 0.9996, m) * 3.0 + pow(saturate(m), 400.0) * 0.4);
-        float4 planet = ringedPlanet(rd, moon);
+        float4 planet = ringedPlanet(rd, moon, normalize(rotateY(float3(-0.62, 0.14, 0.8), u_Sky.z)));
         c = c * (1.0 - planet.a) + planet.rgb * 0.5;
         c += meteors(rd, saturate(u_Sky2.y));
     } else if (mode == 3) {
-        c = blackHoleSky(rd, blackHoleDirection(), 70.0 / u_Sky2.z);
-        float3 pdir = normalize(rotateY(float3(-0.62, 0.14, 0.8), u_Sky.z));
-        float4 planet = ringedPlanet(rd, normalize(blackHoleDirection() * 0.45 - pdir * 0.75 + float3(0, 0.35, 0)));
+        c = u_BlackHole.w > 0.0 ? blackHoleSky(rd, blackHoleDirection(), 70.0 / u_BlackHole.w) : spaceBackground(rd);
+        float3 pdir = dirFromAngles(u_Planet.z, u_Planet.w);
+        float4 planet = ringedPlanet(rd, normalize(blackHoleDirection() * 0.45 - pdir * 0.75 + float3(0, 0.35, 0)), pdir);
         c = c * (1.0 - planet.a) + planet.rgb;
         c += meteors(rd, saturate(u_Sky2.y));
     } else if (mode == 5) {
