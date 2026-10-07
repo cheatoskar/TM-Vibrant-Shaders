@@ -16,7 +16,7 @@ const char* const kEntryPoints[] = {
     "PS_ShadowHeight", "PS_Volumetric", "PS_GI", "PS_GITemporal",
     "PS_SkyClear",    "PS_SkyStars", "PS_SkyBlackHole", "PS_SkyAurora",   "PS_SkyRing",     "PS_AuroraHalf",
     "PS_SkyAverage",  "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
-    "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail",
+    "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail", "PS_SnowFlake",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",
@@ -144,6 +144,7 @@ void Pipeline::release() {
     gfx::release(m_dropVS);
     gfx::release(m_splashVS);
     gfx::release(m_sprayVS);
+    gfx::release(m_snowVS);
     gfx::release(m_rainDecl);
     gfx::release(m_trailVS);
     gfx::release(m_trailDecl);
@@ -521,6 +522,9 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
     const float water[4] = {in.water[0], in.water[1], in.water[2], 0.0f};
     device->SetPixelShaderConstantF(38, water, 1);
+    // z (whether the height map shelters surfaces from the snow) is set with the height map.
+    const float snow[4] = {s.snow, s.snowCover, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(39, snow, 1);
 }
 
 // --- Long-range shadows -----------------------------------------------------
@@ -838,6 +842,65 @@ VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float3 right = normalize(float3(1.0, 0.0, 0.0) - up * up.x);
     o.pos = toClip(v + right * corner.x * s * 1.7 + up * corner.y * s * 1.6);
     o.data = float4(corner.x, corner.y, v.z, age);
+    return o;
+}
+
+// Snow: a box around the camera that is fixed in the world (wrapped like the rain), each
+// flake drifting with the wind and fluttering. Flakes rushing past the camera stretch into
+// short streaks (where they were a frame ago); those right at the lens are out of focus.
+float4 c_SnowWind : register(c18); // wind x, z (m/s), fall speed (m/s), 0
+struct SnowOut { float4 pos : POSITION; float4 data : TEXCOORD0; float len : TEXCOORD1; };
+
+SnowOut snowVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
+    SnowOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    o.len = 0;
+    float3 box = float3(20.0, 14.0, 20.0); // farther snow is the screen-space veil
+    float t = c_Cam.w;
+    float gust = 0.75 + 0.25 * sin(t * 0.6 + seed.x * 2.0) + 0.15 * sin(t * 1.7 + seed.z * 5.0);
+    float3 velocity = float3(c_SnowWind.x * gust, -c_SnowWind.z * (0.7 + 0.6 * seed.w), c_SnowWind.y * gust);
+    float3 local = (frac((seed.xyz * box + velocity * t - c_Cam.xyz) / box) - 0.5) * box;
+    // Flutter: each flake sways on its own small circle.
+    float phase = seed.w * 40.0;
+    local.xz += float2(sin(t * (1.3 + seed.x) + phase), cos(t * (1.1 + seed.z) + phase)) * 0.25;
+    float3 w = c_Cam.xyz + local;
+    float3 va = toView(w);
+    if (va.z < 0.25) return o;
+    float4 ca = toClip(va);
+    float2 na = ca.xy / ca.w;
+    float2 nb = na;
+    if (c_Motion.y > 0.5) {
+        float4 p = float4(w - velocity * c_Motion.z, 1.0);
+        float3 vp = float3(dot(p, c_Prev0), dot(p, c_Prev1), dot(p, c_Prev2));
+        if (vp.z > 0.25) {
+            float2 np = float2(vp.x * c_PrevP.x / vp.z + c_PrevP.z, vp.y * c_PrevP.y / vp.z + c_PrevP.w);
+            float2 move = (np - na) * c_Motion.x * 0.5;
+            float l = length(move);
+            nb = na + (l > c_Motion.w * 0.5 ? move * (c_Motion.w * 0.5 / l) : move);
+        }
+    }
+    float z = va.z;
+    // Flakes of 8 - 22 mm (clumps in a blizzard); closer than ~1.5 m they blur into larger,
+    // fainter discs.
+    float sizeM = 0.008 + 0.014 * frac(seed.w * 13.7);
+    float px = sizeM * c_Proj.y / (c_Proj2.w * z);
+    float blur = 5.0 * saturate((1.5 - z) / 1.25);
+    float r = max(px, 1.2) + blur;
+    float opacity = saturate(px / 1.2) * 0.85 + 0.15;
+    opacity *= 1.0 / (1.0 + blur * 0.35);
+    float2 d = (nb - na) / c_Proj2.zw;      // streak in pixels
+    float len = length(d);
+    float2 dir = len > 1e-3 ? d / len : float2(0.0, 1.0);
+    float lenR = len / r;
+    opacity /= 1.0 + lenR * 0.5;             // a long streak is the same flake spread out
+    float along = corner.y * (lenR + 2.0) - 1.0;
+    float2 n = na + (dir * along + float2(-dir.y, dir.x) * corner.x) * r * c_Proj2.zw;
+    o.pos = float4(n * ca.w, ca.z, ca.w);
+    float edge = saturate(2.0 - 4.0 * max(abs(local.x), abs(local.z)) / box.x); // hide the box edges
+    float far = exp(-z / 14.0);
+    o.data = float4(corner.x, along, z, opacity * edge * far * smoothstep(0.25, 0.6, z));
+    o.len = lenR;
     return o;
 }
 
@@ -1199,13 +1262,14 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
         m_dropVS = blend ? gfx::compileVertexShader(device, kRainVS, "dropVS", "RainVS") : nullptr;
         m_splashVS = blend ? gfx::compileVertexShader(device, kRainVS, "splashVS", "RainVS") : nullptr;
         m_sprayVS = blend ? gfx::compileVertexShader(device, kRainVS, "sprayVS", "RainVS") : nullptr;
+        m_snowVS = blend ? gfx::compileVertexShader(device, kRainVS, "snowVS", "RainVS") : nullptr;
         const D3DVERTEXELEMENT9 elements[] = {
             {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
             {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
             D3DDECL_END(),
         };
         if (m_dropVS) device->CreateVertexDeclaration(elements, &m_rainDecl);
-        if (!m_dropVS || !m_splashVS || !m_sprayVS || !m_rainDecl) {
+        if (!m_dropVS || !m_splashVS || !m_sprayVS || !m_snowVS || !m_rainDecl) {
             TMVS_LOG("pipeline: rain particles unavailable (no FP16 blending or vertex shader failed)");
             m_rainSupported = false;
             return false;
@@ -1397,6 +1461,24 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         profileMark(kRainSplash);
     }
 
+    // Snow 1 = steady snowfall, 2 = blizzard. Flakes are blended over the image, not added:
+    // white on a white field must not glow.
+    const UINT flakes = static_cast<UINT>(kSnowFlakes * fminf(s.snow, 2.0f) * 0.5f);
+    if (flakes > 0) {
+        float snowWind[4] = {(1.0f + s.wind * 7.0f) * fminf(s.snow, 1.5f), (0.5f + s.wind * 3.0f) * fminf(s.snow, 1.5f), 1.1f, 0.0f};
+        device->SetVertexShaderConstantF(18, snowWind, 1);
+        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+        device->SetVertexShader(m_snowVS);
+        device->SetPixelShader(m_shaders[kSnowFlake]);
+        passConstants(device, 1.0f, 0.0f);
+        for (UINT first = 0; first < flakes; first += kRainChunk) {
+            const UINT n = flakes - first < kRainChunk ? flakes - first : kRainChunk;
+            device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, static_cast<INT>(first * 4), 0, n * 4, 0, n * 2);
+        }
+        profileMark(kSnowFlake);
+    }
+
     device->SetStreamSource(0, nullptr, 0, 0);
     device->SetIndices(nullptr);
     device->SetTexture(D3DVERTEXTEXTURESAMPLER0, nullptr);
@@ -1477,13 +1559,15 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     if (in.driving || in.time > m_heightHoldUntil) m_heightHoldUntil = -1.0f;
     const bool splat = temporal && m_heightHoldUntil < 0.0f;
-    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
+    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f || s.snowCover > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
     if (heightMap && splat && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s);
     const bool longShadows = heightMap && wantLong;
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
                                     longShadows ? s.longShadows : 0.0f};
     device->SetPixelShaderConstantF(34, longConstants, 1);
+    const float snowConstants[4] = {s.snow, s.snowCover, heightMap && m_heightValid ? 1.0f : 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(39, snowConstants, 1);
 
     // 2. AO + sun shadows, bilateral blur.
     if (s.aoStrength > 0.0f || s.shadowStrength > 0.0f || s.debugView == 3 || s.debugView == 4 || s.debugView == 7) {
@@ -1619,9 +1703,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 9, m_spill[0].texture, true);
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
+    bind(device, 12, s.snowCover > 0.0f && m_heightMap[m_heightIndex].texture ? m_heightMap[m_heightIndex].texture : nullptr, false);
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
+    device->SetTexture(12, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
 
@@ -1776,7 +1862,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     // Rain particles go on top of the finished image: TAA would erase thin, fast drops as
     // flicker, and keeping them out of its history avoids trails.
-    if ((s.rain > 0.0f || s.wetness > 0.0f) && post && ensureRain(device)) drawRain(device, in, s, dt, heightMap && m_heightValid, output);
+    if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f) && post && ensureRain(device))
+        drawRain(device, in, s, dt, heightMap && m_heightValid, output);
     profileEnd();
 
     if (temporal) {

@@ -74,6 +74,8 @@ const std::vector<Field>& fields() {
 
         TMVS_FIELD("Wetness", "Wet roads", "Weather & Surfaces", Float, wetness, 0.0f, 1.0f),
         TMVS_FIELD("Rain", "Rain (2 = downpour)", "Weather & Surfaces", Float, rain, 0.0f, 2.0f),
+        TMVS_FIELD("Snow", "Snow (2 = blizzard)", "Weather & Surfaces", Float, snow, 0.0f, 2.0f),
+        TMVS_FIELD("SnowCover", "Snow on the ground", "Weather & Surfaces", Float, snowCover, 0.0f, 1.0f),
         TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
         TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
         TMVS_FIELD("LensDrops", "Rain drops on the lens", "Weather & Surfaces", Bool, lensDrops, 0.0f, 1.0f),
@@ -126,6 +128,7 @@ const char* presetName(Preset preset) {
         case Preset::RainyDay: return "Rainy Day";
         case Preset::ReplayCinema: return "Replay Cinema";
         case Preset::Storm: return "Storm";
+        case Preset::Snowstorm: return "Snowstorm";
         case Preset::Custom: return "Custom";
         default: return "?";
     }
@@ -666,6 +669,42 @@ void applyPreset(Settings& s, Preset preset) {
             s.vignette = 0.45f;
             s.chromaticAberration = 0.0f;
             s.filmGrain = 0.02f;
+            break;
+        case Preset::Snowstorm:
+            // Overcast and bright: the light comes from everywhere, snow and haze glow white.
+            s.skyNight = 0.2f;
+            s.volumetricLight = 0.0f;
+            s.volumetricClouds = 1.0f;
+            s.cloudCoverage = 1.0f;
+            s.cloudHeight = 600.0f;
+            s.snow = 1.5f;
+            s.snowCover = 1.0f;
+            s.wind = 1.0f;
+            s.sunLight = 0.0f;
+            s.shadowStrength = 0.15f;
+            s.longShadows = 0.0f;
+            s.aoStrength = 1.1f;
+            s.ambientTint = 0.7f;
+            s.skyColor[0] = 0.74f; s.skyColor[1] = 0.82f; s.skyColor[2] = 0.95f;
+            s.fogDensity = 3.0f;
+            s.fogHeightFalloff = 0.6f;
+            s.fogSunScatter = 0.0f;
+            s.godRays = 0.0f;
+            s.sunGlow = 0.0f;
+            s.lensFlare = 0.0f;
+            s.highlightBoost = 3.0f;
+            s.neonLight = 0.8f;
+            s.bloom = 0.1f;
+            s.exposure = 0.0f;
+            s.contrast = 1.04f;
+            s.saturation = 0.72f;
+            s.vibrance = 0.0f;
+            s.temperature = -0.3f;
+            s.shadowTint = 0.5f;
+            s.vignette = 0.3f;
+            s.chromaticAberration = 0.0f;
+            s.filmGrain = 0.015f;
+            s.autoExposure = 0.2f;  // a white world must not be pulled down to grey
             break;
         default:
             break;

@@ -18,6 +18,7 @@ enum class Preset : int {
     RainyDay,        // overcast, wet roads, puddles and falling rain
     ReplayCinema,    // film look with motion blur and depth of field for replays
     Storm,           // dark, overcast, pouring rain, soaked track, lightning
+    Snowstorm,       // blizzard: driving snow, snow fields, white-out haze
     Custom,
     Count
 };
