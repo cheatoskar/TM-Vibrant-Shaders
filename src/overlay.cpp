@@ -254,7 +254,10 @@ void drawMoodPresets(Config& config, const std::vector<std::string>& names) {
 bool section(Config& config, const char* label, int bit, bool header = true) {
     const int flag = 1 << bit;
     ImGui::SetNextItemOpen((config.menuSections & flag) != 0, ImGuiCond_Once);
+    // Own ID scope: a header may share its label with a widget inside it ("Sky").
+    ImGui::PushID("section");
     const bool open = header ? ImGui::CollapsingHeader(label) : ImGui::TreeNodeEx(label, ImGuiTreeNodeFlags_NoTreePushOnOpen);
+    ImGui::PopID();
     const int sections = open ? (config.menuSections | flag) : (config.menuSections & ~flag);
     if (sections != config.menuSections) {
         config.menuSections = sections;

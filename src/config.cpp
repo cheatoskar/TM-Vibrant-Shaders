@@ -640,6 +640,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.wetness = 1.0f;
             s.rain = 1.6f;
             s.puddles = 0.55f;
+            s.reflections = 1.3f;
             s.lightning = 1.0f;
             s.spray = 0.25f;
             s.wind = 0.9f;
