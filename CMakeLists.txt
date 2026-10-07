@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(tm_vibrant_shaders VERSION 1.2.1 LANGUAGES CXX RC)
+project(tm_vibrant_shaders VERSION 1.3.0 LANGUAGES CXX RC)
 
 if(NOT DEFINED TM_SHADERS_VERSION)
   set(TM_SHADERS_VERSION "${PROJECT_VERSION}")

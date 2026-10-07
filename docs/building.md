@@ -19,7 +19,7 @@ cmake --build build --config Release                        # plugin, setup, pre
 cmake --build build --config Release --target release_zip   # dist/: zip, DLL, SHA256SUMS.txt
 ```
 
-Set a version with `-DTM_SHADERS_VERSION=1.2.0` when configuring. The CI does this from the tag.
+Set a version with `-DTM_SHADERS_VERSION=1.3.0` when configuring. The CI does this from the tag.
 
 To try a local build in the game: `install-modloader.ps1` copies it into the ModLoader, or copy `build\Release\TMVibrantShaders.dll` next to `TmForever.exe` as `d3d9.dll`. Close the game first.
 

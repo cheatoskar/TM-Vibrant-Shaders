@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.3.0
+
+**Snow**
+- Falling snow (`Snow`, 2 = blizzard): flakes of different sizes that streak past the camera and drift with the wind, blurred close to the lens. Flakes also land on the lens (with *Drops and flakes on the lens*). A snow veil far away, blizzard haze.
+- Snow on the ground (`SnowCover`): on grass and everything that faces up. Below full cover the wind heaps it into piles and drifts with bare ground between them (0.5 is about half the ground). It has relief, sparkles in the sun, keeps the game's shadows, stays thin on painted surfaces, gathers as streaky crusts on walls facing the wind, and stays off the water.
+- Your car keeps its paint: it is found in the depth buffer, and the road around it keeps its snow.
+- Powder snow thrown up behind the car (`Spray`).
+- Snow storm wind: a synthesised wind sound that grows with the snowfall and the wind.
+- New preset **Snowstorm**.
+
+**Author's Shader**
+- A look stored in a map's comments. Map authors set it from the menu (*Advanced → Author's Shader → Set as Author's Shader*) into the map open in the editor and save the map. Everyone with the mod gets that look on that map; on the next map your own look is back, and `settings.ini` is never touched.
+- Packed into a short code (about 2 bytes per changed setting), so it fits next to the author's own text. *Copy code* puts it on the clipboard; a readable `[TMVS] Preset=Snowstorm Snow=1.5` line typed by hand works too.
+- *Load Author's Shaders* switches it off. The comments are read from the map in memory, so campaign and online maps work too.
+
+**Sky**
+- The black hole lights the space skies: light shafts, shadows, lens flare and glow come from it instead of the sun.
+- Black hole direction and height (both space skies), the planet's position in the black hole sky; size 0 turns the black hole or the planet off.
+- Ring World: seamless planets, sharper rings, planet size in every view, a *None* planet.
+- Clouds move with the wind; aurora movement speed (`AuroraSpeed`).
+
+**Presets**
+- Presets tuned. *Rainy Day* is now **Rainy** (old settings keep working). **Horizon** uses the black hole sky.
+- Switching presets glides over about a second instead of jumping.
+
+**Menu**
+- Search box in the advanced view: finds any setting across all sections.
+- A reset arrow next to every setting you changed: back to the preset's value.
+- Coloured section headers.
+
+**Light and surfaces**
+- Long-range shadows: animated, even noise instead of a fixed pattern (it blurred into blotches that slid with the camera), and more margin under a low sun or moon.
+- Reflection blur (`ReflectionBlur`): the dry track becomes a glossy sheen instead of a mirror.
+- Lens flare only from distant lights. Neon light spill without blocky edges. Grass detail with tufts (off by default). Haze up to 6.
+- TAA is off by default.
+
+**Fixes**
+- Water: no more horizontal stripes on pools seen from mid distance. The water was found by its height with a fixed tolerance, which the depth's precision couldn't hold far away; the tolerance now grows with the camera's height, and waves and reflections use the exact water plane.
+- Snow: no more black rectangles in the snow around the car (next to pools, on grass edges, in banked turns or with replay cameras).
+- Frame captures (`F12`) on maps with water saved an empty depth buffer. Captures never overwrite earlier ones.
+
 ## 1.2.1
 
 - Storm: the dry track also reflects (1.3), so the wet road and the stadium mirror more clearly.
