@@ -38,9 +38,15 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 - Presets tuned. *Rainy Day* is now **Rainy**, **Horizon** uses the black hole sky.
 
 **Fixes**
-- No more horizontal stripes on pools and the sea seen from mid distance.
+- Far fewer horizontal stripes on pools and the sea seen from mid distance.
 - No more black rectangles in the snow around the car.
 - Long-range shadows no longer leave blotches that slide with the camera.
 - `F12` captures on maps with water are complete again.
+
+### Known issues
+
+- Some spots can flicker now and then. If you see it, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
+- Snow is work in progress: the snow on the ground doesn't follow the game's textures and surfaces well yet.
+- Water: the stripes on pools are mostly gone, but a few faint lines can still show in some views.
 
 Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md).

@@ -16,7 +16,7 @@
 
 A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
-**[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Documentation](#documentation)
+**[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
 
 ---
 
@@ -77,7 +77,7 @@ Run the setup again to update or uninstall; your settings stay. Windows SmartScr
 | **Aurora** | Northern lights, green and teal. |
 | **Rainy** | Overcast, wet track, puddles, rain. |
 | **Storm** | Low clouds, pouring rain, deep puddles, lightning and thunder. |
-| **Snowstorm** | A blizzard: driving snow, snow drifts on the ground, haze and the howl of the wind. |
+| **Snowstorm** | A blizzard: driving snow, snow drifts on the ground, haze and the howl of the wind. Work in progress. |
 | **Replay Cinema** | Film look with motion blur and depth of field, for replays and the video export. |
 | **Competition** | Clarity first: AO and contact shadows, no haze or lens effects. |
 | **Performance** | Vibrant with the expensive parts off. |
@@ -145,6 +145,12 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
 | Other `d3d9.dll` mods (ReShade and similar) | Not as `d3d9.dll` in the same game folder. Together with the ModLoader install: untested |
 | Windows | 10 and 11 |
+
+## Known issues
+
+- **Flickering:** some spots can flicker now and then. If you see it, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
+- **Snow is work in progress:** the snow on the ground doesn't follow the game's textures and surfaces well yet (it can lie across markings, kerbs and edges). The *Snowstorm* preset will be tuned further.
+- **Water:** the horizontal stripes on pools are mostly gone in 1.3, but a few faint lines can still show in some views.
 
 ---
 

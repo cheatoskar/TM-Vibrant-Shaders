@@ -37,9 +37,14 @@
 - TAA is off by default.
 
 **Fixes**
-- Water: no more horizontal stripes on pools seen from mid distance. The water was found by its height with a fixed tolerance, which the depth's precision couldn't hold far away; the tolerance now grows with the camera's height, and waves and reflections use the exact water plane.
+- Water: far fewer horizontal stripes on pools seen from mid distance (a few faint lines can remain). The water was found by its height with a fixed tolerance, which the depth's precision couldn't hold far away; the tolerance now grows with the camera's height, and waves and reflections use the exact water plane.
 - Snow: no more black rectangles in the snow around the car (next to pools, on grass edges, in banked turns or with replay cameras).
 - Frame captures (`F12`) on maps with water saved an empty depth buffer. Captures never overwrite earlier ones.
+
+**Known issues**
+- Some spots can flicker now and then.
+- Snow is work in progress: the snow on the ground doesn't follow the game's textures and surfaces well yet.
+- Water: a few faint lines can still show on pools in some views.
 
 ## 1.2.1
 
