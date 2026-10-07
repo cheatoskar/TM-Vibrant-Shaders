@@ -1493,17 +1493,6 @@ float snowHeight(float2 xz, float near) {
     return h;
 }
 
-// How far a point is above the static world (the height map keeps the player's car out):
-// > 0.3 m is the car (or another moving car), which keeps its paint. -1 = not known (never
-// seen, e.g. the road right under the car).
-float aboveWorld(float3 world) {
-    if (u_Sky3.w < 0.5) return -1.0;
-    float2 m = (world.xz - u_HeightMap.xy) / u_HeightMap.z;
-    if (any(m < 0.0) || any(m > 1.0)) return -1.0;
-    float h = tex2Dlod(s12, float4(m, 0, 0)).r;
-    return h > 0.0 ? max(world.y - (h - 10000.0), 0.0) : -1.0;
-}
-
 float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, float emissive, float water, out float3 snow) {
     snow = 0;
     float cover = u_Snow.y;
@@ -1532,7 +1521,7 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     // ground between them (a little more bare on the track than on the grass); at 1 it
     // closes into a blanket. Far away the piles blend into their average (no shimmer).
     float pile = lerp(snowPile(world.xz), 0.5, smoothstep(80.0, 200.0, dist));
-    float t = 1.0 - cover * 0.95 + 0.06 * built;
+    float t = 0.85 - cover * 0.8 + 0.03 * built; // 0.5: about half the ground
     float depth = saturate((pile - t) / 0.2);
     // Painted surfaces (the blue track edges, signs) get less, not none.
     float mask = saturate(smoothstep(0.0, 0.45, depth) * lerp(1.0, 0.6, colourful) * up * (1.0 - emissive) * (1.0 - water));
@@ -1554,6 +1543,53 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     return saturate(mask + edge * 0.15);
 }
 
+
+// Height of the static world at a point (s12, the height map), or `fallback` where it has
+// never been seen.
+float groundAt(float2 xz, float fallback) {
+    float2 m = (xz - u_HeightMap.xy) / u_HeightMap.z;
+    if (u_Sky3.w < 0.5 || any(m < 0.0) || any(m > 1.0)) return fallback;
+    float h = tex2Dlod(s12, float4(m, 0, 0)).r;
+    return h > 0.0 ? h - 10000.0 : fallback;
+}
+
+// The player's car for the snow: inside a car-sized box (as onCar) and clearly above the road
+// beside it. The road's height comes from the height map a few metres to the left and right
+// (the map leaves out the car and the road just around it), at the back and the front of the
+// box, so ramps work. The road in the box keeps its snow; when the point found is no car
+// (a camera from above), nothing is masked.
+float carBody(float3 world) {
+    float z0 = tex2Dlod(s1, float4(0.5, 0.6, 0, 0)).w;
+    float z1 = tex2Dlod(s1, float4(0.5, 0.65, 0, 0)).w;
+    float z2 = tex2Dlod(s1, float4(0.5, 0.7, 0, 0)).w;
+    float z = min(z0, min(z1, z2));
+    float3 fwd = viewToWorldDir(float3(0, 0, 1));
+    // Any camera that looks along the road, also steeply down (the road check below tells a
+    // car from the road).
+    if (z < 1.5 || z > 16.0 || abs(fwd.y) > 0.95) return 0.0;
+    float3 tail = worldPosition(viewPosition(float2(0.5, z == z0 ? 0.6 : (z == z1 ? 0.65 : 0.7)), z));
+    fwd = normalize(float3(fwd.x, 0.0, fwd.z));
+    float3 side = float3(fwd.z, 0.0, -fwd.x);
+    // The point is the rear in a chase view, the cockpit from above: the box covers both.
+    float3 centre = tail + fwd * 0.9;
+    float3 d = world - centre;
+    float along = dot(d, fwd), across = dot(d, side);
+    float box = smoothstep(3.7, 3.4, abs(along)) * smoothstep(1.5, 1.25, abs(across));
+    if (box <= 0.0 || d.y > 2.0) return 0.0;
+    // Lowest known road on either side (kerbs and walls are higher), back and front.
+    float none = 1e5;
+    float2 b = centre.xz - fwd.xz * 2.5, f = centre.xz + fwd.xz * 2.5;
+    float back = min(min(groundAt(b + side.xz * 4.0, none), groundAt(b - side.xz * 4.0, none)),
+                     min(groundAt(b + side.xz * 6.0, none), groundAt(b - side.xz * 6.0, none)));
+    float front = min(min(groundAt(f + side.xz * 4.0, none), groundAt(f - side.xz * 4.0, none)),
+                      min(groundAt(f + side.xz * 6.0, none), groundAt(f - side.xz * 6.0, none)));
+    if (back > 1e4) back = front;
+    if (front > 1e4) front = back;
+    float road = back > 1e4 ? tail.y - 0.6 : lerp(back, front, (along + 2.5) / 5.0);
+    // The point found must be the car, not the road (or something low on it).
+    if (tail.y < lerp(back, front, (dot(tail - centre, fwd) + 2.5) / 5.0) + 0.25 && back < 1e4) return 0.0;
+    return box * smoothstep(road + 0.12, road + 0.28, world.y);
+}
 
 // The player's car, found like the spray does (the closest surface just below the screen
 // centre, where the chase camera keeps it): 1 inside a car-sized box above the road. Snow
@@ -1957,13 +1993,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
-    if (snow > 0.0) {
-        // The car keeps its paint: above the known world, or (where the map knows nothing yet,
-        // under the car) in the part of the screen the height map leaves out for the car.
-        float lift = aboveWorld(world);
-        bool carArea = nd.w < 16.0 && uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.35;
-        snow *= 1.0 - (lift >= 0.0 ? smoothstep(0.3, 0.5, lift) : (carArea ? 1.0 : 0.0));
-    }
+    if (snow > 0.0) snow *= 1.0 - carBody(world); // the car keeps its paint
     if (snow > 0.0) {
         c = lerp(c, snowColour, snow);
         albedo = lerp(albedo, snowColour, snow);

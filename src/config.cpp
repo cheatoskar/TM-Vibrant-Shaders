@@ -1039,7 +1039,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.cloudCoverage = 1.0f;
             s.cloudHeight = 600.0f;
             s.snow = 2.0f;
-            s.snowCover = 0.7f;   // drifts and heaps, bare ground between
+            s.snowCover = 0.5f;   // drifts and heaps, bare ground between
             s.lensDrops = true;
             s.spray = 0.8f;
             s.wind = 1.0f;
@@ -1049,7 +1049,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.aoStrength = 1.1f;
             s.ambientTint = 0.7f;
             s.skyColor[0] = 0.74f; s.skyColor[1] = 0.82f; s.skyColor[2] = 0.95f;
-            s.fogDensity = 3.0f;
+            s.fogDensity = 3.6f;
             s.fogHeightFalloff = 0.6f;
             s.fogSunScatter = 0.0f;
             s.godRays = 0.0f;

@@ -129,7 +129,7 @@ struct Settings {
 
     // Anti-aliasing & sharpening
     bool fxaa = true;
-    bool taa = true;               // temporal anti-aliasing / stabilisation
+    bool taa = false;              // temporal anti-aliasing / stabilisation
     float sharpen = 0.35f;
 };
 
