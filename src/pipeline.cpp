@@ -548,7 +548,10 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
     const float water[4] = {in.water[0], in.water[1], in.water[2], 0.0f};
     device->SetPixelShaderConstantF(38, water, 1);
-    const float snow[4] = {s.snow, s.snowCover, 0.0f, 0.0f};
+    // The direction the snow drifts (as the flakes in drawRain): walls facing it catch snow.
+    const float drift[2] = {1.0f + s.wind * 7.0f, 0.5f + s.wind * 3.0f};
+    const float driftLength = sqrtf(drift[0] * drift[0] + drift[1] * drift[1]);
+    const float snow[4] = {s.snow, s.snowCover, drift[0] / driftLength, drift[1] / driftLength};
     device->SetPixelShaderConstantF(39, snow, 1);
     const float sky3[4] = {s.auroraSpeed, s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f, s.reflectionBlur, 0.0f};
     device->SetPixelShaderConstantF(41, sky3, 1);
@@ -579,8 +582,24 @@ VSOut main(float2 uv : TEXCOORD0) {
     // Beyond ~400 m the depth is too coarse to be useful.
     bool valid = z > 0.3 && z < 400.0 && all(m > 0.0) && all(m < 1.0);
     // The player's car (close, in the middle of the lower screen) must not cast long
-    // shadows: it moves on and would leave stale blotches behind and below it.
+    // shadows: it moves on and would leave stale copies of itself behind (dark car shapes
+    // in the haze, shadows of a car that is gone).
     if (z < 16.0 && uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.35) valid = false;
+    // Also wherever the car is on screen: a car-sized box around the closest surface below
+    // the screen centre (found like the spray and the snow do).
+    float z0 = tex2Dlod(s_depth, float4(0.5, 0.6, 0, 0)).r;
+    float z1 = tex2Dlod(s_depth, float4(0.5, 0.65, 0, 0)).r;
+    float z2 = tex2Dlod(s_depth, float4(0.5, 0.7, 0, 0)).r;
+    float cz = min(z0, min(z1, z2));
+    float3 fwd = c_V2.xyz; // view forward in the world
+    if (valid && cz > 1.5 && cz < 16.0 && abs(fwd.y) < 0.45) {
+        float cy = cz == z0 ? 0.6 : (cz == z1 ? 0.65 : 0.7);
+        float3 cv = float3((0.0 - c_Proj.z) * cz / c_Proj.x, (1.0 - cy * 2.0 - c_Proj.w) * cz / c_Proj.y, cz);
+        float3 tail = float3(c_V0.w, c_V1.w, c_V2.w) + cv.x * c_V0.xyz + cv.y * c_V1.xyz + cv.z * c_V2.xyz;
+        float3 f = normalize(float3(fwd.x, 0.0, fwd.z) + 1e-5);
+        float3 d = w - (tail + f * 1.6);
+        if (abs(dot(d, f)) < 3.0 && abs(dot(d, float3(f.z, 0.0, -f.x))) < 1.6 && d.y > -0.75 && d.y < 2.0) valid = false;
+    }
     o.pos = valid ? float4(m.x * 2.0 - 1.0 + c_Half.x, 1.0 - m.y * 2.0 + c_Half.y, saturate(0.5 - (w.y - c_Map.w) / 1000.0), 1.0)
                   : float4(-10.0, -10.0, 0.0, 1.0);
     o.data = float2(w.y + 10000.0, 0.0);

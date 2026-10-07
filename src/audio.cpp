@@ -228,7 +228,7 @@ public:
             const float howl = m_howl[c].process(noise, (230.0f + 380.0f * gust) * (c ? 1.07f : 1.0f), 0.35f);
             const float rush = m_rush[c].process(noise, 900.0f + 700.0f * gust, 1.2f);
             const float rumble = m_rumble[c].process(noise);
-            out[c] += (howl * 0.18f + rush * 0.07f + rumble * 1.0f) * level;
+            out[c] += (howl * 0.4f + rush * 0.16f + rumble * 2.2f) * level;
         }
     }
 

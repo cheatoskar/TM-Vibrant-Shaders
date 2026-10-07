@@ -853,7 +853,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.planetAzimuth = 150.0f;
             s.planetElevation = 14.0f;
             s.skyRotation = 263.0f;
-            s.skyEffectSize = 4.0f;
+            s.skyEffectSize = 3.0f;
             s.blackHoleAzimuth = 145.5f;
             s.blackHoleElevation = 12.8f;
             s.planetSize = 1.0f;

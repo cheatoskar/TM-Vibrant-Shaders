@@ -279,7 +279,7 @@ bool isRelevant(const Field& f, const Settings& s) {
 // skies, the black hole's light, a darker night for the stars).
 void applySkyDefaults(Settings& s, int sky) {
     if (sky == 3 || sky == 5) {
-        s.skyEffectSize = 4.0f;
+        s.skyEffectSize = 3.0f;
         s.godRays = 1.35f;
         s.godRayDecay = 0.9f;
         if (s.planetSize <= 0.0f) s.planetSize = 1.0f;

@@ -211,7 +211,13 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs) {
         return;
     }
     wchar_t name[64];
-    swprintf(name, 64, L"\\capture_%03d.tmcap", g_capturesWritten++);
+    // The next free number: captures of earlier sessions are kept.
+    for (;;) {
+        swprintf(name, 64, L"\\capture_%03d.tmcap", g_capturesWritten);
+        if (GetFileAttributesW((log::dataDir() + name).c_str()) == INVALID_FILE_ATTRIBUTES) break;
+        g_capturesWritten++;
+    }
+    g_capturesWritten++;
     cap.save(log::dataDir() + name);
     TMVS_LOG("capture: wrote %ls", name + 1);
     g_screenshotRequested = true;

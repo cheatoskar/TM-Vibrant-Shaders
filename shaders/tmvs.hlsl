@@ -51,7 +51,7 @@ float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
 float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
 float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
-float4 u_Snow      : register(c39); // snowfall, snow cover, 0, 0
+float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
 float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 0
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
@@ -213,7 +213,11 @@ float4 PS_HeightMerge(float2 uv : TEXCOORD0) : COLOR0 {
     if (seen <= 0.0) return float4(previous, 0, 0, 1);
     // Seen again: the new height wins, but walls only sink slowly. Points that hit a wall
     // top in one frame may miss it in the next; moving cars must not leave a ridge behind.
-    return float4(previous > 0.0 ? max(seen, previous - u_Pass0.w) : seen, 0, 0, 1);
+    // Small differences are the depth's noise, not a missed wall top: the new height wins
+    // at once (kept as a running maximum, the noise raised the floor into bumps that shade
+    // themselves in blotches under a low moon).
+    float drop = previous - seen;
+    return float4(previous > 0.0 && drop > 0.5 ? max(seen, previous - u_Pass0.w) : seen, 0, 0, 1);
 }
 
 float4 PS_HeightSplat(float2 data : TEXCOORD0) : COLOR0 {
@@ -237,7 +241,8 @@ float longShadow(float3 pView, float3 nView, float noise) {
         float h = tex2Dlod(s2, float4(m, 0, 0)).r;
         if (h > 0.0) {
             // Soft edge that widens with distance (penumbra of the sun disc).
-            float above = h - 10000.0 - q.y - (0.35 + t * 0.012);
+            // A low sun or moon grazes the ground: more margin, or the floor shades itself.
+            float above = h - 10000.0 - q.y - (0.35 + t * (0.012 + 0.02 * saturate(1.0 - sun.y * 3.0)));
             occlusion = max(occlusion, saturate(above / (0.3 + t * 0.04)));
             if (occlusion > 0.99) break;
         }
@@ -327,7 +332,9 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 p = viewPosition(uv, nd.w);
     float3 n = nd.xyz;
     float noise = ign(vpos);
-    float noise2 = hash12(vpos + 17.31);
+    // Changes every frame too (a fixed per-pixel pattern can't be averaged by TAA: the blur
+    // turned it into blotches that slid over the floor with the camera).
+    float noise2 = frac(hash12(vpos + 17.31) + u_Temporal.z * 0.618034);
 
     // --- Ambient occlusion (horizon-based, normal-aware) ---
     float radius = u_Light.y;
@@ -380,7 +387,8 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     }
     float longVis = 1.0;
     if (u_Temporal.w > 0.0 && u_SunView.w > 0.5 && ndl > 0.0) {
-        longVis = 1.0 - longShadow(p, n, noise2) * u_Temporal.w;
+        // Interleaved gradient noise: even, so the blur below removes it (no blotches).
+        longVis = 1.0 - longShadow(p, n, frac(noise + 0.5)) * u_Temporal.w;
         sunVis = min(sunVis, longVis);
     }
     return float4(ao, sunVis, longVis, 1);
@@ -1282,7 +1290,7 @@ float4 PS_SkyAverage(float2 uv : TEXCOORD0) : COLOR0 {
 //   out.rgb = in-scattered light, out.a = transmittance
 // ---------------------------------------------------------------------------------
 float cloudShape(float3 p, float heightFrac) {
-    float3 wind = float3(u_Proj2.z * 32.0, u_Proj2.z * 4.0, u_Proj2.z * 12.0) * (0.15 + u_Nature.z);
+    float3 wind = float3(u_Proj2.z * 32.0, u_Proj2.z * 4.0, u_Proj2.z * 12.0) * (0.4 + u_Nature.z * 4.0);
     float4 n = tex3Dlod(s7, float4((p + wind) / 5600.0, 0));
     float shape = n.r * 0.75 + n.g * 0.25;
     // Flat, dense bottoms and rounded, thinning tops.
@@ -1295,7 +1303,7 @@ float cloudDensity(float3 p, float heightFrac) {
     float d = cloudShape(p, heightFrac);
     if (d <= 0.0) return 0.0;
     // Erode the edges with finer noise (wisps).
-    float3 wind = float3(u_Proj2.z * 50.0, -u_Proj2.z * 9.0, u_Proj2.z * 19.0) * (0.15 + u_Nature.z);
+    float3 wind = float3(u_Proj2.z * 50.0, -u_Proj2.z * 9.0, u_Proj2.z * 19.0) * (0.4 + u_Nature.z * 4.0);
     float4 n = tex3Dlod(s7, float4((p + wind) / 1300.0, 0));
     float erode = (1.0 - (n.g * 0.5 + n.b * 0.3 + n.a * 0.2)) * 0.45;
     return saturate((d - erode) / (1.0 - erode));
@@ -1443,8 +1451,9 @@ float grassBlades(float3 ground, float3 rd, float t) {
 float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
     // Patches of fresher and drier grass.
     float n = noise2(world.xz * 0.045) * 0.6 + noise2(world.xz * 0.17 + 7.0) * 0.4;
-    float3 g = c * lerp(0.86, 1.12, n);
-    g = lerp(g, g * float3(1.18, 1.06, 0.72), smoothstep(0.62, 0.85, n) * 0.35);
+    float detail = u_Nature.x;
+    float3 g = c * lerp(1.0 - 0.2 * detail, 1.0 + 0.18 * detail, n);
+    g = lerp(g, g * float3(1.18, 1.06, 0.72), smoothstep(0.62, 0.85, n) * 0.5 * detail);
     // Mowing stripes, 8 m wide along the block grid. Like real mowed grass they swap
     // bright and dark depending on which way you look along them.
     if (u_Nature.y > 0.0) {
@@ -1457,7 +1466,7 @@ float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
         // Tufts and clumps (visible from the chase camera, out to ~90 m), faded out before
         // they would shimmer.
         float tufts = noise2(world.xz * 2.2 + 3.3) * 0.6 + noise2(world.xz * 7.0 + 1.1) * 0.4;
-        g *= lerp(1.0, lerp(0.74, 1.18, tufts), u_Nature.x * smoothstep(0.09, 0.03, footprint));
+        g *= lerp(1.0, lerp(0.62, 1.25, tufts), u_Nature.x * smoothstep(0.12, 0.04, footprint));
         // Blades close to the camera.
         float fade = smoothstep(0.045, 0.018, footprint);
         if (fade > 0.0) g *= lerp(1.0, grassBlades(world, rd, u_Proj2.z), fade * u_Nature.x);
@@ -1470,11 +1479,32 @@ float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
 // stays readable, little on painted surfaces (cars, coloured borders), none on lights,
 // water and steep walls. Returns the coverage; `snow` is the snow's colour before the
 // scene's lighting. Only the surface itself decides: nothing pops in while driving.
+// Height of the snow's surface (m): long dunes, wind ripples and, close up, small lumps.
+float snowHeight(float2 xz, float near) {
+    float h = noise2(xz * 0.07 + float2(3.1, 1.7)) * 0.5;
+    h += sin(dot(xz, float2(0.8, 0.6)) * 3.0 + noise2(xz * 0.5) * 6.0) * 0.01 * near;
+    h += (noise2(xz * 2.5 + 5.0) - 0.5) * 0.06 * near + (noise2(xz * 9.0 + 2.0) - 0.5) * 0.005 * near;
+    return h;
+}
+
 float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, float emissive, float water, out float3 snow) {
     snow = 0;
     float cover = u_Snow.y;
     if (cover <= 0.0) return 0.0;
     float up = smoothstep(0.35, 0.8, nWorld.y);
+    // Walls and kerbs facing the wind catch flakes: streaky crusts, more of them low down.
+    float facing = saturate(-dot(nWorld.xz, u_Snow.zw) * 1.4) * (1.0 - up) * (1.0 - emissive) * smoothstep(-0.5, 0.0, nWorld.y);
+    if (facing > 0.0) {
+        float along = dot(world.xz, float2(u_Snow.w, -u_Snow.z));
+        float streak = noise2(float2(along * 0.45, world.y * 1.6)) * 0.7 + noise2(float2(along * 1.7, world.y * 4.0) + 7.0) * 0.3;
+        float pk = max(c.r, max(c.g, c.b));
+        float painted = smoothstep(0.3, 0.55, (pk - min(c.r, min(c.g, c.b))) / max(pk, 1e-3)); // flags, signs
+        float crust = smoothstep(0.3, 0.85, streak) * facing * cover * 0.45 * (1.0 - 0.6 * painted);
+        if (up <= 0.0) {
+            snow = float3(0.84, 0.88, 0.95) * lerp(0.7, 1.0, saturate(luma(c) * 4.0));
+            return crust;
+        }
+    }
     if (up <= 0.0) return 0.0;
     float peak = max(c.r, max(c.g, c.b));
     float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
@@ -1492,20 +1522,39 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
     // Painted surfaces (the blue track edges, signs) get a thinner layer, not none.
     float mask = saturate(lerp(field, thin, built) * lerp(1.0, 0.6, colourful) * up * (1.0 - emissive) * (1.0 - water));
     if (mask <= 0.0) return 0.0;
-    // Drifts: soft dunes and wind ripples shade the fields a little.
-    float dune = noise2(world.xz * 0.07 + float2(3.1, 1.7)) - noise2(world.xz * 0.07 + float2(3.4, 1.7));
-    float ripple = sin(dot(world.xz, float2(0.8, 0.6)) * 3.0 + noise2(world.xz * 0.5) * 6.0);
-    float shade = 1.0 + dune * 0.35 + ripple * 0.02 * (1.0 - smoothstep(10.0, 40.0, dist)) * grass;
+    // Relief: the snow surface lit from the light's side (the sun, or the sky's brighter side),
+    // the small lumps only close up (no shimmer far away).
+    float near = 1.0 - smoothstep(12.0, 45.0, dist);
+    float2 e = float2(0.06, 0.0);
+    float h0 = snowHeight(world.xz, near);
+    float2 grad = float2(snowHeight(world.xz + e.xy, near) - h0, snowHeight(world.xz + e.yx, near) - h0) / e.x;
+    float2 light = u_SunView.w > 0.5 && length(u_SunWorld.xz) > 0.05 ? normalize(u_SunWorld.xz) : float2(0.6, 0.8);
+    float relief = clamp(dot(grad, light) * lerp(1.2, 3.0, near), -0.35, 0.3);
+    // Thickness: where a field ends the snow has an edge, its lit rim and its shaded flank.
+    float edge = mask * (1.0 - mask) * 4.0 * (1.0 - built);
+    float shade = 1.0 + relief - edge * 0.18;
     // The game's own light and shadow on the surface carry over (dimmed snow in its shade).
     shade *= lerp(0.72, 1.0, saturate(luma(c) * 4.0));
     snow = float3(0.86, 0.9, 0.96) * shade;
+    return saturate(mask + edge * 0.15);
+}
+
+// A light layer of snow on the player's car (the top surfaces): patches that keep the
+// car's own shading, so it doesn't turn into a flat white shape. local = position in the
+// car's frame (along, across, up), so the pattern rides with the car.
+float carSnow(float3 c, float3 nWorld, float3 local, out float3 snow) {
+    float up = smoothstep(0.45, 0.85, nWorld.y);
+    float patches = noise3(local * float3(2.2, 2.2, 3.0) + 4.0) * 0.65 + noise3(local * 7.0 + 1.3) * 0.35;
+    float mask = smoothstep(0.62 - 0.2 * u_Snow.y, 0.8 - 0.2 * u_Snow.y, patches) * up * u_Snow.y * 0.75;
+    snow = float3(0.88, 0.91, 0.96) * lerp(0.55, 1.1, saturate(luma(c) * 2.5));
     return mask;
 }
 
 // The player's car, found like the spray does (the closest surface just below the screen
 // centre, where the chase camera keeps it): 1 inside a car-sized box above the road. Snow
 // doesn't settle on a car doing 300 km/h, and the road under it keeps its snow.
-float onCar(float3 world) {
+float onCar(float3 world, out float3 local) {
+    local = 0;
     float z0 = tex2Dlod(s1, float4(0.5, 0.6, 0, 0)).w;
     float z1 = tex2Dlod(s1, float4(0.5, 0.65, 0, 0)).w;
     float z2 = tex2Dlod(s1, float4(0.5, 0.7, 0, 0)).w;
@@ -1515,9 +1564,14 @@ float onCar(float3 world) {
     float3 tail = worldPosition(viewPosition(float2(0.5, z == z0 ? 0.6 : (z == z1 ? 0.65 : 0.7)), z));
     fwd = normalize(float3(fwd.x, 0.0, fwd.z));
     float3 d = world - (tail + fwd * 1.6);
-    float along = abs(dot(d, fwd)), across = abs(dot(d, float3(fwd.z, 0.0, -fwd.x)));
-    return smoothstep(2.7, 2.3, along) * smoothstep(1.4, 1.1, across) * smoothstep(-0.72, -0.6, world.y - tail.y)
-           * smoothstep(-2.0, -1.6, -(world.y - tail.y));
+    local = float3(dot(d, fwd), dot(d, float3(fwd.z, 0.0, -fwd.x)), world.y - tail.y);
+    return smoothstep(2.7, 2.3, abs(local.x)) * smoothstep(1.4, 1.1, abs(local.y)) * smoothstep(-0.72, -0.6, local.z)
+           * smoothstep(-2.0, -1.6, -local.z);
+}
+
+float onCar(float3 world) {
+    float3 local;
+    return onCar(world, local);
 }
 
 // The colour of driving snow: the overcast light, whitened.
@@ -1905,7 +1959,16 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
-    if (snow > 0.0) snow *= 1.0 - onCar(world);
+    if (u_Snow.y > 0.0) {
+        float3 local;
+        float car = onCar(world, local);
+        if (car > 0.0) {
+            float3 carColour;
+            float onIt = carSnow(c, nWorld, local, carColour);
+            snow = lerp(snow, onIt, car);
+            snowColour = lerp(snowColour, carColour, car);
+        }
+    }
     if (snow > 0.0) {
         c = lerp(c, snowColour, snow);
         albedo = lerp(albedo, snowColour, snow);
@@ -2370,9 +2433,11 @@ float3 grade(float3 c) {
 }
 
 float3 flareSource(float2 uv) {
-    // Only the brightest parts (sun, lamps) produce ghosts.
+    // Only the brightest parts (sun, lamps) produce ghosts, and only far ones: a bright car
+    // close in front of the camera would throw a row of copies of itself up the track.
     float3 c = tex2Dlod(s6, float4(uv, 0, 0)).rgb;
-    return max(c - 2.5, 0.0);
+    float z = tex2Dlod(s4, float4(uv, 0, 0)).w;
+    return max(c - 2.5, 0.0) * smoothstep(25.0, 60.0, z);
 }
 
 float3 lensFlare(float2 uv) {
@@ -2738,6 +2803,13 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     }
     // Fast motion: favour the current frame (less smearing).
     weight = max(weight, saturate(speed / 60.0) * 0.4);
+    // Water mirrors and refracts what is around it, which moves differently from its surface:
+    // its history would smear into streaks while the camera moves.
+    if (u_Water.z > 0.5 && z < SKY_Z) {
+        float y = worldPosition(viewPosition(cuv, z)).y;
+        float onWater = max(1.0 - abs(y - u_Water.x) / 0.15, 1.0 - abs(y - u_Water.y) / 0.15);
+        weight = lerp(weight, max(weight, 0.6), saturate(onWater) * saturate(speed / 2.0));
+    }
     return float4(fromYCoCg(lerp(history, toYCoCg(current), weight)), z);
 }
 
