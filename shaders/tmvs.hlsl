@@ -53,7 +53,7 @@ float4 u_Light2    : register(c36); // neon light spill, game sun direction know
 float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
-float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, height map valid (s12)
+float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, -
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -68,7 +68,6 @@ sampler2D s8 : register(s8);
 sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
-sampler2D s12 : register(s12); // height map of the static world (lighting pass, snow)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -1377,6 +1376,26 @@ float puddleMask(float3 world, float flatness, float grass) {
     return smoothstep(threshold, threshold + 0.18, n) * flatness * (1.0 - grass) * saturate(u_Weather.x * 2.0);
 }
 
+// How well a point lies on the game's water (u_Water.z = 1): 1 on it, 0 off it. `level` = the
+// water height it was compared with.
+// The reconstructed depth is only good to ~0.7 % of the distance (view z is FP16 in the
+// normal/depth buffer, and the z-fight snap pulls flat ground up by up to a row). On the water
+// plane that is 0.7 % of the camera's height above it: a fixed 0.2 m sat right on the edge at
+// mid distance and the mask flipped row by row (horizontal stripes). The ground is 1.06 m above
+// the water blocks, so the tolerance can grow with the camera height up to 0.6 m.
+float waterLevelMatch(float3 world, out float level) {
+    level = abs(world.y - u_Water.x) < abs(world.y - u_Water.y) ? u_Water.x : u_Water.y;
+    float tol = clamp(abs(cameraWorld().y - level) * 0.0075, 0.15, 0.6);
+    return smoothstep(tol, tol * 0.6, abs(world.y - level));
+}
+
+// Where the view ray `rd` (world) meets the water plane at `level`: exact, unlike the depth.
+float3 waterSurface(float3 rd, float level, float3 fallback) {
+    float3 cam = cameraWorld();
+    float t = (level - cam.y) / (abs(rd.y) > 1e-4 ? rd.y : -1e-4);
+    return t > 0.0 ? cam + rd * t : fallback;
+}
+
 // Open water (TMUF Island/Bay/Coast): flat, blue.
 float waterMask(float3 c, float3 nWorld, float3 world, float z, float emissive) {
     if (u_Weather.w <= 0.0 || u_Water.z == 0.0) return 0.0;
@@ -1385,8 +1404,8 @@ float waterMask(float3 c, float3 nWorld, float3 world, float z, float emissive) 
         // The game tells where its water is (the height its own water shaders use): every
         // flat surface at that height is water - pools, rivers, the sea.
         // Far away the depth gets too coarse to tell the water from the ground 1 m above.
-        float d = min(abs(world.y - u_Water.x), abs(world.y - u_Water.y));
-        return smoothstep(0.2, 0.05, d) * saturate((350.0 - z) / 100.0) * level;
+        float waterY;
+        return waterLevelMatch(world, waterY) * saturate((350.0 - z) / 100.0) * level;
     }
     // Without the engine hooks: guess from the colour.
     float blue = (c.b - max(c.r, c.g * 0.8)) / max(c.b, 1e-3);
@@ -1544,20 +1563,13 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
 }
 
 
-// Height of the static world at a point (s12, the height map), or `fallback` where it has
-// never been seen.
-float groundAt(float2 xz, float fallback) {
-    float2 m = (xz - u_HeightMap.xy) / u_HeightMap.z;
-    if (u_Sky3.w < 0.5 || any(m < 0.0) || any(m > 1.0)) return fallback;
-    float h = tex2Dlod(s12, float4(m, 0, 0)).r;
-    return h > 0.0 ? h - 10000.0 : fallback;
-}
-
 // The player's car for the snow: inside a car-sized box (as onCar) and clearly above the road
-// beside it. The road's height comes from the height map a few metres to the left and right
-// (the map leaves out the car and the road just around it), at the back and the front of the
-// box, so ramps work. The road in the box keeps its snow; when the point found is no car
-// (a camera from above), nothing is masked.
+// under it. The road is what the screen shows beside the car right now: four points left and
+// right of it, each a surface facing up and lower than the car, carried on as a plane (its
+// point and normal) to under the pixel. The highest of them is the road: a pool, the grass or
+// a drop beside a platform is lower and loses (the lowest one made the whole box "car" there:
+// a bare black rectangle in the snow), and a banked turn's plane runs on under the car.
+// Nothing found (or the point found is the road itself): nothing is masked.
 float carBody(float3 world) {
     float z0 = tex2Dlod(s1, float4(0.5, 0.6, 0, 0)).w;
     float z1 = tex2Dlod(s1, float4(0.5, 0.65, 0, 0)).w;
@@ -1576,19 +1588,29 @@ float carBody(float3 world) {
     float along = dot(d, fwd), across = dot(d, side);
     float box = smoothstep(3.7, 3.4, abs(along)) * smoothstep(1.5, 1.25, abs(across));
     if (box <= 0.0 || d.y > 2.0) return 0.0;
-    // Lowest known road on either side (kerbs and walls are higher), back and front.
-    float none = 1e5;
-    float2 b = centre.xz - fwd.xz * 2.5, f = centre.xz + fwd.xz * 2.5;
-    float back = min(min(groundAt(b + side.xz * 4.0, none), groundAt(b - side.xz * 4.0, none)),
-                     min(groundAt(b + side.xz * 6.0, none), groundAt(b - side.xz * 6.0, none)));
-    float front = min(min(groundAt(f + side.xz * 4.0, none), groundAt(f - side.xz * 4.0, none)),
-                      min(groundAt(f + side.xz * 6.0, none), groundAt(f - side.xz * 6.0, none)));
-    if (back > 1e4) back = front;
-    if (front > 1e4) front = back;
-    float road = back > 1e4 ? tail.y - 0.6 : lerp(back, front, (along + 2.5) / 5.0);
+    float none = -1e5;
+    float road = none, roadAtTail = none;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float3 q = centre + side * (k == 0 || k == 2 ? -2.2 : 2.2) + fwd * (k < 2 ? -1.0 : 1.8);
+        q.y = tail.y - 0.8;
+        float3 v = worldToViewDir(q - cameraWorld());
+        if (v.z < 0.3) continue;
+        float2 quv = projectToUV(v);
+        if (any(quv < 0.0) || any(quv > 1.0)) continue;
+        float4 snd = tex2Dlod(s1, float4(quv, 0, 0));
+        if (snd.w >= SKY_Z) continue;
+        float3 pw = worldPosition(viewPosition(quv, snd.w));
+        float3 nw = viewToWorldDir(snd.xyz);
+        float3 o = pw - centre;
+        bool onTheCar = abs(dot(o, side)) < 1.3 && abs(dot(o, fwd)) < 2.8;
+        if (onTheCar || nw.y < 0.7 || pw.y > tail.y - 0.35) continue;
+        // The sample's plane, carried on to under this pixel and under the point found.
+        road = max(road, pw.y - dot(nw.xz, world.xz - pw.xz) / nw.y);
+        roadAtTail = max(roadAtTail, pw.y - dot(nw.xz, tail.xz - pw.xz) / nw.y);
+    }
     // The point found must be the car, not the road (or something low on it).
-    if (tail.y < lerp(back, front, (dot(tail - centre, fwd) + 2.5) / 5.0) + 0.25 && back < 1e4) return 0.0;
-    return box * smoothstep(road + 0.12, road + 0.28, world.y);
+    if (road <= none || tail.y < roadAtTail + 0.25) return 0.0;
+    return box * smoothstep(road + 0.15, road + 0.3, world.y);
 }
 
 // The player's car, found like the spray does (the closest surface just below the screen
@@ -1704,8 +1726,20 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (!glossy && !water) return 0;
 
     float3 p = viewPosition(uv, nd.w);
-    float3 r = reflect(normalize(p), nd.xyz);
-    float maxDist = min(120.0, nd.w * 1.5 + 25.0);
+    float3 n = nd.xyz;
+    // The game's water: start on the exact plane, facing straight up (the stepped depth made
+    // the reflection jump row by row).
+    if (water && u_Water.z > 0.5) {
+        float waterY;
+        float3 world = worldPosition(p);
+        if (waterLevelMatch(world, waterY) > 0.5) {
+            float3 rdView = normalize(viewPosition(uv, 1.0));
+            p = worldToViewDir(waterSurface(viewToWorldDir(rdView), waterY, world) - cameraWorld());
+            n = u_UpView.xyz;
+        }
+    }
+    float3 r = reflect(normalize(p), n);
+    float maxDist = min(120.0, p.z * 1.5 + 25.0);
     float noise = ign(vpos);
     float tPrev = 0.05;
     // A polished dry track is a mirror: finer steps so the reflection holds together.
@@ -2010,8 +2044,16 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float2 slope = 0;
     if (reflectivity > 0.0) {
         float t = u_Proj2.z;
-        if (u_Weather.y > 0.0) slope = rippleSlope(world.xz, t) * u_Weather.y * (puddle + water + wet * 0.25);
-        if (water > 0.0) slope += waveSlope(world.xz, t) * water;
+        // On the game's water the waves sit on the exact plane: the depth's steps would shear
+        // them row by row.
+        float2 xz = world.xz;
+        if (water > 0.0 && u_Water.z > 0.5) {
+            float waterY;
+            waterLevelMatch(world, waterY);
+            xz = waterSurface(rd, waterY, world).xz;
+        }
+        if (u_Weather.y > 0.0) slope = rippleSlope(xz, t) * u_Weather.y * (puddle + water + wet * 0.25);
+        if (water > 0.0) slope += waveSlope(xz, t) * water;
         // Rough wet asphalt breaks the reflection up.
         if (wet > 0.0) {
             float2 q = world.xz * 6.0;
@@ -2834,7 +2876,9 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     if (u_Water.z > 0.5 && z < SKY_Z) {
         float y = worldPosition(viewPosition(cuv, z)).y;
         float level = abs(y - u_Water.x) < abs(y - u_Water.y) ? u_Water.x : u_Water.y;
-        float onWater = saturate(1.0 - (y - level) / 0.15) * saturate((y - level + 3.0) / 0.3);
+        // Same depth tolerance as waterLevelMatch (grows with the camera height).
+        float tol = clamp(abs(cameraWorld().y - level) * 0.0075, 0.15, 0.6);
+        float onWater = saturate(1.0 - (y - level) / tol) * saturate((y - level + 3.0) / 0.3);
         weight = lerp(weight, max(weight, 0.5), onWater);
     }
     return float4(fromYCoCg(lerp(history, toYCoCg(current), weight)), z);

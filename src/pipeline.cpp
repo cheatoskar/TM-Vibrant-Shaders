@@ -1565,11 +1565,12 @@ bool Pipeline::detectCameraCut(const Inputs& in) const {
     return fabsf(in.projection[5] - m_prevProjection[5]) > 0.1f * fabsf(m_prevProjection[5]);
 }
 
-void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output) {
-    if (!m_ready || !in.color || !in.depth) return;
-    if (!ensureTargets(device, in.width, in.height)) return;
-    m_frame++;
+namespace {
 
+// Full-screen passes with none of the game's leftover state (alpha test, stencil, scissor and
+// clip planes would drop pixels: the depth capture came out all 0 on maps with water).
+// Returns whether software vertex processing was on, for the caller to restore.
+BOOL setPassStates(IDirect3DDevice9* device) {
     device->SetRenderState(D3DRS_ZENABLE, FALSE);
     device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
     device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
@@ -1586,6 +1587,17 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // TrackMania's device does mixed vertex processing: our vertex shaders need hardware.
     const BOOL softwareVP = device->GetSoftwareVertexProcessing();
     if (softwareVP) device->SetSoftwareVertexProcessing(FALSE);
+    return softwareVP;
+}
+
+} // namespace
+
+void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output) {
+    if (!m_ready || !in.color || !in.depth) return;
+    if (!ensureTargets(device, in.width, in.height)) return;
+    m_frame++;
+
+    const BOOL softwareVP = setPassStates(device);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
@@ -1761,15 +1773,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 9, m_spill[0].texture, true);
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
-    // The static world's heights: snow keeps off the car (it is not in the map).
-    const bool snowMap = s.snowCover > 0.0f && heightMap && m_heightValid;
-    bind(device, 12, snowMap ? m_heightMap[m_heightIndex].texture : nullptr, false);
-    const float sky3[4] = {s.auroraSpeed, s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f, s.reflectionBlur, snowMap ? 1.0f : 0.0f};
-    device->SetPixelShaderConstantF(41, sky3, 1);
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
-    device->SetTexture(12, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
 
@@ -1964,12 +1970,11 @@ bool Pipeline::readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std
     D3DSURFACE_DESC desc{};
     depth->GetLevelDesc(0, &desc);
     if (!m_depthCopy.create(device, desc.Width, desc.Height, D3DFMT_R32F)) return false;
+    const BOOL softwareVP = setPassStates(device);
     bind(device, 0, depth, false);
-    device->SetRenderState(D3DRS_ZENABLE, FALSE);
-    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
-    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
     runPass(device, kCopyDepth, m_depthCopy);
     device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
 
     IDirect3DSurface9* system = nullptr;
     if (FAILED(device->CreateOffscreenPlainSurface(desc.Width, desc.Height, D3DFMT_R32F, D3DPOOL_SYSTEMMEM, &system, nullptr)))
