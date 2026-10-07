@@ -103,6 +103,7 @@ add_library(tmvs_core STATIC
   src/noise.cpp
   src/framecap.cpp
   src/config.cpp
+  src/gbx.cpp
   src/log.cpp
   src/weather.cpp
   ${TMVS_SHADER_HEADERS}

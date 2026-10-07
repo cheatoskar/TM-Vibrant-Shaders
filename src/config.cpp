@@ -4,7 +4,12 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <cwctype>
+#include <utility>
 
 namespace tmshaders {
 
@@ -258,6 +263,213 @@ bool isBuiltIn(const std::string& name) {
     return false;
 }
 
+// --- Map looks ----------------------------------------------------------------------
+// Written packed (see compactTag below). Also read as text, for tags typed by hand:
+// "[TMVS] Preset=Snowstorm Snow=1.5 SkyColor=0.7,0.8,0.9": a built-in preset (spaces in its
+// name written as "_"), then the settings that differ from it, keys as in settings.ini.
+constexpr const char* kTagStart = "[TMVS]";
+
+bool sameValue(const Field& f, const Settings& a, const Settings& b) {
+    const char* pa = reinterpret_cast<const char*>(&a) + f.offset;
+    const char* pb = reinterpret_cast<const char*>(&b) + f.offset;
+    switch (f.kind) {
+        case Field::Bool: return *reinterpret_cast<const bool*>(pa) == *reinterpret_cast<const bool*>(pb);
+        case Field::Int: return *reinterpret_cast<const int*>(pa) == *reinterpret_cast<const int*>(pb);
+        case Field::Color:
+            for (int i = 0; i < 3; i++) {
+                if (fabsf(reinterpret_cast<const float*>(pa)[i] - reinterpret_cast<const float*>(pb)[i]) > 5e-4f) return false;
+            }
+            return true;
+        default: return fabsf(*reinterpret_cast<const float*>(pa) - *reinterpret_cast<const float*>(pb)) <= 5e-4f;
+    }
+}
+
+float clampTo(const Field& f, float v) {
+    return v < f.min ? f.min : (v > f.max ? f.max : v);
+}
+
+// A value from a map: anything out of range is clamped, it is someone else's file.
+void parseValue(const Field& f, const std::string& value, Settings& s) {
+    char* p = reinterpret_cast<char*>(&s) + f.offset;
+    switch (f.kind) {
+        case Field::Bool: *reinterpret_cast<bool*>(p) = atoi(value.c_str()) != 0; break;
+        case Field::Int: *reinterpret_cast<int*>(p) = static_cast<int>(clampTo(f, static_cast<float>(atoi(value.c_str())))); break;
+        case Field::Color: {
+            float c[3] = {};
+            if (sscanf(value.c_str(), "%f,%f,%f", &c[0], &c[1], &c[2]) != 3) break;
+            for (int i = 0; i < 3; i++) reinterpret_cast<float*>(p)[i] = c[i] < 0.0f ? 0.0f : (c[i] > 1.0f ? 1.0f : c[i]);
+            break;
+        }
+        default: *reinterpret_cast<float*>(p) = clampTo(f, static_cast<float>(atof(value.c_str()))); break;
+    }
+}
+
+int builtInIndex(const std::string& name) {
+    for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
+        if (!_stricmp(name.c_str(), presetName(static_cast<Preset>(i)))) return i;
+    }
+    return -1;
+}
+
+// --- Compact map tags: "[TMVS:<base64url>]" ---------------------------------------------
+// The editor's comment box is short, so the look is packed: version, base preset, then per
+// differing setting its number and its value in one byte (colours three). Both tables are
+// append-only: a number, once given, always means the same setting or preset.
+const char* const kTagKeys[] = {
+    "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "LongShadows", "LongShadowRange", "NeonLight",
+    "GlobalIllumination", "SunLight", "AmbientTint", "SunColor", "GameSunColor", "SkyColor", "SunElevation", "SunAzimuth",
+    "SkyMode", "SkyNight", "SkyRotation", "SkyBrightness", "CloudAmount", "StarAmount", "SkyEffectSize", "PlanetSize",
+    "PlanetType", "PlanetView", "PlanetAzimuth", "PlanetElevation", "VolumetricClouds", "CloudCoverage", "CloudHeight",
+    "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter", "GodRays", "VolumetricLight", "GodRayDecay",
+    "Bloom", "BloomRadius", "HighlightBoost", "LensFlare", "ChromaticAberration", "Vignette", "FilmGrain", "Exposure",
+    "AutoExposure", "Contrast", "Saturation", "Vibrance", "Temperature", "Tint", "Lift", "Gamma", "Gain", "SplitToning",
+    "Wetness", "Rain", "Snow", "SnowCover", "Puddles", "Lightning", "LensDrops", "WaterSurfaces", "Reflections",
+    "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
+    "TAA", "Sharpen", "Quality",
+};
+const char* const kTagPresets[] = {
+    "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
+    "Rainy Day", "Replay Cinema", "Storm", "Snowstorm",
+};
+constexpr unsigned char kTagVersion = 1;
+const char kBase64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+const Field* fieldByKey(const char* key) {
+    for (const Field& f : fields()) {
+        if (!_stricmp(f.key, key)) return &f;
+    }
+    return nullptr;
+}
+
+unsigned char quantize(float v, float lo, float hi) {
+    const float t = hi > lo ? (v - lo) / (hi - lo) : 0.0f;
+    return static_cast<unsigned char>(lroundf((t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t)) * 255.0f));
+}
+
+float dequantize(unsigned char q, float lo, float hi) {
+    return lo + (hi - lo) * (q / 255.0f);
+}
+
+std::string encodeBase64(const std::vector<unsigned char>& bytes) {
+    std::string out;
+    for (size_t i = 0; i < bytes.size(); i += 3) {
+        const unsigned v = (bytes[i] << 16) | ((i + 1 < bytes.size() ? bytes[i + 1] : 0) << 8) | (i + 2 < bytes.size() ? bytes[i + 2] : 0);
+        const size_t chars = i + 2 < bytes.size() ? 4 : (i + 1 < bytes.size() ? 3 : 2);
+        for (size_t k = 0; k < chars; k++) out += kBase64[(v >> (18 - 6 * k)) & 63];
+    }
+    return out;
+}
+
+bool decodeBase64(const std::string& text, std::vector<unsigned char>& bytes) {
+    unsigned v = 0;
+    int bits = 0;
+    for (char ch : text) {
+        const char* at = strchr(kBase64, ch);
+        if (!at || !ch) return false;
+        v = (v << 6) | static_cast<unsigned>(at - kBase64);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes.push_back(static_cast<unsigned char>((v >> bits) & 0xff));
+        }
+    }
+    return true;
+}
+
+std::string compactTag(int presetIndex, const Settings& base, const Settings& s) {
+    std::vector<unsigned char> bytes = {kTagVersion, static_cast<unsigned char>(presetIndex)};
+    for (int k = 0; k < static_cast<int>(sizeof(kTagKeys) / sizeof(kTagKeys[0])); k++) {
+        const Field* f = fieldByKey(kTagKeys[k]);
+        if (!f || isSystemField(*f) || sameValue(*f, base, s)) continue;
+        const char* p = reinterpret_cast<const char*>(&s) + f->offset;
+        bytes.push_back(static_cast<unsigned char>(k));
+        switch (f->kind) {
+            case Field::Bool: bytes.push_back(*reinterpret_cast<const bool*>(p) ? 1 : 0); break;
+            case Field::Int: bytes.push_back(static_cast<unsigned char>(*reinterpret_cast<const int*>(p) - static_cast<int>(f->min))); break;
+            case Field::Color:
+                for (int i = 0; i < 3; i++) bytes.push_back(quantize(reinterpret_cast<const float*>(p)[i], 0.0f, 1.0f));
+                break;
+            default: bytes.push_back(quantize(*reinterpret_cast<const float*>(p), f->min, f->max)); break;
+        }
+    }
+    return "[TMVS:" + encodeBase64(bytes) + "]";
+}
+
+// False when the text is no valid compact tag (a newer version is skipped, not guessed).
+bool lookFromCompact(const std::string& text, Settings& look, std::string& base) {
+    std::vector<unsigned char> b;
+    if (!decodeBase64(text, b) || b.size() < 2 || b[0] != kTagVersion) return false;
+    const size_t presets = sizeof(kTagPresets) / sizeof(kTagPresets[0]);
+    base = b[1] < presets ? kTagPresets[b[1]] : "Vibrant";
+    applyPreset(look, static_cast<Preset>(builtInIndex(base) < 0 ? 0 : builtInIndex(base)));
+    for (size_t i = 2; i < b.size();) {
+        const size_t k = b[i++];
+        if (k >= sizeof(kTagKeys) / sizeof(kTagKeys[0])) return true; // a newer setting: the rest can't be read
+        const Field* f = fieldByKey(kTagKeys[k]);
+        if (!f) return true;
+        char* p = reinterpret_cast<char*>(&look) + f->offset;
+        const size_t need = f->kind == Field::Color ? 3 : 1;
+        if (i + need > b.size()) return true;
+        if (!isSystemField(*f)) {
+            switch (f->kind) {
+                case Field::Bool: *reinterpret_cast<bool*>(p) = b[i] != 0; break;
+                case Field::Int: *reinterpret_cast<int*>(p) = static_cast<int>(clampTo(*f, f->min + b[i])); break;
+                case Field::Color:
+                    for (int c = 0; c < 3; c++) reinterpret_cast<float*>(p)[c] = dequantize(b[i + c], 0.0f, 1.0f);
+                    break;
+                default: *reinterpret_cast<float*>(p) = dequantize(b[i], f->min, f->max); break;
+            }
+        }
+        i += need;
+    }
+    return true;
+}
+
+// The look in a map's comments, on top of `look` (which brings your machine settings).
+// False when there is no tag.
+bool lookFromComments(const std::string& comments, Settings& look, std::string& base) {
+    // The tag may sit anywhere in the comments, in any case.
+    std::string lower = comments;
+    for (char& ch : lower) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+    const size_t compact = lower.find("[tmvs:");
+    if (compact != std::string::npos) {
+        const size_t end = comments.find(']', compact);
+        if (end != std::string::npos && lookFromCompact(comments.substr(compact + 6, end - compact - 6), look, base)) return true;
+    }
+    const size_t at = lower.find("[tmvs]");
+    if (at == std::string::npos) return false;
+    size_t end = comments.find_first_of("\r\n", at);
+    const std::string line = comments.substr(at + strlen(kTagStart), end == std::string::npos ? std::string::npos : end - at - strlen(kTagStart));
+
+    std::vector<std::pair<std::string, std::string>> pairs;
+    size_t i = 0;
+    while (i < line.size()) {
+        while (i < line.size() && (isspace(static_cast<unsigned char>(line[i])) || line[i] == ';')) i++;
+        const size_t start = i;
+        while (i < line.size() && !isspace(static_cast<unsigned char>(line[i])) && line[i] != ';') i++;
+        const std::string token = line.substr(start, i - start);
+        const size_t eq = token.find('=');
+        if (eq != std::string::npos && eq > 0) pairs.emplace_back(token.substr(0, eq), token.substr(eq + 1));
+    }
+    base = "Vibrant";
+    for (const auto& kv : pairs) {
+        if (_stricmp(kv.first.c_str(), "Preset") != 0) continue;
+        std::string name = kv.second;
+        for (char& ch : name) {
+            if (ch == '_') ch = ' ';
+        }
+        const int index = builtInIndex(name);
+        if (index >= 0) base = presetName(static_cast<Preset>(index));
+    }
+    applyPreset(look, static_cast<Preset>(builtInIndex(base)));
+    for (const auto& kv : pairs) {
+        for (const Field& f : fields()) {
+            if (!_stricmp(kv.first.c_str(), f.key) && !isSystemField(f)) parseValue(f, kv.second, look);
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 std::vector<std::string> Config::presetNames() const {
@@ -306,6 +518,7 @@ bool Config::applyNamed(const std::string& name) {
 
 bool Config::selectPreset(const std::string& name) {
     if (!applyNamed(name)) return false;
+    m_mapLook = false; // your choice: it is your look from now on
     preset = name;
     if (autoMood && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
     markDirty();
@@ -321,6 +534,7 @@ bool Config::saveUserPreset(const std::string& requested) {
     writeFields(settings, file.c_str(), L"Preset", false);
     scanUserPresets();
     TMVS_LOG("config: saved preset \"%s\"", name.c_str());
+    m_mapLook = false;
     preset = name;
     if (autoMood && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
     markDirty();
@@ -343,14 +557,111 @@ void Config::onMoodDetected(Mood m) {
     mood = m;
     markDirty();
     TMVS_LOG("config: map mood %s", moodName(m));
-    // Your own unsaved tweaks win over the mood presets: a map change must not throw them away.
-    if (preset == kCustomPreset) return;
+    // The map's own look wins, and your own unsaved tweaks win over the mood presets: a map
+    // change must not throw them away.
+    if (m_mapLook || preset == kCustomPreset) return;
     const std::string& p = moodPreset[static_cast<int>(m)];
     if (!autoMood || p.empty() || p == preset) return;
     if (applyNamed(p)) {
         preset = p;
         TMVS_LOG("config: map mood %s -> preset %s", moodName(m), p.c_str());
     }
+}
+
+// Your look, with the machine settings as they are now (they may change during a map look).
+Settings Config::ownSettings() const {
+    if (!m_mapLook) return settings;
+    Settings own = m_ownSettings;
+    const char* from = reinterpret_cast<const char*>(&settings);
+    char* to = reinterpret_cast<char*>(&own);
+    for (const Field& f : fields()) {
+        if (!isSystemField(f)) continue;
+        const size_t size = f.kind == Field::Bool ? sizeof(bool) : (f.kind == Field::Color ? sizeof(float) * 3 : sizeof(float));
+        memcpy(to + f.offset, from + f.offset, size);
+    }
+    own.enabled = settings.enabled;
+    own.debugView = settings.debugView;
+    return own;
+}
+
+void Config::leaveMapLook() {
+    if (!m_mapLook) return;
+    settings = ownSettings();
+    preset = m_ownPreset;
+    m_mapLook = false;
+    TMVS_LOG("config: back to your look (%s)", preset.c_str());
+}
+
+void Config::onMapComments(const std::string& comments) {
+    m_mapComments = comments;
+    Settings look = m_mapLook ? ownSettings() : settings;
+    std::string base;
+    if (!useMapLooks || !lookFromComments(comments, look, base)) {
+        leaveMapLook();
+        return;
+    }
+    if (!m_mapLook) {
+        m_ownSettings = settings;
+        m_ownPreset = preset;
+    }
+    look.enabled = settings.enabled;
+    look.debugView = settings.debugView;
+    settings = look;
+    preset = kMapLookPreset;
+    m_mapLook = true;
+    TMVS_LOG("config: this map brings its own look (based on %s)", base.c_str());
+}
+
+void Config::setUseMapLooks(bool use) {
+    if (use == useMapLooks) return;
+    useMapLooks = use;
+    markDirty();
+    if (use) {
+        onMapComments(m_mapComments);
+    } else {
+        leaveMapLook();
+    }
+}
+
+std::string Config::mapTag() const {
+    // The built-in preset closest to the current look keeps the line short.
+    int best = 0;
+    size_t fewest = SIZE_MAX;
+    for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
+        Settings base = settings;
+        applyPreset(base, static_cast<Preset>(i));
+        size_t differing = 0;
+        for (const Field& f : fields()) {
+            if (!isSystemField(f) && !sameValue(f, base, settings)) differing++;
+        }
+        if (differing < fewest) {
+            fewest = differing;
+            best = i;
+        }
+    }
+    Settings base = settings;
+    applyPreset(base, static_cast<Preset>(best));
+    int index = 0;
+    for (int i = 0; i < static_cast<int>(sizeof(kTagPresets) / sizeof(kTagPresets[0])); i++) {
+        if (!strcmp(kTagPresets[i], presetName(static_cast<Preset>(best)))) index = i;
+    }
+    return compactTag(index, base, settings);
+}
+
+std::string Config::withMapTag(const std::string& comments, const std::string& tag) {
+    // The author's own text stays; an older tag of ours goes.
+    std::string out = comments;
+    std::string lower = out;
+    for (char& ch : lower) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+    size_t at;
+    while ((at = lower.find("[tmvs")) != std::string::npos) {
+        size_t end = lower[at + 5] == ':' ? lower.find(']', at) : lower.find_first_of("\r\n", at);
+        end = end == std::string::npos ? lower.size() : end + (lower[at + 5] == ':' ? 1 : 0);
+        out.erase(at, end - at);
+        lower.erase(at, end - at);
+    }
+    while (!out.empty() && isspace(static_cast<unsigned char>(out.back()))) out.pop_back();
+    return out.empty() ? tag : out + " " + tag;
 }
 
 void Config::markDirty() {
@@ -725,6 +1036,7 @@ void Config::load() {
     GetPrivateProfileStringW(L"General", L"Preset", L"", text, 128, ini);
     preset = presetFromText(text, "Vibrant");
     autoMood = GetPrivateProfileIntW(L"General", L"AutoMoodPresets", 1, ini) != 0;
+    useMapLooks = GetPrivateProfileIntW(L"General", L"UseMapLooks", 1, ini) != 0;
     advancedMenu = GetPrivateProfileIntW(L"General", L"AdvancedMenu", 0, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
@@ -757,9 +1069,12 @@ void Config::load() {
 void Config::save() {
     if (m_path.empty()) m_path = log::dataDir() + L"\\settings.ini";
     const wchar_t* ini = m_path.c_str();
-    WritePrivateProfileStringW(L"General", L"Preset", widen(preset).c_str(), ini);
+    // A map's look is never saved as yours.
+    const Settings own = ownSettings();
+    WritePrivateProfileStringW(L"General", L"Preset", widen(m_mapLook ? m_ownPreset : preset).c_str(), ini);
     WritePrivateProfileStringW(L"General", L"Enabled", settings.enabled ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"UseMapLooks", useMapLooks ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"AdvancedMenu", advancedMenu ? L"1" : L"0", ini);
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);
@@ -770,7 +1085,7 @@ void Config::save() {
     wchar_t value[16];
     swprintf(value, 16, L"%d", static_cast<int>(mood));
     WritePrivateProfileStringW(L"General", L"LastMood", value, ini);
-    writeFields(settings, ini, L"Settings", true);
+    writeFields(own, ini, L"Settings", true);
     m_dirty = false;
 }
 

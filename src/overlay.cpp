@@ -1,6 +1,7 @@
 #include "overlay.h"
 #include "autoquality.h"
 #include "config.h"
+#include "engine.h"
 #include "pipeline.h"
 #include "imgui.h"
 #include "backends/imgui_impl_dx9.h"
@@ -359,6 +360,26 @@ bool drawAdvanced(Config& config, Settings& s, const std::vector<std::string>& n
     }
     drawPerformance();
 
+    // Author's Shader: a look stored in a map (its comments), for everyone with the mod.
+    if (ImGui::CollapsingHeader("Author's Shader")) {
+        bool mapLooks = config.useMapLooks;
+        if (ImGui::Checkbox("Load Author's Shaders", &mapLooks)) config.setUseMapLooks(mapLooks);
+        static std::string result;
+        if (ImGui::Button("Set as Author's Shader")) {
+            std::string comments;
+            const bool ok = engine::currentMapComments(comments) &&
+                            engine::setCurrentMapComments(Config::withMapTag(comments, config.mapTag()));
+            result = ok ? "Set. Save the map to keep it." : "No map open.";
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stores this look in the map open in the editor.");
+        ImGui::SameLine();
+        if (ImGui::Button("Copy code")) {
+            ImGui::SetClipboardText(config.mapTag().c_str());
+            result = "Copied.";
+        }
+        if (!result.empty()) ImGui::TextDisabled("%s", result.c_str());
+    }
+
     ImGui::Separator();
     if (ImGui::Button("Reset preset")) {
         std::string base = config.preset;
@@ -399,7 +420,8 @@ void drawMenu() {
     // Presets: built-in, then your own. Everything is saved automatically.
     const std::vector<std::string> names = config.presetNames();
     const bool custom = config.preset == kCustomPreset;
-    if (ImGui::BeginCombo("Preset", custom ? "Custom (your changes)" : config.preset.c_str())) {
+    const char* current = custom ? "Custom (your changes)" : (config.mapLookActive() ? "Author's Shader" : config.preset.c_str());
+    if (ImGui::BeginCombo("Preset", current)) {
         for (size_t i = 0; i < names.size(); i++) {
             if (i == static_cast<size_t>(Preset::Custom)) ImGui::Separator(); // user presets below
             if (ImGui::Selectable(names[i].c_str(), names[i] == config.preset)) config.selectPreset(names[i]);

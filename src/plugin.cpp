@@ -226,6 +226,14 @@ void processScene(IDirect3DDevice9* device) {
         g_sceneStart = seconds();
         TMVS_LOG("scene: first gameplay camera");
     }
+    // A new map: its own look (from its comments), before the mood picks a preset.
+    {
+        static int s_mapLoads = 0;
+        if (engine::mapLoads() != s_mapLoads) {
+            s_mapLoads = engine::mapLoads();
+            Config::get().onMapComments(engine::mapComments());
+        }
+    }
     // Map mood from the sun light, only in gameplay: menu backgrounds have their own light.
     if (g_scene.haveLight && g_scene.projection[14] > -1.0f) Config::get().onMoodDetected(classifyMood(g_scene.lightColor));
 

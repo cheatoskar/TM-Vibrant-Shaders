@@ -1,5 +1,6 @@
 #pragma once
 #include <d3d9.h>
+#include <string>
 
 // Hooks into the TrackMania Forever "Vision" engine (CVisionViewportDx9).
 //
@@ -61,6 +62,16 @@ bool stadium();
 // (from the map load or the plane the game renders the water reflection for; = blockY without
 // a sea). False until a map load was seen (hooks unavailable): the shaders then guess by colour.
 bool waterHeights(float& blockY, float& seaY);
+// Counts map loads; mapComments() are the comments of the last loaded map (the map's author
+// writes them in the editor), "" when it has none or its file can't be read (campaign maps
+// sit in the game's packs).
+int mapLoads();
+std::string mapComments();
+// The comments of the map that is open now (race, replay or editor), read and written in the
+// game's memory. Written comments are saved into the file when the author saves the map.
+bool currentMapComments(std::string& comments);
+bool setCurrentMapComments(const std::string& comments);
+
 // Which of the cinematic hooks fired since the last call (bit 0 clip player, 1 clip viewer,
 // 2 video export), for the log.
 unsigned cinematicSources();

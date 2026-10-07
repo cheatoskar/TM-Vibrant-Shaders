@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "gbx.h"
 #include "hook.h"
 #include "log.h"
 #include <windows.h>
@@ -16,7 +17,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -26,17 +27,27 @@ struct GameBuild {
     uintptr_t handlers[kSiteCount]; // absolute address inside a prologue (its SEH handler), or 0
     uintptr_t shaderLevel;         // word: GPU shader path (PC0..PC3)
     uintptr_t idGetString;         // const char* CMwId::GetString() const
+    uintptr_t getFidFile;          // static CSystemFidFile* CSystemEngine::GetFidFile(const CMwNod*)
+    uintptr_t fidFullName;         // void CSystemFidFile::GetFullName(CFastStringInt&, int, int) const
+    uintptr_t emptyString;         // wchar_t*: the text of every empty CFastStringInt
+    uintptr_t setString;           // void CFastStringInt::SetString(const SStringParamInt&)
 };
+
+// Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
+constexpr size_t kAppChallenge = 0x198;      // CGameCtnChallenge* (CGameCtnApp::GetChallenge)
+constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail::FillHeaderUserData)
 
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20}, 0x00d123ba, 0x00935400},
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     0x00903280},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620}, 0x00d1442a, 0x00935290},
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     0x00903a90},
 };
 const GameBuild* g_build = nullptr;
 
@@ -82,6 +93,8 @@ constexpr float kBlockWaterY = 7.94f;
 constexpr InlineSite kWaterPlaneSite = {kWaterPlane, {0x81, 0xec, 0xe0, 0x01, 0x00, 0x00}, 6, -1, "CVisionViewportDx9::TexRender_Water_PlaneR"};
 // Map load: the map's decoration and environment (TMUF has seven; water blocks are Stadium's).
 constexpr InlineSite kLoadDecorationSite = {kLoadDecoration, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnChallenge::LoadDecorationAndCollection"};
+// The game sets its current map (race, replay, editor): we keep the app to find that map.
+constexpr InlineSite kSetChallengeSite = {kSetChallenge, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnApp::SetChallenge"};
 
 using FrameBeginFn = int(__fastcall*)(void*, void*);
 using CameraBeginFn = void(__fastcall*)(void*, void*, void*, void*);
@@ -121,6 +134,11 @@ using LoadDecorationFn = void(__fastcall*)(void*, void*, const void*);
 using IdGetStringFn = const char*(__fastcall*)(const void*, void*);
 LoadDecorationFn g_loadDecoration = nullptr;
 char g_environment[32] = {}; // "Stadium", "Speed", ... ("" = not known yet)
+std::string g_mapComments;      // of the last map loaded
+volatile LONG g_mapLoads = 0;
+using SetChallengeFn = void(__fastcall*)(void*, void*, void*);
+SetChallengeFn g_setChallenge = nullptr;
+void* g_app = nullptr;          // CGameCtnApp (holds the current map)
 RespawnFn g_respawn = nullptr;
 volatile LONG g_raceResets = 0; // counters: the plugin compares them every frame
 volatile LONG g_respawns = 0;
@@ -243,9 +261,102 @@ void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
     g_respawn(self, edx, player, flag);
 }
 
+// The file a loaded map came from, through the engine's file system: the map's file node
+// and its path on disk (GetFullName(path, 0, 0), as the game itself does before writing a
+// file). Guarded: a wrong address must not take the game down with it.
+using GetFidFileFn = void*(__cdecl*)(const void*);
+using FidFullNameFn = void(__fastcall*)(const void*, void*, void*, int, int);
+struct FastStringInt {
+    uint32_t size;
+    wchar_t* text; // empty: the engine's shared empty string, never null
+};
+
+bool mapFilePath(const void* challenge, wchar_t* out, size_t size) {
+    __try {
+        const void* fid = reinterpret_cast<GetFidFileFn>(rebase(g_build->getFidFile))(challenge);
+        if (!fid) return false;
+        // The path is appended to this string; its buffer stays with the game's allocator
+        // (a few bytes per map load).
+        FastStringInt name = {0, *reinterpret_cast<wchar_t**>(rebase(g_build->emptyString))};
+        reinterpret_cast<FidFullNameFn>(rebase(g_build->fidFullName))(fid, nullptr, &name, 0, 0);
+        if (!name.text || name.size == 0 || name.size >= size) return false;
+        wcsncpy_s(out, size, name.text, _TRUNCATE);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+std::string toUtf8(const wchar_t* text, int length) {
+    if (length <= 0) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, text, length, nullptr, 0, nullptr, nullptr);
+    std::string out(n > 0 ? n : 0, '\0');
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, text, length, &out[0], n, nullptr, nullptr);
+    return out;
+}
+
+// The comments the map holds in memory (from its file, or as the editor changed them).
+bool commentsInMemory(const void* challenge, wchar_t* out, size_t size) {
+    __try {
+        const FastStringInt* s = reinterpret_cast<const FastStringInt*>(static_cast<const BYTE*>(challenge) + kChallengeComments);
+        if (!s->text || s->size >= size) return false;
+        memcpy(out, s->text, s->size * sizeof(wchar_t));
+        out[s->size] = L'\0';
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void readMapComments(const void* challenge) {
+    static wchar_t text[16384];
+    std::string comments;
+    const char* source = "none";
+    if (commentsInMemory(challenge, text, 16384) && text[0]) {
+        comments = toUtf8(text, static_cast<int>(wcslen(text)));
+        source = "map";
+    } else {
+        // Not loaded with the map: the file's header has them.
+        wchar_t path[1024] = {};
+        if (mapFilePath(challenge, path, 1024) && gbx::readMapComments(path, comments) && !comments.empty()) source = "file";
+    }
+    TMVS_LOG("engine: map loaded, comments: %s", source);
+    g_mapComments = comments;
+    InterlockedIncrement(&g_mapLoads);
+}
+
+void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
+    g_app = self;
+    g_setChallenge(self, edx, challenge);
+}
+
+void* currentChallenge() {
+    if (!g_app) return nullptr;
+    void* const* slot = reinterpret_cast<void* const*>(static_cast<const BYTE*>(g_app) + kAppChallenge);
+    return readable(slot, sizeof(void*)) ? *slot : nullptr;
+}
+
+using SetStringFn = void(__fastcall*)(void*, void*, const void*);
+struct StringParamInt {
+    const wchar_t* text;
+    uint32_t size;
+    int checked;
+};
+
+bool writeComments(void* challenge, const wchar_t* text, uint32_t length) {
+    __try {
+        const StringParamInt param = {text, length, 0};
+        reinterpret_cast<SetStringFn>(rebase(g_build->setString))(static_cast<BYTE*>(challenge) + kChallengeComments, nullptr, &param);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // SGameCtnIdentifier of the decoration at +0xc4: id, collection (the environment), author.
 void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMods) {
     g_loadDecoration(self, edx, forcedMods);
+    readMapComments(self);
     const void* collection = static_cast<const BYTE*>(self) + 0xc8;
     if (!readable(collection, sizeof(uint32_t))) return;
     const char* name = reinterpret_cast<IdGetStringFn>(rebase(g_build->idGetString))(collection, nullptr);
@@ -378,6 +489,7 @@ bool install(const Callbacks& callbacks) {
     g_raceReset = reinterpret_cast<RaceResetFn>(inlineHook(kRaceResetSite, reinterpret_cast<void*>(&raceResetDetour)));
     g_respawn = reinterpret_cast<RespawnFn>(inlineHook(kRespawnSite, reinterpret_cast<void*>(&respawnDetour)));
     g_loadDecoration = reinterpret_cast<LoadDecorationFn>(inlineHook(kLoadDecorationSite, reinterpret_cast<void*>(&loadDecorationDetour)));
+    g_setChallenge = reinterpret_cast<SetChallengeFn>(inlineHook(kSetChallengeSite, reinterpret_cast<void*>(&setChallengeDetour)));
     g_active = true;
     TMVS_LOG("engine: TrackMania %s, CVisionViewportDx9 hooks installed (module base %p)", g_build->name, GetModuleHandleW(nullptr));
     return true;
@@ -403,6 +515,33 @@ bool waterHeights(float& blockY, float& seaY) {
     float y = 0.0f;
     if (g_lastWater != 0 && GetTickCount() - g_lastWater < 2000 && levelPlaneHeight(g_waterPlaneEq, y)) seaY = y;
     else if (g_seaLevel != -1.0f) seaY = g_seaLevel;
+    return true;
+}
+
+int mapLoads() {
+    return static_cast<int>(g_mapLoads);
+}
+
+std::string mapComments() {
+    return g_mapComments;
+}
+
+bool currentMapComments(std::string& comments) {
+    static wchar_t text[16384];
+    void* challenge = currentChallenge();
+    if (!challenge || !commentsInMemory(challenge, text, 16384)) return false;
+    comments = toUtf8(text, static_cast<int>(wcslen(text)));
+    return true;
+}
+
+bool setCurrentMapComments(const std::string& comments) {
+    void* challenge = currentChallenge();
+    if (!challenge || !g_setChallenge) return false;
+    const int n = MultiByteToWideChar(CP_UTF8, 0, comments.c_str(), static_cast<int>(comments.size()), nullptr, 0);
+    std::wstring wide(n > 0 ? n : 0, L'\0');
+    if (n > 0) MultiByteToWideChar(CP_UTF8, 0, comments.c_str(), static_cast<int>(comments.size()), &wide[0], n);
+    if (!writeComments(challenge, wide.c_str(), static_cast<uint32_t>(wide.size()))) return false;
+    TMVS_LOG("engine: comments of the open map set (%u characters)", static_cast<unsigned>(wide.size()));
     return true;
 }
 

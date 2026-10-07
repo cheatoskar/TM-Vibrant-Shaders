@@ -17,6 +17,7 @@
 #include "audio.h"
 #include "config.h"
 #include "framecap.h"
+#include "gbx.h"
 #include "gfx.h"
 #include "log.h"
 #include "pipeline.h"
@@ -185,6 +186,26 @@ int main(int argc, char** argv) {
     }
     // tmvs_preview --decode in.mp3 out.wav
     if (argc >= 4 && !strcmp(argv[1], "--decode")) return tmshaders::audio::decodeToWav(widen(argv[2]).c_str(), widen(argv[3]).c_str()) ? 0 : 1;
+    // tmvs_preview --map <file.Challenge.Gbx>: the map's comments and the look they bring.
+    if (argc >= 3 && !strcmp(argv[1], "--map")) {
+        std::string comments;
+        if (!tmshaders::gbx::readMapComments(widen(argv[2]), comments)) {
+            printf("no comments (or not a map)\n");
+            return 1;
+        }
+        tmshaders::Config& config = tmshaders::Config::get();
+        config.onMapComments(comments);
+        printf("comments: %s\nmap look: %s\n", comments.c_str(), config.mapLookActive() ? config.mapTag().c_str() : "none");
+        return 0;
+    }
+    // tmvs_preview --tag <preset> [Key=Value ...]: a look as the line for a map's comments.
+    if (argc >= 3 && !strcmp(argv[1], "--tag")) {
+        tmshaders::Config& config = tmshaders::Config::get();
+        if (!config.selectPreset(argv[2])) return 1;
+        for (int i = 3; i < argc; i++) setByKey(config.settings, argv[i]);
+        printf("%s\n", config.mapTag().c_str());
+        return 0;
+    }
     // tmvs_preview --play <seconds> [volume]: plays the weather sound live, as in the game.
     if (argc >= 3 && !strcmp(argv[1], "--play")) {
         tmshaders::Settings s;

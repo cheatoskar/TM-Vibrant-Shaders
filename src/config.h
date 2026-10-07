@@ -45,6 +45,8 @@ const std::vector<Field>& fields();
 
 // Name of the state after the user changed a value by hand.
 constexpr const char* kCustomPreset = "Custom";
+// Name of the state while the look comes from the map's comments.
+constexpr const char* kMapLookPreset = "Author's Shader";
 
 class Config {
 public:
@@ -76,15 +78,32 @@ public:
     Mood mood = Mood::Unknown;
     void onMoodDetected(Mood m);
 
+    // Map looks: the map's author writes "[TMVS] Preset=Snowstorm Snow=1.5 ..." into the map's
+    // comments (map editor). With the mod you get exactly that look on that map; on the next
+    // map without one your own look is back. settings.ini always keeps your own look.
+    bool useMapLooks = true;
+    void onMapComments(const std::string& comments); // every map load ("" = no comments)
+    void setUseMapLooks(bool use);
+    bool mapLookActive() const { return m_mapLook; }
+    std::string mapTag() const; // the current look, packed for a map's comments
+    // The comments with the tag in place of an older one (the author's text stays).
+    static std::string withMapTag(const std::string& comments, const std::string& tag);
+
 private:
     Config() = default;
     bool applyNamed(const std::string& name);
+    Settings ownSettings() const;
+    void leaveMapLook();
     void scanUserPresets();
     std::wstring presetFile(const std::string& name) const;
 
     std::wstring m_path;
     std::wstring m_presetDir;
     std::vector<std::string> m_userPresets;
+    bool m_mapLook = false;
+    Settings m_ownSettings;       // your look while a map look is shown
+    std::string m_ownPreset;
+    std::string m_mapComments;    // of the current map, to apply its look when switched on
     bool m_dirty = false;
     unsigned long m_dirtySince = 0;
 };
