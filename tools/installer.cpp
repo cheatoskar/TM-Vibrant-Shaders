@@ -217,10 +217,16 @@ std::wstring pickGameDir(const std::wstring& suggestion) {
 // --- The two installs ----------------------------------------------------------
 
 bool installModLoader() {
-    const std::wstring target = productsDir() + L"\\" + kProduct;
-    if (exists(target) && !shellFileOp(FO_DELETE, target)) return false; // older versions are replaced
-    SHCreateDirectoryExW(nullptr, productsDir().c_str(), nullptr);
-    return shellFileOp(FO_COPY, sourceProduct(), productsDir());
+    // Older versions stay next to the new one (the ModLoader lists every version folder).
+    const std::wstring productDir = productsDir() + L"\\" + kProduct;
+    const std::wstring versionTarget = productDir + L"\\" + TM_SHADERS_VERSION;
+    const std::wstring srcVersion = sourceProduct() + L"\\" + TM_SHADERS_VERSION;
+    const std::wstring srcDesc = sourceProduct() + L"\\description.yaml";
+    const std::wstring targetDesc = productDir + L"\\description.yaml";
+
+    SHCreateDirectoryExW(nullptr, versionTarget.c_str(), nullptr);
+    if (exists(srcDesc)) CopyFileW(srcDesc.c_str(), targetDesc.c_str(), FALSE);
+    return shellFileOp(FO_COPY, srcVersion, productDir);
 }
 
 bool removeModLoader() {

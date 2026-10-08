@@ -28,7 +28,6 @@ if (-not (Test-Path $loader)) {
 
 $product = "$loader\database\TmForever\products\TM Vibrant Shaders"
 $target = "$product\$Version"
-if (Test-Path $product) { Remove-Item -Recurse -Force $product }
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 
 Copy-Item "$PSScriptRoot\packaging\description.yaml" "$product\description.yaml"
