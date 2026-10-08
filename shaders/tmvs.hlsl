@@ -89,14 +89,20 @@ float linearDepth(float d) {
     return (d >= 0.999999) ? SKY_Z : u_Proj2.y / (d - u_Proj2.x);
 }
 
+// Screen uv <-> the game's ndc. D3D9 rasterizes pixel i at ndc 2i/W - 1 (pixel centres on
+// whole coordinates), but our passes sample it at its texel centre (i + 0.5)/W: half a
+// full-res pixel (u_Screen.zw) apart. Ignored, every ray was tilted by it and flat ground
+// sank with distance (-0.35 m at 400 m: the water mask lost the pools far away).
+float2 uvToNdc(float2 uv) { return float2(uv.x * 2.0 - 1.0 - u_Screen.z, 1.0 - uv.y * 2.0 + u_Screen.w); }
+float2 ndcToUV(float2 ndc) { return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) + 0.5 * u_Screen.zw; }
+
 float3 viewPosition(float2 uv, float z) {
-    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    float2 ndc = uvToNdc(uv);
     return float3((ndc.x - u_Proj.z) * z / u_Proj.x, (ndc.y - u_Proj.w) * z / u_Proj.y, z);
 }
 
 float2 projectToUV(float3 p) {
-    float2 ndc = float2(p.x * u_Proj.x / p.z + u_Proj.z, p.y * u_Proj.y / p.z + u_Proj.w);
-    return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    return ndcToUV(float2(p.x * u_Proj.x / p.z + u_Proj.z, p.y * u_Proj.y / p.z + u_Proj.w));
 }
 
 float3 viewToWorldDir(float3 v) { return v.x * u_ViewToW0.xyz + v.y * u_ViewToW1.xyz + v.z * u_ViewToW2.xyz; }
@@ -109,8 +115,7 @@ float2 reproject(float3 world, out float prevZ) {
     float4 w = float4(world, 1.0);
     float3 v = float3(dot(w, u_PrevView0), dot(w, u_PrevView1), dot(w, u_PrevView2));
     prevZ = v.z;
-    float2 ndc = float2(v.x * u_PrevProj.x / v.z + u_PrevProj.z, v.y * u_PrevProj.y / v.z + u_PrevProj.w);
-    return float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    return ndcToUV(float2(v.x * u_PrevProj.x / v.z + u_PrevProj.z, v.y * u_PrevProj.y / v.z + u_PrevProj.w));
 }
 
 float ign(float2 pixel) {
@@ -143,13 +148,20 @@ float4 PS_LinearDepth(float2 uv : TEXCOORD0) : COLOR0 {
     float c = rawZ(uv);
     // Snap to the closest layer among neighbours that are within z-fighting distance,
     // so interleaved coplanar layers read as one surface. Real edges are left alone.
+    // A neighbour's layer is carried over to this pixel along the surface through it and the
+    // pixel behind it (1/z is linear across a plane). Taking the neighbours' own depths, the
+    // nearer row of any slanted surface was always within the tolerance: all flat ground was
+    // lifted by one row (z / focal px: 0.6 m at 200 m from a high camera, the water no longer
+    // matched its height). Each side on its own: a slope across an edge drew outlines. Only a
+    // layer clearly in front counts: the depth's own steps, carried over, made speckles.
     float z = c;
     float tolerance = 0.006 * c;
-    [unroll] for (int y = -1; y <= 1; y++) {
-        [unroll] for (int x = -1; x <= 1; x++) {
-            float n = rawZ(uv + float2(x, y) * px);
-            if (abs(n - c) < tolerance) z = min(z, n);
-        }
+    [unroll] for (int i = 0; i < 4; i++) {
+        float2 o = (i < 2 ? float2(i * 2 - 1, 0) : float2(0, i * 2 - 5)) * px;
+        float inv = 2.0 / rawZ(uv + o) - 1.0 / rawZ(uv + 2.0 * o);
+        float n = inv > 0.0 ? 1.0 / inv : SKY_Z;
+        float ahead = c - n;
+        if (ahead > 0.0003 * c && ahead < tolerance) z = min(z, n);
     }
     return float4(z, 0, 0, 1);
 }
@@ -1265,7 +1277,8 @@ float3 lightningBolt(float3 rd) {
 
 // ---------------------------------------------------------------------------------
 // Pass 3: average sky colour near the horizon (1x1), used as fog colour.
-//   s0 = scene colour, s1 = full normal/depth, s2 = custom sky (when enabled)
+//   s0 = scene colour, s1 = full normal/depth, s2 = custom sky (when enabled),
+//   s3 = last frame's average, u_Pass0.x = blend towards this frame, u_Pass0.y = 1: no history
 // ---------------------------------------------------------------------------------
 float4 PS_SkyAverage(float2 uv : TEXCOORD0) : COLOR0 {
     float3 sum = 0;
@@ -1283,9 +1296,13 @@ float4 PS_SkyAverage(float2 uv : TEXCOORD0) : COLOR0 {
             }
         }
     }
+    // A few sky pixels (a gap in a roof) are no average of the sky: lean on the fallback until
+    // enough are seen, instead of switching hard between them.
     float3 fallback = u_SkyColor.rgb * 0.6;
-    float3 avg = wsum > 0.01 ? sum / wsum : fallback;
-    return float4(avg, saturate(wsum / 20.0));
+    float3 avg = lerp(fallback, sum / max(wsum, 1e-4), saturate(wsum / 2.0));
+    float4 current = float4(avg, saturate(wsum / 20.0));
+    if (u_Pass0.y > 0.5) return current;
+    return lerp(tex2Dlod(s3, float4(0.5, 0.5, 0, 0)), current, u_Pass0.x);
 }
 
 // ---------------------------------------------------------------------------------
@@ -1381,16 +1398,22 @@ float puddleMask(float3 world, float flatness, float grass) {
     return smoothstep(threshold, threshold + 0.18, n) * flatness * (1.0 - grass) * saturate(u_Weather.x * 2.0);
 }
 
+// How far a point may sit from the water plane at `level` and still be on it.
+// The reconstructed height is exact to a few cm out to 400 m and more: the depth is 24 bit,
+// view z is FP16 (0.05 % steps), and since 1.3.1 neither half a pixel (rays tilted, flat
+// ground sank with distance) nor the z-fight snap (lifted flat ground by one row) bend it.
+// Before, the tolerance had to grow with the camera height and still lost the water far out
+// or near the camera: a "chunk" around the car looked different from the rest, and the mask
+// flipped row by row at its edge (stripes). The ground is 1.00 m above the water blocks.
+float waterTolerance(float level) {
+    return clamp(0.15 + abs(cameraWorld().y - level) * 0.001, 0.15, 0.4);
+}
+
 // How well a point lies on the game's water (u_Water.z = 1): 1 on it, 0 off it. `level` = the
 // water height it was compared with.
-// The reconstructed depth is only good to ~0.7 % of the distance (view z is FP16 in the
-// normal/depth buffer, and the z-fight snap pulls flat ground up by up to a row). On the water
-// plane that is 0.7 % of the camera's height above it: a fixed 0.2 m sat right on the edge at
-// mid distance and the mask flipped row by row (horizontal stripes). The ground is 1.06 m above
-// the water blocks, so the tolerance can grow with the camera height up to 0.6 m.
 float waterLevelMatch(float3 world, out float level) {
     level = abs(world.y - u_Water.x) < abs(world.y - u_Water.y) ? u_Water.x : u_Water.y;
-    float tol = clamp(abs(cameraWorld().y - level) * 0.0075, 0.15, 0.6);
+    float tol = waterTolerance(level);
     return smoothstep(tol, tol * 0.6, abs(world.y - level));
 }
 
@@ -1408,9 +1431,10 @@ float waterMask(float3 c, float3 nWorld, float3 world, float z, float emissive) 
     if (u_Water.z > 0.5) {
         // The game tells where its water is (the height its own water shaders use): every
         // flat surface at that height is water - pools, rivers, the sea.
-        // Far away the depth gets too coarse to tell the water from the ground 1 m above.
+        // Far away the depth gets too coarse to tell the water from the ground 1 m above
+        // (measured exact to 400 m and more since the D3D9 pixel centre is used).
         float waterY;
-        return waterLevelMatch(world, waterY) * saturate((350.0 - z) / 100.0) * level;
+        return waterLevelMatch(world, waterY) * saturate((600.0 - z) / 150.0) * level;
     }
     // Without the engine hooks: guess from the colour.
     float blue = (c.b - max(c.r, c.g * 0.8)) / max(c.b, 1e-3);
@@ -1436,16 +1460,22 @@ float2 rippleSlope(float2 xz, float t) {
     return g * 0.3;
 }
 
-// Gentle swell plus fine chop for open water.
-float2 waveSlope(float2 xz, float t) {
+// Gentle swell plus fine chop for open water. `footprint` = metres per pixel on the water
+// (along the view): waves shorter than ~2 pixels can't be shown and only alias into moire
+// and grain at a distance, so each one fades out before it gets there.
+float2 waveSlope(float2 xz, float t, float footprint) {
     float2 g = 0;
     float2 d0 = float2(0.8, 0.6), d1 = float2(-0.4, 0.92), d2 = float2(0.97, -0.24), d3 = float2(-0.7, -0.7);
-    g += d0 * cos(dot(d0, xz) * 0.9 + t * 1.3) * 0.05;
-    g += d1 * cos(dot(d1, xz) * 1.7 + t * 1.9) * 0.035;
-    g += d2 * cos(dot(d2, xz) * 3.1 + t * 2.6) * 0.025;
-    g += d3 * cos(dot(d3, xz) * 5.3 + t * 3.4) * 0.015;
-    float2 q = xz * 2.0 + t * 0.6;
-    g += float2(noise2(q + float2(0.08, 0)) - noise2(q - float2(0.08, 0)), noise2(q + float2(0, 0.08)) - noise2(q - float2(0, 0.08))) * 0.35;
+    float px = 2.0 * footprint;
+    g += d0 * cos(dot(d0, xz) * 0.9 + t * 1.3) * 0.05 * saturate(7.0 / px - 1.0);
+    g += d1 * cos(dot(d1, xz) * 1.7 + t * 1.9) * 0.035 * saturate(3.7 / px - 1.0);
+    g += d2 * cos(dot(d2, xz) * 3.1 + t * 2.6) * 0.025 * saturate(2.0 / px - 1.0);
+    g += d3 * cos(dot(d3, xz) * 5.3 + t * 3.4) * 0.015 * saturate(1.2 / px - 1.0);
+    float chop = saturate(0.5 / px - 1.0);
+    if (chop > 0.0) {
+        float2 q = xz * 2.0 + t * 0.6;
+        g += float2(noise2(q + float2(0.08, 0)) - noise2(q - float2(0.08, 0)), noise2(q + float2(0, 0.08)) - noise2(q - float2(0, 0.08))) * 0.35 * chop;
+    }
     return g;
 }
 
@@ -1734,10 +1764,12 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 n = nd.xyz;
     // The game's water: start on the exact plane, facing straight up (the stepped depth made
     // the reflection jump row by row).
+    bool onWater = false;
     if (water && u_Water.z > 0.5) {
         float waterY;
         float3 world = worldPosition(p);
-        if (waterLevelMatch(world, waterY) > 0.5) {
+        onWater = waterLevelMatch(world, waterY) > 0.5;
+        if (onWater) {
             float3 rdView = normalize(viewPosition(uv, 1.0));
             p = worldToViewDir(waterSurface(viewToWorldDir(rdView), waterY, world) - cameraWorld());
             n = u_UpView.xyz;
@@ -1756,7 +1788,14 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         if (q.z < 0.25) break;
         float2 quv = projectToUV(q);
         if (any(quv < 0.0) || any(quv > 1.0)) break;
-        float delta = q.z - tex2Dlod(s1, float4(quv, 0, 0)).w;
+        float sceneZ = tex2Dlod(s1, float4(quv, 0, 0)).w;
+        float delta = q.z - sceneZ;
+        // The ray leaves the exact plane, but the depth of the water around it is stepped
+        // (FP16, z-fight snap) and lies in front of the plane in places: the water "hit"
+        // itself and mirrored itself in rows (stripes at mid distance). Only what stands
+        // above the water can be mirrored in it.
+        float level;
+        if (onWater && delta > 0.0 && waterLevelMatch(worldPosition(viewPosition(quv, sceneZ)), level) > 0.1) delta = -1.0;
         if (delta > 0.0 && delta < 0.4 + t * 0.1) {
             // Refine between the last two steps.
             float a = tPrev, b = t;
@@ -2064,7 +2103,11 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             xz = waterSurface(rd, waterY, world).xz;
         }
         if (u_Weather.y > 0.0) slope = rippleSlope(xz, t) * u_Weather.y * (puddle + water + wet * 0.25);
-        if (water > 0.0) slope += waveSlope(xz, t) * water;
+        if (water > 0.0) {
+            // A pixel on the water is stretched along the view by 1 / |rd.y|.
+            float footprint = dist / (abs(u_Proj.y) * 0.5 * u_Screen.y * max(abs(rd.y), 0.05));
+            slope += waveSlope(xz, t, footprint) * water;
+        }
         // Rough wet asphalt breaks the reflection up.
         if (wet > 0.0) {
             float2 q = world.xz * 6.0;
@@ -2886,8 +2929,7 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     if (u_Water.z > 0.5 && z < SKY_Z) {
         float y = worldPosition(viewPosition(cuv, z)).y;
         float level = abs(y - u_Water.x) < abs(y - u_Water.y) ? u_Water.x : u_Water.y;
-        // Same depth tolerance as waterLevelMatch (grows with the camera height).
-        float tol = clamp(abs(cameraWorld().y - level) * 0.0075, 0.15, 0.6);
+        float tol = waterTolerance(level); // as waterLevelMatch
         float onWater = saturate(1.0 - (y - level) / tol) * saturate((y - level + 3.0) / 0.3);
         weight = lerp(weight, max(weight, 0.5), onWater);
     }

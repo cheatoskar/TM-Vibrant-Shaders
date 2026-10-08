@@ -37,16 +37,17 @@
 - TAA is off by default.
 
 **Fixes**
-- Water: far fewer horizontal stripes on pools seen from mid distance (a few faint lines can remain). The water was found by its height with a fixed tolerance, which the depth's precision couldn't hold far away; the tolerance now grows with the camera's height, and waves and reflections use the exact water plane.
+- Water: no more stripes on pools and no "box" around the car where the water looked different from further away. Positions rebuilt from the depth were off by half a pixel (Direct3D 9 draws pixel centres there), which tilted every view ray: flat ground sank by up to 35 cm at 400 m, and far water fell out of the water mask. The water level is 8.00 m (it was measured as 7.94 with the tilted rays), the depth clean-up no longer lifts flat ground near the camera, reflections no longer hit the water itself, and waves fade their small ripples with distance instead of flickering into stripes.
+- Water is at full strength (`WaterSurfaces` 1) in every preset.
+- Shadows no longer pop up for a frame near walls and buildings: every ~40 m the long-shadow map moves with the car, and for one frame the shadows read it at the old place.
+- Snowstorm: the fog no longer comes and goes between walls and inside buildings. Its colour comes from the sky on screen, which jumped when only a few sky pixels showed; it is now eased over time.
 - Snow: no more black rectangles in the snow around the car (next to pools, on grass edges, in banked turns or with replay cameras).
 - The mod no longer switches itself off on many GPUs (for example NVIDIA): two shaders had grown past the 4096 instructions those drivers accept ("shader creation failed" in the log). The build now checks every shader against that limit, and the log names the failing shader and the driver's limit.
 - Other mods that create their own Direct3D device (for example Twinkie) no longer take the mod's hooks away from the game.
 - Frame captures (`F12`) on maps with water saved an empty depth buffer. Captures never overwrite earlier ones.
 
 **Known issues**
-- Some spots can flicker now and then.
-- Snow is work in progress: the snow on the ground doesn't follow the game's textures and surfaces well yet.
-- Water: a few faint lines can still show on pools in some views.
+- Snow is work in progress: the snow on the ground doesn't follow the game's textures and surfaces well yet. On the start podium the car can turn white, and driving down from it can leave a rectangle in the snow.
 
 ## 1.2.1
 

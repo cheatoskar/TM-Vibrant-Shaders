@@ -67,6 +67,7 @@ public:
         m_historyValid = false;
         m_havePrevious = false;
         m_heightValid = false;
+        m_skyValid = false;
     }
 
     // GPU timing per pass with timestamp queries (results arrive a few frames late).
@@ -181,7 +182,9 @@ private:
     gfx::Target m_giHistory[2]; // quarter: GI accumulated over frames (rgb, view z in a)
     int m_giIndex = 0;
     bool m_giValid = false;
-    gfx::Target m_skyAverage;   // 1x1
+    gfx::Target m_skyAverage[2]; // 1x1 ping-pong: fog colour, eased over time
+    int m_skyIndex = 0;
+    bool m_skyValid = false;
     gfx::Target m_hdr;          // full HDR
     gfx::Target m_rays[2];      // half
     gfx::Target m_bloomDown[kBloomLevels];

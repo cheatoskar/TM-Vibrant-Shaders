@@ -87,8 +87,9 @@ constexpr InlineSite kWaterTileHeight = {kTileHeight, {0x55, 0x8b, 0xe9, 0xd9, 0
 constexpr InlineSite kRaceResetSite = {kRaceReset, {0x56, 0x8b, 0xf1, 0x83, 0xbe, 0xa4, 0x01, 0x00, 0x00, 0x00}, 10, -1, "CTrackManiaRaceInterface::RaceOnReset"};
 constexpr InlineSite kRespawnSite = {kRespawn, {0x53, 0x8b, 0x5c, 0x24, 0x08}, 5, -1, "CTrackManiaRace::RespawnPlayer"};
 // Water blocks (Stadium pools and rivers) are terrain blocks: their surface is always here,
-// 1.06 m below the ground (measured in game: 7.937 +- 0.003).
-constexpr float kBlockWaterY = 7.94f;
+// 1.00 m below the ground (measured from the depth of four captures, out to 400 m: water
+// 8.000, ground 9.001). The 7.94 measured before came from rays tilted by half a pixel.
+constexpr float kBlockWaterY = 8.0f;
 // Renders the reflection of a water plane; gets the plane equation (world space).
 constexpr InlineSite kWaterPlaneSite = {kWaterPlane, {0x81, 0xec, 0xe0, 0x01, 0x00, 0x00}, 6, -1, "CVisionViewportDx9::TexRender_Water_PlaneR"};
 // Map load: the map's decoration and environment (TMUF has seven; water blocks are Stadium's).

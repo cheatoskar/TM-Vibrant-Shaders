@@ -40,15 +40,16 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 **Fixes**
 - Works again on GPUs whose drivers allow at most 4096 shader instructions (many NVIDIA cards showed "shader creation failed").
 - Other mods with their own Direct3D device (for example Twinkie) no longer turn the shaders off.
-- Far fewer horizontal stripes on pools and the sea seen from mid distance.
+- Water: no more stripes on pools and no "box" around the car where the water looked different. Water is at full strength in every preset.
+- Shadows no longer pop up for a moment near walls and buildings.
+- Snowstorm: the fog no longer comes and goes between walls and inside buildings.
 - No more black rectangles in the snow around the car.
 - Long-range shadows no longer leave blotches that slide with the camera.
 - `F12` captures on maps with water are complete again.
 
 ### Known issues
 
-- Some spots can flicker now and then. If you see it, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
-- Snow is work in progress: the snow on the ground doesn't follow the game's textures and surfaces well yet.
-- Water: the stripes on pools are mostly gone, but a few faint lines can still show in some views.
+- Snow is work in progress: the snow on the ground doesn't follow the game's textures and surfaces well yet. On the start podium the car can turn white.
+- If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
 Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md).

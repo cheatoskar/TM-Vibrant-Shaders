@@ -50,7 +50,7 @@ The *Performance* panel in the menu times each of these groups on the GPU with t
 
 ## Water
 
-Stadium's water blocks always sit at the same height (7.94 m), and the game reports the sea level of the map when it loads it and the plane it renders water reflections for. The shader treats a surface as water only when it lies at one of those heights. In United Forever the Stadium height is used only on Stadium maps.
+Stadium's water blocks always sit at the same height (8.00 m), and the game reports the sea level of the map when it loads it and the plane it renders water reflections for. The shader treats a surface as water only when it lies at one of those heights. In United Forever the Stadium height is used only on Stadium maps.
 
 ## Sound
 

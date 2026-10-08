@@ -211,7 +211,8 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_ndHalf.create(device, hw, hh, D3DFMT_A16B16G16R16F);
     ok &= m_occlusion.create(device, hw, hh, D3DFMT_A8R8G8B8);
     ok &= m_occlusionTmp.create(device, hw, hh, D3DFMT_A8R8G8B8);
-    ok &= m_skyAverage.create(device, 1, 1, D3DFMT_A16B16G16R16F);
+    for (auto& t : m_skyAverage) ok &= t.create(device, 1, 1, D3DFMT_A16B16G16R16F);
+    m_skyValid = false;
     ok &= m_sky.create(device, width, height, D3DFMT_A16B16G16R16F);
     ok &= m_gi[0].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
     ok &= m_gi[1].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
@@ -259,7 +260,7 @@ void Pipeline::destroyTargets() {
     m_ndHalf.destroy();
     m_occlusion.destroy();
     m_occlusionTmp.destroy();
-    m_skyAverage.destroy();
+    for (auto& t : m_skyAverage) t.destroy();
     m_sky.destroy();
     for (auto& t : m_gi) t.destroy();
     for (auto& t : m_giHistory) t.destroy();
@@ -579,12 +580,14 @@ float4 c_V1   : register(c3);
 float4 c_V2   : register(c4);
 float4 c_Map  : register(c5);   // map corner x, z, 1 / world size, camera height
 float4 c_Half : register(c6);   // half-texel offset of the map
+float4 c_Texel : register(c7);  // full-res texel size of the depth (x, y)
 sampler2D s_depth : register(s0);
 struct VSOut { float4 pos : POSITION; float2 data : TEXCOORD0; };
 VSOut main(float2 uv : TEXCOORD0) {
     VSOut o;
     float z = tex2Dlod(s_depth, float4(uv, 0, 0)).r;
-    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    // D3D9 pixel centre: the game drew texel centre uv at ndc 2(uv - texel / 2) - 1.
+    float2 ndc = float2(uv.x * 2.0 - 1.0 - c_Texel.x, 1.0 - uv.y * 2.0 + c_Texel.y);
     float3 v = float3((ndc.x - c_Proj.z) * z / c_Proj.x, (ndc.y - c_Proj.w) * z / c_Proj.y, z);
     float3 w = float3(c_V0.w, c_V1.w, c_V2.w) + v.x * c_V0.xyz + v.y * c_V1.xyz + v.z * c_V2.xyz;
     float2 m = (w.xz - c_Map.xy) * c_Map.z;
@@ -722,7 +725,7 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-    float vc[6][4] = {};
+    float vc[7][4] = {};
     vc[0][0] = P[0];
     vc[0][1] = P[5];
     vc[0][2] = P[8];
@@ -739,7 +742,9 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
     vc[4][3] = camera[1];
     vc[5][0] = -1.0f / kHeightMapSize;
     vc[5][1] = 1.0f / kHeightMapSize;
-    device->SetVertexShaderConstantF(1, &vc[0][0], 6);
+    vc[6][0] = 1.0f / m_linearDepth.width;
+    vc[6][1] = 1.0f / m_linearDepth.height;
+    device->SetVertexShaderConstantF(1, &vc[0][0], 7);
     device->SetVertexShader(m_splatVS);
     device->SetVertexDeclaration(m_splatDecl);
     device->SetPixelShader(m_shaders[kHeightSplat]);
@@ -761,7 +766,11 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
     passConstants(device, shift[0], shift[1], m_heightValid ? 0.0f : 1.0f, 0.08f);
     runPass(device, kHeightMerge, m_heightMap[m_heightIndex]);
     m_heightValid = true;
-    (void)s;
+
+    // The frame constants went up before this re-centre: with the old origin, the shadow and
+    // volumetric passes read the shifted map ~40 m off for one frame (shadows popping up).
+    const float map[4] = {m_heightOrigin[0], m_heightOrigin[1], kHeightMapWorld, s.longShadowRange};
+    device->SetPixelShaderConstantF(35, map, 1);
 }
 
 bool Pipeline::ensureCloudNoise(IDirect3DDevice9* device) {
@@ -890,7 +899,7 @@ VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     // Only where this spot is the surface you see (not under a bridge, not on a wall top
     // seen from the side).
     float4 c = toClip(v);
-    float2 suv = float2(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+    float2 suv = float2(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5) + c_Proj2.zw * 0.5; // toClip's draw shift -> texel centre
     if (any(suv < 0.0) || any(suv > 1.0)) return o;
     float sceneZ = tex2Dlod(s_depth, float4(suv, 0, 0)).r;
     if (abs(sceneZ - v.z) > 0.25 + v.z * 0.02) return o;
@@ -974,8 +983,9 @@ SnowOut snowVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
 // Spray: water thrown up by the rear tyres on a wet road. The car is found in the depth
 // buffer where the chase camera keeps it (low in the middle of the screen); every particle
 // leaves a tyre, rises, falls and hangs in the air while the car drives on.
+// uv = texel centre; the game drew that pixel at ndc 2(uv - texel / 2) - 1 (D3D9 pixel centre).
 float3 viewRay(float2 uv, float z) {
-    float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    float2 ndc = float2(uv.x * 2.0 - 1.0 - c_Proj2.z * 0.5, 1.0 - uv.y * 2.0 + c_Proj2.w * 0.5);
     return float3((ndc.x - c_Proj.z) / c_Proj.x * z, (ndc.y - c_Proj.w) / c_Proj.y * z, z);
 }
 
@@ -1009,7 +1019,8 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
         float3 bv = toView(beside);
         if (bv.z < 0.5) continue;
         float4 bc = toClip(bv);
-        float2 buv = float2(bc.x / bc.w * 0.5 + 0.5, 0.5 - bc.y / bc.w * 0.5);
+        // toClip shifted it by half a pixel for drawing; the texel centre is a whole pixel over.
+        float2 buv = float2(bc.x / bc.w * 0.5 + 0.5, 0.5 - bc.y / bc.w * 0.5) + c_Proj2.zw * 0.5;
         float3 rv = viewRay(buv, tex2Dlod(s_depth, float4(buv, 0, 0)).r);
         float roadY = c_Cam.y + c_V0.y * rv.x + c_V1.y * rv.y + c_V2.y * rv.z;
         grounded = max(grounded, saturate(1.0 - (abs(roadY - under) - 0.45) / 0.45));
@@ -1481,7 +1492,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x7);
     bind(device, 0, m_nd.texture, false);
     bind(device, 1, in.color, true);
-    bind(device, 2, m_skyAverage.texture, false);
+    bind(device, 2, m_skyAverage[m_skyIndex].texture, false);
     bind(device, 3, s.neonLight > 0.0f ? m_spill[0].texture : nullptr, true);
     bind(device, 4, m_adapted[m_adaptIndex].texture, false);
     device->SetVertexDeclaration(m_rainDecl);
@@ -1730,13 +1741,27 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         const int mode = s.skyMode < 1 ? 1 : (s.skyMode > 5 ? 5 : s.skyMode);
         runPass(device, static_cast<Pass>(kSkyClear + mode - 1), m_sky);
     }
-    bind(device, 0, in.color, false);
-    bind(device, 1, m_nd.texture, false);
-    bind(device, 2, m_sky.texture, false);
-    runPass(device, kSkyAverage, m_skyAverage);
+    const float dt = m_historyValid ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
+    if (temporal) m_lastTime = in.time;
+
+    // The fog and haze colour, eased over time: with a few sky pixels flickering through a
+    // gap (between walls, in a building) it jumped every frame and the fog came and went.
+    // Extra cameras reuse it, like the exposure.
+    if (temporal || !m_skyValid) {
+        const int previous = m_skyIndex;
+        m_skyIndex ^= 1;
+        bind(device, 0, in.color, false);
+        bind(device, 1, m_nd.texture, false);
+        bind(device, 2, m_sky.texture, false);
+        bind(device, 3, m_skyAverage[previous].texture, false);
+        passConstants(device, 1.0f - expf(-dt / 0.4f), (m_skyValid && m_temporalValid) ? 0.0f : 1.0f);
+        runPass(device, kSkyAverage, m_skyAverage[m_skyIndex]);
+        m_skyValid = true;
+    }
+    const gfx::Target& skyAverage = m_skyAverage[m_skyIndex];
     const bool clouds = s.volumetricClouds > 0.0f && ensureCloudNoise(device);
     if (clouds) {
-        bind(device, 4, m_skyAverage.texture, false);
+        bind(device, 4, skyAverage.texture, false);
         device->SetTexture(7, m_cloudNoise);
         device->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
         device->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
@@ -1775,7 +1800,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 1, m_nd.texture, false);
     bind(device, 2, m_occlusion.texture, false);
     bind(device, 3, m_ndHalf.texture, false);
-    bind(device, 4, m_skyAverage.texture, false);
+    bind(device, 4, skyAverage.texture, false);
     bind(device, 5, m_sky.texture, false);
     bind(device, 6, m_clouds.texture, true);
     bind(device, 8, m_reflect.texture, true);
@@ -1787,9 +1812,6 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     device->SetTexture(11, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
-
-    const float dt = m_historyValid ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
-    if (temporal) m_lastTime = in.time;
 
     // 4b. Neon trail behind the car, into the HDR image so it blooms.
     if (s.neonTrail > 0.0f && ensureTrail(device)) drawTrail(device, in, s, temporal ? dt : 0.0f);

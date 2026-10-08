@@ -148,9 +148,8 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 
 ## Known issues
 
-- **Flickering:** some spots can flicker now and then. If you see it, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
-- **Snow is work in progress:** the snow on the ground doesn't follow the game's textures and surfaces well yet (it can lie across markings, kerbs and edges). The *Snowstorm* preset will be tuned further.
-- **Water:** the horizontal stripes on pools are mostly gone in 1.3, but a few faint lines can still show in some views.
+- **Snow is work in progress:** the snow on the ground doesn't follow the game's textures and surfaces well yet (it can lie across markings, kerbs and edges). On the start podium the car can turn white. The *Snowstorm* preset will be tuned further.
+- If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
 ---
 

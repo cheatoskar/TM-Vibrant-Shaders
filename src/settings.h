@@ -111,7 +111,7 @@ struct Settings {
     float snow = 0.0f;             // falling snow (2 = blizzard)
     float snowCover = 0.0f;        // snow lying on the ground, the grass and everything facing up
     float puddles = 0.0f;          // standing water on flat ground
-    float waterSurfaces = 0.8f;    // waves, reflections and refraction on the game's water (pools, sea)
+    float waterSurfaces = 1.0f;   // waves, reflections and refraction on the game's water (pools, sea)
     float lightning = 0.0f;        // lightning flashes (how often)
     bool lensDrops = false;        // rain drops on the lens (only while it rains)
     float weatherSound = 0.45f;    // volume of rain and thunder (only plays with rain or lightning)
