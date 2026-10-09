@@ -33,6 +33,13 @@ FetchContent_Declare(
   GIT_TAG ea99364f61c14656440e8d77e9c233ccf3124633
 )
 FetchContent_MakeAvailable(minimp3)
+# JPEG reader and writer for the preset pictures in the menu (public domain / MIT, header only).
+FetchContent_Declare(
+  stb
+  GIT_REPOSITORY https://github.com/nothings/stb.git
+  GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
+)
+FetchContent_MakeAvailable(stb)
 
 configure_file(src/version.h.in "${CMAKE_CURRENT_BINARY_DIR}/tm_shaders_version.h" @ONLY)
 # File version resource: also how the setup recognises its own d3d9.dll in a game folder.
@@ -48,7 +55,7 @@ configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
 set(TMVS_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/tmvs.hlsl")
 set(TMVS_ENTRIES
   PS_LinearDepth PS_Prepare PS_DownsampleND PS_HeightMerge PS_HeightSplat PS_OcclusionShadow PS_BilateralBlur PS_ShadowHeight PS_Volumetric PS_GI PS_GITemporal
-  PS_SkyClear PS_SkyStars PS_SkyBlackHole PS_SkyAurora PS_SkyRing PS_AuroraHalf PS_SkyAverage PS_Clouds PS_Reflect PS_SpillDown PS_SpillBlur PS_Lighting PS_RainDrop PS_RainSplash PS_Spray PS_TrailPoint PS_Trail PS_SnowFlake
+  PS_SkyClear PS_SkyStars PS_SkyBlackHole PS_SkyAurora PS_SkyRing PS_AuroraHalf PS_SkyAverage PS_Shelter PS_Clouds PS_Reflect PS_SpillDown PS_SpillBlur PS_Lighting PS_RainDrop PS_RainSplash PS_Spray PS_TrailPoint PS_Trail PS_SnowFlake
   PS_Focus PS_DofBlur PS_Cinematic
   PS_RayMask PS_RayBlur PS_BloomDown PS_BloomUp PS_Luminance PS_Adapt PS_Final PS_FXAA PS_TAA PS_Sharpen PS_Copy
   PS_CopyDepth)
@@ -108,9 +115,11 @@ add_library(tmvs_core STATIC
   src/gbx.cpp
   src/log.cpp
   src/weather.cpp
+  src/image.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(tmvs_core PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(tmvs_core PUBLIC d3d9 d3dcompiler dxguid)
 
 set(TMVS_DEFINITIONS WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -127,12 +136,15 @@ add_library(tm_vibrant_shaders SHARED
   src/tracer.cpp
   src/capture.cpp
   src/overlay.cpp
+  src/thumbnails.cpp
+  src/update.cpp
   src/autoquality.cpp
   src/audio.cpp
   src/proxy.cpp
   src/exports.def
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
   sounds/sounds.rc
+  thumbnails/thumbnails.rc
 
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -141,7 +153,7 @@ add_library(tm_vibrant_shaders SHARED
   ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
 )
-target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm)
+target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm shell32 winhttp)
 target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR})
 target_compile_options(tm_vibrant_shaders PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
 
@@ -158,6 +170,10 @@ target_include_directories(tmvs_preview PRIVATE ${minimp3_SOURCE_DIR})
 set_property(SOURCE sounds/sounds.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/sounds")
 file(GLOB TMVS_SOUND_FILES "${CMAKE_CURRENT_SOURCE_DIR}/sounds/*.mp3")
 set_source_files_properties(sounds/sounds.rc PROPERTIES OBJECT_DEPENDS "${TMVS_SOUND_FILES}")
+# The preset pictures (tools/make-thumbnails.ps1), found next to thumbnails.rc.
+set_property(SOURCE thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails")
+file(GLOB TMVS_THUMBNAIL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails/*.jpg")
+set_source_files_properties(thumbnails/thumbnails.rc PROPERTIES OBJECT_DEPENDS "${TMVS_THUMBNAIL_FILES}")
 target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into

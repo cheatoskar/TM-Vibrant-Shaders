@@ -56,6 +56,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("FogDensity", "Haze density", "Sky & Atmosphere", Float, fogDensity, 0.0f, 6.0f),
         TMVS_FIELD("FogHeightFalloff", "Haze height falloff", "Sky & Atmosphere", Float, fogHeightFalloff, 0.0f, 3.0f),
         TMVS_FIELD("FogSunScatter", "Haze sun scattering", "Sky & Atmosphere", Float, fogSunScatter, 0.0f, 2.0f),
+        TMVS_FIELD("HazeDistance", "Haze distance", "Sky & Atmosphere", Float, hazeDistance, 0.1f, 1.0f),
         TMVS_FIELD("GodRays", "Light shafts", "Sky & Atmosphere", Float, godRays, 0.0f, 2.0f),
         TMVS_FIELD("VolumetricLight", "Volumetric light (shadowed haze)", "Sky & Atmosphere", Float, volumetricLight, 0.0f, 2.0f),
         TMVS_FIELD("GodRayDecay", "Light shaft length", "Sky & Atmosphere", Float, godRayDecay, 0.9f, 0.995f),
@@ -87,6 +88,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
         TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
         TMVS_FIELD("LensDrops", "Drops and flakes on the lens", "Weather & Surfaces", Bool, lensDrops, 0.0f, 1.0f),
+        TMVS_FIELD("WeatherShelter", "Dry under roofs and bridges", "Weather & Surfaces", Bool, weatherShelter, 0.0f, 1.0f),
         TMVS_FIELD("WeatherSound", "Sound volume: rain and thunder", "Weather & Surfaces", Float, weatherSound, 0.0f, 2.0f),
         TMVS_FIELD("WaterSurfaces", "Water (pools, sea)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
         TMVS_FIELD("Reflections", "Track reflections (dry, >1 = mirror)", "Weather & Surfaces", Float, reflections, 0.0f, 2.0f),
@@ -332,6 +334,7 @@ const char* const kTagKeys[] = {
     "Wetness", "Rain", "Snow", "SnowCover", "Puddles", "Lightning", "LensDrops", "WaterSurfaces", "Reflections",
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
+    "WeatherShelter", "HazeDistance",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
@@ -536,25 +539,30 @@ bool Config::selectPreset(const std::string& name) {
     if (!applyNamed(name)) return false;
     m_mapLook = false; // your choice: it is your look from now on
     preset = name;
-    if (autoMood && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
+    if (autoMood && rememberMoodPick && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
     markDirty();
     return true;
 }
 
-bool Config::saveUserPreset(const std::string& requested) {
+bool Config::saveUserPreset(const std::string& requested, const std::string& description) {
     const std::string name = sanitizeName(requested);
     if (name.empty() || isBuiltIn(name)) return false;
     CreateDirectoryW(m_presetDir.c_str(), nullptr);
     const std::wstring file = presetFile(name);
+    // Saving over your preset keeps its line unless you wrote a new one.
+    const std::string keep = description.empty() && isUserPreset(name) ? presetDescription(name) : description;
     DeleteFileW(file.c_str());
     writeFields(settings, file.c_str(), L"Preset", false);
+    if (!keep.empty()) WritePrivateProfileStringW(L"Info", L"Description", widen(keep).c_str(), file.c_str());
     scanUserPresets();
     TMVS_LOG("config: saved preset \"%s\"", name.c_str());
+    // A new preset gets its picture; saving changes keeps the one it has.
+    if (GetFileAttributesW(presetPicture(name).c_str()) == INVALID_FILE_ATTRIBUTES) requestPicture(name);
     m_mapLook = false;
     preset = name;
     m_baseline = settings;
     m_basePreset = name;
-    if (autoMood && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
+    if (autoMood && rememberMoodPick && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
     markDirty();
     return true;
 }
@@ -562,12 +570,48 @@ bool Config::saveUserPreset(const std::string& requested) {
 void Config::deleteUserPreset(const std::string& name) {
     if (!isUserPreset(name)) return;
     DeleteFileW(presetFile(name).c_str());
+    DeleteFileW(presetPicture(name).c_str());
+    m_pictureVersion++;
     scanUserPresets();
     if (preset == name) preset = kCustomPreset; // keep the current look
     for (auto& mp : moodPreset) {
         if (mp == name) mp.clear();
     }
     markDirty();
+}
+
+std::string Config::presetDescription(const std::string& name) const {
+    if (!isUserPreset(name)) return {};
+    wchar_t text[256] = {};
+    GetPrivateProfileStringW(L"Info", L"Description", L"", text, 256, presetFile(name).c_str());
+    return narrow(text);
+}
+
+void Config::setPresetDescription(const std::string& name, const std::string& description) {
+    if (!isUserPreset(name)) return;
+    // One line (the INI file has no line breaks), not longer than the card shows.
+    std::string line;
+    for (char ch : description) line += (ch == '\r' || ch == '\n' || ch == '\t') ? ' ' : ch;
+    if (line.size() > 140) line.resize(140);
+    WritePrivateProfileStringW(L"Info", L"Description", line.empty() ? nullptr : widen(line).c_str(), presetFile(name).c_str());
+}
+
+std::wstring Config::presetPicture(const std::string& name) const {
+    return m_presetDir + L"\\" + widen(name) + L".jpg";
+}
+
+void Config::requestPicture(const std::string& name) {
+    if (!isUserPreset(name)) return;
+    m_pictureRequest = name;
+    m_pictureRequestTick = GetTickCount();
+}
+
+bool Config::takePictureRequest(std::string& name) {
+    // The look glides to new values for a moment (smoothLook): wait until it is there.
+    if (m_pictureRequest.empty() || GetTickCount() - m_pictureRequestTick < 900) return false;
+    name = m_pictureRequest;
+    m_pictureRequest.clear();
+    return true;
 }
 
 void Config::onMoodDetected(Mood m) {
@@ -761,7 +805,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.fogSunScatter = 0.5f;
             s.godRays = 1.55f;
             s.neonLight = 0.05f;
-            s.highlightBoost = 2.5f;
+            s.highlightBoost = 3.5f;
             s.bloom = 0.05f;
             s.lensFlare = 0.0f;
             s.chromaticAberration = 0.0f;
@@ -824,7 +868,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyColor[0] = 0.35f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.3f;
             s.ambientTint = 0.8f;
-            s.highlightBoost = 3.0f;
+            s.highlightBoost = 5.5f;
             s.bloom = 0.4f;
             s.godRays = 2.0f;
             s.exposure = 1.5f;
@@ -867,9 +911,9 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.48f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.4f;
             s.ambientTint = 0.7f;
-            s.highlightBoost = 3.0f;
+            s.highlightBoost = 5.5f;
             s.fogDensity = 0.9f;
-            s.bloom = 0.1f;
+            s.bloom = 0.15f;
             s.contrast = 1.18f;
             s.saturation = 1.0f;
             s.vibrance = 0.15f;
@@ -886,7 +930,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.starAmount = 3.0f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.85f; s.skyColor[2] = 0.75f;
             s.ambientTint = 0.9f;
-            s.highlightBoost = 4.0f;
+            s.highlightBoost = 6.0f;
             s.fogDensity = 0.5f;
             s.bloom = 0.11f;
             s.contrast = 1.08f;
@@ -959,7 +1003,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRayDecay = 0.9f;
             s.sunGlow = 0.2f;
             s.lensFlare = 0.0f;
-            s.highlightBoost = 4.0f;
+            s.highlightBoost = 5.0f;
             s.neonLight = 1.0f;
             s.bloom = 0.1f;
             s.exposure = -0.15f;
@@ -1018,7 +1062,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRays = 0.0f;
             s.sunGlow = 0.0f;
             s.lensFlare = 0.0f;
-            s.highlightBoost = 4.5f;
+            s.highlightBoost = 5.5f;
             s.neonLight = 1.3f;
             s.bloom = 0.12f;
             s.exposure = -0.3f;
@@ -1039,7 +1083,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.cloudCoverage = 1.0f;
             s.cloudHeight = 600.0f;
             s.snow = 2.0f;
-            s.snowCover = 0.5f;   // drifts and heaps, bare ground between
+            s.snowCover = 0.0f;   // snow on the ground (SnowCover) can't follow the game's surfaces well: off, a snow texture pack does it better
             s.lensDrops = true;
             s.spray = 0.8f;
             s.wind = 1.0f;
@@ -1049,13 +1093,14 @@ void applyPreset(Settings& s, Preset preset) {
             s.aoStrength = 1.1f;
             s.ambientTint = 0.7f;
             s.skyColor[0] = 0.74f; s.skyColor[1] = 0.82f; s.skyColor[2] = 0.95f;
-            s.fogDensity = 3.6f;
+            s.fogDensity = 6.0f;
             s.fogHeightFalloff = 0.6f;
             s.fogSunScatter = 0.0f;
+            s.hazeDistance = 0.5f;  // the blizzard closes in
             s.godRays = 0.0f;
             s.sunGlow = 0.0f;
             s.lensFlare = 0.0f;
-            s.highlightBoost = 3.0f;
+            s.highlightBoost = 4.0f;
             s.neonLight = 0.8f;
             s.bloom = 0.1f;
             s.exposure = -0.3f;
@@ -1089,7 +1134,13 @@ void Config::load() {
     preset = presetFromText(text, "Vibrant");
     autoMood = GetPrivateProfileIntW(L"General", L"AutoMoodPresets", 1, ini) != 0;
     useMapLooks = GetPrivateProfileIntW(L"General", L"UseMapLooks", 1, ini) != 0;
-    advancedMenu = GetPrivateProfileIntW(L"General", L"AdvancedMenu", 0, ini) != 0;
+    // Until 1.3 the menu had a simple and an advanced view: advanced opens the studio.
+    const int advanced = GetPrivateProfileIntW(L"General", L"AdvancedMenu", 0, ini) != 0 ? 2 : 0;
+    menuPage = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuPage", advanced, ini));
+    hoverPreview = GetPrivateProfileIntW(L"General", L"HoverPreview", 1, ini) != 0;
+    menuFull = GetPrivateProfileIntW(L"General", L"MenuFull", 0, ini) != 0;
+    checkUpdates = GetPrivateProfileIntW(L"General", L"CheckForUpdates", 1, ini) != 0;
+    rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 1, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         if (GetPrivateProfileStringW(L"General", kMoodKeys[i], L"", text, 128, ini)) moodPreset[i] = presetFromText(text, moodPreset[i]);
@@ -1133,7 +1184,13 @@ void Config::save() {
     WritePrivateProfileStringW(L"General", L"Enabled", settings.enabled ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"UseMapLooks", useMapLooks ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"AdvancedMenu", advancedMenu ? L"1" : L"0", ini);
+    wchar_t page[16];
+    swprintf(page, 16, L"%d", menuPage);
+    WritePrivateProfileStringW(L"General", L"MenuPage", page, ini);
+    WritePrivateProfileStringW(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"MenuFull", menuFull ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0", ini);
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);
     WritePrivateProfileStringW(L"General", L"MenuSections", sections, ini);

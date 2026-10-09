@@ -53,7 +53,7 @@ float4 u_Light2    : register(c36); // neon light spill, game sun direction know
 float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
-float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, -
+float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -479,6 +479,19 @@ float4 PS_GITemporal(float2 uv : TEXCOORD0) : COLOR0 {
     float4 history = tex2Dlod(s1, float4(prevUV, 0, 0));
     float error = abs(history.a - prevZ) / max(prevZ, 0.1);
     float weight = lerp(0.1, 1.0, smoothstep(0.03, 0.1, error));
+    // The history may only hold what this frame's neighbourhood could: the car's coloured
+    // bounce light moves with the car, but the road it fell on stays - without the clamp it
+    // was left behind as a trail.
+    float2 t = u_Screen.zw * 2.0; // half res
+    float3 lo = current, hi = current;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 o = k == 0 ? float2(t.x, 0) : (k == 1 ? float2(-t.x, 0) : (k == 2 ? float2(0, t.y) : float2(0, -t.y)));
+        float3 n = tex2Dlod(s0, float4(uv + o * 1.5, 0, 0)).rgb;
+        lo = min(lo, n);
+        hi = max(hi, n);
+    }
+    float3 margin = (hi - lo) * 0.25 + 0.01;
+    history.rgb = clamp(history.rgb, lo - margin, hi + margin);
     return float4(lerp(history.rgb, current, weight), z);
 }
 
@@ -1306,6 +1319,46 @@ float4 PS_SkyAverage(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // ---------------------------------------------------------------------------------
+// Shelter (1x1): how much of the rain or snow is kept off the camera (a wide roof, a
+// tunnel, a building), so the lens dries off there. Like the drops (pipeline.cpp,
+// `sheltered`): the way the rain comes - back up against u_Pass1.xyz, its velocity, 40 m -
+// is blocked by a roof's underside or a solid. Five rays around the camera: a pipe or a
+// narrow bridge right above dries one of them, not the lens.
+//   s0 = height map, s1 = last frame's shelter, s2 = undersides (ceiling map)
+//   u_Pass0.x = blend, u_Pass0.y = 1: no history
+// ---------------------------------------------------------------------------------
+float rainBlocked(float3 w, float3 d) {
+    float3 p = w;
+    bool under = false;
+    [loop] for (int i = 1; i <= 7; i++) {
+        float t = i / 7.0;
+        float3 q = w + d * (40.0 * t * t);
+        float2 m = (q.xz - u_HeightMap.xy) / u_HeightMap.z;
+        if (any(m < 0.0) || any(m > 1.0)) return 0.0;
+        float top = tex2Dlod(s0, float4(m, 0, 0)).r - 10000.0;
+        float roof = tex2Dlod(s2, float4(m, 0, 0)).r - 10000.0;
+        under = roof > -9000.0 && q.y < roof;
+        if (roof > -9000.0 && p.y < roof && q.y >= roof) return 1.0;
+        if (!under && q.y < top - 0.3) return 1.0;
+        p = q;
+    }
+    return under ? 1.0 : 0.0;
+}
+
+float4 PS_Shelter(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 cam = cameraWorld();
+    float3 d = -normalize(u_Pass1.xyz);
+    float blocked = 0.0;
+    [loop] for (int i = 0; i < 5; i++) {
+        float2 o = i == 0 ? float2(0, 0) : float2(i == 1 ? 3.0 : (i == 2 ? -3.0 : 0.0), i == 3 ? 3.0 : (i == 4 ? -3.0 : 0.0));
+        blocked += rainBlocked(cam + float3(o.x, 0.0, o.y), d);
+    }
+    float4 current = float4(saturate((blocked - 1.0) / 3.0), 0, 0, 1);
+    if (u_Pass0.y > 0.5) return current;
+    return lerp(tex2Dlod(s1, float4(0.5, 0.5, 0, 0)), current, u_Pass0.x);
+}
+
+// ---------------------------------------------------------------------------------
 // Volumetric clouds (half res): a ray-marched cumulus layer, lit by the sun. Rendered
 // for every pixel as if it were sky; the lighting pass composites it over sky pixels.
 //   s7 = tiling cloud noise (r: Perlin-Worley, g/b/a: Worley octaves)
@@ -1599,8 +1652,8 @@ float snowCover(float3 c, float3 world, float3 nWorld, float dist, float grass, 
 
 
 // The player's car for the snow: inside a car-sized box (as onCar) and clearly above the road
-// under it. The road is what the screen shows beside the car right now: four points left and
-// right of it, each a surface facing up and lower than the car, carried on as a plane (its
+// under it. The road is what the screen shows beside the car right now: points left and right
+// of it and behind it, each a surface facing up and lower than the car, carried on as a plane (its
 // point and normal) to under the pixel. The highest of them is the road: a pool, the grass or
 // a drop beside a platform is lower and loses (the lowest one made the whole box "car" there:
 // a bare black rectangle in the snow), and a banked turn's plane runs on under the car.
@@ -1625,8 +1678,11 @@ float carBody(float3 world) {
     if (box <= 0.0 || d.y > 2.0) return 0.0;
     float none = -1e5;
     float road = none, roadAtTail = none;
-    [loop] for (int k = 0; k < 4; k++) {
-        float3 q = centre + side * (k == 0 || k == 2 ? -2.2 : 2.2) + fwd * (k < 2 ? -1.0 : 1.8);
+    // Left and right of the car, and on the road just behind it (between walls, on the start
+    // podium, the sides only show walls or the ground far below).
+    [loop] for (int k = 0; k < 6; k++) {
+        float3 q = k < 4 ? centre + side * (k == 0 || k == 2 ? -2.2 : 2.2) + fwd * (k < 2 ? -1.0 : 1.8)
+                         : centre + side * (k == 4 ? -0.6 : 0.6) - fwd * 4.3;
         q.y = tail.y - 0.8;
         float3 v = worldToViewDir(q - cameraWorld());
         if (v.z < 0.3) continue;
@@ -1638,7 +1694,9 @@ float carBody(float3 world) {
         float3 nw = viewToWorldDir(snd.xyz);
         float3 o = pw - centre;
         bool onTheCar = abs(dot(o, side)) < 1.3 && abs(dot(o, fwd)) < 2.8;
-        if (onTheCar || nw.y < 0.7 || pw.y > tail.y - 0.35) continue;
+        // The road is at most a car's height below the point found: the ground below a raised
+        // block is not (it turned the block's edge into a bare rectangle).
+        if (onTheCar || nw.y < 0.7 || pw.y > tail.y - 0.35 || pw.y < tail.y - 1.6) continue;
         // The sample's plane, carried on to under this pixel and under the point found.
         road = max(road, pw.y - dot(nw.xz, world.xz - pw.xz) / nw.y);
         roadAtTail = max(roadAtTail, pw.y - dot(nw.xz, tail.xz - pw.xz) / nw.y);
@@ -1646,6 +1704,33 @@ float carBody(float3 world) {
     // The point found must be the car, not the road (or something low on it).
     if (road <= none || tail.y < roadAtTail + 0.25) return 0.0;
     return box * smoothstep(road + 0.15, road + 0.3, world.y);
+}
+
+// Any camera (replays, the free and TV cameras, ghosts): snow doesn't settle on the top of a
+// small object on the road, a car. Around the point (3 m out, eight directions) the ground
+// lies 0.3 - 1.8 m lower wherever the screen shows it; a bigger surface (the road, a block,
+// a wall's top running on) has something at its own height in one of them. Directions
+// hidden behind the object itself say nothing.
+float smallObject(float3 world, float dist) {
+    if (dist > 90.0) return 0.0;
+    float lower = 0.0;
+    [loop] for (int k = 0; k < 8; k++) {
+        float s, c;
+        sincos(k * 0.7853982, s, c);
+        float3 q = world + float3(c * 3.0, -0.8, s * 3.0);
+        float3 v = worldToViewDir(q - cameraWorld());
+        if (v.z < 0.3) continue;
+        float2 quv = projectToUV(v);
+        if (any(quv < 0.0) || any(quv > 1.0)) continue;
+        float4 snd = tex2Dlod(s1, float4(quv, 0, 0));
+        if (snd.w >= SKY_Z) return 0.0;      // nothing below: a block's edge, not a car
+        float3 pw = worldPosition(viewPosition(quv, snd.w));
+        if (length(pw.xz - q.xz) > 1.2) continue; // hidden (behind the object itself) or far off
+        float dy = world.y - pw.y;
+        if (dy < 0.3 || dy > 1.8) return 0.0;
+        lower += 1.0;
+    }
+    return lower >= 4.0 ? 1.0 : 0.0;
 }
 
 // The player's car, found like the spray does (the closest surface just below the screen
@@ -1918,7 +2003,9 @@ float3 upsampleGI(float2 uv, float z, float3 n) { // from quarter res, depths fr
 
 // Light sources in the game's LDR image: lamps and neon strips. Returns 0..1.
 //   c = linear colour, nWorld = world normal, rd = view ray (to tell sun glare from lights)
-float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist) {
+//   area = how much of the surroundings is as bright (1 = a large lit surface, not a strip).
+float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist, float z, out float area) {
+    area = 0.0;
     // Far away the game's mipmaps blend a strip with its dark frame: it gets dimmer, so
     // the bar for "bright" comes down with distance.
     float low = lerp(0.5, 0.28, saturate((dist - 20.0) / 150.0));
@@ -1936,14 +2023,21 @@ float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist) 
         along = max(along, min(max(ea.r, max(ea.g, ea.b)), max(eb.r, max(eb.g, eb.b))));
     }
     peak = min(peak, along);
+    // The mean of a ring of 8 samples around the pixel. Samples well in front of the pixel
+    // (the car in front of a white barrier, a pole) are not its surroundings: they count as
+    // bright as the pixel. Counted as dark they made a glowing echo of the car on the
+    // barrier, which drove along with it like a ghost.
     float surround = 0.0;
     float2 r = float2(0.012 * u_Screen.y * u_Screen.z, 0.012);
     [loop] for (int k = 0; k < 8; k++) {
         float a = k * (PI / 4.0) + 0.39;
-        float3 sc = toLinear(tex2Dlod(s0, float4(uv + float2(cos(a), sin(a)) * r, 0, 0)).rgb);
-        surround += max(sc.r, max(sc.g, sc.b));
+        float2 suv = uv + float2(cos(a), sin(a)) * r;
+        float3 sc = toLinear(tex2Dlod(s0, float4(suv, 0, 0)).rgb);
+        float front = tex2Dlod(s3, float4(suv, 0, 0)).w < z * 0.85 ? 1.0 : 0.0;
+        surround += lerp(max(sc.r, max(sc.g, sc.b)), peak, front);
     }
     surround /= 8.0;
+    area = saturate(surround / max(max(c.r, max(c.g, c.b)), 1e-3));
     // Clearly brighter than the surroundings (lamps at night) ...
     float contrast = saturate((peak - surround) * 3.0) * pow(smoothstep(0.75, 1.0, peak), 2.0);
     // ... or a strongly coloured bright strip (neon), which glows in daylight too.
@@ -2052,8 +2146,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float flatness = smoothstep(0.8, 0.97, nWorld.y);
 
     // Expand the LDR image back toward HDR: light sources glow.
-    float emissive = emissiveAmount(uv, c, nWorld, rd, dist);
+    float lightArea;
+    float emissive = emissiveAmount(uv, c, nWorld, rd, dist, nd.w, lightArea);
     float3 glow = c * u_Rays.w * emissive;
+    // Large lit faces (signs, light blocks) are already big and bright: the full boost blows
+    // them out at night. Thin lights (road borders, strips) keep it.
+    glow *= lerp(1.0, 0.35, smoothstep(0.6, 0.9, lightArea));
     // White lights and screens glow less than coloured ones, or they bleach to flat white.
     float peakC = max(c.r, max(c.g, c.b));
     glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3)));
@@ -2077,7 +2175,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
-    if (snow > 0.0) snow *= 1.0 - carBody(world); // the car keeps its paint
+    if (snow > 0.0) snow *= 1.0 - max(carBody(world), smallObject(world, dist)); // cars keep their paint
     if (snow > 0.0) {
         c = lerp(c, snowColour, snow);
         albedo = lerp(albedo, snowColour, snow);
@@ -2089,6 +2187,10 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // checkpoints mirror clearly in the dry track).
     float polish = saturate(u_Nature.w - 1.0);
     float dry = flatness * (1.0 - grass) * (1.0 - emissive) * (1.0 - snow);
+    // Dirt (warm brown, rough) mirrored the banners like a polished floor: a faint sheen only.
+    float dirt = smoothstep(0.3, 0.45, sat) * (1.0 - smoothstep(0.75, 0.9, sat)) * saturate((c.r - c.g) / max(c.r, 1e-3) * 8.0) *
+                 saturate((c.g - c.b) / max(c.r, 1e-3) * 8.0);
+    dry *= 1.0 - 0.85 * dirt;
     reflectivity = max(reflectivity, min(u_Nature.w, 1.0) * dry * lerp(0.35, 1.0, polish));
     polish *= dry;
     float2 slope = 0;
@@ -2207,8 +2309,9 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // is already shaded (darker than the true albedo), hence the boost.
     if (u_Volume.z > 0.0) c += albedo * upsampleGI(uv, nd.w, n) * u_Volume.z * 2.5 * lerp(0.5, 1.0, occ.r);
 
-    // Aerial perspective: exponential height fog lit by the sky and the sun.
-    float density = u_Atmo.x * 0.0009 + u_Snow.x * 0.005;
+    // Aerial perspective: exponential height fog lit by the sky and the sun. Haze distance
+    // (u_Sky3.w) brings it nearer: the same haze over a shorter way.
+    float density = (u_Atmo.x * 0.0009 + u_Snow.x * 0.005) * u_Sky3.w;
     float falloff = max(u_Atmo.y * 0.012, 1e-4);
     float camY = u_UpView.w;
     float rdy = rd.y;
@@ -2712,8 +2815,12 @@ float4 PS_FXAA(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // ---------------------------------------------------------------------------------
-// AMD FidelityFX CAS (contrast adaptive sharpening) - s0 = LDR, u_Pass0.xy = texel
+// AMD FidelityFX CAS (contrast adaptive sharpening) - s0 = LDR, u_Pass0.xy = texel,
+// s1 = shelter (1x1, lens drops and flakes dry off under a roof)
 // ---------------------------------------------------------------------------------
+// Under a roof (s1 = shelter) no new drops or flakes land on the lens and the old ones dry off.
+float sheltered() { return tex2Dlod(s1, float4(0.5, 0.5, 0, 0)).r; }
+
 // Rain drops on the lens. Two kinds, like on a real camera in the rain:
 //  - small droplets that land, sit still and slowly dry off,
 //  - bigger drops that run down the lens, wobbling, with a thin wet trail behind them.
@@ -2723,6 +2830,7 @@ float3 lensDrops(float2 uv) {
     float3 r = float3(0, 0, 1);
     float amount = u_Volume.w;
     if (amount <= 0.0) return r;
+    amount *= 1.0 - sheltered();
     float aspect = u_Screen.x * u_Screen.w;
     float2 p = float2(uv.x * aspect, uv.y); // square units
     float t = u_Proj2.z;
@@ -2786,6 +2894,7 @@ float3 lensDrops(float2 uv) {
 float4 lensSnow(float2 uv) {
     float amount = u_Sky3.y;
     if (amount <= 0.0) return 0;
+    amount *= 1.0 - sheltered();
     float aspect = u_Screen.x * u_Screen.w;
     float2 p = float2(uv.x * aspect, uv.y);
     float t = u_Proj2.z;
@@ -2916,10 +3025,17 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     float weight = lerp(0.1, 0.06, still);
     // Disocclusion and moving objects (the car, opponents): the history must have seen
     // this surface at the depth the reprojection expects.
+    float historyZ = tex2Dlod(s1, float4(prevUV, 0, 0)).a;
     if (z < SKY_Z) {
-        float historyZ = tex2Dlod(s1, float4(prevUV, 0, 0)).a;
-        float error = abs(historyZ - prevZ) / max(prevZ, 0.1);
-        weight = lerp(weight, 1.0, smoothstep(0.02, 0.08, error));
+        float error = abs(historyZ - prevZ);
+        // Close to the camera the car moves with it: the road just behind it lies only a
+        // few dm deeper than the car did a frame ago, too little in relative terms - the car
+        // was left behind as a see-through trail. Static surfaces reproject to the mm.
+        float near = 1.0 - smoothstep(12.0, 25.0, min(historyZ, prevZ));
+        float reset = max(smoothstep(0.02, 0.08, error / max(prevZ, 0.1)), near * smoothstep(0.06, 0.2, error));
+        weight = lerp(weight, 1.0, reset);
+    } else if (historyZ < SKY_Z * 0.5) {
+        weight = 1.0; // sky where the history had geometry (the car's roof against the sky)
     }
     // Fast motion: favour the current frame (less smearing).
     weight = max(weight, saturate(speed / 60.0) * 0.4);

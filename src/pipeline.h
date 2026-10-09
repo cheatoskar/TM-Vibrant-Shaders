@@ -43,6 +43,8 @@ public:
     // car from outside the area kept out of the map, and the ground under the parked car is
     // never seen again to correct it: it would cast blotchy shadows around the car.
     void resetHeights() { m_heightReset = true; }
+    // A restart or a new map: the roofs and bridges remembered for the rain are gone too.
+    void resetCeilings() { m_ceilingValid = false; }
 
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.
     bool init(IDirect3DDevice9* device, const std::wstring& shaderDir);
@@ -68,6 +70,7 @@ public:
         m_havePrevious = false;
         m_heightValid = false;
         m_skyValid = false;
+        m_shelterValid = false;
     }
 
     // GPU timing per pass with timestamp queries (results arrive a few frames late).
@@ -98,6 +101,7 @@ private:
         kSkyRing,
         kAuroraHalf,
         kSkyAverage,
+        kShelter,
         kClouds,
         kReflect,
         kSpillDown,
@@ -138,7 +142,7 @@ private:
     void bind(IDirect3DDevice9* device, int stage, IDirect3DBaseTexture9* texture, bool linear);
     void passConstants(IDirect3DDevice9* device, float a, float b, float c = 0.0f, float d = 0.0f);
     bool ensureHeightMap(IDirect3DDevice9* device);
-    void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings);
+    void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, bool ceilings);
     bool ensureCloudNoise(IDirect3DDevice9* device);
     bool ensureRain(IDirect3DDevice9* device);
     bool ensureTrail(IDirect3DDevice9* device);
@@ -185,6 +189,9 @@ private:
     gfx::Target m_skyAverage[2]; // 1x1 ping-pong: fog colour, eased over time
     int m_skyIndex = 0;
     bool m_skyValid = false;
+    gfx::Target m_shelter[2];    // 1x1 ping-pong: roof over the camera (lens drops dry off)
+    int m_shelterIndex = 0;
+    bool m_shelterValid = false;
     gfx::Target m_hdr;          // full HDR
     gfx::Target m_rays[2];      // half
     gfx::Target m_bloomDown[kBloomLevels];
@@ -218,6 +225,7 @@ private:
     static constexpr float kHeightMapWorld = 320.0f; // metres covered
     gfx::Target m_heightFrame;                       // this frame's splat
     gfx::Target m_heightMap[2];                         // accumulated, ping-pong
+    gfx::Target m_ceilingMap[2];                        // undersides (roofs, bridges), kept, ping-pong
     gfx::Target m_shadowHeight;                      // volumetric light: shadow height per column
     IDirect3DSurface9* m_heightDepth = nullptr;      // keeps the highest splat per texel
     IDirect3DVertexShader9* m_splatVS = nullptr;
@@ -227,6 +235,7 @@ private:
     int m_heightIndex = 0;
     bool m_heightValid = false;
     bool m_heightReset = false;
+    bool m_ceilingValid = false;
     float m_heightHoldUntil = -1.0f; // no splats until the player's camera is back (or this time)
     bool m_heightSupported = true;
     float m_heightOrigin[2] = {};

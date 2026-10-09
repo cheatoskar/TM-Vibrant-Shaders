@@ -4,6 +4,7 @@
 #include "config.h"
 #include "noise.h"
 #include "tmvs_bytecode.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -15,7 +16,7 @@ const char* const kEntryPoints[] = {
     "PS_LinearDepth", "PS_Prepare",  "PS_DownsampleND", "PS_HeightMerge", "PS_HeightSplat", "PS_OcclusionShadow", "PS_BilateralBlur",
     "PS_ShadowHeight", "PS_Volumetric", "PS_GI", "PS_GITemporal",
     "PS_SkyClear",    "PS_SkyStars", "PS_SkyBlackHole", "PS_SkyAurora",   "PS_SkyRing",     "PS_AuroraHalf",
-    "PS_SkyAverage",  "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
+    "PS_SkyAverage",  "PS_Shelter",    "PS_Clouds",     "PS_Reflect",     "PS_SpillDown",   "PS_SpillBlur",       "PS_Lighting",
     "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail", "PS_SnowFlake",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
@@ -213,6 +214,8 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_occlusionTmp.create(device, hw, hh, D3DFMT_A8R8G8B8);
     for (auto& t : m_skyAverage) ok &= t.create(device, 1, 1, D3DFMT_A16B16G16R16F);
     m_skyValid = false;
+    for (auto& t : m_shelter) ok &= t.create(device, 1, 1, D3DFMT_A16B16G16R16F);
+    m_shelterValid = false;
     ok &= m_sky.create(device, width, height, D3DFMT_A16B16G16R16F);
     ok &= m_gi[0].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
     ok &= m_gi[1].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
@@ -261,6 +264,7 @@ void Pipeline::destroyTargets() {
     m_occlusion.destroy();
     m_occlusionTmp.destroy();
     for (auto& t : m_skyAverage) t.destroy();
+    for (auto& t : m_shelter) t.destroy();
     m_sky.destroy();
     for (auto& t : m_gi) t.destroy();
     for (auto& t : m_giHistory) t.destroy();
@@ -282,6 +286,7 @@ void Pipeline::destroyTargets() {
     for (auto& t : m_taa) t.destroy();
     m_heightFrame.destroy();
     for (auto& t : m_heightMap) t.destroy();
+    for (auto& t : m_ceilingMap) t.destroy();
     m_shadowHeight.destroy();
     gfx::release(m_heightDepth);
     gfx::release(m_splatPoints);
@@ -563,7 +568,7 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     const float driftLength = sqrtf(drift[0] * drift[0] + drift[1] * drift[1]);
     const float snow[4] = {s.snow, s.snowCover, drift[0] / driftLength, drift[1] / driftLength};
     device->SetPixelShaderConstantF(39, snow, 1);
-    const float sky3[4] = {s.auroraSpeed, s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f, s.reflectionBlur, 0.0f};
+    const float sky3[4] = {s.auroraSpeed, s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f, s.reflectionBlur, 1.0f / fmaxf(s.hazeDistance, 0.1f)};
     device->SetPixelShaderConstantF(41, sky3, 1);
 }
 
@@ -581,18 +586,34 @@ float4 c_V2   : register(c4);
 float4 c_Map  : register(c5);   // map corner x, z, 1 / world size, camera height
 float4 c_Half : register(c6);   // half-texel offset of the map
 float4 c_Texel : register(c7);  // full-res texel size of the depth (x, y)
+float4 c_Mode  : register(c8);  // x: 1 = undersides (roofs, bridges) instead of top surfaces
 sampler2D s_depth : register(s0);
 struct VSOut { float4 pos : POSITION; float2 data : TEXCOORD0; };
-VSOut main(float2 uv : TEXCOORD0) {
-    VSOut o;
-    float z = tex2Dlod(s_depth, float4(uv, 0, 0)).r;
-    // D3D9 pixel centre: the game drew texel centre uv at ndc 2(uv - texel / 2) - 1.
+// World position of the depth at uv. D3D9 pixel centre: the game drew texel centre uv at
+// ndc 2(uv - texel / 2) - 1.
+float3 worldAt(float2 uv, out float z) {
+    z = tex2Dlod(s_depth, float4(uv, 0, 0)).r;
     float2 ndc = float2(uv.x * 2.0 - 1.0 - c_Texel.x, 1.0 - uv.y * 2.0 + c_Texel.y);
     float3 v = float3((ndc.x - c_Proj.z) * z / c_Proj.x, (ndc.y - c_Proj.w) * z / c_Proj.y, z);
-    float3 w = float3(c_V0.w, c_V1.w, c_V2.w) + v.x * c_V0.xyz + v.y * c_V1.xyz + v.z * c_V2.xyz;
+    return float3(c_V0.w, c_V1.w, c_V2.w) + v.x * c_V0.xyz + v.y * c_V1.xyz + v.z * c_V2.xyz;
+}
+VSOut main(float2 uv : TEXCOORD0) {
+    VSOut o;
+    float z;
+    float3 w = worldAt(uv, z);
     float2 m = (w.xz - c_Map.xy) * c_Map.z;
     // Beyond ~400 m the depth is too coarse to be useful.
     bool valid = z > 0.3 && z < 400.0 && all(m > 0.0) && all(m < 1.0);
+    if (valid && c_Mode.x > 0.5) {
+        // Undersides only: the surface faces down (normal from the neighbouring depths, on
+        // one surface - not across an edge).
+        float zx, zy;
+        float3 wx = worldAt(uv + float2(c_Texel.x * 2.0, 0.0), zx);
+        float3 wy = worldAt(uv + float2(0.0, c_Texel.y * 2.0), zy);
+        float3 n = cross(wx - w, wy - w);
+        float tol = 0.03 * z + 0.05;
+        valid = n.y < -0.7 * length(n) && abs(zx - z) < tol && abs(zy - z) < tol;
+    }
     // The player's car (close, in the middle of the lower screen) must not cast long
     // shadows: it moves on and would leave stale copies of itself behind (dark car shapes
     // in the haze, shadows of a car that is gone).
@@ -656,6 +677,8 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
     bool ok = m_heightFrame.create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
     ok &= m_heightMap[0].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
     ok &= m_heightMap[1].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
+    ok &= m_ceilingMap[0].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
+    ok &= m_ceilingMap[1].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
     ok &= m_shadowHeight.create(device, kHeightMapSize / 2, kHeightMapSize / 2, D3DFMT_R32F);
     if (ok && !m_heightDepth) {
         ok = SUCCEEDED(device->CreateDepthStencilSurface(kHeightMapSize, kHeightMapSize, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE,
@@ -686,7 +709,7 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
     return ok;
 }
 
-void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const Settings& s) {
+void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const Settings& s, bool ceilings) {
     const float* V = in.view;
     const float* P = in.projection;
     float camera[3];
@@ -706,65 +729,72 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
         m_heightOrigin[1] = oz;
     }
 
-    // 1. Splat this frame's depth.
-    IDirect3DSurface9* savedDepth = nullptr;
-    device->GetDepthStencilSurface(&savedDepth);
-    device->SetRenderTarget(0, m_heightFrame.surface);
-    device->SetDepthStencilSurface(m_heightDepth);
-    D3DVIEWPORT9 viewport = {0, 0, kHeightMapSize, kHeightMapSize, 0.0f, 1.0f};
-    device->SetViewport(&viewport);
-    device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
-    device->SetRenderState(D3DRS_ZENABLE, TRUE);
-    device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
-    device->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESS);
-    device->SetRenderState(D3DRS_POINTSPRITEENABLE, FALSE);
-    device->SetRenderState(D3DRS_POINTSCALEENABLE, FALSE);
-    device->SetTexture(D3DVERTEXTEXTURESAMPLER0, m_linearDepth.texture);
-    device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
-    device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
-    device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-    device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-    device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-    float vc[7][4] = {};
-    vc[0][0] = P[0];
-    vc[0][1] = P[5];
-    vc[0][2] = P[8];
-    vc[0][3] = P[9];
-    for (int i = 0; i < 3; i++) {
-        vc[1 + i][0] = V[0 * 4 + i];
-        vc[1 + i][1] = V[1 * 4 + i];
-        vc[1 + i][2] = V[2 * 4 + i];
-        vc[1 + i][3] = camera[i];
-    }
-    vc[4][0] = m_heightOrigin[0];
-    vc[4][1] = m_heightOrigin[1];
-    vc[4][2] = 1.0f / kHeightMapWorld;
-    vc[4][3] = camera[1];
-    vc[5][0] = -1.0f / kHeightMapSize;
-    vc[5][1] = 1.0f / kHeightMapSize;
-    vc[6][0] = 1.0f / m_linearDepth.width;
-    vc[6][1] = 1.0f / m_linearDepth.height;
-    device->SetVertexShaderConstantF(1, &vc[0][0], 7);
-    device->SetVertexShader(m_splatVS);
-    device->SetVertexDeclaration(m_splatDecl);
-    device->SetPixelShader(m_shaders[kHeightSplat]);
-    device->SetStreamSource(0, m_splatPoints, 0, 8);
-    device->DrawPrimitive(D3DPT_POINTLIST, 0, m_splatCount);
-    device->SetStreamSource(0, nullptr, 0, 0);
-    device->SetTexture(D3DVERTEXTEXTURESAMPLER0, nullptr);
-    device->SetRenderState(D3DRS_ZENABLE, FALSE);
-    device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
-    device->SetDepthStencilSurface(savedDepth);
-    if (savedDepth) savedDepth->Release();
-    profileMark(kHeightSplat);
-
-    // 2. Merge into the persistent map.
+    // 1. Splat this frame's depth, 2. merge it into the persistent map. Twice with shelter:
+    // the top surfaces (shadows, splashes, snow), then the undersides of roofs and bridges,
+    // which the floor seen below them never wears down (rain and snow stay out there).
     const int previous = m_heightIndex;
     m_heightIndex ^= 1;
-    bind(device, 0, m_heightMap[previous].texture, false);
-    bind(device, 1, m_heightFrame.texture, false);
-    passConstants(device, shift[0], shift[1], m_heightValid ? 0.0f : 1.0f, 0.08f);
-    runPass(device, kHeightMerge, m_heightMap[m_heightIndex]);
+    for (int pass = 0; pass < (ceilings ? 2 : 1); pass++) {
+        IDirect3DSurface9* savedDepth = nullptr;
+        device->GetDepthStencilSurface(&savedDepth);
+        device->SetRenderTarget(0, m_heightFrame.surface);
+        device->SetDepthStencilSurface(m_heightDepth);
+        D3DVIEWPORT9 viewport = {0, 0, kHeightMapSize, kHeightMapSize, 0.0f, 1.0f};
+        device->SetViewport(&viewport);
+        device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+        device->SetRenderState(D3DRS_ZENABLE, TRUE);
+        device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+        device->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESS);
+        device->SetRenderState(D3DRS_POINTSPRITEENABLE, FALSE);
+        device->SetRenderState(D3DRS_POINTSCALEENABLE, FALSE);
+        device->SetTexture(D3DVERTEXTEXTURESAMPLER0, m_linearDepth.texture);
+        device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+        device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+        device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        device->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        float vc[7][4] = {};
+        vc[0][0] = P[0];
+        vc[0][1] = P[5];
+        vc[0][2] = P[8];
+        vc[0][3] = P[9];
+        for (int i = 0; i < 3; i++) {
+            vc[1 + i][0] = V[0 * 4 + i];
+            vc[1 + i][1] = V[1 * 4 + i];
+            vc[1 + i][2] = V[2 * 4 + i];
+            vc[1 + i][3] = camera[i];
+        }
+        vc[4][0] = m_heightOrigin[0];
+        vc[4][1] = m_heightOrigin[1];
+        vc[4][2] = 1.0f / kHeightMapWorld;
+        vc[4][3] = camera[1];
+        vc[5][0] = -1.0f / kHeightMapSize;
+        vc[5][1] = 1.0f / kHeightMapSize;
+        vc[6][0] = 1.0f / m_linearDepth.width;
+        vc[6][1] = 1.0f / m_linearDepth.height;
+        device->SetVertexShaderConstantF(1, &vc[0][0], 7);
+        const float mode[4] = {static_cast<float>(pass), 0.0f, 0.0f, 0.0f};
+        device->SetVertexShaderConstantF(8, mode, 1);
+        device->SetVertexShader(m_splatVS);
+        device->SetVertexDeclaration(m_splatDecl);
+        device->SetPixelShader(m_shaders[kHeightSplat]);
+        device->SetStreamSource(0, m_splatPoints, 0, 8);
+        device->DrawPrimitive(D3DPT_POINTLIST, 0, m_splatCount);
+        device->SetStreamSource(0, nullptr, 0, 0);
+        device->SetTexture(D3DVERTEXTEXTURESAMPLER0, nullptr);
+        device->SetRenderState(D3DRS_ZENABLE, FALSE);
+        device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+        device->SetDepthStencilSurface(savedDepth);
+        if (savedDepth) savedDepth->Release();
+        profileMark(kHeightSplat);
+        gfx::Target* map = pass ? m_ceilingMap : m_heightMap;
+        const bool fresh = pass ? !m_ceilingValid : !m_heightValid;
+        bind(device, 0, map[previous].texture, false);
+        bind(device, 1, m_heightFrame.texture, false);
+        passConstants(device, shift[0], shift[1], fresh ? 1.0f : 0.0f, pass ? 0.0f : 0.08f);
+        runPass(device, kHeightMerge, map[m_heightIndex]);
+    }
+    m_ceilingValid = ceilings;
     m_heightValid = true;
 
     // The frame constants went up before this re-centre: with the old origin, the shadow and
@@ -814,7 +844,7 @@ float4 c_Cam    : register(c5);  // camera world xyz, time
 float4 c_Streak : register(c6);  // streak (world m), 0
 float4 c_Box    : register(c7);  // box size, box height, fall speed, min width (px)
 float4 c_Wind   : register(c8);  // wind x, z (m/s), splash rate (1/s), splash box size
-float4 c_Map    : register(c9);  // height map corner x, z, 1 / world size, 0
+float4 c_Map    : register(c9);  // height map corner x, z, 1 / world size, 1 = shelter (map valid)
 float4 c_Prev0  : register(c10); // world -> previous frame's view, column 0
 float4 c_Prev1  : register(c11);
 float4 c_Prev2  : register(c12);
@@ -823,6 +853,7 @@ float4 c_Motion : register(c14); // shutter (frames), previous frame valid, fram
 float4 c_Spray  : register(c15); // speed (m/s), spray amount, 0, 0
 sampler2D s_height : register(s0);
 sampler2D s_depth  : register(s1);
+sampler2D s_ceiling : register(s3); // undersides of roofs and bridges (0 = none seen)
 struct VSOut { float4 pos : POSITION; float4 data : TEXCOORD0; };
 
 float3 toView(float3 w) { float4 p = float4(w, 1.0); return float3(dot(p, c_V0), dot(p, c_V1), dot(p, c_V2)); }
@@ -830,6 +861,31 @@ float4 toClip(float3 v) {
     float4 c = float4(v.x * c_Proj.x + v.z * c_Proj.z, v.y * c_Proj.y + v.z * c_Proj.w, v.z * c_Proj2.x + c_Proj2.y, v.z);
     c.xy += float2(-c_Proj2.z, c_Proj2.w) * 0.5 * c.w; // D3D9 half-pixel offset
     return c;
+}
+
+// Under roofs and bridges, behind walls: the way this drop came - back up along its
+// velocity, against the wind, 40 m - is blocked. The height map holds the highest surface
+// seen per column, the ceiling map the undersides of roofs and bridges. So a slanting wind
+// still carries rain in under a high roof, and between walls it only comes from above.
+// `jitter` (0..1, per drop) moves the samples: the dry area has a ragged edge.
+bool sheltered(float3 w, float3 velocity, float jitter) {
+    if (c_Map.w < 0.5) return false;
+    float3 d = -normalize(velocity);
+    float3 p = w;
+    bool under = false;
+    [loop] for (int i = 1; i <= 7; i++) {
+        float t = (i + jitter - 0.5) / 7.0;
+        float3 q = w + d * (40.0 * t * t);
+        float2 m = (q.xz - c_Map.xy) * c_Map.z;
+        if (any(m < 0.0) || any(m > 1.0)) return false;
+        float top = tex2Dlod(s_height, float4(m, 0, 0)).r - 10000.0;
+        float roof = tex2Dlod(s_ceiling, float4(m, 0, 0)).r - 10000.0; // -10000: none
+        under = roof > -9000.0 && q.y < roof;
+        if (roof > -9000.0 && p.y < roof && q.y >= roof) return true; // through a roof
+        if (!under && q.y < top - 0.3) return true;                    // through a wall, a block
+        p = q;
+    }
+    return under; // still under a roof 40 m on: deep inside
 }
 
 VSOut dropVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
@@ -841,7 +897,7 @@ VSOut dropVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float3 local = (frac((seed.xyz * box + velocity * c_Cam.w - c_Cam.xyz) / box) - 0.5) * box;
     float3 w = c_Cam.xyz + local;
     float3 va = toView(w);
-    if (va.z < 0.4) return o;
+    if (va.z < 0.4 || sheltered(w, velocity, frac(seed.w * 5.17))) return o;
     float4 ca = toClip(va);
     float2 na = ca.xy / ca.w, nb;
     if (c_Motion.y > 0.5) {
@@ -938,7 +994,7 @@ SnowOut snowVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     local.xz += float2(sin(t * (1.3 + seed.x) + phase), cos(t * (1.1 + seed.z) + phase)) * sway;
     float3 w = centre + local;
     float3 va = toView(w);
-    if (va.z < 0.25) return o;
+    if (va.z < 0.25 || sheltered(w, velocity, frac(seed.w * 5.17))) return o;
     float4 ca = toClip(va);
     float2 na = ca.xy / ca.w;
     float2 nb = na;
@@ -1457,6 +1513,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     vc[9][0] = m_heightOrigin[0];
     vc[9][1] = m_heightOrigin[1];
     vc[9][2] = 1.0f / kHeightMapWorld;
+    vc[9][3] = splashes && s.weatherShelter ? 1.0f : 0.0f; // shelter (the height map is valid)
     // Previous camera for the streaks (camera turns smear the rain like a real shutter).
     const bool previous = in.temporal && m_temporalValid && m_havePrevious && dt > 1e-4f;
     float pc[5][4] = {};
@@ -1500,7 +1557,8 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     device->SetIndices(m_rainIB);
     device->SetTexture(D3DVERTEXTEXTURESAMPLER0, m_heightMap[m_heightIndex].texture);
     device->SetTexture(D3DVERTEXTEXTURESAMPLER1, m_linearDepth.texture);
-    for (DWORD sampler = D3DVERTEXTEXTURESAMPLER0; sampler <= D3DVERTEXTEXTURESAMPLER1; sampler++) {
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER3, m_ceilingValid ? m_ceilingMap[m_heightIndex].texture : nullptr);
+    for (DWORD sampler = D3DVERTEXTEXTURESAMPLER0; sampler <= D3DVERTEXTEXTURESAMPLER3; sampler++) {
         device->SetSamplerState(sampler, D3DSAMP_MINFILTER, D3DTEXF_POINT);
         device->SetSamplerState(sampler, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
         device->SetSamplerState(sampler, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
@@ -1562,6 +1620,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     device->SetIndices(nullptr);
     device->SetTexture(D3DVERTEXTEXTURESAMPLER0, nullptr);
     device->SetTexture(D3DVERTEXTEXTURESAMPLER1, nullptr);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER3, nullptr);
     device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
 }
@@ -1650,9 +1709,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     if (in.driving || in.time > m_heightHoldUntil) m_heightHoldUntil = -1.0f;
     const bool splat = temporal && m_heightHoldUntil < 0.0f;
-    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f || s.snowCover > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
+    const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
-    if (heightMap && splat && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s);
+    // Roofs and bridges for the rain and snow, only while it falls.
+    const bool ceilings = s.weatherShelter && (s.rain > 0.0f || s.snow > 0.0f);
+    if (heightMap && splat && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s, ceilings);
+    if (!ceilings) m_ceilingValid = false;
     const bool longShadows = heightMap && wantLong;
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
                                     longShadows ? s.longShadows : 0.0f};
@@ -1899,6 +1961,29 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         m_historyValid = true;
     }
 
+    // Drops on the lens sit on the lens: after TAA (it would smear them along the camera's
+    // motion), in the last pass.
+    const bool post = s.debugView == 0;
+    const bool drops = (lensDrops > 0.0f || lensSnow > 0.0f) && post;
+    // Roof over the camera, eased like the sky average: the lens dries off under a bridge.
+    const bool shelter = drops && heightMap && m_heightValid && s.weatherShelter;
+    if (shelter && (temporal || !m_shelterValid)) {
+        const int previous = m_shelterIndex;
+        m_shelterIndex ^= 1;
+        bind(device, 0, m_heightMap[m_heightIndex].texture, false);
+        bind(device, 1, m_shelter[previous].texture, false);
+        bind(device, 2, m_ceilingValid ? m_ceilingMap[m_heightIndex].texture : nullptr, false);
+        // The way the rain comes (as the drops fall: wind, fall speed), or the snow's.
+        const float rainVelocity[4] = {2.5f + s.wind * 5.0f, -9.0f, 1.0f + s.wind * 2.0f, 0.0f};
+        const float snowVelocity[4] = {(1.0f + s.wind * 7.0f) * fminf(s.snow, 1.5f), -1.1f, (0.5f + s.wind * 3.0f) * fminf(s.snow, 1.5f), 0.0f};
+        device->SetPixelShaderConstantF(33, s.rain > 0.0f ? rainVelocity : snowVelocity, 1);
+        passConstants(device, 1.0f - expf(-dt / 0.8f), (m_shelterValid && m_temporalValid) ? 0.0f : 1.0f);
+        runPass(device, kShelter, m_shelter[m_shelterIndex]);
+        m_shelterValid = true;
+    } else if (!shelter) {
+        m_shelterValid = false;
+    }
+
     // 9. Final grade.
     bind(device, 0, hdr->texture, true);
     bind(device, 1, m_bloomUp[0].texture, true);
@@ -1909,14 +1994,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 6, m_bloomDown[2].texture, true);
     passConstants(device, 1.0f / norm, 0.0f);
     // Disabled post passes are skipped entirely, not just passed through.
-    const bool post = s.debugView == 0;
     const bool fxaa = s.fxaa && post;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
                      m_taa[1].create(device, in.width, in.height, D3DFMT_A16B16G16R16F);
     const bool sharpen = s.sharpen > 0.001f && post;
-    // Drops on the lens sit on the lens: after TAA (it would smear them along the camera's
-    // motion), in the last pass.
-    const bool drops = (lensDrops > 0.0f || lensSnow > 0.0f) && post;
     // Chain: Final -> [FXAA] -> [TAA] -> [Sharpen | Copy] -> output.
     IDirect3DTexture9* current = nullptr;
     if (!fxaa && !taa && !sharpen && !drops) {
@@ -1956,6 +2037,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     if (current) {
         bind(device, 0, current, false);
+        bind(device, 1, shelter ? m_shelter[m_shelterIndex].texture : nullptr, false);
         passConstants(device, 1.0f / in.width, 1.0f / in.height);
         runPass(device, sharpen ? kSharpen : kCopy, output, in.width, in.height);
     }
@@ -2023,6 +2105,10 @@ bool Pipeline::readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std
         ok = false;
     }
     system->Release();
+    // Captures in a resized window once came out with depth 0 everywhere; say what was read.
+    if (ok && std::all_of(out.begin(), out.end(), [](float d) { return d == 0.0f; }))
+        TMVS_LOG("capture: depth is all 0 (depth texture %ux%u format %u, pool %u)", desc.Width, desc.Height,
+                 static_cast<unsigned>(desc.Format), static_cast<unsigned>(desc.Pool));
     return ok;
 }
 

@@ -77,7 +77,7 @@ In TrackMania's launcher, *Advanced* options:
 | Shader quality | PC3 High | The richest base image to light. Lower works, it just starts flatter. |
 | Shadows | Complex | Fine. The mod adds its own shadows on top. |
 | Textures | High | |
-| FX post-processing | On or off | Try both. Off avoids the game's own glow adding to the mod's bloom. |
+| FX post-processing | **Off** if anything looks wrong | The game's own glow and blur can interfere with the shaders (overexposed, smeared or doubled spots). Off also keeps it from adding to the mod's bloom. |
 | Water geometry, stadium water | On | |
 
 The shaders also work with everything on low. They only need the finished image and the depth buffer.

@@ -11,9 +11,12 @@
 #include "overlay.h"
 #include "pipeline.h"
 #include "autoquality.h"
+#include "thumbnails.h"
 #include "tracer.h"
 #include "tm_shaders_version.h"
 #include <d3d9.h>
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <utility>
@@ -357,6 +360,7 @@ void processScene(IDirect3DDevice9* device) {
             s_resets = resets;
             g_pipeline.resetTrail();
             g_pipeline.resetHeights();
+            g_pipeline.resetCeilings();
         }
         if (respawns != s_respawns) {
             if (s_respawns >= 0) TMVS_LOG("engine: respawn");
@@ -377,6 +381,8 @@ void processScene(IDirect3DDevice9* device) {
     if (settings.enabled) {
         // Auto quality renders a reduced copy; your settings stay untouched.
         Settings effective = settings;
+        // The menu points at a preset: show it (it glides in like a chosen one).
+        if (Config::get().previewSettings(effective)) effective.debugView = settings.debugView;
         smoothLook(effective, seconds());
         g_autoQuality.apply(effective);
         // Motion blur and depth of field are for watching, not for driving (the auto focus
@@ -387,6 +393,12 @@ void processScene(IDirect3DDevice9* device) {
         }
         g_pipeline.render(device, inputs, effective, target);
         g_shadedThisFrame = true;
+        // A preset was just saved: this frame (without HUD and menu) becomes its picture.
+        std::string picture;
+        if (temporal && Config::get().takePictureRequest(picture)) {
+            thumbnails::savePicture(device, target, Config::get().presetPicture(picture));
+            Config::get().pictureTaken();
+        }
         g_gameplayThisFrame = g_gameplayThisFrame || g_scene.projection[14] > -1.0f; // not a menu background
     }
 
@@ -446,6 +458,25 @@ void onCameraBegin(void* camera) {
     if (g_scene.inMainCamera) {
         g_scene.haveView = false;
         g_scene.haveProjection = false;
+    } else if (rt) {
+        // A screen-sized camera that isn't shaded: say why (a player's shaders stayed off in
+        // races while they worked in the editor, and the log showed nothing). Each kind once.
+        static std::vector<std::array<UINT, 5>> s_logged;
+        D3DSURFACE_DESC rtDesc{}, dsDesc{};
+        rt->GetDesc(&rtDesc);
+        IDirect3DSurface9* ds = nullptr;
+        g_device->GetDepthStencilSurface(&ds);
+        if (ds) ds->GetDesc(&dsDesc);
+        const bool readable = depth::textureFor(ds) != nullptr;
+        if (ds) ds->Release();
+        const std::array<UINT, 5> kind = {rtDesc.Width, rtDesc.Height, dsDesc.Width, dsDesc.Height, static_cast<UINT>(dsDesc.Format)};
+        if (rtDesc.Width >= 640 && rtDesc.Height >= 400 && s_logged.size() < 8 &&
+            std::find(s_logged.begin(), s_logged.end(), kind) == s_logged.end()) {
+            s_logged.push_back(kind);
+            TMVS_LOG("scene: camera into %ux%u not shaded (depth %ux%u format %u, %s)", rtDesc.Width, rtDesc.Height, dsDesc.Width,
+                     dsDesc.Height, static_cast<unsigned>(dsDesc.Format),
+                     !ds ? "no depth buffer" : (readable ? "size differs from the depth" : "depth not readable"));
+        }
     }
     if (tracer::tracing()) {
         IDirect3DSurface9* ds = nullptr;
@@ -561,7 +592,7 @@ void onPresent(IDirect3DDevice9* device) {
     // GPU timing costs a few queries per frame: only while it's used.
     const Settings& settings = Config::get().settings;
     g_pipeline.setProfiling(settings.autoQuality || Config::get().showOverlay);
-    g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline.totalTime(), settings);
+    g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline, settings);
     D3DDEVICE_CREATION_PARAMETERS cp{};
     device->GetCreationParameters(&cp);
     audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);

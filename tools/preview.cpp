@@ -14,11 +14,13 @@
 //     --bench                 GPU time per pass
 //     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
 //                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
+//   An output ending in .jpg is a preset picture for the menu (384x216, the middle 16:9).
 #include "audio.h"
 #include "config.h"
 #include "framecap.h"
 #include "gbx.h"
 #include "gfx.h"
+#include "image.h"
 #include "log.h"
 #include "pipeline.h"
 #include <windows.h>
@@ -412,7 +414,13 @@ int main(int argc, char** argv) {
             continue;
         }
         QueryPerformanceCounter(&t1);
-        writeBmp(job.output.c_str(), pixels, cap.width, cap.height);
+        const size_t length = job.output.size();
+        if (length > 4 && !_stricmp(job.output.c_str() + length - 4, ".jpg")) {
+            image::writeThumbnail(widen(job.output.c_str()), pixels.data(), static_cast<int>(cap.width), static_cast<int>(cap.height),
+                                  static_cast<int>(cap.width));
+        } else {
+            writeBmp(job.output.c_str(), pixels, cap.width, cap.height);
+        }
         printf("%s: %ux%u, sun %s (%.3f %.3f %.3f), last frame incl. readback %.1f ms\n", job.output.c_str(), cap.width, cap.height,
                in.sunKnown ? "known" : "unknown", in.sunDirection[0], in.sunDirection[1], in.sunDirection[2],
                1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));

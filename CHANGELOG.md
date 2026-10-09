@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.3.1 (not released yet)
+
+- New `F8` menu. **Shaders:** every preset as a card with a picture, a line about it and its GPU load; rest the pointer on one and the game shows that look, click to use it, right click for day, sunset or night maps. Filters for day, night, weather and light presets. Your own presets get a picture of the game when you save them, and a line about them if you like (right click: edit description, update picture, delete). A preset is its .ini and .jpg in the presets folder (*Open the presets folder*): share both; files put there, and pictures replaced there, show up while the game runs. Pages for *Customize* (the main settings), *Studio* (every setting), *Maps* (preset per map mood, Author's Shader) and *Performance*. Segoe UI instead of the pixel font, sized for the screen. The menu opens big, leaving the right part of the game in view for the live preview (one button puts it over the whole screen); on a wide menu the settings stand in panels side by side. Deleting a preset and resetting your changes ask first.
+- Settings page: *Preset per map type*, *Picked preset applies to all maps of this type* (off: picking a preset no longer changes which preset that kind of map gets), Author's Shaders, live preview, menu size, update check, the game options and the folders. Every on/off setting is a switch now.
+- Studio shows which preset you are editing and whether it is saved; *Save changes* writes your changes into your own preset. Its groups start closed (a dot marks groups with changes), *Expand all* opens them.
+- Text fields in the menu take typing (the game never turned key presses into characters: preset names could not be entered).
+- Update check: when the game starts the mod asks GitHub for the newest release; a new version shows in the menu with its notes and a link to its release page (*About* page, can be switched off). Nothing is downloaded by itself.
+- Rain and snow stay outside (`WeatherShelter`, on by default): every drop and flake is traced back along its way, against the wind. Under roofs and bridges and behind walls nothing falls, around them it keeps falling; under a high roof a side wind still blows rain in. Under a wide roof the lens dries off (a pipe or a narrow bridge above doesn't). It knows the roofs the camera has seen, from above or from below.
+- Snowstorm: no snow on the ground by default (it lay across markings, kerbs and edges; *Snow on the ground* still turns it on, a snow texture pack looks better on the road). Thicker haze that closes in nearer (`FogDensity` 6, new `HazeDistance` 0.5).
+- Auto quality reworked: it measures every effect on your GPU and, below the target FPS, turns off just enough of them in one step (the ones that cost the most for the least look first). Before, it went down in fixed levels and gave up for two minutes when one level won less than 4 % - on many GPUs it never did anything. The light shafts, FXAA and sharpening can go now too; the menu shows what is off.
+- The log says why a screen-sized camera isn't shaded (size or depth buffer), and when a capture's depth is empty.
+- New setting *Haze distance* (`HazeDistance`): below 1 the haze closes in nearer the camera.
+- Snow: cars keep their paint with every camera (replays, outside and TV cameras, ghosts), not only behind the car.
+- Snow: the car on the start podium no longer turns white, and driving down from it leaves no bare rectangle in the snow.
+- TAA: the car no longer leaves see-through copies behind it while driving (the road just behind the car passed the depth check), nor its roof against the sky.
+- Light sources: your car (or anything else in front) no longer counts as dark surroundings for the surface behind it: a white barrier next to the car got a glowing echo of the car, which drove along like a ghost. Large lit faces (signs, light blocks) get less of the boost. *Light source intensity* is higher by default now (5, night presets 5.5-6).
+- Horizon: more bloom (0.15).
+- Bounce light (GI): your car's coloured bounce light no longer stays on the road behind it as a trail.
+- Dry reflections: dirt roads only get a faint sheen (they mirrored the banners like a polished floor).
+
+**Known issues**
+- TrackMania's own FX post-processing (launcher, *Advanced*) can interfere with the shaders. If something looks overexposed, smeared or doubled, turn it off.
+
 ## 1.3.0
 
 **Snow**

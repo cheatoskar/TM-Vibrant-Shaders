@@ -75,6 +75,7 @@ struct Settings {
     float fogDensity = 0.35f;
     float fogHeightFalloff = 0.6f;
     float fogSunScatter = 0.7f;
+    float hazeDistance = 1.0f;      // < 1: the haze closes in nearer the camera (less visibility)
 
     // Volumetric light shafts
     float godRays = 1.5f;
@@ -85,7 +86,7 @@ struct Settings {
     // Bloom & lens
     float bloom = 0.09f;
     float bloomRadius = 0.85f;
-    float highlightBoost = 3.5f;   // LDR -> HDR expansion of light sources
+    float highlightBoost = 5.0f;   // LDR -> HDR expansion of light sources
     float lensFlare = 0.25f;
     float chromaticAberration = 0.05f;
     float vignette = 0.25f;
@@ -114,6 +115,7 @@ struct Settings {
     float waterSurfaces = 1.0f;   // waves, reflections and refraction on the game's water (pools, sea)
     float lightning = 0.0f;        // lightning flashes (how often)
     bool lensDrops = false;        // rain drops on the lens (only while it rains)
+    bool weatherShelter = true;    // no rain or snow under roofs, bridges and in buildings
     float weatherSound = 0.45f;    // volume of rain and thunder (only plays with rain or lightning)
     float reflections = 0.0f;      // dry glossy reflections on the track
     float reflectionBlur = 0.35f;  // 0 = a mirror, 1 = a soft sheen (dry track)
