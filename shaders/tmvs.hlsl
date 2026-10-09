@@ -50,7 +50,7 @@ float4 u_Pass1 : register(c33);
 float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
 float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
-float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour
+float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour; w: reach of the screen-space effects (photo mode 3)
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
 float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
@@ -367,7 +367,7 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     }
     float ao = saturate(1.0 - occlusion * 2.2 / AO_SAMPLES);
     ao = ao * ao;
-    ao = lerp(1.0, ao, saturate(1.5 - p.z / 250.0)); // fade far away
+    ao = lerp(1.0, ao, saturate(1.5 - p.z / (250.0 * u_Water.w))); // fade far away
 
     // --- Screen-space sun shadows (traced against the full-resolution depth) ---
     float sunVis = 1.0;
@@ -395,7 +395,7 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         }
         // Grazing sun: rely less on the trace (depth precision) and more on N.L.
         hit *= saturate(ndl * 6.0);
-        sunVis = 1.0 - hit * saturate(1.5 - p.z / 300.0);
+        sunVis = 1.0 - hit * saturate(1.5 - p.z / (300.0 * u_Water.w));
     }
     float longVis = 1.0;
     if (u_Temporal.w > 0.0 && u_SunView.w > 0.5 && ndl > 0.0) {
@@ -463,7 +463,7 @@ float4 PS_GI(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         sum += toLinear(tex2Dlod(s1, float4(suv, 0, 0)).rgb) * w;
     }
     // Fades out far away, where the radius is below a pixel.
-    float fade = saturate(2.0 - p.z / 120.0);
+    float fade = saturate(2.0 - p.z / (120.0 * u_Water.w));
     return float4(min(sum / samples * fade, 4.0), 1);
 }
 
@@ -1861,7 +1861,7 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         }
     }
     float3 r = reflect(normalize(p), n);
-    float maxDist = min(120.0, p.z * 1.5 + 25.0);
+    float maxDist = min(120.0 * u_Water.w, p.z * 1.5 + 25.0);
     float noise = ign(vpos);
     float tPrev = 0.05;
     // A polished dry track is a mirror: finer steps so the reflection holds together.
@@ -2402,13 +2402,17 @@ float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
 // Auto focus (1x1): what's in the middle of the frame, a little below the centre (the car
 // or the road ahead), smoothed over time.
 //   s0 = full normal/depth, s1 = previous focus, u_Pass0.x = blend, u_Pass0.y = reset
+// u_Pass0.zw: the point clicked in the photo mode (uv), negative = the car / the road ahead.
 float4 PS_Focus(float2 uv : TEXCOORD0) : COLOR0 {
     float focus = u_Cine.z;
     if (focus <= 0.0) {
         float inv = 0.0;
+        bool clicked = u_Pass0.z >= 0.0;
+        float2 at = clicked ? u_Pass0.zw : float2(0.5, 0.56);
+        float spread = clicked ? 0.006 : 0.05;
         [unroll] for (int j = -1; j <= 1; j++) {
             [unroll] for (int i = -1; i <= 1; i++) {
-                float z = tex2Dlod(s0, float4(0.5 + i * 0.05, 0.56 + j * 0.05, 0, 0)).w;
+                float z = tex2Dlod(s0, float4(at + float2(i, j) * spread, 0, 0)).w;
                 inv += 1.0 / min(z, 3000.0);
             }
         }

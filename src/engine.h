@@ -50,6 +50,16 @@ bool cinematicActive();
 // on, for TAA: each frame samples the pixels at a slightly different spot. 0, 0 = off.
 void setProjectionJitter(float x, float y);
 
+// Hi-res photos: every perspective projection zooms in on one tile of the view
+// (NDC x' = scaleX x + offsetX, y likewise). 1, 1, 0, 0 = off.
+void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY);
+
+// Skips the game's HUD and menus (RenderOverlayZones) while true: the photo mode.
+void hideOverlay(bool hide);
+
+// The free camera (cam 7 in replays, the editor's) is on. False without the hook.
+bool freeCamActive();
+
 // Counters of race (re)starts / map loads and of respawns (for the neon trail).
 int raceResets();
 int respawns();

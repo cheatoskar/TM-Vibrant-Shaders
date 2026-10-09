@@ -17,7 +17,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -40,13 +40,13 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90},
 };
 const GameBuild* g_build = nullptr;
@@ -96,6 +96,10 @@ constexpr InlineSite kWaterPlaneSite = {kWaterPlane, {0x81, 0xec, 0xe0, 0x01, 0x
 constexpr InlineSite kLoadDecorationSite = {kLoadDecoration, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnChallenge::LoadDecorationAndCollection"};
 // The game sets its current map (race, replay, editor): we keep the app to find that map.
 constexpr InlineSite kSetChallengeSite = {kSetChallenge, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnApp::SetChallenge"};
+// The free camera (cam 7 in replays, the editor's free camera) is switched on or off. Its
+// state is the int at +0x5c (the function returns at once when it doesn't change).
+constexpr InlineSite kFreeCamSite = {kFreeCam, {0x8b, 0x44, 0x24, 0x04, 0x3b, 0x41, 0x5c}, 7, -1, "CGameControlCameraFree::SetIsActive"};
+constexpr size_t kFreeCamActive = 0x5c;
 
 using FrameBeginFn = int(__fastcall*)(void*, void*);
 using CameraBeginFn = void(__fastcall*)(void*, void*, void*, void*);
@@ -150,6 +154,11 @@ TracksUpdateFn g_tracksUpdate = nullptr;
 UpdateCamsFn g_updateCams = nullptr;
 DoShootFn g_doShoot = nullptr;
 float g_jitter[2] = {};          // NDC offset for perspective projections (TAA)
+float g_tile[4] = {1.0f, 1.0f, 0.0f, 0.0f}; // scale x, y and NDC offset x, y (hi-res photos)
+bool g_hideOverlay = false;      // skip the game's HUD and menus (photo mode)
+using FreeCamFn = void(__fastcall*)(void*, void*, int);
+FreeCamFn g_freeCamSet = nullptr;
+void* g_freeCam = nullptr;       // the free camera last switched on (null: off)
 DWORD g_lastCinematic = 0;      // GetTickCount of the last cinematic hook call
 unsigned g_cinematicSources = 0;
 
@@ -255,6 +264,12 @@ bool levelPlaneHeight(const float* p, float& y) {
 void __fastcall raceResetDetour(void* self, void* edx) {
     InterlockedIncrement(&g_raceResets);
     g_raceReset(self, edx);
+}
+
+void __fastcall freeCamDetour(void* self, void* edx, int active) {
+    if (active) g_freeCam = self;
+    else if (self == g_freeCam) g_freeCam = nullptr;
+    g_freeCamSet(self, edx, active);
 }
 
 void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
@@ -409,7 +424,7 @@ void __fastcall cameraEndDetour(void* self, void* edx, void* camera) {
 
 void __fastcall overlayZonesDetour(void* self, void* edx, void* zones, int flags) {
     if (g_callbacks.overlayBegin) g_callbacks.overlayBegin();
-    g_overlayZones(self, edx, zones, flags);
+    if (!g_hideOverlay) g_overlayZones(self, edx, zones, flags);
     if (g_callbacks.overlayEnd) g_callbacks.overlayEnd();
 }
 
@@ -434,6 +449,17 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
     // move x/y in NDC. The struct holds the matrix transposed first (P20 at [0][2]), then
     // in D3D's own layout. Perspective only (shadow maps are orthographic).
     float* m = static_cast<float*>(projection);
+    // Hi-res photo tile: zoom in on one part of the view (x' = scale x + offset in NDC).
+    if ((g_tile[0] != 1.0f || g_tile[1] != 1.0f) && m[14] == 1.0f && m[16 + 11] == 1.0f) {
+        m[0] *= g_tile[0];
+        m[2] = m[2] * g_tile[0] + g_tile[2];
+        m[5] *= g_tile[1];
+        m[6] = m[6] * g_tile[1] + g_tile[3];
+        m[16 + 0] *= g_tile[0];
+        m[16 + 8] = m[16 + 8] * g_tile[0] + g_tile[2];
+        m[16 + 5] *= g_tile[1];
+        m[16 + 9] = m[16 + 9] * g_tile[1] + g_tile[3];
+    }
     if ((g_jitter[0] != 0.0f || g_jitter[1] != 0.0f) && m[14] == 1.0f && m[16 + 11] == 1.0f) {
         m[2] += g_jitter[0];
         m[6] += g_jitter[1];
@@ -491,6 +517,7 @@ bool install(const Callbacks& callbacks) {
     g_respawn = reinterpret_cast<RespawnFn>(inlineHook(kRespawnSite, reinterpret_cast<void*>(&respawnDetour)));
     g_loadDecoration = reinterpret_cast<LoadDecorationFn>(inlineHook(kLoadDecorationSite, reinterpret_cast<void*>(&loadDecorationDetour)));
     g_setChallenge = reinterpret_cast<SetChallengeFn>(inlineHook(kSetChallengeSite, reinterpret_cast<void*>(&setChallengeDetour)));
+    g_freeCamSet = reinterpret_cast<FreeCamFn>(inlineHook(kFreeCamSite, reinterpret_cast<void*>(&freeCamDetour)));
     g_active = true;
     TMVS_LOG("engine: TrackMania %s, CVisionViewportDx9 hooks installed (module base %p)", g_build->name, GetModuleHandleW(nullptr));
     return true;
@@ -557,6 +584,23 @@ int respawns() {
 void setProjectionJitter(float x, float y) {
     g_jitter[0] = x;
     g_jitter[1] = y;
+}
+
+void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY) {
+    g_tile[0] = scaleX;
+    g_tile[1] = scaleY;
+    g_tile[2] = offsetX;
+    g_tile[3] = offsetY;
+}
+
+void hideOverlay(bool hide) {
+    g_hideOverlay = hide;
+}
+
+bool freeCamActive() {
+    // The flag itself, not only the last call: the camera may be gone with its replay.
+    const BYTE* camera = static_cast<const BYTE*>(g_freeCam);
+    return camera && readable(camera + kFreeCamActive, sizeof(int)) && *reinterpret_cast<const int*>(camera + kFreeCamActive) == 1;
 }
 
 bool cinematicActive() {

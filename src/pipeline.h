@@ -33,6 +33,14 @@ public:
         float water[3] = {0.0f, 0.0f, -1.0f};
         // The player drives (not a replay / intro): the neon trail records the car.
         bool driving = true;
+        // Photo mode: effects reach 3x farther, a larger height map, no car assumed in the
+        // middle of the screen.
+        bool photo = false;
+        // Focus on this point of the screen (uv), -1 = the usual spot (the car, the road ahead).
+        float focusPoint[2] = {-1.0f, -1.0f};
+        // Hi-res photo tiles: exposure, focus and the haze colour keep their values (each tile
+        // sees another part of the view).
+        bool freeze = false;
     };
 
     // Neon trail: start over (race restart, new map) / start a new line (respawn).
@@ -221,8 +229,8 @@ private:
     bool m_havePrevious = false;
 
     // Long-range shadows: world-space height map built from the depth buffer.
-    static constexpr UINT kHeightMapSize = 512;
-    static constexpr float kHeightMapWorld = 320.0f; // metres covered
+    UINT m_heightSize = 512;
+    float m_heightWorld = 320.0f;                    // metres covered (photo mode: 960)
     gfx::Target m_heightFrame;                       // this frame's splat
     gfx::Target m_heightMap[2];                         // accumulated, ping-pong
     gfx::Target m_ceilingMap[2];                        // undersides (roofs, bridges), kept, ping-pong

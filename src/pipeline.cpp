@@ -540,7 +540,7 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
 
     c[35][0] = m_heightOrigin[0];
     c[35][1] = m_heightOrigin[1];
-    c[35][2] = kHeightMapWorld;
+    c[35][2] = m_heightWorld;
     c[35][3] = s.longShadowRange;
     c[36][0] = s.neonLight;
     c[36][1] = in.sunKnown && len > 1e-5f ? 1.0f : 0.0f; // the game's sun, even under a night sky
@@ -561,7 +561,8 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
 
     device->SetPixelShaderConstantF(0, &c[0][0], 32);
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
-    const float water[4] = {in.water[0], in.water[1], in.water[2], 0.0f};
+    // w: how much farther AO, shadows, bounce light and reflections reach (photo mode).
+    const float water[4] = {in.water[0], in.water[1], in.water[2], in.photo ? 3.0f : 1.0f};
     device->SetPixelShaderConstantF(38, water, 1);
     // The direction the snow drifts (as the flakes in drawRain): walls facing it catch snow.
     const float drift[2] = {1.0f + s.wind * 7.0f, 0.5f + s.wind * 3.0f};
@@ -586,7 +587,7 @@ float4 c_V2   : register(c4);
 float4 c_Map  : register(c5);   // map corner x, z, 1 / world size, camera height
 float4 c_Half : register(c6);   // half-texel offset of the map
 float4 c_Texel : register(c7);  // full-res texel size of the depth (x, y)
-float4 c_Mode  : register(c8);  // x: 1 = undersides (roofs, bridges) instead of top surfaces
+float4 c_Mode  : register(c8);  // x: 1 = undersides (roofs, bridges) instead of top surfaces, y: max depth, z: 1 = keep the car out
 sampler2D s_depth : register(s0);
 struct VSOut { float4 pos : POSITION; float2 data : TEXCOORD0; };
 // World position of the depth at uv. D3D9 pixel centre: the game drew texel centre uv at
@@ -603,7 +604,7 @@ VSOut main(float2 uv : TEXCOORD0) {
     float3 w = worldAt(uv, z);
     float2 m = (w.xz - c_Map.xy) * c_Map.z;
     // Beyond ~400 m the depth is too coarse to be useful.
-    bool valid = z > 0.3 && z < 400.0 && all(m > 0.0) && all(m < 1.0);
+    bool valid = z > 0.3 && z < c_Mode.y && all(m > 0.0) && all(m < 1.0);
     if (valid && c_Mode.x > 0.5) {
         // Undersides only: the surface faces down (normal from the neighbouring depths, on
         // one surface - not across an edge).
@@ -617,7 +618,7 @@ VSOut main(float2 uv : TEXCOORD0) {
     // The player's car (close, in the middle of the lower screen) must not cast long
     // shadows: it moves on and would leave stale copies of itself behind (dark car shapes
     // in the haze, shadows of a car that is gone).
-    if (z < 16.0 && uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.35) valid = false;
+    if (c_Mode.z > 0.5 && z < 16.0 && uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.35) valid = false;
     // Also wherever the car is on screen: a car-sized box around the closest surface below
     // the screen centre (found like the spray and the snow do).
     float z0 = tex2Dlod(s_depth, float4(0.5, 0.6, 0, 0)).r;
@@ -625,7 +626,7 @@ VSOut main(float2 uv : TEXCOORD0) {
     float z2 = tex2Dlod(s_depth, float4(0.5, 0.7, 0, 0)).r;
     float cz = min(z0, min(z1, z2));
     float3 fwd = c_V2.xyz; // view forward in the world
-    if (valid && cz > 1.5 && cz < 16.0 && abs(fwd.y) < 0.45) {
+    if (valid && c_Mode.z > 0.5 && cz > 1.5 && cz < 16.0 && abs(fwd.y) < 0.45) {
         float cy = cz == z0 ? 0.6 : (cz == z1 ? 0.65 : 0.7);
         float3 cv = float3((0.0 - c_Proj.z) * cz / c_Proj.x, (1.0 - cy * 2.0 - c_Proj.w) * cz / c_Proj.y, cz);
         float3 tail = float3(c_V0.w, c_V1.w, c_V2.w) + cv.x * c_V0.xyz + cv.y * c_V1.xyz + cv.z * c_V2.xyz;
@@ -674,14 +675,14 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
             return false;
         }
     }
-    bool ok = m_heightFrame.create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
-    ok &= m_heightMap[0].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
-    ok &= m_heightMap[1].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
-    ok &= m_ceilingMap[0].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
-    ok &= m_ceilingMap[1].create(device, kHeightMapSize, kHeightMapSize, D3DFMT_R32F);
-    ok &= m_shadowHeight.create(device, kHeightMapSize / 2, kHeightMapSize / 2, D3DFMT_R32F);
+    bool ok = m_heightFrame.create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
+    ok &= m_heightMap[0].create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
+    ok &= m_heightMap[1].create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
+    ok &= m_ceilingMap[0].create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
+    ok &= m_ceilingMap[1].create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
+    ok &= m_shadowHeight.create(device, m_heightSize / 2, m_heightSize / 2, D3DFMT_R32F);
     if (ok && !m_heightDepth) {
-        ok = SUCCEEDED(device->CreateDepthStencilSurface(kHeightMapSize, kHeightMapSize, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE,
+        ok = SUCCEEDED(device->CreateDepthStencilSurface(m_heightSize, m_heightSize, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE,
                                                          &m_heightDepth, nullptr));
     }
     if (ok && !m_splatPoints) {
@@ -716,15 +717,15 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
     for (int j = 0; j < 3; j++) camera[j] = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
 
     // Keep the camera near the middle; move the map in whole texels so history lines up.
-    const float texel = kHeightMapWorld / kHeightMapSize;
+    const float texel = m_heightWorld / m_heightSize;
     const float snap = texel * 16.0f;
     float shift[2] = {0.0f, 0.0f};
-    const float cx = m_heightOrigin[0] + kHeightMapWorld * 0.5f, cz = m_heightOrigin[1] + kHeightMapWorld * 0.5f;
+    const float cx = m_heightOrigin[0] + m_heightWorld * 0.5f, cz = m_heightOrigin[1] + m_heightWorld * 0.5f;
     if (!m_heightValid || fabsf(camera[0] - cx) > 40.0f || fabsf(camera[2] - cz) > 40.0f) {
-        const float ox = floorf((camera[0] - kHeightMapWorld * 0.5f) / snap) * snap;
-        const float oz = floorf((camera[2] - kHeightMapWorld * 0.5f) / snap) * snap;
-        shift[0] = (ox - m_heightOrigin[0]) / kHeightMapWorld;
-        shift[1] = (oz - m_heightOrigin[1]) / kHeightMapWorld;
+        const float ox = floorf((camera[0] - m_heightWorld * 0.5f) / snap) * snap;
+        const float oz = floorf((camera[2] - m_heightWorld * 0.5f) / snap) * snap;
+        shift[0] = (ox - m_heightOrigin[0]) / m_heightWorld;
+        shift[1] = (oz - m_heightOrigin[1]) / m_heightWorld;
         m_heightOrigin[0] = ox;
         m_heightOrigin[1] = oz;
     }
@@ -739,7 +740,7 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
         device->GetDepthStencilSurface(&savedDepth);
         device->SetRenderTarget(0, m_heightFrame.surface);
         device->SetDepthStencilSurface(m_heightDepth);
-        D3DVIEWPORT9 viewport = {0, 0, kHeightMapSize, kHeightMapSize, 0.0f, 1.0f};
+        D3DVIEWPORT9 viewport = {0, 0, m_heightSize, m_heightSize, 0.0f, 1.0f};
         device->SetViewport(&viewport);
         device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
         device->SetRenderState(D3DRS_ZENABLE, TRUE);
@@ -766,14 +767,15 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
         }
         vc[4][0] = m_heightOrigin[0];
         vc[4][1] = m_heightOrigin[1];
-        vc[4][2] = 1.0f / kHeightMapWorld;
+        vc[4][2] = 1.0f / m_heightWorld;
         vc[4][3] = camera[1];
-        vc[5][0] = -1.0f / kHeightMapSize;
-        vc[5][1] = 1.0f / kHeightMapSize;
+        vc[5][0] = -1.0f / m_heightSize;
+        vc[5][1] = 1.0f / m_heightSize;
         vc[6][0] = 1.0f / m_linearDepth.width;
         vc[6][1] = 1.0f / m_linearDepth.height;
         device->SetVertexShaderConstantF(1, &vc[0][0], 7);
-        const float mode[4] = {static_cast<float>(pass), 0.0f, 0.0f, 0.0f};
+        // Beyond ~400 m the depth is too coarse to be useful (photo mode: stills, the map is larger).
+        const float mode[4] = {static_cast<float>(pass), in.photo ? 1200.0f : 400.0f, in.photo ? 0.0f : 1.0f, 0.0f};
         device->SetVertexShaderConstantF(8, mode, 1);
         device->SetVertexShader(m_splatVS);
         device->SetVertexDeclaration(m_splatDecl);
@@ -799,7 +801,7 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
 
     // The frame constants went up before this re-centre: with the old origin, the shadow and
     // volumetric passes read the shifted map ~40 m off for one frame (shadows popping up).
-    const float map[4] = {m_heightOrigin[0], m_heightOrigin[1], kHeightMapWorld, s.longShadowRange};
+    const float map[4] = {m_heightOrigin[0], m_heightOrigin[1], m_heightWorld, s.longShadowRange};
     device->SetPixelShaderConstantF(35, map, 1);
 }
 
@@ -1512,7 +1514,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     vc[8][3] = 30.0f;
     vc[9][0] = m_heightOrigin[0];
     vc[9][1] = m_heightOrigin[1];
-    vc[9][2] = 1.0f / kHeightMapWorld;
+    vc[9][2] = 1.0f / m_heightWorld;
     vc[9][3] = splashes && s.weatherShelter ? 1.0f : 0.0f; // shelter (the height map is valid)
     // Previous camera for the streaks (camera turns smear the rain like a real shutter).
     const bool previous = in.temporal && m_temporalValid && m_havePrevious && dt > 1e-4f;
@@ -1680,6 +1682,16 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
+    // Photo mode: a 3x larger height map (twice the texels), so far views get long shadows.
+    const UINT heightSize = in.photo ? 1024 : 512;
+    const float heightWorld = in.photo ? 960.0f : 320.0f;
+    if (heightSize != m_heightSize || heightWorld != m_heightWorld) {
+        m_heightSize = heightSize;
+        m_heightWorld = heightWorld;
+        gfx::release(m_heightDepth); // recreated at the new size with the maps
+        m_heightValid = false;
+        m_ceilingValid = false;
+    }
     const bool cut = temporal && detectCameraCut(in);
     m_temporalValid = temporal && !cut;
     if (cut) m_taaValid = false;
@@ -1809,7 +1821,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // The fog and haze colour, eased over time: with a few sky pixels flickering through a
     // gap (between walls, in a building) it jumped every frame and the fog came and went.
     // Extra cameras reuse it, like the exposure.
-    if (temporal || !m_skyValid) {
+    if ((temporal && !in.freeze) || !m_skyValid) {
         const int previous = m_skyIndex;
         m_skyIndex ^= 1;
         bind(device, 0, in.color, false);
@@ -1886,11 +1898,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if ((motionBlur || dof) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
         if (dof) {
             int focus = m_focusIndex;
-            if (temporal) {
+            if (temporal && !in.freeze) {
                 focus ^= 1;
                 bind(device, 0, m_nd.texture, false);
                 bind(device, 1, m_focus[m_focusIndex].texture, false);
-                passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f);
+                passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
                 runPass(device, kFocus, m_focus[focus]);
                 m_focusIndex = focus;
             }
@@ -1949,7 +1961,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
 
     // 8. Exposure (extra cameras reuse the adapted value).
-    if (temporal) {
+    if (temporal && !in.freeze) {
         bind(device, 0, m_bloomDown[3].texture, true);
         runPass(device, kLuminance, m_luminance);
         const int previous = m_adaptIndex;
