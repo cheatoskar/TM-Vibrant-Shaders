@@ -54,6 +54,7 @@ float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
 float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
+float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials")
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
@@ -70,6 +71,7 @@ sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
 sampler3D s12 : register(s12); // colour look-up table (final pass)
+sampler2D s13 : register(s13); // the game's materials: r light, g car, b glass, a grass (debug view "Materials")
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -1864,10 +1866,14 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     }
     float3 r = reflect(normalize(p), n);
     float maxDist = min(120.0 * u_Water.w, p.z * 1.5 + 25.0);
-    float noise = ign(vpos);
+    // Photo mode (u_Water.w 3): three times the steps and little noise; a still image shows
+    // the gaps between coarse steps as dashed lines, and the noise as grain (no TAA to
+    // average it).
+    bool photo = u_Water.w > 1.5;
+    float noise = ign(vpos) * (photo ? 0.25 : 1.0);
     float tPrev = 0.05;
     // A polished dry track is a mirror: finer steps so the reflection holds together.
-    float steps = u_Nature.w > 1.0 ? 32.0 : 16.0;
+    float steps = (u_Nature.w > 1.0 ? 32.0 : 16.0) * (photo ? 3.0 : 1.0);
     [loop] for (int i = 1; i <= (int)steps; i++) {
         float t = (i - 1 + noise) / steps;
         t = t * t * maxDist + 0.1;
@@ -2428,12 +2434,14 @@ float circleOfConfusion(float z, float focus) {
 
 // Gathered bokeh (half res). s0 = HDR, s1 = half normal/depth, s2 = focus (1x1)
 // out.rgb = blurred colour, out.a = how much blur covers this pixel (0..1)
-// u_Pass0.x = samples (16, photo mode 64), u_Pass0.y = how much each pixel's spiral is turned at random
+// u_Pass0.x = samples (16, photo mode 64), u_Pass0.y = how much each pixel's spiral is turned at random,
+// u_Pass0.z = radius (1; 0.3 for the smoothing pass)
 float4 PS_DofBlur(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float focus = tex2Dlod(s2, float4(0.5, 0.5, 0, 0)).r;
     float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
     float coc = abs(circleOfConfusion(z, focus));
     float maxPx = u_Cine.w * u_Screen.y / 1080.0;
+    float reachPx = maxPx * u_Pass0.z;
     float3 sum = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
     float wsum = 1.0;
     float foreground = 0.0;
@@ -2443,7 +2451,7 @@ float4 PS_DofBlur(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float2 dir = float2(cos(rot), sin(rot));
     const float2x2 golden = float2x2(-0.737369, -0.675490, 0.675490, -0.737369);
     [loop] for (int i = 0; i < N; i++) {
-        float r = sqrt((i + 0.5) / N) * maxPx;
+        float r = sqrt((i + 0.5) / N) * reachPx;
         dir = mul(golden, dir);
         float2 suv = uv + dir * r * u_Screen.zw;
         float sz = tex2Dlod(s1, float4(suv, 0, 0)).w;
@@ -2737,6 +2745,12 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float grainAmount = u_Post.x * smoothstep(0.0, 0.45, luma(srgb)) * (1.2 - luma(srgb));
     srgb += grain * (grainAmount + 1.0 / 255.0);
     srgb = saturate(srgb);
+    // Debug view 8: the game's materials over the image (lamps yellow, cars red, glass cyan, grass green).
+    if (debugView == 8 && u_Mat.x > 0.5) {
+        float4 m = tex2D(s13, uv);
+        float3 tint = m.r * float3(1.0, 0.9, 0.1) + m.g * float3(1.0, 0.15, 0.15) + m.b * float3(0.1, 1.0, 1.0) + m.a * float3(0.2, 1.0, 0.2);
+        srgb = lerp(srgb, tint, 0.6 * saturate(dot(m, 1.0)));
+    }
     return float4(srgb, luma(srgb));
 }
 

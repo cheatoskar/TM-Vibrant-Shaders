@@ -48,7 +48,7 @@ std::string hint() {
     char text[200];
     const Config& config = Config::get();
     const float factor = static_cast<float>(config.photoTiles) * 0.84f;
-    snprintf(text, sizeof(text), "Photo mode   F12 photo   Shift+F12 %.1fx photo   middle click: focus   Ctrl+wheel: blur   Shift+wheel: zoom   F6: off",
+    snprintf(text, sizeof(text), "Photo mode   F12 photo   Shift+F12 %.1fx photo   middle click: focus   Ctrl+wheel: aperture   Shift+wheel: zoom   F6: off",
              factor);
     return text;
 }
@@ -136,6 +136,10 @@ bool active() {
     return g_active;
 }
 
+float fNumber(float dof) {
+    return 1.4f * powf(16.0f / 1.4f, 1.0f - (dof < 0.0f ? 0.0f : (dof > 1.0f ? 1.0f : dof)));
+}
+
 void toggle() {
     g_manual = g_active ? 0 : 1;
 }
@@ -211,7 +215,7 @@ bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         config.photoDof = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
         config.markDirty();
         char text[64];
-        snprintf(text, sizeof(text), "Depth of field %.0f %%", config.photoDof * 100.0f);
+        snprintf(text, sizeof(text), "Aperture f/%.1f", fNumber(config.photoDof));
         setStatus(text, 2);
         return true;
     }

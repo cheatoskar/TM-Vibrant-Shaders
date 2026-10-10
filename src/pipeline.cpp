@@ -277,12 +277,16 @@ void Pipeline::destroyTargets() {
     for (auto& t : m_adapted) t.destroy();
     m_ldr.destroy();
     m_ldr2.destroy();
+    m_materials.destroy();
     m_depthCopy.destroy();
     m_clouds.destroy();
     m_reflect.destroy();
     for (auto& t : m_spill) t.destroy();
     for (auto& t : m_focus) t.destroy();
     m_dof.destroy();
+    m_dofFull.destroy();
+    m_dofFull2.destroy();
+    m_dof2.destroy();
     m_hdr2.destroy();
     for (auto& t : m_taa) t.destroy();
     m_heightFrame.destroy();
@@ -575,6 +579,16 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(39, snow, 1);
     const float sky3[4] = {s.auroraSpeed, s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f, s.reflectionBlur, 1.0f / fmaxf(s.hazeDistance, 0.1f)};
     device->SetPixelShaderConstantF(41, sky3, 1);
+    // Day-for-night: how much of the game's baked sun comes out, and where that sun is (the
+    // game's own, also under a black hole sky, whose light is the hole). Every night sky over a
+    // day map takes it out fully; the scene's darkness (u_Sky.y) is a separate thing (a black
+    // hole lights the scene like a dim sun, but not from where the game's sun was).
+    float gameSunDir[3] = {in.sunDirection[0], in.sunDirection[1], in.sunDirection[2]};
+    const float gameSunLen = sqrtf(gameSunDir[0] * gameSunDir[0] + gameSunDir[1] * gameSunDir[1] + gameSunDir[2] * gameSunDir[2]);
+    if (gameSunLen > 1e-5f) for (float& v : gameSunDir) v /= gameSunLen;
+    const float removal = c[20][1]; // (as before: the shader uses u_Sky.y; kept for later)
+    const float sunOut[4] = {removal, gameSunDir[0], gameSunDir[1], gameSunDir[2]};
+    device->SetPixelShaderConstantF(43, sunOut, 1);
 }
 
 // --- Long-range shadows -----------------------------------------------------
@@ -865,27 +879,24 @@ bool Pipeline::ensureLut(IDirect3DDevice9* device) {
     return ok;
 }
 
-void Pipeline::drawMaterialIds(IDirect3DDevice9* device, const Inputs& in, IDirect3DSurface9* output) {
-    // The game's depth-stencil is our INTZ texture: its stencil holds the ids. Bound as the
-    // depth-stencil again for the stencil test (no texture of ours may stay bound to it).
-    // Not in the previewer (its depth is a plain R32F texture).
+bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
+    // The game's depth-stencil is our INTZ texture; its stencil holds the material class of
+    // every pixel (written while the game drew, see the plugin). Bound as the depth-stencil
+    // again for a stencil test per class (no texture of ours may be bound meanwhile). Not in
+    // the previewer: its depth is a plain R32F texture.
     D3DSURFACE_DESC desc{};
-    if (FAILED(in.depth->GetLevelDesc(0, &desc)) || desc.Format != static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z'))) return;
+    if (!in.materials || FAILED(in.depth->GetLevelDesc(0, &desc)) || desc.Format != static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z')))
+        return false;
+    if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
     if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
-    if (!m_solidPS) return;
-    for (int i = 0; i < 13; i++) device->SetTexture(i, nullptr);
+    if (!m_solidPS) return false;
+    for (int i = 0; i < 16; i++) device->SetTexture(i, nullptr);
     IDirect3DSurface9* ds = nullptr;
-    if (FAILED(in.depth->GetSurfaceLevel(0, &ds)) || !ds) return;
+    if (FAILED(in.depth->GetSurfaceLevel(0, &ds)) || !ds) return false;
+    device->SetRenderTarget(0, m_materials.surface);
+    device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
     device->SetDepthStencilSurface(ds);
-    device->SetRenderState(D3DRS_ZENABLE, FALSE);
-    static const float kColors[kMaterialIds][3] = {{1.0f, 0.2f, 0.2f}, {0.2f, 1.0f, 0.2f}, {0.25f, 0.45f, 1.0f}, {1.0f, 0.9f, 0.1f},
-                                                   {1.0f, 0.2f, 1.0f}, {0.1f, 1.0f, 1.0f}, {1.0f, 0.55f, 0.1f}, {0.6f, 0.3f, 1.0f},
-                                                   {0.6f, 1.0f, 0.4f}, {1.0f, 1.0f, 1.0f}, {0.5f, 0.25f, 0.1f}, {0.1f, 0.5f, 0.5f}};
-    device->SetRenderTarget(0, output);
     device->SetPixelShader(m_solidPS);
-    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
     device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
     device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
     device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_EQUAL);
@@ -893,16 +904,17 @@ void Pipeline::drawMaterialIds(IDirect3DDevice9* device, const Inputs& in, IDire
     device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_KEEP);
-    for (int id = 1; id <= kMaterialIds; id++) {
-        const float color[4] = {kColors[id - 1][0], kColors[id - 1][1], kColors[id - 1][2], 0.6f};
+    // One channel per class: r light, g car, b glass, a grass.
+    for (int id = 1; id <= kMaterialClasses; id++) {
+        const float color[4] = {id == 1 ? 1.0f : 0.0f, id == 2 ? 1.0f : 0.0f, id == 3 ? 1.0f : 0.0f, id == 4 ? 1.0f : 0.0f};
         device->SetPixelShaderConstantF(32, color, 1);
         device->SetRenderState(D3DRS_STENCILREF, static_cast<DWORD>(id));
         m_quad.draw(device, in.width, in.height);
     }
     device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
-    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     device->SetDepthStencilSurface(nullptr);
     ds->Release();
+    return true;
 }
 
 // --- Rain particles ---------------------------------------------------------
@@ -1757,6 +1769,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 
     const BOOL softwareVP = setPassStates(device);
 
+    // The game's materials (lamps, cars, glass, grass) for the lighting and the final pass.
+    const bool materials = buildMaterialMask(device, in);
+    const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(44, materialConstants, 1);
+
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
     // Photo mode: a 3x larger height map (twice the texels), so far views get long shadows.
@@ -1931,12 +1948,14 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 0, in.color, true);
         bind(device, 1, m_nd.texture, false);
         bind(device, 2, m_ndHalf.texture, false);
+        bind(device, 13, materials ? m_materials.texture : nullptr, false);
         runPass(device, kReflect, m_reflect);
     }
     const bool spill = s.neonLight > 0.0f;
     if (spill) {
         bind(device, 0, in.color, true);
         bind(device, 1, m_nd.texture, false);
+        bind(device, 13, materials ? m_materials.texture : nullptr, false);
         runPass(device, kSpillDown, m_spill[0]);
         bind(device, 0, m_spill[0].texture, true);
         passConstants(device, 1.0f / m_spill[0].width, 0.0f);
@@ -1958,6 +1977,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 9, m_spill[0].texture, true);
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
+    bind(device, 13, materials ? m_materials.texture : nullptr, false);
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
@@ -1973,6 +1993,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool motionBlur = s.motionBlur > 0.0f && m_temporalValid;
     const bool dof = s.depthOfField > 0.0f;
     if ((motionBlur || dof) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
+        // Photo mode: the blur at full resolution (half resolution showed as coarse, blocky
+        // edges once the image stands still and gets looked at).
+        gfx::Target* dofTarget = &m_dof;
+        if (dof && in.photo && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
         if (dof) {
             int focus = m_focusIndex;
             if (temporal && !in.freeze) {
@@ -1984,15 +2008,24 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
                 m_focusIndex = focus;
             }
             bind(device, 0, m_hdr.texture, true);
-            bind(device, 1, m_ndHalf.texture, false);
+            bind(device, 1, dofTarget == &m_dofFull ? m_nd.texture : m_ndHalf.texture, false);
             bind(device, 2, m_focus[focus].texture, false);
-            // Photo mode: four times the samples and almost no per-pixel noise (nothing to
-            // average it out over frames: TAA is off by default, tiles freeze it).
-            passConstants(device, in.photo ? 64.0f : 16.0f, in.photo ? 0.15f : 1.0f);
-            runPass(device, kDofBlur, m_dof);
+            // Photo mode: four times the samples and no per-pixel noise (nothing averages it
+            // out over frames: TAA is off by default, tiles freeze it).
+            passConstants(device, in.photo ? 64.0f : 16.0f, in.photo ? 0.0f : 1.0f, 1.0f);
+            runPass(device, kDofBlur, *dofTarget);
+            // A second, smaller pass over the first smooths the grain of the 16 samples and the
+            // rings the spiral leaves on bright lights.
+            gfx::Target& second = dofTarget == &m_dofFull ? m_dofFull2 : m_dof2;
+            if (second.create(device, dofTarget->width, dofTarget->height, D3DFMT_A16B16G16R16F)) {
+                bind(device, 0, dofTarget->texture, true);
+                passConstants(device, in.photo ? 32.0f : 12.0f, in.photo ? 0.0f : 1.0f, 0.3f);
+                runPass(device, kDofBlur, second);
+                dofTarget = &second;
+            }
         }
         bind(device, 0, m_hdr.texture, true);
-        bind(device, 1, m_dof.texture, true);
+        bind(device, 1, dofTarget->texture, true);
         bind(device, 2, m_nd.texture, false);
         runPass(device, kCinematic, m_hdr2);
         hdr = &m_hdr2;
@@ -2101,6 +2134,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // the tone curve pulled lamps and the surfaces they light to grey). s8 = the game's image.
     const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night && s.debugView == 0;
     if (mapNight) bind(device, 8, in.color, false);
+    bind(device, 13, materials ? m_materials.texture : nullptr, false);
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
     passConstants(device, 1.0f / norm, 0.0f);
@@ -2156,7 +2190,6 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // flicker, and keeping them out of its history avoids trails.
     if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && post && ensureRain(device))
         drawRain(device, in, s, dt, heightMap && m_heightValid, output);
-    if (s.debugView == kMaterialView) drawMaterialIds(device, in, output);
     profileEnd();
 
     if (temporal) {
@@ -2165,7 +2198,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         m_havePrevious = true;
     }
     for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
-    device->SetTexture(12, nullptr); // the LUT: nothing of ours stays bound (a Reset needs it released)
+    for (int i = 12; i < 16; i++) device->SetTexture(i, nullptr); // the LUT, the materials: nothing of ours stays bound (Reset)
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
 }
 

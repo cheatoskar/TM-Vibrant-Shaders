@@ -234,6 +234,8 @@ bool sunDirection(float out[3]) {
     return true;
 }
 
+bool materialsWanted(); // the game's material masks this frame (below, with the draw tagging)
+
 // The colour look-up table picked in the menu: loaded when the choice changes, a broken
 // file is reported once and left off. Returns how much of it to use (0 = none).
 float updateLut() {
@@ -430,6 +432,7 @@ void processScene(IDirect3DDevice9* device) {
     photo::focusPoint(inputs.focusPoint);
     inputs.freeze = photo::tiling();
     inputs.lut = updateLut();
+    inputs.materials = materialsWanted();
     g_frameWidth = desc.Width;
     g_frameHeight = desc.Height;
 
@@ -518,6 +521,7 @@ void onFrameBegin() {
         // The game's bloom and colour filter would work on the image the mod already graded.
         const Settings& s = Config::get().settings;
         engine::skipGameFx(s.enabled && s.disableGameFx);
+        engine::hideSunFlare(false); // light reset: the sun's halo as before (step by step later)
     }
     updateJitter();
     g_cameraIndex = 0;
@@ -534,9 +538,8 @@ void onCameraBegin(void* camera) {
         g_scene.haveView = false;
         g_scene.haveProjection = false;
         engine::setMainCamera(camera);
-        // Materials view: no ids left from the last frame where nothing is drawn (the sky).
-        const Settings& s = Config::get().settings;
-        if (s.enabled && s.debugView == Pipeline::kMaterialView) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
+        // Material masks: nothing left from the last frame where nothing is drawn (the sky).
+        if (materialsWanted()) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
     } else if (rt) {
         // A screen-sized camera that isn't shaded: say why (a player's shaders stayed off in
         // races while they worked in the editor, and the log showed nothing). Each kind once.
@@ -567,11 +570,21 @@ void onCameraBegin(void* camera) {
     if (rt) rt->Release();
 }
 
-// Debug view "Materials": every draw of the main camera writes an id of its game material
-// (engine::currentShader, hashed to 1..kMaterialIds) into the stencil buffer, and the
-// pipeline shows each id in a colour. Draws that use the stencil themselves (shadow volumes)
-// are left alone.
+// The game's materials: every draw of the main camera writes the class of its material
+// (engine::currentMaterial: light, car, glass, grass) into the stencil buffer, and the
+// pipeline turns that into a mask (lamps glow for real, white walls don't). Draws that don't
+// write depth (glows, headlight cones, decals, particles over whole blocks) leave what is
+// behind them: they marked whole blocks as lamps. If the game uses the stencil itself (shadow
+// volumes) the masks stay off.
 bool g_stencilTagged = false;
+bool g_gameStencil = false;
+
+bool materialsWanted() {
+    const Settings& s = Config::get().settings;
+    // For now only for the debug view "Materials" (the light handling is back on the confirmed
+    // 8e14c69 state; the masks come back into it one step at a time).
+    return s.enabled && s.gameMaterials && s.debugView == Pipeline::kMaterialView && !g_gameStencil;
+}
 
 void untagStencil(IDirect3DDevice9* device) {
     if (!g_stencilTagged) return;
@@ -580,17 +593,24 @@ void untagStencil(IDirect3DDevice9* device) {
 }
 
 void onDraw(IDirect3DDevice9* device) {
-    const Settings& s = Config::get().settings;
-    const void* shader = engine::currentShader();
-    if (!g_scene.inMainCamera || !s.enabled || s.debugView != Pipeline::kMaterialView || !shader) {
+    if (!g_scene.inMainCamera || !materialsWanted()) {
         untagStencil(device);
         return;
     }
     DWORD stencil = FALSE;
     device->GetRenderState(D3DRS_STENCILENABLE, &stencil);
-    if (stencil && !g_stencilTagged) return; // the game's own stencil
-    const uintptr_t key = reinterpret_cast<uintptr_t>(shader) >> 4;
-    const DWORD id = 1 + static_cast<DWORD>((key * 2654435761u) >> 8) % Pipeline::kMaterialIds;
+    if (stencil && !g_stencilTagged) {
+        g_gameStencil = true;
+        TMVS_LOG("materials: the game uses the stencil buffer itself, material masks off");
+        return;
+    }
+    const engine::Material m = engine::currentMaterial();
+    DWORD zwrite = TRUE;
+    device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+    if (!zwrite) {
+        untagStencil(device);
+        return;
+    }
     device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
     device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
     device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_ALWAYS);
@@ -598,7 +618,7 @@ void onDraw(IDirect3DDevice9* device) {
     device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILWRITEMASK, 0xFF);
-    device->SetRenderState(D3DRS_STENCILREF, id);
+    device->SetRenderState(D3DRS_STENCILREF, static_cast<DWORD>(m));
     g_stencilTagged = true;
 }
 
@@ -806,6 +826,7 @@ void bootOnce() {
     TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
     loadDevOptions();
     Config::get().load();
+    lut::writeBuiltInLooks();
 
     engine::Callbacks engineCallbacks;
     engineCallbacks.frameBegin = onFrameBegin;

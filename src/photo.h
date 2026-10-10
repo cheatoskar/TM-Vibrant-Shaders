@@ -31,6 +31,9 @@ void adjust(Settings& s);
 // A hi-res photo is being taken: TAA jitter off; exposure, focus and haze colour frozen.
 bool tiling();
 
+// The depth of field amount (0..1) as a camera aperture: 1 = f/1.4 (most blur), 0 = f/16.
+float fNumber(float dof);
+
 // The focus point (uv), -1 = none.
 void focusPoint(float out[2]);
 

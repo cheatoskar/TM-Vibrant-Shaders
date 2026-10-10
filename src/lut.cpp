@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 
 namespace tmshaders {
@@ -22,7 +23,89 @@ std::string narrow(const std::wstring& text) {
     return out;
 }
 
+// The built-in looks, as grades on display (sRGB) values. Kept simple: a contrast curve,
+// saturation, a split tone (shadows / highlights) and levels.
+struct Rgb {
+    float r, g, b;
+};
+
+float lumaOf(const Rgb& c) {
+    return 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b;
+}
+
+Rgb saturation(Rgb c, float s) {
+    const float l = lumaOf(c);
+    return {l + (c.r - l) * s, l + (c.g - l) * s, l + (c.b - l) * s};
+}
+
+float curve1(float x, float contrast) { // S-curve around 0.5, 1 = identity
+    x = x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
+    return x < 0.5f ? 0.5f * powf(x / 0.5f, contrast) : 1.0f - 0.5f * powf((1.0f - x) / 0.5f, contrast);
+}
+
+Rgb curve(Rgb c, float contrast) {
+    return {curve1(c.r, contrast), curve1(c.g, contrast), curve1(c.b, contrast)};
+}
+
+Rgb splitTone(Rgb c, Rgb shadow, Rgb highlight, float amount) {
+    float w = (lumaOf(c) - 0.15f) / 0.7f;
+    w = w < 0.0f ? 0.0f : (w > 1.0f ? 1.0f : w);
+    w = w * w * (3.0f - 2.0f * w);
+    const Rgb t = {shadow.r + (highlight.r - shadow.r) * w, shadow.g + (highlight.g - shadow.g) * w, shadow.b + (highlight.b - shadow.b) * w};
+    return {c.r * (1.0f + (t.r - 1.0f) * amount), c.g * (1.0f + (t.g - 1.0f) * amount), c.b * (1.0f + (t.b - 1.0f) * amount)};
+}
+
+Rgb levels(Rgb c, float black, float white) {
+    return {black + c.r * (white - black), black + c.g * (white - black), black + c.b * (white - black)};
+}
+
+struct Look {
+    const char* name;
+    Rgb (*grade)(Rgb);
+};
+
+const Look kLooks[] = {
+    {"Warm Film", [](Rgb c) { return levels(saturation(splitTone(curve(c, 1.15f), {0.97f, 1.0f, 1.05f}, {1.09f, 1.02f, 0.88f}, 0.9f), 1.05f), 0.015f, 0.99f); }},
+    {"Teal & Orange", [](Rgb c) { return saturation(splitTone(curve(c, 1.1f), {0.86f, 1.02f, 1.12f}, {1.1f, 1.0f, 0.84f}, 0.75f), 1.08f); }},
+    {"Bleach Bypass", [](Rgb c) { return splitTone(curve(saturation(c, 0.6f), 1.25f), {0.98f, 1.0f, 1.03f}, {1.0f, 1.0f, 1.0f}, 1.0f); }},
+    {"Faded Vintage", [](Rgb c) { return levels(saturation(splitTone(curve(c, 0.92f), {1.0f, 1.02f, 0.98f}, {1.06f, 1.02f, 0.86f}, 0.9f), 0.82f), 0.07f, 0.93f); }},
+    {"Cold Night", [](Rgb c) { return saturation(splitTone(curve(c, 1.08f), {0.86f, 0.95f, 1.16f}, {0.96f, 1.0f, 1.06f}, 0.9f), 0.9f); }},
+    {"Vivid", [](Rgb c) { return curve(saturation(c, 1.28f), 1.06f); }},
+    {"Noir", [](Rgb c) { return curve(saturation(c, 0.0f), 1.3f); }},
+};
+
+bool writeLook(const std::wstring& file, const Look& look) {
+    const int n = 33;
+    FILE* f = _wfopen(file.c_str(), L"wb");
+    if (!f) return false;
+    fprintf(f, "TITLE \"%s\"\nLUT_3D_SIZE %d\n", look.name, n);
+    for (int b = 0; b < n; b++) {
+        for (int g = 0; g < n; g++) {
+            for (int r = 0; r < n; r++) {
+                Rgb c = look.grade({r / float(n - 1), g / float(n - 1), b / float(n - 1)});
+                const auto clamp = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+                fprintf(f, "%.5f %.5f %.5f\n", clamp(c.r), clamp(c.g), clamp(c.b));
+            }
+        }
+    }
+    return fclose(f) == 0;
+}
+
 } // namespace
+
+void writeBuiltInLooks() {
+    const std::wstring dir = folder();
+    CreateDirectoryW(dir.c_str(), nullptr);
+    const std::wstring marker = dir + L"\\.built-in-looks-1";
+    if (GetFileAttributesW(marker.c_str()) != INVALID_FILE_ATTRIBUTES) return;
+    int written = 0;
+    for (const Look& look : kLooks) {
+        const std::wstring file = path(look.name) + L".cube";
+        if (GetFileAttributesW(file.c_str()) == INVALID_FILE_ATTRIBUTES && writeLook(file, look)) written++;
+    }
+    if (FILE* f = _wfopen(marker.c_str(), L"wb")) fclose(f);
+    TMVS_LOG("lut: %d built-in looks written to the LUT folder", written);
+}
 
 bool loadCube(const std::wstring& path, Table& out, std::string& error) {
     out = Table();

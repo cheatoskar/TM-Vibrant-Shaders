@@ -43,16 +43,25 @@ public:
         bool freeze = false;
         // Colour look-up table (setLut) mixed in after the grade: 0 = off, 1 = fully.
         float lut = 0.0f;
+        // The stencil of the depth texture holds the game's material classes (the plugin
+        // tagged the game's draws): lamps, cars, glass, grass are known, not guessed.
+        bool materials = false;
     };
 
     // A 3D colour look-up table (A8R8G8B8, x = red, y = green, z = blue; size 0 = none).
     // Kept on the CPU and uploaded when needed (also after a device reset).
     void setLut(const std::vector<uint32_t>& texels, int size);
 
-    // Debug view "Materials": the game's draws mark their material in the stencil buffer
-    // (ids 1..kMaterialIds, see the plugin); the final image shows each id in a colour.
+    // Debug view "Materials": the game's material classes in colour (lamps yellow, cars red,
+    // glass cyan, grass green). Classes 1..kMaterialClasses as engine::Material.
     static constexpr int kMaterialView = 8;
-    static constexpr int kMaterialIds = 12;
+    static constexpr int kMaterialClasses = 4;
+
+    // The sky replaces the game's sun (night skies, the black hole): its baked light comes out
+    // on day maps and its halo is hidden.
+    static bool skyReplacesSun(const Settings& s) {
+        return (s.skyMode >= 2 && s.skyMode != 5) || ((s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f);
+    }
 
     // Neon trail: start over (race restart, new map) / start a new line (respawn).
     void resetTrail() { m_trailReset = true; }
@@ -164,7 +173,7 @@ private:
     void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, bool ceilings);
     bool ensureCloudNoise(IDirect3DDevice9* device);
     bool ensureLut(IDirect3DDevice9* device);
-    void drawMaterialIds(IDirect3DDevice9* device, const Inputs& in, IDirect3DSurface9* output);
+    bool buildMaterialMask(IDirect3DDevice9* device, const Inputs& in);
     bool ensureRain(IDirect3DDevice9* device);
     bool ensureTrail(IDirect3DDevice9* device);
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
@@ -220,6 +229,7 @@ private:
     gfx::Target m_bloomUp[kBloomLevels];
     gfx::Target m_luminance;    // 1x1
     gfx::Target m_adapted[2];   // 1x1 ping-pong
+    gfx::Target m_materials;    // full: the game's material classes (r light, g car, b glass, a grass)
     gfx::Target m_ldr;          // full LDR
     gfx::Target m_ldr2;         // full LDR
     gfx::Target m_depthCopy;    // capture helper (R32F)
@@ -228,6 +238,9 @@ private:
     gfx::Target m_spill[2];     // quarter: neon light spill
     gfx::Target m_focus[2];     // 1x1 auto focus ping-pong
     gfx::Target m_dof;          // half: depth of field blur
+    gfx::Target m_dofFull;      // full: the same in photo mode
+    gfx::Target m_dofFull2;     // full: its second, smoothing pass
+    gfx::Target m_dof2;         // half: the smoothing pass of the normal blur
     gfx::Target m_hdr2;         // full: HDR after DOF / motion blur
     gfx::Target m_taa[2];       // full: TAA history ping-pong (rgb, view z)
     int m_adaptIndex = 0;

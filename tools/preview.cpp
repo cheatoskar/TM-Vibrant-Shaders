@@ -232,7 +232,7 @@ int main(int argc, char** argv) {
     }
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
-                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--lut file.cube] [--lutmix 0..1] [--bench] "
+                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--lut file.cube] [--lutmix 0..1] [--photo] [--focus u,v] [--bench] "
                         "[--batch jobs.txt]\n"
                         "       tmvs_preview --sound <out.wav> [rain] [volume] [wind] | --play <seconds> [volume] [snow] | --decode <in.mp3> <out.wav>\n");
         return 2;
@@ -251,6 +251,8 @@ int main(int argc, char** argv) {
     float sun[3] = {}, sunColor[3] = {};
     const char* lutFile = nullptr;
     float lutMix = 1.0f;
+    bool photoMode = false;              // the photo mode's look (3x reach, full-res blur)
+    float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
             applyPresetByName(defaults.settings, argv[++i]);
@@ -268,6 +270,10 @@ int main(int argc, char** argv) {
             batch = argv[++i];
         } else if (!strcmp(argv[i], "--water") && i + 1 < argc) {
             waterHeight = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--photo")) {
+            photoMode = true;
+        } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f", &focus[0], &focus[1]);
         } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
             lutFile = argv[++i];
         } else if (!strcmp(argv[i], "--lutmix") && i + 1 < argc) {
@@ -364,6 +370,9 @@ int main(int argc, char** argv) {
         const FrameCapture& cap = loaded->cap;
         Pipeline::Inputs in;
         in.lut = lutFile ? lutMix : 0.0f;
+        in.photo = photoMode;
+        in.focusPoint[0] = focus[0];
+        in.focusPoint[1] = focus[1];
         in.color = loaded->color;
         in.depth = loaded->depth;
         in.width = cap.width;

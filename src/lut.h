@@ -23,5 +23,9 @@ std::vector<std::string> list();
 // The full path of a file in the folder (name in UTF-8, as list() gives it).
 std::wstring path(const std::string& name);
 
+// Writes the built-in looks (Warm Film, Teal & Orange, ...) into the folder once (a marker
+// file remembers it, so looks you delete stay deleted).
+void writeBuiltInLooks();
+
 } // namespace lut
 } // namespace tmshaders

@@ -24,6 +24,7 @@ struct Settings {
     bool disableGameMSAA = true; // required for the depth buffer; post AA replaces it
     int quality = 2;               // 0 low, 1 medium, 2 high (sample counts)
     bool readableGameDepth = true; // also hook the game's own depth buffers (menus, replay/video export)
+    bool gameMaterials = true;     // lamps, cars, glass and grass from the game's own materials (not guessed from pixels)
     bool disableGameFx = true;     // skip the game's bloom and colour filter (launcher "FX") while the mod shades
     // Neon light trail behind the car, kept for the whole run (0 = off).
     float neonTrail = 0.0f;
