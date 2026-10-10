@@ -140,6 +140,7 @@ void Pipeline::release() {
     releaseProfile();
     for (auto& shader : m_shaders) gfx::release(shader);
     gfx::release(m_stateBlock);
+    gfx::release(m_solidPS);
     gfx::release(m_splatVS);
     gfx::release(m_splatDecl);
     gfx::release(m_dropVS);
@@ -291,6 +292,7 @@ void Pipeline::destroyTargets() {
     gfx::release(m_heightDepth);
     gfx::release(m_splatPoints);
     gfx::release(m_cloudNoise);
+    gfx::release(m_lut);
     gfx::release(m_rainVB);
     gfx::release(m_rainIB);
     gfx::release(m_trailVB);
@@ -543,7 +545,9 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[35][2] = m_heightWorld;
     c[35][3] = s.longShadowRange;
     c[36][0] = s.neonLight;
-    c[36][1] = in.sunKnown && len > 1e-5f ? 1.0f : 0.0f; // the game's sun, even under a night sky
+    // The game's sun, even under a night sky: 1 known, 0 unknown, -1 the map is a night map
+    // (its light is the moon: no sun glare to tell from lamps, nothing baked to take out).
+    c[36][1] = mapNight ? -1.0f : (in.sunKnown && len > 1e-5f ? 1.0f : 0.0f);
     c[36][2] = weather::lightningFlash(in.time, s.lightning);
     // The bolt of the current strike: its direction is picked once, near where the camera
     // looks at that moment (a bolt behind you is a wasted strike), and then stays put.
@@ -826,6 +830,79 @@ bool Pipeline::ensureCloudNoise(IDirect3DDevice9* device) {
     staging->Release();
     if (!ok) gfx::release(m_cloudNoise);
     return ok;
+}
+
+void Pipeline::setLut(const std::vector<uint32_t>& texels, int size) {
+    gfx::release(m_lut);
+    const bool valid = size >= 2 && texels.size() == static_cast<size_t>(size) * size * size;
+    m_lutTexels = valid ? texels : std::vector<uint32_t>();
+    m_lutSize = valid ? size : 0;
+}
+
+bool Pipeline::ensureLut(IDirect3DDevice9* device) {
+    if (m_lut) return true;
+    if (m_lutSize == 0) return false;
+    const int size = m_lutSize;
+    IDirect3DVolumeTexture9* staging = nullptr;
+    if (FAILED(device->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &staging, nullptr))) return false;
+    D3DLOCKED_BOX box{};
+    if (SUCCEEDED(staging->LockBox(0, &box, nullptr, 0))) {
+        for (int z = 0; z < size; z++) {
+            for (int y = 0; y < size; y++) {
+                memcpy(static_cast<BYTE*>(box.pBits) + static_cast<size_t>(z) * box.SlicePitch + static_cast<size_t>(y) * box.RowPitch,
+                       &m_lutTexels[(static_cast<size_t>(z) * size + y) * size], size * 4);
+            }
+        }
+        staging->UnlockBox(0);
+    }
+    bool ok = SUCCEEDED(device->CreateVolumeTexture(size, size, size, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_lut, nullptr)) &&
+              SUCCEEDED(device->UpdateTexture(staging, m_lut));
+    staging->Release();
+    if (!ok) {
+        gfx::release(m_lut);
+        m_lutSize = 0; // don't try every frame
+    }
+    return ok;
+}
+
+void Pipeline::drawMaterialIds(IDirect3DDevice9* device, const Inputs& in, IDirect3DSurface9* output) {
+    // The game's depth-stencil is our INTZ texture: its stencil holds the ids. Bound as the
+    // depth-stencil again for the stencil test (no texture of ours may stay bound to it).
+    // Not in the previewer (its depth is a plain R32F texture).
+    D3DSURFACE_DESC desc{};
+    if (FAILED(in.depth->GetLevelDesc(0, &desc)) || desc.Format != static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z'))) return;
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
+    if (!m_solidPS) return;
+    for (int i = 0; i < 13; i++) device->SetTexture(i, nullptr);
+    IDirect3DSurface9* ds = nullptr;
+    if (FAILED(in.depth->GetSurfaceLevel(0, &ds)) || !ds) return;
+    device->SetDepthStencilSurface(ds);
+    device->SetRenderState(D3DRS_ZENABLE, FALSE);
+    static const float kColors[kMaterialIds][3] = {{1.0f, 0.2f, 0.2f}, {0.2f, 1.0f, 0.2f}, {0.25f, 0.45f, 1.0f}, {1.0f, 0.9f, 0.1f},
+                                                   {1.0f, 0.2f, 1.0f}, {0.1f, 1.0f, 1.0f}, {1.0f, 0.55f, 0.1f}, {0.6f, 0.3f, 1.0f},
+                                                   {0.6f, 1.0f, 0.4f}, {1.0f, 1.0f, 1.0f}, {0.5f, 0.25f, 0.1f}, {0.1f, 0.5f, 0.5f}};
+    device->SetRenderTarget(0, output);
+    device->SetPixelShader(m_solidPS);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
+    device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
+    device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_EQUAL);
+    device->SetRenderState(D3DRS_STENCILMASK, 0xFF);
+    device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_KEEP);
+    for (int id = 1; id <= kMaterialIds; id++) {
+        const float color[4] = {kColors[id - 1][0], kColors[id - 1][1], kColors[id - 1][2], 0.6f};
+        device->SetPixelShaderConstantF(32, color, 1);
+        device->SetRenderState(D3DRS_STENCILREF, static_cast<DWORD>(id));
+        m_quad.draw(device, in.width, in.height);
+    }
+    device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetDepthStencilSurface(nullptr);
+    ds->Release();
 }
 
 // --- Rain particles ---------------------------------------------------------
@@ -1909,6 +1986,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             bind(device, 0, m_hdr.texture, true);
             bind(device, 1, m_ndHalf.texture, false);
             bind(device, 2, m_focus[focus].texture, false);
+            // Photo mode: four times the samples and almost no per-pixel noise (nothing to
+            // average it out over frames: TAA is off by default, tiles freeze it).
+            passConstants(device, in.photo ? 64.0f : 16.0f, in.photo ? 0.15f : 1.0f);
             runPass(device, kDofBlur, m_dof);
         }
         bind(device, 0, m_hdr.texture, true);
@@ -2004,6 +2084,25 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 4, m_nd.texture, false);
     bind(device, 5, m_occlusion.texture, true);
     bind(device, 6, m_bloomDown[2].texture, true);
+    // The colour look-up table: texel centres of an N^3 table (scale, offset), mix.
+    const bool lut = in.lut > 0.001f && s.debugView == 0 && ensureLut(device);
+    if (lut) {
+        device->SetTexture(12, m_lut);
+        device->SetSamplerState(12, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+        device->SetSamplerState(12, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+        device->SetSamplerState(12, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+        device->SetSamplerState(12, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+        device->SetSamplerState(12, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+        device->SetSamplerState(12, D3DSAMP_ADDRESSW, D3DTADDRESS_CLAMP);
+        device->SetSamplerState(12, D3DSAMP_SRGBTEXTURE, FALSE);
+    }
+    const float n = static_cast<float>(m_lutSize > 0 ? m_lutSize : 2);
+    // Night maps: light sources never end up darker than the game drew them (the grade and
+    // the tone curve pulled lamps and the surfaces they light to grey). s8 = the game's image.
+    const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night && s.debugView == 0;
+    if (mapNight) bind(device, 8, in.color, false);
+    const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
+    device->SetPixelShaderConstantF(42, lutConstants, 1);
     passConstants(device, 1.0f / norm, 0.0f);
     // Disabled post passes are skipped entirely, not just passed through.
     const bool fxaa = s.fxaa && post;
@@ -2057,6 +2156,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // flicker, and keeping them out of its history avoids trails.
     if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && post && ensureRain(device))
         drawRain(device, in, s, dt, heightMap && m_heightValid, output);
+    if (s.debugView == kMaterialView) drawMaterialIds(device, in, output);
     profileEnd();
 
     if (temporal) {
@@ -2065,6 +2165,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         m_havePrevious = true;
     }
     for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
+    device->SetTexture(12, nullptr); // the LUT: nothing of ours stays bound (a Reset needs it released)
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
 }
 

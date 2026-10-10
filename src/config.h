@@ -67,6 +67,16 @@ public:
     bool hoverPreview = true;  // F8 menu: pointing at a preset shows it in the game
     bool menuFull = false;     // F8 menu over the whole screen (else the game stays in view on the right)
     bool checkUpdates = true;  // ask GitHub for a newer release when the game starts
+    // Photo mode (not in presets): on by itself with the free camera (cam 7), tiles per side
+    // of a hi-res photo (2..4, ~0.84x the screen each), depth of field on the clicked point.
+    bool photoAuto = true;
+    bool photoHideHud = true;
+    int photoTiles = 2;
+    float photoDof = 0.5f;
+    // Colour look-up table on top of every preset: a .cube file in TMVS\luts ("" = none)
+    // and how much of it (0..1).
+    std::string lutFile;
+    float lutAmount = 1.0f;
     // Picking a preset also makes it the one for this kind of map (day / sunset / night).
     bool rememberMoodPick = true;
     // The preset the menu points at: shown in the game until the pointer leaves (not saved).

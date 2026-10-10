@@ -49,7 +49,8 @@ tmvs_preview --play 20 0.5                                     # play the weathe
 |---|---|
 | `--preset <name>` | Start from a preset |
 | `--set Key=Value` | Override a setting (keys as in `settings.ini`), repeatable |
-| `--debug <n>` | Debug view: 1 depth, 2 normals, 3 AO, 4 shadows, 5 shafts, 6 bloom |
+| `--lut <file.cube>`, `--lutmix <0..1>` | Colour look-up table and how much of it |
+| `--debug <n>` | Debug view: 1 depth, 2 normals, 3 AO, 4 shadows, 5 shafts, 6 bloom, 7 long shadows (8 materials: in game only) |
 | `--before <file.bmp>` | Also write the unprocessed frame |
 | `--bench` | GPU time per pass |
 | `--batch <jobs.txt>` | One job per line: `out.bmp [cap=file.tmcap] [preset=Golden_Hour] [Key=Value ...]` |

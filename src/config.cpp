@@ -113,6 +113,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("TargetFPS", "Auto quality: target FPS", "Image", Float, targetFps, 30.0f, 240.0f),
         TMVS_FIELD("DisableGameMSAA", "Disable game MSAA (restart)", "Image", Bool, disableGameMSAA, 0.0f, 1.0f),
         TMVS_FIELD("ReadableGameDepth", "Effects in replay/video export (restart)", "Image", Bool, readableGameDepth, 0.0f, 1.0f),
+        TMVS_FIELD("DisableGameFX", "Turn off the game's FX post-processing (next map)", "Image", Bool, disableGameFx, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
         TMVS_FIELD("TrailColor", "Trail colour", "Neon trail", Color, trailColor, 0.0f, 1.0f),
@@ -205,7 +206,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 // too: it stays when you switch presets.
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
-           !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
+           !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "TAAJitter");
 }
 
@@ -744,6 +745,7 @@ void Config::tick() {
 void applyPreset(Settings& s, Preset preset) {
     const bool keepMSAA = s.disableGameMSAA;
     const bool keepDepth = s.readableGameDepth;
+    const bool keepFx = s.disableGameFx;
     const bool keepEnabled = s.enabled;
     const bool keepAuto = s.autoQuality;
     const float keepTarget = s.targetFps;
@@ -763,6 +765,7 @@ void applyPreset(Settings& s, Preset preset) {
     memcpy(s.trailColor, keepTrailColor, sizeof(keepTrailColor));
     s.disableGameMSAA = keepMSAA;
     s.readableGameDepth = keepDepth;
+    s.disableGameFx = keepFx;
     s.enabled = keepEnabled;
     s.autoQuality = keepAuto;
     s.targetFps = keepTarget;
@@ -805,7 +808,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.fogSunScatter = 0.5f;
             s.godRays = 1.55f;
             s.neonLight = 0.05f;
-            s.highlightBoost = 3.5f;
+            s.highlightBoost = 2.5f;
             s.bloom = 0.05f;
             s.lensFlare = 0.0f;
             s.chromaticAberration = 0.0f;
@@ -868,7 +871,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyColor[0] = 0.35f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.3f;
             s.ambientTint = 0.8f;
-            s.highlightBoost = 5.5f;
+            s.highlightBoost = 3.0f;
             s.bloom = 0.4f;
             s.godRays = 2.0f;
             s.exposure = 1.5f;
@@ -911,7 +914,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.48f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.4f;
             s.ambientTint = 0.7f;
-            s.highlightBoost = 5.5f;
+            s.highlightBoost = 3.0f;
             s.fogDensity = 0.9f;
             s.bloom = 0.15f;
             s.contrast = 1.18f;
@@ -930,7 +933,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.starAmount = 3.0f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.85f; s.skyColor[2] = 0.75f;
             s.ambientTint = 0.9f;
-            s.highlightBoost = 6.0f;
+            s.highlightBoost = 4.0f;
             s.fogDensity = 0.5f;
             s.bloom = 0.11f;
             s.contrast = 1.08f;
@@ -1003,7 +1006,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRayDecay = 0.9f;
             s.sunGlow = 0.2f;
             s.lensFlare = 0.0f;
-            s.highlightBoost = 5.0f;
+            s.highlightBoost = 4.0f;
             s.neonLight = 1.0f;
             s.bloom = 0.1f;
             s.exposure = -0.15f;
@@ -1062,7 +1065,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRays = 0.0f;
             s.sunGlow = 0.0f;
             s.lensFlare = 0.0f;
-            s.highlightBoost = 5.5f;
+            s.highlightBoost = 4.5f;
             s.neonLight = 1.3f;
             s.bloom = 0.12f;
             s.exposure = -0.3f;
@@ -1100,7 +1103,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRays = 0.0f;
             s.sunGlow = 0.0f;
             s.lensFlare = 0.0f;
-            s.highlightBoost = 4.0f;
+            s.highlightBoost = 3.0f;
             s.neonLight = 0.8f;
             s.bloom = 0.1f;
             s.exposure = -0.3f;
@@ -1140,6 +1143,17 @@ void Config::load() {
     hoverPreview = GetPrivateProfileIntW(L"General", L"HoverPreview", 1, ini) != 0;
     menuFull = GetPrivateProfileIntW(L"General", L"MenuFull", 0, ini) != 0;
     checkUpdates = GetPrivateProfileIntW(L"General", L"CheckForUpdates", 1, ini) != 0;
+    photoAuto = GetPrivateProfileIntW(L"General", L"PhotoAuto", 1, ini) != 0;
+    photoHideHud = GetPrivateProfileIntW(L"General", L"PhotoHideHud", 1, ini) != 0;
+    photoTiles = static_cast<int>(GetPrivateProfileIntW(L"General", L"PhotoTiles", 2, ini));
+    photoTiles = photoTiles < 2 ? 2 : (photoTiles > 4 ? 4 : photoTiles);
+    photoDof = 0.5f;
+    if (GetPrivateProfileStringW(L"General", L"PhotoDof", L"", text, 128, ini)) photoDof = static_cast<float>(_wtof(text));
+    photoDof = photoDof < 0.0f ? 0.0f : (photoDof > 1.0f ? 1.0f : photoDof);
+    lutFile = GetPrivateProfileStringW(L"General", L"Lut", L"", text, 128, ini) ? narrow(text) : std::string();
+    lutAmount = 1.0f;
+    if (GetPrivateProfileStringW(L"General", L"LutAmount", L"", text, 128, ini)) lutAmount = static_cast<float>(_wtof(text));
+    lutAmount = lutAmount < 0.0f ? 0.0f : (lutAmount > 1.0f ? 1.0f : lutAmount);
     rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 1, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
@@ -1152,6 +1166,7 @@ void Config::load() {
     settings.enabled = GetPrivateProfileIntW(L"General", L"Enabled", 1, ini) != 0;
     settings.disableGameMSAA = GetPrivateProfileIntW(L"Settings", L"DisableGameMSAA", 1, ini) != 0;
     settings.readableGameDepth = GetPrivateProfileIntW(L"Settings", L"ReadableGameDepth", 1, ini) != 0;
+    settings.disableGameFx = GetPrivateProfileIntW(L"Settings", L"DisableGameFX", 1, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
     wchar_t target[32] = {};
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
@@ -1190,6 +1205,16 @@ void Config::save() {
     WritePrivateProfileStringW(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"MenuFull", menuFull ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0", ini);
+    wchar_t photo[32];
+    swprintf(photo, 32, L"%d", photoTiles);
+    WritePrivateProfileStringW(L"General", L"PhotoTiles", photo, ini);
+    swprintf(photo, 32, L"%.2f", photoDof);
+    WritePrivateProfileStringW(L"General", L"PhotoDof", photo, ini);
+    WritePrivateProfileStringW(L"General", L"Lut", widen(lutFile).c_str(), ini);
+    swprintf(photo, 32, L"%.2f", lutAmount);
+    WritePrivateProfileStringW(L"General", L"LutAmount", photo, ini);
     WritePrivateProfileStringW(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0", ini);
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);

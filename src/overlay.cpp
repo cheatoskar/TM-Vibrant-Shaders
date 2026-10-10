@@ -4,6 +4,8 @@
 #include "engine.h"
 #include "pipeline.h"
 #include "log.h"
+#include "lut.h"
+#include "photo.h"
 #include "thumbnails.h"
 #include "update.h"
 #include "imgui.h"
@@ -39,7 +41,7 @@ float g_scale = 1.0f;          // 1 at 1080p, more on larger screens
 const char* kSkyModes[] = {"Game sky", "Clear sky + clouds", "Starry night", "Black hole", "Aurora", "Ring world"};
 const char* kPlanetChoices[] = {"None", "Saturn", "Jupiter", "Ice giant", "Exotic"};
 const char* kPlanetViews[] = {"Distant", "Next to the rings", "On the rings"};
-const char* kDebugViews[] = {"Final image", "Depth", "Normals", "Ambient occlusion", "Sun shadows", "Light shafts", "Bloom", "Long shadows"};
+const char* kDebugViews[] = {"Final image", "Depth", "Normals", "Ambient occlusion", "Sun shadows", "Light shafts", "Bloom", "Long shadows", "Materials (game draws)"};
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     Config& config = Config::get();
@@ -51,6 +53,10 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
         if (wparam == VK_F7) {
             config.settings.enabled = !config.settings.enabled;
             config.markDirty();
+            return 0;
+        }
+        if (wparam == VK_F6) {
+            photo::toggle();
             return 0;
         }
     }
@@ -70,6 +76,8 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
         if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST && ImGui::GetIO().WantCaptureMouse) return 1;
         if ((msg == WM_KEYDOWN || msg == WM_CHAR) && ImGui::GetIO().WantCaptureKeyboard) return 1;
     }
+    // Photo mode: focus click and depth of field on the wheel (the game doesn't see them).
+    if (photo::handleMessage(hwnd, msg, wparam, lparam)) return 0;
     return CallWindowProcW(g_originalWndProc, hwnd, msg, wparam, lparam);
 }
 
@@ -304,7 +312,7 @@ const Field* findField(const char* key) {
 // Settings of the installation (not of a look): changing them keeps the preset.
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
-           !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
+           !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "TAAJitter");
 }
 
@@ -1075,6 +1083,33 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"Exposure", "Brightness"},
                                     {"Saturation", "Colour"},
                                     {"MotionBlur", "Motion blur"}}));
+    // On top of every preset (not part of one): a colour look from Resolve, Lightroom, ...
+    panels.push_back({"Colour look (LUT)", 3.0f, [&config] {
+                          ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                          if (ImGui::BeginCombo("Look", config.lutFile.empty() ? "None" : config.lutFile.c_str())) {
+                              if (ImGui::Selectable("None", config.lutFile.empty())) {
+                                  config.lutFile.clear();
+                                  config.markDirty();
+                              }
+                              for (const std::string& name : lut::list()) {
+                                  if (ImGui::Selectable(name.c_str(), name == config.lutFile)) {
+                                      config.lutFile = name;
+                                      config.markDirty();
+                                  }
+                              }
+                              ImGui::EndCombo();
+                          }
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("3D .cube files in the LUT folder, applied after the preset's own colours.");
+                          if (!config.lutFile.empty()) {
+                              ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                              if (ImGui::SliderFloat("Amount", &config.lutAmount, 0.0f, 1.0f, "%.2f")) config.markDirty();
+                          }
+                          if (ImGui::Button("Open the LUT folder")) {
+                              CreateDirectoryW(lut::folder().c_str(), nullptr);
+                              ShellExecuteW(nullptr, L"open", lut::folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                          }
+                          return false;
+                      }});
     panels.push_back(settingsPanel("Weather", s,
                                    {{"Rain", "Rain"},
                                     {"Snow", "Snow"},
@@ -1144,7 +1179,10 @@ bool drawStudio(Config& config, Settings& s) {
     sameLineIfRoom("Reload shaders (F9)");
     if (ImGui::Button("Reload shaders (F9)")) g_reloadRequested = true;
     ImGui::SameLine();
-    if (ImGui::GetContentRegionAvail().x < 170.0f * g_scale) ImGui::NewLine();
+    if (ImGui::GetContentRegionAvail().x < 260.0f * g_scale) ImGui::NewLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Debug view");
+    ImGui::SameLine();
     ImGui::SetNextItemWidth(170.0f * g_scale);
     ImGui::Combo("##debug", &s.debugView, kDebugViews, IM_ARRAYSIZE(kDebugViews));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Debug view");
@@ -1361,18 +1399,35 @@ bool drawSettings(Config& config, Settings& s) {
                           switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
                           return false;
                       }});
-    panels.push_back({"Game", 6.0f, [&s] {
+    panels.push_back({"Game", 7.0f, [&s] {
                           bool l = drawKey(s, "CinematicOnlyInReplays", "Motion blur, depth of field only in replays");
                           l |= drawKey(s, "WeatherSound", "Rain and thunder volume");
                           l |= drawKey(s, "TAA", "Temporal anti-aliasing");
                           l |= drawKey(s, "TAAJitter", "TAA sub-pixel jitter");
                           l |= drawKey(s, "DisableGameMSAA", "Turn off the game's MSAA (restart)");
                           l |= drawKey(s, "ReadableGameDepth", "Effects in replays and video export (restart)");
+                          l |= drawKey(s, "DisableGameFX", "Turn off the game's FX: bloom, colour filter (next map)");
                           return l;
+                      }});
+    panels.push_back({"Photo mode", 8.0f, [&config] {
+                          switchRow("With the free camera (cam 7)", &config.photoAuto,
+                                    "Photo mode comes on by itself with the free camera: no HUD, full quality, effects that reach far.\nF6 turns it on or off anywhere.");
+                          switchRow("Hide the HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
+                          ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                          char factor[48];
+                          snprintf(factor, sizeof(factor), "%d x %d tiles = %.1fx", config.photoTiles, config.photoTiles, config.photoTiles * 0.84f);
+                          if (ImGui::SliderInt("Hi-res photo", &config.photoTiles, 2, 4, factor)) config.markDirty();
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+F12: a photo this many times the screen size. Pause the replay while the tiles are taken.");
+                          ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                          if (ImGui::SliderFloat("Depth of field", &config.photoDof, 0.0f, 1.0f, "%.2f")) config.markDirty();
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Blur around the clicked focus point (Ctrl+wheel in the game).");
+                          ImGui::TextDisabled("F12 photo  |  Shift+F12 hi-res  |  middle click: focus");
+                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: blur  |  Shift+wheel: zoom  |  F6: on/off");
+                          return false;
                       }});
     panels.push_back({"Files", 3.0f, [&config] {
                           if (ImGui::Button("Open the TMVS folder")) ShellExecuteW(nullptr, L"open", log::dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("settings.ini, tmvs.log and the F12 captures.");
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("settings.ini, tmvs.log, the F12 captures and the photos.");
                           ImGui::SameLine();
                           if (ImGui::Button("Open the presets folder")) {
                               CreateDirectoryW(config.presetDir().c_str(), nullptr);
@@ -1700,17 +1755,29 @@ void draw(IDirect3DDevice9* device) {
         init(device);
         if (!g_initialized) return;
     }
-    if (!Config::get().showOverlay) {
+    const bool menu = Config::get().showOverlay;
+    const char* photoHint = photo::status();
+    if (!menu) {
         Config::get().previewPreset.clear();
-        return;
+        if (!*photoHint) return;
     }
 
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
     // Draw ImGui's cursor over the menu (the game hides the OS cursor), the game's elsewhere.
-    ImGui::GetIO().MouseDrawCursor = ImGui::GetIO().WantCaptureMouse;
+    ImGui::GetIO().MouseDrawCursor = menu && ImGui::GetIO().WantCaptureMouse;
     ImGui::NewFrame();
-    drawMenu(device);
+    if (menu) drawMenu(device);
+    if (*photoHint) {
+        // Photo mode line, top left. Drawn at Present: never in the photos.
+        ImGui::SetNextWindowPos(ImVec2(16.0f * g_scale, 16.0f * g_scale));
+        ImGui::SetNextWindowBgAlpha(0.55f);
+        ImGui::Begin("##photo", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::TextUnformatted(photoHint);
+        ImGui::End();
+    }
     ImGui::EndFrame();
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();

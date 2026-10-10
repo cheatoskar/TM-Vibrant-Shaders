@@ -4,6 +4,7 @@
 #include "image.h"
 #include "log.h"
 #include "settings.h"
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -17,6 +18,7 @@ int g_manual = -1;          // F6: -1 follow the free camera, 0 off, 1 on
 bool g_wasFreeCam = false;
 bool g_active = false;
 float g_focus[2] = {-1.0f, -1.0f};
+float g_zoom = 1.0f;        // Shift+wheel, 1..8
 
 enum class Job { None, Single, Tiles };
 Job g_job = Job::None;
@@ -43,10 +45,11 @@ void setStatus(const std::string& text, DWORD seconds) {
 }
 
 std::string hint() {
-    char text[160];
+    char text[200];
     const Config& config = Config::get();
     const float factor = static_cast<float>(config.photoTiles) * 0.84f;
-    snprintf(text, sizeof(text), "Photo mode   F12 photo   Shift+F12 %.1fx photo   middle click: focus   Ctrl+wheel: blur   F6: off", factor);
+    snprintf(text, sizeof(text), "Photo mode   F12 photo   Shift+F12 %.1fx photo   middle click: focus   Ctrl+wheel: blur   Shift+wheel: zoom   F6: off",
+             factor);
     return text;
 }
 
@@ -154,12 +157,16 @@ void beginFrame() {
         } else {
             cancel("photo mode off");
             g_focus[0] = g_focus[1] = -1.0f;
+            g_zoom = 1.0f;
             setStatus("", 0);
         }
     }
-    engine::hideOverlay(g_active);
+    engine::hideOverlay(g_active && config.photoHideHud);
+    engine::fullViewDistance(g_active);
+    engine::setProjectionZoom(g_active ? g_zoom : 1.0f);
 
-    if (g_job == Job::Tiles) {
+    // The screen size comes with the first frame after the request (no 0 / 0 before).
+    if (g_job == Job::Tiles && g_width > 0 && g_height > 0) {
         const int n = g_tiles;
         const int i = g_tile % n, j = g_tile / n;
         const float sx = static_cast<float>(n) * g_innerW / g_width;
@@ -175,6 +182,11 @@ void beginFrame() {
 bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (!g_active || g_job != Job::None) return false;
     if (msg == WM_MBUTTONDOWN) {
+        if (wparam & MK_SHIFT) {
+            g_zoom = 1.0f;
+            setStatus("Zoom off", 2);
+            return true;
+        }
         if (wparam & MK_CONTROL) {
             g_focus[0] = g_focus[1] = -1.0f;
             setStatus("Focus off", 2);
@@ -200,6 +212,16 @@ bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         config.markDirty();
         char text[64];
         snprintf(text, sizeof(text), "Depth of field %.0f %%", config.photoDof * 100.0f);
+        setStatus(text, 2);
+        return true;
+    }
+    // Zoom: 10 % per wheel step, up to 8x (a telephoto lens from the free camera).
+    if (msg == WM_MOUSEWHEEL && (GET_KEYSTATE_WPARAM(wparam) & MK_SHIFT)) {
+        const float steps = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
+        const float z = g_zoom * powf(1.1f, steps);
+        g_zoom = z < 1.0f ? 1.0f : (z > 8.0f ? 8.0f : z);
+        char text[64];
+        snprintf(text, sizeof(text), "Zoom %.1fx", g_zoom);
         setStatus(text, 2);
         return true;
     }

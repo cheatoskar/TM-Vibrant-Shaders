@@ -54,6 +54,33 @@ IDirect3DDevice9* g_device = nullptr; // the game's device, for the memory repor
 IDirect3DDevice9* g_gameDevice = nullptr;
 bool foreignDevice(IDirect3DDevice9* device) { return g_gameDevice && device != g_gameDevice; }
 
+// The game's draw calls: how many per frame, and how many with software vertex processing
+// (the device is a mixed one): is the CPU side of the game worth working on? Logged twice,
+// after about 1000 and 10000 frames, then no longer counted.
+struct DrawStats {
+    unsigned frames = 0;
+    unsigned draws = 0;
+    unsigned software = 0;
+    unsigned primitives = 0;
+} g_drawStats;
+bool g_countDraws = true;
+
+void countDraw(IDirect3DDevice9* device, UINT primitives) {
+    if (!g_countDraws || g_internal != 0) return;
+    g_drawStats.draws++;
+    g_drawStats.primitives += primitives;
+    if (device->GetSoftwareVertexProcessing()) g_drawStats.software++;
+}
+
+void drawStatsFrame() {
+    if (!g_countDraws || ++g_drawStats.frames % 1000 != 0) return;
+    const DrawStats& d = g_drawStats;
+    TMVS_LOG("draws: %.0f per frame, %.0f%% with software vertex processing, %.0f primitives per frame (%u frames)",
+             static_cast<double>(d.draws) / d.frames, d.draws ? 100.0 * d.software / d.draws : 0.0, static_cast<double>(d.primitives) / d.frames,
+             d.frames);
+    if (d.frames >= 10000) g_countDraws = false;
+}
+
 template <typename Fn>
 Fn original(Slot slot) {
     return reinterpret_cast<Fn>(g_original[slot]);
@@ -166,6 +193,7 @@ HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const 
     }
     if (tracingGame()) tracer::event("Present");
     tracer::onPresent(device);
+    drawStatsFrame();
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(kPresent)(
         device, src, dst, window, dirty);
 }
@@ -346,12 +374,14 @@ HRESULT APIENTRY setTextureDetour(IDirect3DDevice9* device, DWORD stage, IDirect
 
 HRESULT APIENTRY drawPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count) {
     if (tracingGame()) traceDrawState(device, "DP", count);
+    countDraw(device, count);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT)>(kDrawPrimitive)(device, type, start, count);
 }
 
 HRESULT APIENTRY drawIndexedPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices,
                                             UINT start, UINT count) {
     if (tracingGame()) traceDrawState(device, "DIP", count);
+    countDraw(device, count);
     if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT)>(kDrawIndexedPrimitive)(
         device, type, base, minIndex, vertices, start, count);
@@ -359,6 +389,7 @@ HRESULT APIENTRY drawIndexedPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITI
 
 HRESULT APIENTRY drawPrimitiveUPDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride) {
     if (tracingGame()) traceDrawState(device, "DPUP", count);
+    countDraw(device, count);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT)>(kDrawPrimitiveUP)(
         device, type, count, data, stride);
 }
@@ -366,6 +397,7 @@ HRESULT APIENTRY drawPrimitiveUPDetour(IDirect3DDevice9* device, D3DPRIMITIVETYP
 HRESULT APIENTRY drawIndexedPrimitiveUPDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT minIndex, UINT vertices,
                                               UINT count, const void* indices, D3DFORMAT indexFormat, const void* data, UINT stride) {
     if (tracingGame()) traceDrawState(device, "DIPUP", count);
+    countDraw(device, count);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void*, D3DFORMAT, const void*,
                                        UINT)>(kDrawIndexedPrimitiveUP)(device, type, minIndex, vertices, count, indices, indexFormat,
                                                                        data, stride);

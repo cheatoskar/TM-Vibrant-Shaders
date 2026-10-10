@@ -24,6 +24,7 @@ struct Settings {
     bool disableGameMSAA = true; // required for the depth buffer; post AA replaces it
     int quality = 2;               // 0 low, 1 medium, 2 high (sample counts)
     bool readableGameDepth = true; // also hook the game's own depth buffers (menus, replay/video export)
+    bool disableGameFx = true;     // skip the game's bloom and colour filter (launcher "FX") while the mod shades
     // Neon light trail behind the car, kept for the whole run (0 = off).
     float neonTrail = 0.0f;
     float trailColor[3] = {0.1f, 0.65f, 1.0f};
@@ -86,7 +87,7 @@ struct Settings {
     // Bloom & lens
     float bloom = 0.09f;
     float bloomRadius = 0.85f;
-    float highlightBoost = 5.0f;   // LDR -> HDR expansion of light sources
+    float highlightBoost = 3.5f;   // LDR -> HDR expansion of light sources
     float lensFlare = 0.25f;
     float chromaticAberration = 0.05f;
     float vignette = 0.25f;
