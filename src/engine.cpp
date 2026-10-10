@@ -5,7 +5,9 @@
 #include <windows.h>
 #include <cstring>
 #include <cmath>
+#include <unordered_map>
 #include <unordered_set>
+#include <cwchar>
 
 namespace tmshaders {
 namespace engine {
@@ -18,7 +20,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -44,13 +46,13 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0},
 };
 const GameBuild* g_build = nullptr;
@@ -115,6 +117,18 @@ constexpr size_t kZClipEnabled = 0x194;
 constexpr InlineSite kDrawShaderSite = {kDrawShader, {0x81, 0xec, 0x88, 0x01, 0x00, 0x00}, 6, -1, "CDx9ShaderKeeper::UpdateAndRender"};
 constexpr InlineSite kDrawPassSite = {kDrawPass, {0x81, 0xec, 0xc8, 0x00, 0x00, 0x00}, 6, -1, "CDx9ShaderKeeper::ShadeVisualForCurrentPass"};
 constexpr size_t kDelayedRenderShader = 0x10;
+// Lens flares of the scene's lights, the sun's halo among them (drawn over everything in front
+// of the sun): LensFlareAdd(light, position, size, testVisible, ...). A light whose GxLight
+// (light +0x48 -> +0x88) answers 1 to its type (vtable +0x78) is the directional one, the sun.
+// The game reads its keyboard (and pads, mouse) through DirectInput: GetDeviceState into a
+// buffer, 256 bytes for the keyboard (one per DIK_ key). Not through window messages, so a
+// key the menu used (Esc) has to be taken out here, or the game pauses as well.
+constexpr InlineSite kReadInputSite = {kReadInput, {0x57, 0x8b, 0x7c, 0x24, 0x08}, 5, -1, "CInputPortDx8::DeviceReadHardwareCurState"};
+// The game's own switch for the race / replay interface (HUD): the playground interface
+// shows or hides its 2D scene (CScene2d::SetVisibleInterface). Called with the visibility the
+// game wants; the photo mode answers 0 there.
+constexpr InlineSite kInterfaceSetSite = {kInterfaceSet, {0x8b, 0x44, 0x24, 0x04, 0x3b, 0x41, 0x20}, 7, -1, "CGamePlaygroundInterface::InterfaceVisibleInternalSet"};
+constexpr InlineSite kLensFlareSite = {kLensFlare, {0x83, 0xec, 0x48, 0x53, 0x55}, 5, -1, "CVisionViewport::LensFlareAdd"};
 constexpr size_t kZClipCuts = 0x174;
 
 using FrameBeginFn = int(__fastcall*)(void*, void*);
@@ -188,6 +202,17 @@ DrawShaderFn g_drawShader = nullptr;
 DrawPassFn g_drawPass = nullptr;
 const void* g_currentShader = nullptr; // the material being drawn (null between draws)
 bool g_shaderCensus = false;           // log every material once (dev: finding the lamp, glass, ... materials)
+using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
+LensFlareFn g_lensFlare = nullptr;
+bool g_hideSunFlare = false;           // a night sky replaces the sun: its halo fades out
+using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
+ReadInputFn g_readInput = nullptr;
+volatile bool g_swallowEscape = false; // the menu or photo mode took this Esc press
+using InterfaceSetFn = void(__fastcall*)(void*, void*, int);
+InterfaceSetFn g_interfaceSet = nullptr;
+void* g_interface = nullptr;     // the playground interface that last set its visibility
+int g_interfaceWanted = 1;       // what the game wants for it
+LONG g_interfaceLoads = -1;      // the map it belongs to (gone with the next one)
 void* g_freeCam = nullptr;       // the free camera last switched on (null: off)
 // The game's FX post-processing: CSceneFxNod::CanActive asks each effect through this slot
 // whether it runs at all. Bloom and the colour filter answer with the launcher's
@@ -351,6 +376,39 @@ void __fastcall zclipDetour(void* self, void* edx, float speed, void* frustum, v
 
 bool nodFilePath(const void* nod, wchar_t* out, size_t size);
 
+// What a game material is, from its shader file (one look per shader and map: the engine
+// reuses the memory of freed shaders).
+//   TSelfI ...                       self-illuminated: lamps, light panels, screens (not the additive
+//                                    TAdd glows: they are drawn over whole blocks)
+//   Vehicles\...Glass               car windows
+//   Vehicles\...                    the cars
+//   Grass ...                        grass
+Material classify(const wchar_t* path) {
+    const wchar_t* file = wcsrchr(path, L'\\');
+    file = file ? file + 1 : path;
+    if (!_wcsnicmp(file, L"TSelfI", 6)) return Material::Light;
+    if (wcsstr(path, L"Vehicles\\") || wcsstr(path, L"Vehicles/")) return wcsstr(file, L"Glass") ? Material::Glass : Material::Car;
+    if (!_wcsnicmp(file, L"Grass", 5)) return Material::Grass;
+    return Material::Other;
+}
+
+Material materialOf(const void* shader) {
+    static std::unordered_map<const void*, Material> known;
+    static LONG knownLoads = -1;
+    if (!shader) return Material::Other;
+    if (knownLoads != g_mapLoads) {
+        known.clear();
+        knownLoads = g_mapLoads;
+    }
+    const auto it = known.find(shader);
+    if (it != known.end()) return it->second;
+    wchar_t path[512] = {};
+    const bool named = nodFilePath(shader, path, 512);
+    const Material m = named ? classify(path) : Material::Other;
+    if (known.size() < 8192) known.emplace(shader, m);
+    return m;
+}
+
 void censusShader(const void* shader) {
     static std::unordered_set<const void*> seen;
     if (!shader || seen.size() >= 4096 || !seen.insert(shader).second) return;
@@ -373,6 +431,57 @@ void __fastcall drawPassDetour(void* self, void* edx, void* delayed) {
     if (g_shaderCensus) censusShader(g_currentShader);
     g_drawPass(self, edx, delayed);
     g_currentShader = previous;
+}
+
+bool isSunLight(const void* corpusLight) {
+    __try {
+        const BYTE* item = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(corpusLight) + 0x48);
+        if (!item) return false;
+        void* light = *reinterpret_cast<void* const*>(item + 0x88);
+        if (!light) return false;
+        using TypeFn = int(__fastcall*)(void*, void*);
+        const TypeFn type = *reinterpret_cast<const TypeFn*>(*reinterpret_cast<const BYTE* const*>(light) + 0x78);
+        return type(light, nullptr) == 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The sun's flare is reported as hidden: the engine fades it out as when the sun goes behind
+// something (no abrupt cut, and it comes back the same way).
+void __fastcall lensFlareDetour(void* self, void* edx, void* light, const void* position, float size, int testVisible, float extra) {
+    if (g_hideSunFlare && testVisible && isSunLight(light)) testVisible = 0;
+    g_lensFlare(self, edx, light, position, size, testVisible, extra);
+}
+
+int __cdecl readInputDetour(void* device, void* state, unsigned long size) {
+    const int ok = g_readInput(device, state, size);
+    if (g_swallowEscape) {
+        if (GetAsyncKeyState(VK_ESCAPE) < 0) {
+            if (ok && state && size == 256) static_cast<BYTE*>(state)[0x01] = 0; // DIK_ESCAPE
+        } else {
+            g_swallowEscape = false; // released: the game may have it again
+        }
+    }
+    return ok;
+}
+
+void __fastcall interfaceSetDetour(void* self, void* edx, int visible) {
+    g_interface = self;
+    g_interfaceWanted = visible;
+    g_interfaceLoads = g_mapLoads;
+    g_interfaceSet(self, edx, g_hideOverlay ? 0 : visible);
+}
+
+// Applies the photo mode's wish at once (the game only calls the setter when its own flags
+// change). Only for the interface of the current map: an older one is freed.
+void applyInterfaceVisibility() {
+    if (!g_interfaceSet || !g_interface || g_interfaceLoads != g_mapLoads) return;
+    __try {
+        g_interfaceSet(g_interface, nullptr, g_hideOverlay ? 0 : g_interfaceWanted);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_interface = nullptr;
+    }
 }
 
 void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
@@ -549,7 +658,9 @@ void __fastcall cameraEndDetour(void* self, void* edx, void* camera) {
 
 void __fastcall overlayZonesDetour(void* self, void* edx, void* zones, int flags) {
     if (g_callbacks.overlayBegin) g_callbacks.overlayBegin();
-    if (!g_hideOverlay) g_overlayZones(self, edx, zones, flags);
+    // Always drawn: in some setups (camera effects, the editors) this pass also brings the 3D
+    // view to the screen. The photo mode hides only the interface (applyInterfaceVisibility).
+    g_overlayZones(self, edx, zones, flags);
     if (g_callbacks.overlayEnd) g_callbacks.overlayEnd();
 }
 
@@ -662,6 +773,9 @@ bool install(const Callbacks& callbacks) {
     g_zclip = reinterpret_cast<ZClipFn>(inlineHook(kZClipSite, reinterpret_cast<void*>(&zclipDetour)));
     g_drawShader = reinterpret_cast<DrawShaderFn>(inlineHook(kDrawShaderSite, reinterpret_cast<void*>(&drawShaderDetour)));
     g_drawPass = reinterpret_cast<DrawPassFn>(inlineHook(kDrawPassSite, reinterpret_cast<void*>(&drawPassDetour)));
+    g_lensFlare = reinterpret_cast<LensFlareFn>(inlineHook(kLensFlareSite, reinterpret_cast<void*>(&lensFlareDetour)));
+    g_readInput = reinterpret_cast<ReadInputFn>(inlineHook(kReadInputSite, reinterpret_cast<void*>(&readInputDetour)));
+    g_interfaceSet = reinterpret_cast<InterfaceSetFn>(inlineHook(kInterfaceSetSite, reinterpret_cast<void*>(&interfaceSetDetour)));
     patchFx(0, reinterpret_cast<void*>(&bloomCanActiveDetour));
     patchFx(1, reinterpret_cast<void*>(&colorsCanActiveDetour));
     g_active = true;
@@ -748,7 +862,21 @@ void setProjectionZoom(float zoom) {
 }
 
 void hideOverlay(bool hide) {
+    if (hide == g_hideOverlay) return;
     g_hideOverlay = hide;
+    applyInterfaceVisibility();
+}
+
+void swallowEscape() {
+    g_swallowEscape = true;
+}
+
+bool escapeSwallowed() {
+    return g_swallowEscape;
+}
+
+void hideSunFlare(bool hide) {
+    g_hideSunFlare = hide;
 }
 
 void shaderCensus(bool on) {
@@ -757,6 +885,10 @@ void shaderCensus(bool on) {
 
 const void* currentShader() {
     return g_currentShader;
+}
+
+Material currentMaterial() {
+    return materialOf(g_currentShader);
 }
 
 void fullViewDistance(bool full) {

@@ -61,7 +61,8 @@ void setMainCamera(const void* camera);
 // in, never out, since the engine culls with its own field of view).
 void setProjectionZoom(float zoom);
 
-// Skips the game's HUD and menus (RenderOverlayZones) while true: the photo mode.
+// Hides the race / replay interface (HUD) while true: the photo mode. Through the game's own
+// switch (CGamePlaygroundInterface), so menus and the 3D view are drawn as always.
 void hideOverlay(bool hide);
 
 // Skips the game's own FX post-processing (bloom and colour filter, the launcher's "FX"
@@ -77,6 +78,17 @@ void fullViewDistance(bool full);
 // The game's material (CPlugShader) of the draw call being made, null between draws and
 // without the hooks. A first step towards per-material masks (lamps, glass, water).
 const void* currentShader();
+// The menu or photo mode used this Esc press: the game doesn't see it (it would pause) until
+// the key is released.
+void swallowEscape();
+bool escapeSwallowed();
+
+// A night sky replaces the sun: the game's halo around its sun (a lens flare drawn over the
+// geometry in front of the sun) fades out.
+void hideSunFlare(bool hide);
+// What the material being drawn is (from its shader file), Other between draws.
+enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4 };
+Material currentMaterial();
 // Development: log each material once with its file (tmvs.log "shader ...").
 void shaderCensus(bool on);
 

@@ -9,6 +9,7 @@
 #include "thumbnails.h"
 #include "update.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "backends/imgui_impl_dx9.h"
 #include "backends/imgui_impl_win32.h"
 #include "tm_shaders_version.h"
@@ -59,7 +60,15 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
             photo::toggle();
             return 0;
         }
+        // Esc closes the menu first, then leaves photo mode; only then does the game get it.
+        if (wparam == VK_ESCAPE && (config.showOverlay || photo::active())) {
+            if (config.showOverlay) config.showOverlay = false;
+            else photo::toggle();
+            engine::swallowEscape();
+            return 0;
+        }
     }
+    if ((msg == WM_KEYDOWN || msg == WM_KEYUP) && wparam == VK_ESCAPE && GetAsyncKeyState(VK_ESCAPE) < 0 && engine::escapeSwallowed()) return 0;
     if (config.showOverlay) {
         // The game reads its keys itself and never turns key presses into characters, so the
         // menu's text fields stayed empty: while one has the focus, make the WM_CHAR here
@@ -69,6 +78,15 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
             if (!PeekMessageW(&queued, hwnd, WM_CHAR, WM_CHAR, PM_NOREMOVE)) {
                 MSG key{hwnd, msg, wparam, lparam, 0, {}};
                 TranslateMessage(&key);
+            }
+        }
+        if (msg == WM_MOUSEWHEEL) {
+            // Owner report: the wheel didn't scroll the menu. Once: does it get here at all?
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                const ImGuiWindow* hovered = ImGui::GetCurrentContext() ? ImGui::GetCurrentContext()->HoveredWindow : nullptr;
+                TMVS_LOG("menu: mouse wheel %d over %s", static_cast<int>(GET_WHEEL_DELTA_WPARAM(wparam)), hovered ? hovered->Name : "nothing");
             }
         }
         if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) return 1;
@@ -312,7 +330,7 @@ const Field* findField(const char* key) {
 // Settings of the installation (not of a look): changing them keeps the preset.
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
-           !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
+           !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "TAAJitter");
 }
 
@@ -964,7 +982,8 @@ bool panel(const PanelDef& def) {
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 0.07f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f * g_scale);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * g_scale, 10.0f * g_scale));
-    ImGui::BeginChild(def.title.c_str(), ImVec2(0.0f, 0.0f), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_Borders);
+    ImGui::BeginChild(def.title.c_str(), ImVec2(0.0f, 0.0f), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollWithMouse); // the wheel scrolls the page, not the (never scrolling) panel
     // Title with a short bar in the group's colour; a foldable panel opens and closes on it.
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const float h = g_fontTitle->FontSize * 0.8f;
@@ -1123,6 +1142,7 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"WaterSurfaces", "Water"},
                                     {"Reflections", "Reflections (dry track)"},
                                     {"ReflectionBlur", "Reflection blur"}}));
+    for (PanelDef& p : panels) p.foldable = true; // closed at first, the title opens them
     const bool look = panelColumns(panels, 330.0f);
     if (config.preset == kCustomPreset) {
         if (ImGui::Button("Save as preset")) ImGui::OpenPopup("save preset");
@@ -1399,13 +1419,14 @@ bool drawSettings(Config& config, Settings& s) {
                           switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
                           return false;
                       }});
-    panels.push_back({"Game", 7.0f, [&s] {
+    panels.push_back({"Game", 8.0f, [&s] {
                           bool l = drawKey(s, "CinematicOnlyInReplays", "Motion blur, depth of field only in replays");
                           l |= drawKey(s, "WeatherSound", "Rain and thunder volume");
                           l |= drawKey(s, "TAA", "Temporal anti-aliasing");
                           l |= drawKey(s, "TAAJitter", "TAA sub-pixel jitter");
                           l |= drawKey(s, "DisableGameMSAA", "Turn off the game's MSAA (restart)");
                           l |= drawKey(s, "ReadableGameDepth", "Effects in replays and video export (restart)");
+                          l |= drawKey(s, "GameMaterials", "Use the game's materials (lamps, cars, glass)");
                           l |= drawKey(s, "DisableGameFX", "Turn off the game's FX: bloom, colour filter (next map)");
                           return l;
                       }});
@@ -1419,10 +1440,12 @@ bool drawSettings(Config& config, Settings& s) {
                           if (ImGui::SliderInt("Hi-res photo", &config.photoTiles, 2, 4, factor)) config.markDirty();
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+F12: a photo this many times the screen size. Pause the replay while the tiles are taken.");
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
-                          if (ImGui::SliderFloat("Depth of field", &config.photoDof, 0.0f, 1.0f, "%.2f")) config.markDirty();
-                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Blur around the clicked focus point (Ctrl+wheel in the game).");
+                          char aperture[32];
+                          snprintf(aperture, sizeof(aperture), "f/%.1f", photo::fNumber(config.photoDof));
+                          if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Like a camera lens: wide open (f/1.4) blurs most around the clicked focus point, f/16 keeps all sharp (Ctrl+wheel in the game).");
                           ImGui::TextDisabled("F12 photo  |  Shift+F12 hi-res  |  middle click: focus");
-                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: blur  |  Shift+wheel: zoom  |  F6: on/off");
+                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  F6: on/off");
                           return false;
                       }});
     panels.push_back({"Files", 3.0f, [&config] {
@@ -1540,14 +1563,14 @@ void drawAbout(Config& config) {
 
 // --- The window ---------------------------------------------------------------------
 
-// The window's size: most of the screen's height, and wide enough for the settings side
-// by side but leaving the right part of the game in view (the live preview). Full: the
+// The window's size: most of the screen's height and as narrow as the navigation and one
+// column of settings allow, leaving most of the game in view (the live preview). Full: the
 // whole screen.
 void placeWindow(bool full, ImGuiCond cond) {
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float margin = 24.0f * g_scale;
     ImVec2 size(display.x - margin * 2.0f, display.y - margin * 2.0f);
-    if (!full) size.x = std::clamp(display.x * 0.6f, std::min(980.0f * g_scale, size.x), std::min(1500.0f * g_scale, size.x));
+    if (!full) size.x = std::clamp(display.x * 0.3f, std::min(660.0f * g_scale, size.x), std::min(1500.0f * g_scale, size.x));
     ImGui::SetNextWindowPos(ImVec2(margin, margin), cond);
     ImGui::SetNextWindowSize(size, cond);
 }
@@ -1684,7 +1707,7 @@ void drawMenu(IDirect3DDevice9* device) {
     s_display = display;
     s_full = config.menuFull;
     placeWindow(config.menuFull, replace ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(760.0f * g_scale, display.x), std::min(480.0f * g_scale, display.y)), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(620.0f * g_scale, display.x), std::min(480.0f * g_scale, display.y)), ImVec2(FLT_MAX, FLT_MAX));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f * g_scale, 14.0f * g_scale));
     const bool open = ImGui::Begin("TM Vibrant Shaders", &config.showOverlay, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
