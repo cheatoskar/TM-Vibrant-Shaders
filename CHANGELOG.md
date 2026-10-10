@@ -15,13 +15,13 @@
 - Snow: cars keep their paint with every camera (replays, outside and TV cameras, ghosts), not only behind the car.
 - Snow: the car on the start podium no longer turns white, and driving down from it leaves no bare rectangle in the snow.
 - TAA: the car no longer leaves see-through copies behind it while driving (the road just behind the car passed the depth check), nor its roof against the sky.
-- Light sources: your car (or anything else in front) no longer counts as dark surroundings for the surface behind it: a white barrier next to the car got a glowing echo of the car, which drove along like a ghost. Large lit faces (signs, light blocks) get less of the boost. *Light source intensity* is higher by default now (5, night presets 5.5-6).
+- Light sources: your car (or anything else in front) no longer counts as dark surroundings for the surface behind it: a white barrier next to the car got a glowing echo of the car, which drove along like a ghost.
 - Horizon: more bloom (0.15).
 - Bounce light (GI): your car's coloured bounce light no longer stays on the road behind it as a trail.
 - Dry reflections: dirt roads only get a faint sheen (they mirrored the banners like a polished floor).
-
-**Known issues**
-- TrackMania's own FX post-processing (launcher, *Advanced*) can interfere with the shaders. If something looks overexposed, smeared or doubled, turn it off.
+- Photo mode (`F6`, on by itself with the free camera, cam 7): no HUD (the `F8` menu stays), full quality (auto quality pauses), ambient occlusion, shadows, bounce light and reflections reach three times as far, and long shadows cover 960 m. `F12` saves `photo_NNN.png` without the HUD; `Shift+F12` saves a hi-res photo from 2 x 2 to 4 x 4 tiles (about 1.7x to 3.4x the screen, pause the replay first). Middle click sets the focus, `Ctrl`+wheel the depth of field, `Shift`+wheel zooms in (up to 8x). Options on the *Settings* page ([details](docs/settings.md#photo-mode)). Photo mode also turns off the game's adaptive view distance (launcher *ZClip*), so far blocks stay in the picture.
+- The game's own FX post-processing (bloom and colour filter, launcher *Advanced*) is turned off while the mod shades (`DisableGameFX`, on by default, from the next map on): it glowed over the mod's image a second time (overexposed, smeared). The launcher setting itself is left alone; `F7` brings it back on the next map.
+- Colour looks from LUT files: put 3D `.cube` files (DaVinci Resolve, Lightroom, Photoshop, OBS, ...) into `Documents\TrackMania\TMVS\luts` and pick one on the *Customize* page (*Colour look*), with an amount. It sits on top of every preset ([details](docs/settings.md#colour-look-lut)).
 
 ## 1.3.0
 

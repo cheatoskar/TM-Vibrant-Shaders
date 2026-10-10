@@ -49,11 +49,12 @@ float4 u_Pass1 : register(c33);
 
 float4 u_Temporal  : register(c34); // TAA on, history valid, noise frame (0..63), long shadows
 float4 u_HeightMap : register(c35); // world x/z of the height map corner, world size (m), long shadow range (m)
-float4 u_Light2    : register(c36); // neon light spill, game sun direction known, lightning flash, lightning bolt
+float4 u_Light2    : register(c36); // neon light spill, game sun direction known (1; -1 = night map, the moon), lightning flash, lightning bolt
 float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 1 = known, 0 = no water, -1 = guess by colour; w: reach of the screen-space effects (photo mode 3)
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
 float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
+float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
 sampler2D s0 : register(s0);
@@ -68,6 +69,7 @@ sampler2D s8 : register(s8);
 sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
+sampler3D s12 : register(s12); // colour look-up table (final pass)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -2003,9 +2005,7 @@ float3 upsampleGI(float2 uv, float z, float3 n) { // from quarter res, depths fr
 
 // Light sources in the game's LDR image: lamps and neon strips. Returns 0..1.
 //   c = linear colour, nWorld = world normal, rd = view ray (to tell sun glare from lights)
-//   area = how much of the surroundings is as bright (1 = a large lit surface, not a strip).
-float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist, float z, out float area) {
-    area = 0.0;
+float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist, float z) {
     // Far away the game's mipmaps blend a strip with its dark frame: it gets dimmer, so
     // the bar for "bright" comes down with distance.
     float low = lerp(0.5, 0.28, saturate((dist - 20.0) / 150.0));
@@ -2037,7 +2037,6 @@ float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist, 
         surround += lerp(max(sc.r, max(sc.g, sc.b)), peak, front);
     }
     surround /= 8.0;
-    area = saturate(surround / max(max(c.r, max(c.g, c.b)), 1e-3));
     // Clearly brighter than the surroundings (lamps at night) ...
     float contrast = saturate((peak - surround) * 3.0) * pow(smoothstep(0.75, 1.0, peak), 2.0);
     // ... or a strongly coloured bright strip (neon), which glows in daylight too.
@@ -2050,6 +2049,8 @@ float emissiveAmount(float2 uv, float3 c, float3 nWorld, float3 rd, float dist, 
     float white = 1.0 - smoothstep(0.3, 0.6, sat);
     float mirror = u_Light2.y > 0.5 ? smoothstep(0.75, 0.95, dot(reflect(rd, nWorld), u_SunWorld.xyz)) : 0.0;
     float glare = max(smoothstep(0.7, 0.9, nWorld.y) * white, mirror * (1.0 - smoothstep(0.6, 0.9, sat)));
+    // On a night map nothing white is sun glare: lamps facing up stay lamps.
+    if (u_Light2.y < -0.5) glare = 0.0;
     return amount * (1.0 - glare);
 }
 
@@ -2146,12 +2147,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float flatness = smoothstep(0.8, 0.97, nWorld.y);
 
     // Expand the LDR image back toward HDR: light sources glow.
-    float lightArea;
-    float emissive = emissiveAmount(uv, c, nWorld, rd, dist, nd.w, lightArea);
+    float emissive = emissiveAmount(uv, c, nWorld, rd, dist, nd.w);
     float3 glow = c * u_Rays.w * emissive;
-    // Large lit faces (signs, light blocks) are already big and bright: the full boost blows
-    // them out at night. Thin lights (road borders, strips) keep it.
-    glow *= lerp(1.0, 0.35, smoothstep(0.6, 0.9, lightArea));
     // White lights and screens glow less than coloured ones, or they bleach to flat white.
     float peakC = max(c.r, max(c.g, c.b));
     glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3)));
@@ -2431,6 +2428,7 @@ float circleOfConfusion(float z, float focus) {
 
 // Gathered bokeh (half res). s0 = HDR, s1 = half normal/depth, s2 = focus (1x1)
 // out.rgb = blurred colour, out.a = how much blur covers this pixel (0..1)
+// u_Pass0.x = samples (16, photo mode 64), u_Pass0.y = how much each pixel's spiral is turned at random
 float4 PS_DofBlur(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float focus = tex2Dlod(s2, float4(0.5, 0.5, 0, 0)).r;
     float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
@@ -2439,8 +2437,8 @@ float4 PS_DofBlur(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 sum = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
     float wsum = 1.0;
     float foreground = 0.0;
-    float rot = ign(vpos) * 6.2832;
-    const int N = 16;
+    float rot = ign(vpos) * 6.2832 * u_Pass0.y;
+    const int N = (int)u_Pass0.x;
     // Golden-angle spiral; the direction is rotated incrementally (no sin/cos per tap).
     float2 dir = float2(cos(rot), sin(rot));
     const float2x2 golden = float2x2(-0.737369, -0.675490, 0.675490, -0.737369);
@@ -2725,6 +2723,15 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     c *= saturate(vig);
 
     float3 srgb = toSRGB(c);
+    // A .cube look works on display (sRGB) values, red = x, green = y, blue = z.
+    if (u_Lut.x > 0.0) srgb = lerp(srgb, tex3D(s12, saturate(srgb) * u_Lut.y + u_Lut.z).rgb, u_Lut.x);
+    // Night maps: what the game drew (nearly) white - lamps and what they light up close by -
+    // stays at least that bright.
+    if (u_Lut.w > 0.0) {
+        float3 game = tex2D(s8, uv).rgb;
+        float bright = smoothstep(0.78, 0.95, max(game.r, max(game.g, game.b)));
+        srgb = max(srgb, game * bright * u_Lut.w);
+    }
     // Film grain + dithering (also hides banding of the 8-bit output).
     float grain = hash12(vpos + frac(u_Proj2.z) * 1000.0) - 0.5;
     float grainAmount = u_Post.x * smoothstep(0.0, 0.45, luma(srgb)) * (1.2 - luma(srgb));

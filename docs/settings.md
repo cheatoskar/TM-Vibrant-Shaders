@@ -58,6 +58,30 @@ A look stored in a map's comments: everyone with the mod sees the map that way, 
 
 A readable line typed into the comments works too: `[TMVS] Preset=Snowstorm Snow=1.5 SnowCover=0.8`, with the keys below. Preset names with spaces take an underscore (`Golden_Hour`). The settings that aren't part of a preset (see above) are never taken from a map.
 
+## Photo mode
+
+For screenshots of replays. It comes on by itself with the free camera (cam 7 in a replay or in the editor), and `F6` turns it on or off anywhere. While it is on:
+
+- The HUD is gone. The `F8` menu still works.
+- Full quality: auto quality pauses, and ambient occlusion, sun shadows, bounce light and reflections reach three times as far. Long shadows cover 960 m instead of 320 m, so far views get them too. Nothing assumes a car in the middle of the screen.
+- `F12` saves `photo_NNN.png` in `Documents\TrackMania\TMVS\`: the shaded frame without the HUD, at screen size. (Outside photo mode `F12` saves a capture as before.)
+- `Shift+F12` saves a larger photo, put together from tiles (*Hi-res photo*: 2 x 2 to 4 x 4 tiles, about 1.7x to 3.4x the screen size). **Pause the replay** first, because every tile is a separate frame. Exposure, focus and haze colour stay as they were while the tiles are taken. Vignette, film grain, chromatic aberration, lens flare and light shafts are left out of hi-res photos, since they would repeat in every tile.
+- Middle click sets the focus at that point (depth of field), `Ctrl` + middle click removes it, and `Ctrl` + mouse wheel sets how strong the blur is.
+- `Shift` + mouse wheel zooms in (up to 8x, like a telephoto lens), `Shift` + middle click goes back to 1x. Only in: the game decides what to draw from its own view.
+
+- The game's adaptive view distance (launcher *ZClip*) is off, so far blocks stay in the picture even when the frame rate drops.
+
+The options are on the *Settings* page (*Photo mode* panel) and in `settings.ini` (`[General]`: `PhotoAuto`, `PhotoTiles`, `PhotoDof`). They are not part of presets.
+
+## Colour look (LUT)
+
+A colour look-up table changes every colour of the image in one go, the way film looks and colour grades are shared. Any 3D `.cube` file works (exported from DaVinci Resolve, Lightroom, Photoshop, OBS and many free LUT packs), up to 64 x 64 x 64.
+
+1. *Customize* page, *Colour look (LUT)*: *Open the LUT folder* (`Documents\TrackMania\TMVS\luts`) and put the `.cube` files there.
+2. Pick one under *Look*. *Amount* mixes it with the image without it (1 = all of it).
+
+The look is applied last, after the preset's own colours, on the image as you see it (sRGB), and stays when you change presets. It is not part of presets or Author's Shaders: `settings.ini` keeps it in `[General]` (`Lut`, `LutAmount`). 1D LUTs and an input range other than 0..1 (`DOMAIN_MIN`/`DOMAIN_MAX`) aren't supported; `tmvs.log` says why a file didn't load.
+
 ## All settings
 
 Range is the slider range. Key is the name in `settings.ini` and in preset files.
@@ -188,3 +212,4 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Target FPS | `TargetFPS` | 30 – 240 | The frame rate auto quality tries to hold. Lighting, shadows and bloom always stay on, so with heavy presets on a slow GPU it can end a little below. |
 | Disable game MSAA | `DisableGameMSAA` | on / off | Needed for the depth effects. Leave it on. Takes effect after a restart. |
 | Effects in replay / video export | `ReadableGameDepth` | on / off | Also makes the depth buffers of replays and the video export readable. Takes effect after a restart. |
+| Turn off the game's FX | `DisableGameFX` | on / off | Skips the game's own bloom and colour filter (launcher *Advanced*, FX post-processing) while the mod shades, so nothing glows twice. The launcher setting is left alone. The game asks only when it starts its effects, so a change shows from the next map on. |

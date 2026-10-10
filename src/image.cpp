@@ -61,6 +61,18 @@ bool writeThumbnail(const std::wstring& path, const uint32_t* pixels, int width,
     return ok;
 }
 
+bool writePng(const std::wstring& path, const unsigned char* rgb, int width, int height) {
+    if (!rgb || width <= 0 || height <= 0) return false;
+    std::vector<unsigned char> png;
+    if (!stbi_write_png_to_func(appendBytes, &png, width, height, 3, rgb, width * 3)) return false;
+    FILE* f = _wfopen(path.c_str(), L"wb");
+    if (!f) return false;
+    const bool ok = fwrite(png.data(), 1, png.size(), f) == png.size();
+    fclose(f);
+    if (!ok) _wremove(path.c_str()); // no half-written photo
+    return ok;
+}
+
 bool decodeJpeg(const void* data, size_t size, std::vector<uint32_t>& pixels, int& width, int& height) {
     int channels = 0;
     unsigned char* rgb = stbi_load_from_memory(static_cast<const unsigned char*>(data), static_cast<int>(size), &width, &height, &channels, 3);

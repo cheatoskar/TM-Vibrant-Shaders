@@ -48,7 +48,7 @@ Run the setup again to update or uninstall; your settings stay. Windows SmartScr
 | **Sound** | Rain and thunder from real recordings, wind in a snow storm: a rain loop that follows the rain amount and ten different thunders, from close cracks to far rumbles. Each strike sounds a little different and comes from the side of the flash. |
 | **Water** | Pools, rivers and the TMUF seas get waves, refraction and reflections. The mod takes the water height from the game, so nothing else turns into water. |
 | **Sky** | Volumetric clouds. Clear sky, starry night with shooting stars, aurora, a black hole that bends light and lights the scene, and the Ring World: Saturn, Jupiter, an ice giant or an exotic planet, seen from far away, next to the rings or right above them. Night skies work on day maps. |
-| **Camera** | HDR bloom, auto exposure, filmic tone curve. FXAA, temporal anti-aliasing, AMD CAS sharpening. Motion blur and depth of field that switch on by themselves in replays and the video export. |
+| **Camera** | HDR bloom, auto exposure, filmic tone curve, colour looks from `.cube` LUT files. FXAA, temporal anti-aliasing, AMD CAS sharpening. Motion blur and depth of field that switch on by themselves in replays and the video export. |
 | **Extras** | A neon light trail behind your car for the whole run. Track reflections up to a mirror finish. Grass detail and mowing stripes. |
 | **Comfort** | `F8` menu with a gallery of every preset: a picture of each, its GPU load, and a live preview in the game while you point at it. *Customize* for the main settings, *Studio* for every setting in panels side by side, with a search box and a reset arrow for every changed setting. The menu tells you when a new version is out (one request to GitHub per game start, can be switched off). Auto quality holds your frame rate. A live per-effect cost panel. A preset per map mood (day, sunset, night). Your own presets as shareable text files. Map authors can ship a look inside their map ([Author's Shader](#authors-shader)). |
 
@@ -118,6 +118,7 @@ Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (a
 | `F8` | Open or close the menu |
 | `F7` | Shaders on or off, for a before/after look |
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
+| `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms |
 
 ![The F8 menu](docs/images/UI.png)
 
@@ -149,7 +150,6 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 ## Known issues
 
 - **Snow on the ground** (*Snow on the ground*, off in every preset) doesn't follow the game's textures and surfaces well (it can lie across markings, kerbs and edges). For snowy roads a snow texture pack looks better.
-- **TrackMania's own FX post-processing** (launcher, *Advanced*) can interfere with the shaders: its glow and blur work on the same image as the mod. If something looks overexposed, smeared or doubled, turn it off.
 - If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
 ---

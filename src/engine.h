@@ -54,8 +54,31 @@ void setProjectionJitter(float x, float y);
 // (NDC x' = scaleX x + offsetX, y likewise). 1, 1, 0, 0 = off.
 void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY);
 
+// The camera (CHmsCamera) the plugin shades: zoom and tiles apply to its projection only.
+void setMainCamera(const void* camera);
+
+// Photo mode zoom: every perspective projection magnified about the centre (1 = off; only
+// in, never out, since the engine culls with its own field of view).
+void setProjectionZoom(float zoom);
+
 // Skips the game's HUD and menus (RenderOverlayZones) while true: the photo mode.
 void hideOverlay(bool hide);
+
+// Skips the game's own FX post-processing (bloom and colour filter, the launcher's "FX"
+// option) while true: it worked on the same image as the mod (glow twice, smeared).
+// The game's setting itself is not touched. The engine asks only when it starts its
+// effects (map load), so a change shows from the next map on.
+void skipGameFx(bool skip);
+
+// No adaptive view distance (the launcher's "ZClip" cuts the far blocks when the frame rate
+// drops) while true: the photo mode wants the whole map.
+void fullViewDistance(bool full);
+
+// The game's material (CPlugShader) of the draw call being made, null between draws and
+// without the hooks. A first step towards per-material masks (lamps, glass, water).
+const void* currentShader();
+// Development: log each material once with its file (tmvs.log "shader ...").
+void shaderCensus(bool on);
 
 // The free camera (cam 7 in replays, the editor's) is on. False without the hook.
 bool freeCamActive();

@@ -41,7 +41,18 @@ public:
         // Hi-res photo tiles: exposure, focus and the haze colour keep their values (each tile
         // sees another part of the view).
         bool freeze = false;
+        // Colour look-up table (setLut) mixed in after the grade: 0 = off, 1 = fully.
+        float lut = 0.0f;
     };
+
+    // A 3D colour look-up table (A8R8G8B8, x = red, y = green, z = blue; size 0 = none).
+    // Kept on the CPU and uploaded when needed (also after a device reset).
+    void setLut(const std::vector<uint32_t>& texels, int size);
+
+    // Debug view "Materials": the game's draws mark their material in the stencil buffer
+    // (ids 1..kMaterialIds, see the plugin); the final image shows each id in a colour.
+    static constexpr int kMaterialView = 8;
+    static constexpr int kMaterialIds = 12;
 
     // Neon trail: start over (race restart, new map) / start a new line (respawn).
     void resetTrail() { m_trailReset = true; }
@@ -152,6 +163,8 @@ private:
     bool ensureHeightMap(IDirect3DDevice9* device);
     void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, bool ceilings);
     bool ensureCloudNoise(IDirect3DDevice9* device);
+    bool ensureLut(IDirect3DDevice9* device);
+    void drawMaterialIds(IDirect3DDevice9* device, const Inputs& in, IDirect3DSurface9* output);
     bool ensureRain(IDirect3DDevice9* device);
     bool ensureTrail(IDirect3DDevice9* device);
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
@@ -181,6 +194,7 @@ private:
     gfx::Quad m_quad;
     IDirect3DPixelShader9* m_shaders[kPassCount] = {};
     IDirect3DStateBlock9* m_stateBlock = nullptr;
+    IDirect3DPixelShader9* m_solidPS = nullptr; // one colour (c32): the "Materials" debug view
 
     UINT m_width = 0;
     UINT m_height = 0;
@@ -249,6 +263,9 @@ private:
     float m_heightOrigin[2] = {};
 
     IDirect3DVolumeTexture9* m_cloudNoise = nullptr;
+    IDirect3DVolumeTexture9* m_lut = nullptr;
+    std::vector<uint32_t> m_lutTexels;
+    int m_lutSize = 0;
 
     // Rain particles: drops in a box around the camera, splashes on the height map.
     static constexpr UINT kRainDrops = 24000;    // at rain 2 (downpour)

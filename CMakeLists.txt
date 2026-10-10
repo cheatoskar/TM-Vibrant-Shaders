@@ -116,6 +116,7 @@ add_library(tmvs_core STATIC
   src/log.cpp
   src/weather.cpp
   src/image.cpp
+  src/lut.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
@@ -137,6 +138,7 @@ add_library(tm_vibrant_shaders SHARED
   src/capture.cpp
   src/overlay.cpp
   src/thumbnails.cpp
+  src/photo.cpp
   src/update.cpp
   src/autoquality.cpp
   src/audio.cpp

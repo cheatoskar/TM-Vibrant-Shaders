@@ -8,9 +8,11 @@
 #include "gfx.h"
 #include "hook.h"
 #include "log.h"
+#include "lut.h"
 #include "overlay.h"
 #include "pipeline.h"
 #include "autoquality.h"
+#include "photo.h"
 #include "thumbnails.h"
 #include "tracer.h"
 #include "tm_shaders_version.h"
@@ -44,13 +46,16 @@ struct DevOptions {
     float exitAt = 0.0f;         // terminate the game (0 = off)
     float hardExitAt = 0.0f;     // terminate even if no gameplay camera appeared (absolute time)
     // "Keys=4:13,7:a13,9:min,12:restore": post VK 13 at 4 s, Alt+Enter at 7 s, minimize / restore.
+    // Photo mode: "photomode" (like F6), "photo" / "photohires" (like F12 / Shift+F12 in it).
     std::vector<std::pair<float, std::wstring>> keys;
+    std::vector<std::pair<float, std::wstring>> sceneKeys; // "SceneKeys=": the same, timed from the first gameplay frame
     std::wstring shaderDir;      // load shaders from here (hot reload with F9)
 } g_dev;
 float g_nextCaptureAt = 0.0f;
 float g_sceneStart = -1.0f; // first frame with a gameplay camera (near plane < 1 m)
 bool g_screenshotRequested = false;
 size_t g_nextKey = 0;
+size_t g_nextSceneKey = 0;
 
 // Main-camera state for the frame being rendered.
 struct SceneState {
@@ -88,6 +93,24 @@ float seconds() {
     return static_cast<float>(static_cast<double>(now.QuadPart - g_startTime.QuadPart) / static_cast<double>(g_frequency.QuadPart));
 }
 
+// CPU time the mod's own rendering takes (D3D calls of the pipeline, not the GPU work):
+// logged now and then for the first frames, to see whether the CPU side is worth working on.
+struct CpuStats {
+    double total = 0.0, worst = 0.0;
+    unsigned frames = 0;
+} g_cpuStats;
+
+void countPipelineCpu(double ms) {
+    if (g_cpuStats.frames >= 20000) return;
+    g_cpuStats.total += ms;
+    g_cpuStats.worst = ms > g_cpuStats.worst ? ms : g_cpuStats.worst;
+    if (++g_cpuStats.frames % 2000 == 0) {
+        TMVS_LOG("cpu: the mod's rendering takes %.2f ms per shaded frame on the CPU (worst %.1f ms, %u frames)", g_cpuStats.total / g_cpuStats.frames,
+                 g_cpuStats.worst, g_cpuStats.frames);
+        g_cpuStats.worst = 0.0;
+    }
+}
+
 float iniFloat(const wchar_t* ini, const wchar_t* key, float fallback) {
     wchar_t value[64] = {};
     if (!GetPrivateProfileStringW(L"dev", key, L"", value, 64, ini)) return fallback;
@@ -106,14 +129,19 @@ void loadDevOptions() {
     wchar_t buffer[MAX_PATH] = {};
     GetPrivateProfileStringW(L"dev", L"ShaderDir", L"", buffer, MAX_PATH, ini);
     g_dev.shaderDir = buffer;
-    GetPrivateProfileStringW(L"dev", L"Keys", L"", buffer, MAX_PATH, ini);
-    for (wchar_t* token = wcstok(buffer, L","); token; token = wcstok(nullptr, L",")) {
-        float at = 0.0f;
-        wchar_t action[32] = {};
-        if (swscanf(token, L"%f:%31ls", &at, action) == 2) g_dev.keys.emplace_back(at, action);
-    }
+    const auto readKeys = [&](const wchar_t* name, std::vector<std::pair<float, std::wstring>>& keys) {
+        GetPrivateProfileStringW(L"dev", name, L"", buffer, MAX_PATH, ini);
+        for (wchar_t* token = wcstok(buffer, L","); token; token = wcstok(nullptr, L",")) {
+            float at = 0.0f;
+            wchar_t action[32] = {};
+            if (swscanf(token, L"%f:%31ls", &at, action) == 2) keys.emplace_back(at, action);
+        }
+    };
+    readKeys(L"Keys", g_dev.keys);
+    readKeys(L"SceneKeys", g_dev.sceneKeys);
     g_nextCaptureAt = g_dev.captureAt;
     engine::forceShadows(GetPrivateProfileIntW(L"dev", L"ForceShadows", -1, ini));
+    engine::shaderCensus(GetPrivateProfileIntW(L"dev", L"LogShaders", 0, ini) != 0);
 }
 
 void runDevAutomation(IDirect3DDevice9* device) {
@@ -128,27 +156,35 @@ void runDevAutomation(IDirect3DDevice9* device) {
         g_nextCaptureAt = sceneNow + g_dev.captureInterval;
         g_captureRequested = true;
     }
+    const std::wstring* action = nullptr;
     if (g_nextKey < g_dev.keys.size() && now >= g_dev.keys[g_nextKey].first) {
+        action = &g_dev.keys[g_nextKey++].second;
+    } else if (g_nextSceneKey < g_dev.sceneKeys.size() && sceneNow >= g_dev.sceneKeys[g_nextSceneKey].first) {
+        action = &g_dev.sceneKeys[g_nextSceneKey++].second;
+    }
+    if (action) {
         D3DDEVICE_CREATION_PARAMETERS cp{};
         device->GetCreationParameters(&cp);
-        const std::wstring& action = g_dev.keys[g_nextKey].second;
         HWND window = cp.hFocusWindow;
-        if (action == L"min") {
+        if (*action == L"photomode") {
+            photo::toggle();
+        } else if (*action == L"photo" || *action == L"photohires") {
+            photo::request(*action == L"photohires");
+        } else if (*action == L"min") {
             ShowWindow(window, SW_MINIMIZE);
-        } else if (action == L"restore") {
+        } else if (*action == L"restore") {
             ShowWindow(window, SW_RESTORE);
             SetForegroundWindow(window);
-        } else if (action[0] == L'a') {
-            const WPARAM vk = static_cast<WPARAM>(_wtoi(action.c_str() + 1));
+        } else if ((*action)[0] == L'a') {
+            const WPARAM vk = static_cast<WPARAM>(_wtoi(action->c_str() + 1));
             PostMessageW(window, WM_SYSKEYDOWN, vk, 1 | (1 << 29));
             PostMessageW(window, WM_SYSKEYUP, vk, 0xE0000001);
         } else {
-            const WPARAM vk = static_cast<WPARAM>(_wtoi(action.c_str()));
+            const WPARAM vk = static_cast<WPARAM>(_wtoi(action->c_str()));
             PostMessageW(window, WM_KEYDOWN, vk, 1);
             PostMessageW(window, WM_KEYUP, vk, 0xC0000001);
         }
-        TMVS_LOG("dev: action %ls", action.c_str());
-        g_nextKey++;
+        TMVS_LOG("dev: action %ls", action->c_str());
     }
     if ((g_dev.exitAt > 0.0f && sceneNow >= g_dev.exitAt) || (g_dev.hardExitAt > 0.0f && now >= g_dev.hardExitAt)) {
         TMVS_LOG("dev: ExitAt reached, terminating");
@@ -196,6 +232,25 @@ bool sunDirection(float out[3]) {
     out[1] = -g_scene.lightDirection[1];
     out[2] = -g_scene.lightDirection[2];
     return true;
+}
+
+// The colour look-up table picked in the menu: loaded when the choice changes, a broken
+// file is reported once and left off. Returns how much of it to use (0 = none).
+float updateLut() {
+    static std::string loaded;
+    const Config& config = Config::get();
+    if (config.lutFile != loaded) {
+        loaded = config.lutFile;
+        lut::Table table;
+        std::string error;
+        if (!loaded.empty() && !lut::loadCube(lut::path(loaded), table, error)) {
+            TMVS_LOG("lut: %s: %s", loaded.c_str(), error.c_str());
+        } else if (!loaded.empty()) {
+            TMVS_LOG("lut: %s (%d^3)", loaded.c_str(), table.size);
+        }
+        g_pipeline.setLut(table.texels, table.size);
+    }
+    return loaded.empty() ? 0.0f : config.lutAmount;
 }
 
 void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs) {
@@ -371,6 +426,10 @@ void processScene(IDirect3DDevice9* device) {
     }
     inputs.jitter[0] = g_jitterUV[0];
     inputs.jitter[1] = g_jitterUV[1];
+    inputs.photo = photo::active();
+    photo::focusPoint(inputs.focusPoint);
+    inputs.freeze = photo::tiling();
+    inputs.lut = updateLut();
     g_frameWidth = desc.Width;
     g_frameHeight = desc.Height;
 
@@ -384,15 +443,23 @@ void processScene(IDirect3DDevice9* device) {
         // The menu points at a preset: show it (it glides in like a chosen one).
         if (Config::get().previewSettings(effective)) effective.debugView = settings.debugView;
         smoothLook(effective, seconds());
-        g_autoQuality.apply(effective);
+        // Photo mode: full quality, whatever the frame rate.
+        if (!inputs.photo) g_autoQuality.apply(effective);
         // Motion blur and depth of field are for watching, not for driving (the auto focus
         // would blur the track ahead of you).
-        if (effective.cinematicOnlyInReplays && !engine::cinematicActive()) {
+        if (effective.cinematicOnlyInReplays && !engine::cinematicActive() && !inputs.photo) {
             effective.motionBlur = 0.0f;
             effective.depthOfField = 0.0f;
         }
+        photo::adjust(effective);
+        LARGE_INTEGER renderStart, renderEnd;
+        QueryPerformanceCounter(&renderStart);
         g_pipeline.render(device, inputs, effective, target);
+        QueryPerformanceCounter(&renderEnd);
+        countPipelineCpu(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart));
         g_shadedThisFrame = true;
+        // The shaded frame before the HUD: a photo or a hi-res tile.
+        if (temporal) photo::afterRender(device, target);
         // A preset was just saved: this frame (without HUD and menu) becomes its picture.
         std::string picture;
         if (temporal && Config::get().takePictureRequest(picture)) {
@@ -426,8 +493,10 @@ float halton(int index, int base) {
 
 void updateJitter() {
     Settings effective = Config::get().settings;
-    g_autoQuality.apply(effective);
-    const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0;
+    if (!photo::active()) g_autoQuality.apply(effective);
+    // Hi-res tiles: no jitter (each tile must line up with its neighbours to the pixel).
+    const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0 &&
+                    !photo::tiling();
     if (!on) {
         engine::setProjectionJitter(0.0f, 0.0f);
         g_jitterUV[0] = g_jitterUV[1] = 0.0f;
@@ -444,6 +513,12 @@ void updateJitter() {
 
 void onFrameBegin() {
     tracer::event("## RenderFrameBegin");
+    photo::beginFrame();
+    {
+        // The game's bloom and colour filter would work on the image the mod already graded.
+        const Settings& s = Config::get().settings;
+        engine::skipGameFx(s.enabled && s.disableGameFx);
+    }
     updateJitter();
     g_cameraIndex = 0;
     g_scene.lastFrameCount = g_scene.processedCount;
@@ -458,6 +533,10 @@ void onCameraBegin(void* camera) {
     if (g_scene.inMainCamera) {
         g_scene.haveView = false;
         g_scene.haveProjection = false;
+        engine::setMainCamera(camera);
+        // Materials view: no ids left from the last frame where nothing is drawn (the sky).
+        const Settings& s = Config::get().settings;
+        if (s.enabled && s.debugView == Pipeline::kMaterialView) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
     } else if (rt) {
         // A screen-sized camera that isn't shaded: say why (a player's shaders stayed off in
         // races while they worked in the editor, and the log showed nothing). Each kind once.
@@ -488,7 +567,43 @@ void onCameraBegin(void* camera) {
     if (rt) rt->Release();
 }
 
+// Debug view "Materials": every draw of the main camera writes an id of its game material
+// (engine::currentShader, hashed to 1..kMaterialIds) into the stencil buffer, and the
+// pipeline shows each id in a colour. Draws that use the stencil themselves (shadow volumes)
+// are left alone.
+bool g_stencilTagged = false;
+
+void untagStencil(IDirect3DDevice9* device) {
+    if (!g_stencilTagged) return;
+    device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    g_stencilTagged = false;
+}
+
+void onDraw(IDirect3DDevice9* device) {
+    const Settings& s = Config::get().settings;
+    const void* shader = engine::currentShader();
+    if (!g_scene.inMainCamera || !s.enabled || s.debugView != Pipeline::kMaterialView || !shader) {
+        untagStencil(device);
+        return;
+    }
+    DWORD stencil = FALSE;
+    device->GetRenderState(D3DRS_STENCILENABLE, &stencil);
+    if (stencil && !g_stencilTagged) return; // the game's own stencil
+    const uintptr_t key = reinterpret_cast<uintptr_t>(shader) >> 4;
+    const DWORD id = 1 + static_cast<DWORD>((key * 2654435761u) >> 8) % Pipeline::kMaterialIds;
+    device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
+    device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
+    device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_ALWAYS);
+    device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_REPLACE);
+    device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILWRITEMASK, 0xFF);
+    device->SetRenderState(D3DRS_STENCILREF, id);
+    g_stencilTagged = true;
+}
+
 void onCameraEnd(void* camera, const engine::CameraInfo&) {
+    if (g_device) untagStencil(g_device);
     if (tracer::tracing()) {
         tracer::event("## RenderCameraEnd camera=%p main=%d", camera, g_scene.inMainCamera);
         if (g_scene.inMainCamera) {
@@ -592,7 +707,9 @@ void onPresent(IDirect3DDevice9* device) {
     // GPU timing costs a few queries per frame: only while it's used.
     const Settings& settings = Config::get().settings;
     g_pipeline.setProfiling(settings.autoQuality || Config::get().showOverlay);
-    g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline, settings);
+    // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
+    // frame times when it ends starts a quiet period).
+    if (!photo::active()) g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline, settings);
     D3DDEVICE_CREATION_PARAMETERS cp{};
     device->GetCreationParameters(&cp);
     audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);
@@ -647,7 +764,11 @@ void onPresent(IDirect3DDevice9* device) {
     runDevAutomation(device);
     Config::get().tick();
     if (GetAsyncKeyState(VK_F11) & 1) tracer::arm();
-    if (GetAsyncKeyState(VK_F12) & 1) g_captureRequested = true;
+    if (GetAsyncKeyState(VK_F12) & 1) {
+        // Photo mode: a photo without the HUD (Shift: hi-res) instead of a .tmcap capture.
+        if (photo::active()) photo::request(GetAsyncKeyState(VK_SHIFT) < 0);
+        else g_captureRequested = true;
+    }
 }
 
 } // namespace
@@ -705,6 +826,7 @@ void bootOnce() {
     deviceCallbacks.createDepthStencil = onCreateDepthStencil;
     deviceCallbacks.setTransform = onSetTransform;
     deviceCallbacks.setLight = onSetLight;
+    deviceCallbacks.draw = onDraw;
     g_deviceCallbacks = deviceCallbacks;
     // Never block the caller (possibly the game's main thread) on retries.
     if (!hook::install(deviceCallbacks)) {

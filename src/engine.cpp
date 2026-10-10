@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <cstring>
 #include <cmath>
+#include <unordered_set>
 
 namespace tmshaders {
 namespace engine {
@@ -17,20 +18,23 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kSiteCount };
 
 struct GameBuild {
     const char* name;
     uintptr_t viewportVTable;      // ??_7CVisionViewportDx9@@6B@
     uintptr_t slots[kSlotCount];   // the original functions in the vtable
     uintptr_t sites[kSiteCount];   // non-virtual functions, hooked inline
-    uintptr_t handlers[kSiteCount]; // absolute address inside a prologue (its SEH handler), or 0
+    uintptr_t handlers[kSiteCount]; // absolute address inside a prologue (its SEH handler, a global), or 0
     uintptr_t shaderLevel;         // word: GPU shader path (PC0..PC3)
     uintptr_t idGetString;         // const char* CMwId::GetString() const
     uintptr_t getFidFile;          // static CSystemFidFile* CSystemEngine::GetFidFile(const CMwNod*)
     uintptr_t fidFullName;         // void CSystemFidFile::GetFullName(CFastStringInt&, int, int) const
     uintptr_t emptyString;         // wchar_t*: the text of every empty CFastStringInt
     uintptr_t setString;           // void CFastStringInt::SetString(const SStringParamInt&)
+    uintptr_t fxVTables[2];        // ??_7CSceneFxBloom@@6B@, ??_7CSceneFxColors@@6B@
+    uintptr_t fxCanActive[2];      // their CanActive(CHmsCamera*) (vtable slot 32)
+    uintptr_t systemConfig;        // CSystemConfig* CSystemConfig::s_SystemConfig
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -40,14 +44,14 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
-     0x00903280},
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
-     0x00903a90},
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0},
 };
 const GameBuild* g_build = nullptr;
 
@@ -100,6 +104,18 @@ constexpr InlineSite kSetChallengeSite = {kSetChallenge, {0x6a, 0xff, 0x68, 0, 0
 // state is the int at +0x5c (the function returns at once when it doesn't change).
 constexpr InlineSite kFreeCamSite = {kFreeCam, {0x8b, 0x44, 0x24, 0x04, 0x3b, 0x41, 0x5c}, 7, -1, "CGameControlCameraFree::SetIsActive"};
 constexpr size_t kFreeCamActive = 0x5c;
+// The camera's adaptive view distance ("ZClip" in the launcher): with +0x194 set it moves the
+// far plane (+0x178) with the frame rate and +0x174 says it cuts the view. The prologue reads
+// CMwCmdBufferCore::TheCoreCmdBuffer (an absolute address, at +1).
+constexpr InlineSite kZClipSite = {kZClip, {0xa1, 0, 0, 0, 0, 0x8b, 0x80, 0xc0, 0x00, 0x00, 0x00}, 11, 1, "CHmsCamera::ZClipCompute"};
+constexpr size_t kZClipEnabled = 0x194;
+// Every draw of the 3D scene goes through one of these two, with the CPlugShader (material)
+// it draws: CDx9ShaderKeeper::UpdateAndRender(shader, corpus, tree, visual) for the direct
+// path, ShadeVisualForCurrentPass(SDelayedRender&) (shader at +0x10) for the sorted passes.
+constexpr InlineSite kDrawShaderSite = {kDrawShader, {0x81, 0xec, 0x88, 0x01, 0x00, 0x00}, 6, -1, "CDx9ShaderKeeper::UpdateAndRender"};
+constexpr InlineSite kDrawPassSite = {kDrawPass, {0x81, 0xec, 0xc8, 0x00, 0x00, 0x00}, 6, -1, "CDx9ShaderKeeper::ShadeVisualForCurrentPass"};
+constexpr size_t kDelayedRenderShader = 0x10;
+constexpr size_t kZClipCuts = 0x174;
 
 using FrameBeginFn = int(__fastcall*)(void*, void*);
 using CameraBeginFn = void(__fastcall*)(void*, void*, void*, void*);
@@ -155,10 +171,31 @@ UpdateCamsFn g_updateCams = nullptr;
 DoShootFn g_doShoot = nullptr;
 float g_jitter[2] = {};          // NDC offset for perspective projections (TAA)
 float g_tile[4] = {1.0f, 1.0f, 0.0f, 0.0f}; // scale x, y and NDC offset x, y (hi-res photos)
+float g_zoom = 1.0f;             // photo mode zoom (>= 1: the engine culls with its own, wider view)
+// The camera of the shaded view: zoom and tiles only change its projection, not those of
+// the reflection cameras (water planes, the cube maps of the car, which need their 90 degrees).
+const void* g_mainCamera = nullptr;
+bool g_loggedMainProjection = false;
 bool g_hideOverlay = false;      // skip the game's HUD and menus (photo mode)
 using FreeCamFn = void(__fastcall*)(void*, void*, int);
 FreeCamFn g_freeCamSet = nullptr;
+using ZClipFn = void(__fastcall*)(void*, void*, float, void*, void*);
+ZClipFn g_zclip = nullptr;
+bool g_fullViewDistance = false; // no adaptive view distance (photo mode)
+using DrawShaderFn = void(__fastcall*)(void*, void*, void*, void*, void*, void*);
+using DrawPassFn = void(__fastcall*)(void*, void*, void*);
+DrawShaderFn g_drawShader = nullptr;
+DrawPassFn g_drawPass = nullptr;
+const void* g_currentShader = nullptr; // the material being drawn (null between draws)
+bool g_shaderCensus = false;           // log every material once (dev: finding the lamp, glass, ... materials)
 void* g_freeCam = nullptr;       // the free camera last switched on (null: off)
+// The game's FX post-processing: CSceneFxNod::CanActive asks each effect through this slot
+// whether it runs at all. Bloom and the colour filter answer with the launcher's
+// "PostFxEnable" (display config +0x68).
+constexpr int kFxCanActiveSlot = 32;
+using FxCanActiveFn = int(__fastcall*)(void*, void*, void*);
+FxCanActiveFn g_fxCanActive[2] = {};
+bool g_skipGameFx = false;
 DWORD g_lastCinematic = 0;      // GetTickCount of the last cinematic hook call
 unsigned g_cinematicSources = 0;
 
@@ -272,6 +309,72 @@ void __fastcall freeCamDetour(void* self, void* edx, int active) {
     g_freeCamSet(self, edx, active);
 }
 
+int __fastcall bloomCanActiveDetour(void* self, void* edx, void* camera) {
+    return g_skipGameFx ? 0 : g_fxCanActive[0](self, edx, camera);
+}
+
+int __fastcall colorsCanActiveDetour(void* self, void* edx, void* camera) {
+    return g_skipGameFx ? 0 : g_fxCanActive[1](self, edx, camera);
+}
+
+// Replaces one virtual function of an FX class, after checking the slot holds the function
+// the map names (another build or a patched game: left alone).
+void patchFx(int which, void* detour) {
+    void** entry = reinterpret_cast<void**>(rebase(g_build->fxVTables[which])) + kFxCanActiveSlot;
+    if (!readable(entry, sizeof(void*)) || reinterpret_cast<uintptr_t>(*entry) != rebase(g_build->fxCanActive[which])) {
+        TMVS_LOG("engine: FX vtable %d does not match this executable, not hooked", which);
+        return;
+    }
+    g_fxCanActive[which] = reinterpret_cast<FxCanActiveFn>(*entry);
+    DWORD old = 0;
+    VirtualProtect(entry, sizeof(void*), PAGE_READWRITE, &old);
+    *entry = detour;
+    VirtualProtect(entry, sizeof(void*), old, &old);
+}
+
+// Full view distance: the adaptive cut is skipped for this camera and frame, and comes back
+// on its own afterwards (its state is untouched).
+void __fastcall zclipDetour(void* self, void* edx, float speed, void* frustum, void* rect) {
+    if (!g_fullViewDistance) {
+        g_zclip(self, edx, speed, frustum, rect);
+        return;
+    }
+    int* enabled = reinterpret_cast<int*>(static_cast<BYTE*>(self) + kZClipEnabled);
+    int* cuts = reinterpret_cast<int*>(static_cast<BYTE*>(self) + kZClipCuts);
+    const int wasEnabled = *enabled, wasCutting = *cuts;
+    *enabled = 0;
+    *cuts = 0;
+    g_zclip(self, edx, speed, frustum, rect);
+    *enabled = wasEnabled;
+    *cuts = wasCutting;
+}
+
+bool nodFilePath(const void* nod, wchar_t* out, size_t size);
+
+void censusShader(const void* shader) {
+    static std::unordered_set<const void*> seen;
+    if (!shader || seen.size() >= 4096 || !seen.insert(shader).second) return;
+    wchar_t path[512] = {};
+    if (nodFilePath(shader, path, 512)) TMVS_LOG("shader %p: %ls", shader, path);
+    else TMVS_LOG("shader %p: (no file)", shader);
+}
+
+void __fastcall drawShaderDetour(void* self, void* edx, void* shader, void* corpus, void* tree, void* visual) {
+    const void* previous = g_currentShader;
+    g_currentShader = shader;
+    if (g_shaderCensus) censusShader(shader);
+    g_drawShader(self, edx, shader, corpus, tree, visual);
+    g_currentShader = previous;
+}
+
+void __fastcall drawPassDetour(void* self, void* edx, void* delayed) {
+    const void* previous = g_currentShader;
+    g_currentShader = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedRenderShader);
+    if (g_shaderCensus) censusShader(g_currentShader);
+    g_drawPass(self, edx, delayed);
+    g_currentShader = previous;
+}
+
 void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
     InterlockedIncrement(&g_respawns);
     g_respawn(self, edx, player, flag);
@@ -287,9 +390,9 @@ struct FastStringInt {
     wchar_t* text; // empty: the engine's shared empty string, never null
 };
 
-bool mapFilePath(const void* challenge, wchar_t* out, size_t size) {
+bool nodFilePath(const void* nod, wchar_t* out, size_t size) {
     __try {
-        const void* fid = reinterpret_cast<GetFidFileFn>(rebase(g_build->getFidFile))(challenge);
+        const void* fid = reinterpret_cast<GetFidFileFn>(rebase(g_build->getFidFile))(nod);
         if (!fid) return false;
         // The path is appended to this string; its buffer stays with the game's allocator
         // (a few bytes per map load).
@@ -334,7 +437,7 @@ void readMapComments(const void* challenge) {
     } else {
         // Not loaded with the map: the file's header has them.
         wchar_t path[1024] = {};
-        if (mapFilePath(challenge, path, 1024) && gbx::readMapComments(path, comments) && !comments.empty()) source = "file";
+        if (nodFilePath(challenge, path, 1024) && gbx::readMapComments(path, comments) && !comments.empty()) source = "file";
     }
     TMVS_LOG("engine: map loaded, comments: %s", source);
     g_mapComments = comments;
@@ -393,6 +496,27 @@ void __fastcall tileHeightDetour(void* self, void* edx, float height) {
 
 int g_loggedShadowMode = -2;
 
+// The game's display settings from the launcher (CSystemConfigDisplay, the windowed or the
+// fullscreen one), once: what the game itself spends its frame on.
+void logDisplayConfig() {
+    static bool logged = false;
+    if (logged) return;
+    logged = true;
+    __try {
+        const BYTE* config = *reinterpret_cast<const BYTE* const*>(rebase(g_build->systemConfig));
+        if (!config) return;
+        const BYTE* display = *reinterpret_cast<const BYTE* const*>(config + (*reinterpret_cast<const int*>(config + 0x20) ? 0x28 : 0x24));
+        if (!display) return;
+        const auto at = [display](size_t offset) { return *reinterpret_cast<const int*>(display + offset); };
+        // Offsets from the class's parameter table (SMwParamInfos of CSystemConfigDisplay).
+        TMVS_LOG("engine: game display config: ShaderQuality %d, Shadows %d, PostFxEnable %d (force bloom %d, colors %d, motion blur %d), "
+                 "VertexProcess %d, ZClip %d (auto %d), GpuSync %d",
+                 at(0x4c), at(0x54), at(0x68), at(0x74), at(0x6c), at(0x70), at(0x88), at(0x78), at(0x7c), at(0x8c));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        TMVS_LOG("engine: game display config not readable");
+    }
+}
+
 int __fastcall frameBeginDetour(void* self, void* edx) {
     // CHmsViewport::m_Shadows lives at +0x248 (see CHmsViewport::RenderShadowsSet).
     int mode = *reinterpret_cast<const int*>(static_cast<const BYTE*>(self) + 0x248);
@@ -405,6 +529,7 @@ int __fastcall frameBeginDetour(void* self, void* edx) {
         TMVS_LOG("engine: shadow mode %d, shader level %u", mode,
                  static_cast<unsigned>(*reinterpret_cast<const unsigned short*>(rebase(g_build->shaderLevel))));
     }
+    logDisplayConfig();
     if (g_callbacks.frameBegin) g_callbacks.frameBegin();
     return g_frameBegin(self, edx);
 }
@@ -449,8 +574,24 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
     // move x/y in NDC. The struct holds the matrix transposed first (P20 at [0][2]), then
     // in D3D's own layout. Perspective only (shadow maps are orthographic).
     float* m = static_cast<float*>(projection);
+    const bool main = camera && camera == g_mainCamera;
+    if (main && !g_loggedMainProjection && (g_zoom > 1.0f || g_tile[0] != 1.0f)) {
+        g_loggedMainProjection = true;
+        TMVS_LOG("engine: photo zoom / tiles on the main camera's projection");
+    }
+    // Photo zoom: NDC scaled about the centre (x' = zoom x), so P00, P20 and P11, P21.
+    if (main && g_zoom > 1.0f && m[14] == 1.0f && m[16 + 11] == 1.0f) {
+        m[0] *= g_zoom;
+        m[2] *= g_zoom;
+        m[5] *= g_zoom;
+        m[6] *= g_zoom;
+        m[16 + 0] *= g_zoom;
+        m[16 + 8] *= g_zoom;
+        m[16 + 5] *= g_zoom;
+        m[16 + 9] *= g_zoom;
+    }
     // Hi-res photo tile: zoom in on one part of the view (x' = scale x + offset in NDC).
-    if ((g_tile[0] != 1.0f || g_tile[1] != 1.0f) && m[14] == 1.0f && m[16 + 11] == 1.0f) {
+    if (main && (g_tile[0] != 1.0f || g_tile[1] != 1.0f) && m[14] == 1.0f && m[16 + 11] == 1.0f) {
         m[0] *= g_tile[0];
         m[2] = m[2] * g_tile[0] + g_tile[2];
         m[5] *= g_tile[1];
@@ -518,6 +659,11 @@ bool install(const Callbacks& callbacks) {
     g_loadDecoration = reinterpret_cast<LoadDecorationFn>(inlineHook(kLoadDecorationSite, reinterpret_cast<void*>(&loadDecorationDetour)));
     g_setChallenge = reinterpret_cast<SetChallengeFn>(inlineHook(kSetChallengeSite, reinterpret_cast<void*>(&setChallengeDetour)));
     g_freeCamSet = reinterpret_cast<FreeCamFn>(inlineHook(kFreeCamSite, reinterpret_cast<void*>(&freeCamDetour)));
+    g_zclip = reinterpret_cast<ZClipFn>(inlineHook(kZClipSite, reinterpret_cast<void*>(&zclipDetour)));
+    g_drawShader = reinterpret_cast<DrawShaderFn>(inlineHook(kDrawShaderSite, reinterpret_cast<void*>(&drawShaderDetour)));
+    g_drawPass = reinterpret_cast<DrawPassFn>(inlineHook(kDrawPassSite, reinterpret_cast<void*>(&drawPassDetour)));
+    patchFx(0, reinterpret_cast<void*>(&bloomCanActiveDetour));
+    patchFx(1, reinterpret_cast<void*>(&colorsCanActiveDetour));
     g_active = true;
     TMVS_LOG("engine: TrackMania %s, CVisionViewportDx9 hooks installed (module base %p)", g_build->name, GetModuleHandleW(nullptr));
     return true;
@@ -593,8 +739,33 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
     g_tile[3] = offsetY;
 }
 
+void setMainCamera(const void* camera) {
+    g_mainCamera = camera;
+}
+
+void setProjectionZoom(float zoom) {
+    g_zoom = zoom < 1.0f ? 1.0f : zoom;
+}
+
 void hideOverlay(bool hide) {
     g_hideOverlay = hide;
+}
+
+void shaderCensus(bool on) {
+    g_shaderCensus = on;
+}
+
+const void* currentShader() {
+    return g_currentShader;
+}
+
+void fullViewDistance(bool full) {
+    g_fullViewDistance = full;
+}
+
+void skipGameFx(bool skip) {
+    if (skip != g_skipGameFx && (g_fxCanActive[0] || g_fxCanActive[1])) TMVS_LOG("engine: game FX post-processing %s", skip ? "skipped" : "back on");
+    g_skipGameFx = skip;
 }
 
 bool freeCamActive() {

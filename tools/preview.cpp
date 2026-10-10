@@ -22,6 +22,7 @@
 #include "gfx.h"
 #include "image.h"
 #include "log.h"
+#include "lut.h"
 #include "pipeline.h"
 #include <windows.h>
 #include <cstdio>
@@ -231,7 +232,7 @@ int main(int argc, char** argv) {
     }
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
-                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--bench] "
+                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--lut file.cube] [--lutmix 0..1] [--bench] "
                         "[--batch jobs.txt]\n"
                         "       tmvs_preview --sound <out.wav> [rain] [volume] [wind] | --play <seconds> [volume] [snow] | --decode <in.mp3> <out.wav>\n");
         return 2;
@@ -248,6 +249,8 @@ int main(int argc, char** argv) {
     std::vector<const char*> overrides;
     bool sunOverride = false, sunColorOverride = false, bench = false;
     float sun[3] = {}, sunColor[3] = {};
+    const char* lutFile = nullptr;
+    float lutMix = 1.0f;
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
             applyPresetByName(defaults.settings, argv[++i]);
@@ -265,6 +268,10 @@ int main(int argc, char** argv) {
             batch = argv[++i];
         } else if (!strcmp(argv[i], "--water") && i + 1 < argc) {
             waterHeight = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
+            lutFile = argv[++i];
+        } else if (!strcmp(argv[i], "--lutmix") && i + 1 < argc) {
+            lutMix = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             defaults.time = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--drive") && i + 1 < argc) {
@@ -317,6 +324,15 @@ int main(int argc, char** argv) {
         fprintf(stderr, "shader compilation failed:\n%s\n", pipeline.lastError().c_str());
         return 1;
     }
+    if (lutFile) {
+        lut::Table table;
+        std::string error;
+        if (!lut::loadCube(widen(lutFile), table, error)) {
+            fprintf(stderr, "%s: %s\n", lutFile, error.c_str());
+            return 1;
+        }
+        pipeline.setLut(table.texels, table.size);
+    }
 
     std::vector<LoadedCapture*> captures;
     auto loadCapture = [&](const std::string& path) -> LoadedCapture* {
@@ -347,6 +363,7 @@ int main(int argc, char** argv) {
         }
         const FrameCapture& cap = loaded->cap;
         Pipeline::Inputs in;
+        in.lut = lutFile ? lutMix : 0.0f;
         in.color = loaded->color;
         in.depth = loaded->depth;
         in.width = cap.width;
