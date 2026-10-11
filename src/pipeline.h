@@ -91,6 +91,9 @@ public:
     // Capture helpers.
     bool readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out);
     bool readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std::vector<float>& out);
+    // Copies part of the scene depth (area in pixels) into `out` (R32F, the area's size): the
+    // pipeline then runs on a camera that draws into part of the screen (MediaTracker editor).
+    bool copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth, const RECT& area, gfx::Target& out);
 
     // Resets temporal state (exposure, TAA, motion blur, long-shadow height map).
     void resetHistory() {

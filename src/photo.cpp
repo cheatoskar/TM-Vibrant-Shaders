@@ -346,6 +346,20 @@ const char* status() {
         g_status.clear();
         g_statusUntil = 0;
     }
+    if (g_active) {
+        // The camera's settings stay on screen like on a camera's display (drawn at Present:
+        // never in the photos), messages below them.
+        const float dof = Config::get().photoDof;
+        char aperture[32] = "Depth of field off";
+        if (dof > 0.0f) snprintf(aperture, sizeof(aperture), "f/%.1f", fNumber(dof));
+        char line[96];
+        snprintf(line, sizeof(line), "%s   Zoom %.1fx   Focus %s", aperture, g_zoom, g_focus[0] >= 0.0f ? "point" : "auto");
+        std::string text = line;
+        if (!g_status.empty()) text += "\n" + g_status;
+        strncpy_s(g_statusCopy, text.c_str(), _TRUNCATE);
+        ReleaseSRWLockExclusive(&g_statusLock);
+        return g_statusCopy;
+    }
     strncpy_s(g_statusCopy, g_status.c_str(), _TRUNCATE);
     ReleaseSRWLockExclusive(&g_statusLock);
     return g_statusCopy;

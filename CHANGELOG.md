@@ -21,6 +21,11 @@
 - Dry reflections: dirt roads only get a faint sheen (they mirrored the banners like a polished floor).
 - Photo mode (`F6`, on by itself with the free camera, cam 7): no HUD (the `F8` menu stays), full quality (auto quality pauses), ambient occlusion, shadows, bounce light and reflections reach three times as far, and long shadows cover 960 m. `F12` saves `photo_NNN.png` without the HUD; `Shift+F12` saves a hi-res photo from 2 x 2 to 4 x 4 tiles (about 1.7x to 3.4x the screen, pause the replay first). Middle click sets the focus, `Ctrl`+wheel the depth of field, `Shift`+wheel zooms in (up to 8x). Options on the *Settings* page ([details](docs/settings.md#photo-mode)). Photo mode also turns off the game's adaptive view distance (launcher *ZClip*), so far blocks stay in the picture.
 - The game's own FX post-processing (bloom and colour filter, launcher *Advanced*) is turned off while the mod shades (`DisableGameFX`, on by default, from the next map on): it glowed over the mod's image a second time (overexposed, smeared). The launcher setting itself is left alone; `F7` brings it back on the next map.
+- Night skies (and the black hole) over day maps: the game's sun halo and lens flare fade out.
+- Neon, Horizon and Aurora: the dry track has a sheen instead of a mirror (`Reflections` 0.8): every lamp mirrored in the road, brightened, looked overexposed.
+- Animated skies: filaments stream round the black hole (the way its bright side says it moves), the gas giants turn in about two minutes and their bands drift against each other.
+- MediaTracker editor: only its 3D view is shaded. The panels around it no longer get the preset's sky and colours, and the effects line up with the view.
+- Photo mode shows the aperture (f-stop), zoom and focus at the top left (never in the photos).
 - Colour looks from LUT files: put 3D `.cube` files (DaVinci Resolve, Lightroom, Photoshop, OBS, ...) into `Documents\TrackMania\TMVS\luts` and pick one on the *Customize* page (*Colour look*), with an amount. It sits on top of every preset ([details](docs/settings.md#colour-look-lut)).
 
 ## 1.3.0
