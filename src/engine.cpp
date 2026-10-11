@@ -20,7 +20,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -46,13 +46,13 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0},
 };
 const GameBuild* g_build = nullptr;
@@ -129,6 +129,14 @@ constexpr InlineSite kReadInputSite = {kReadInput, {0x57, 0x8b, 0x7c, 0x24, 0x08
 // game wants; the photo mode answers 0 there.
 constexpr InlineSite kInterfaceSetSite = {kInterfaceSet, {0x8b, 0x44, 0x24, 0x04, 0x3b, 0x41, 0x20}, 7, -1, "CGamePlaygroundInterface::InterfaceVisibleInternalSet"};
 constexpr InlineSite kLensFlareSite = {kLensFlare, {0x83, 0xec, 0x48, 0x53, 0x55}, 5, -1, "CVisionViewport::LensFlareAdd"};
+// Map load (also from CGameCtnDecoration::Init): the decoration jumps its day-time animation
+// (sun or moon, ambient, fog, sky) to its mood's start time. A day map's lightmap holds only
+// masks (sky occlusion, sun shadow); the sun's colour comes from that animation at run time.
+// So with the time at midnight the game lights the map with its own night (moon), nothing is
+// baked white. The map, its UID and replays are untouched: the mood's time is restored at once.
+constexpr InlineSite kLoadSceneSite = {kLoadScene, {0x83, 0xec, 0x18, 0x53, 0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x58}, 10, -1, "CGameCtnDecoration::LoadScene3d"};
+constexpr size_t kDecorationMood = 0x60; // CGameCtnDecorationMood*
+constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
 
 using FrameBeginFn = int(__fastcall*)(void*, void*);
@@ -205,6 +213,11 @@ bool g_shaderCensus = false;           // log every material once (dev: finding 
 using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
 LensFlareFn g_lensFlare = nullptr;
 bool g_hideSunFlare = false;           // a night sky replaces the sun: its halo fades out
+using LoadSceneFn = void(__fastcall*)(void*, void*);
+LoadSceneFn g_loadScene = nullptr;
+bool (*g_wantNight)(float dayTime) = nullptr; // the plugin: light this map at midnight?
+float g_mapDayTime = -1.0f;                   // the loaded map's own time of day (-1 unknown)
+bool g_nightForced = false;                   // the game lights it at midnight instead
 using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
 ReadInputFn g_readInput = nullptr;
 volatile bool g_swallowEscape = false; // the menu or photo mode took this Esc press
@@ -593,6 +606,23 @@ void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMo
     strncpy_s(g_environment, name, _TRUNCATE);
 }
 
+void __fastcall loadSceneDetour(void* self, void* edx) {
+    const BYTE* decoration = static_cast<const BYTE*>(self);
+    void* mood = readable(decoration + kDecorationMood, sizeof(void*)) ? *reinterpret_cast<void* const*>(decoration + kDecorationMood) : nullptr;
+    float* time = mood && readable(static_cast<BYTE*>(mood) + kMoodDayTime, sizeof(float)) ? reinterpret_cast<float*>(static_cast<BYTE*>(mood) + kMoodDayTime) : nullptr;
+    if (!time || !(*time >= 0.0f && *time <= 1.0f)) {
+        g_loadScene(self, edx);
+        return;
+    }
+    const float original = *time;
+    g_mapDayTime = original;
+    g_nightForced = g_wantNight && g_wantNight(original);
+    TMVS_LOG("engine: map time of day %.3f%s", original, g_nightForced ? ", lit at midnight (night sky)" : "");
+    if (g_nightForced) *time = 0.0f;
+    g_loadScene(self, edx);
+    *time = original;
+}
+
 void __fastcall tileHeightDetour(void* self, void* edx, float height) {
     InterlockedIncrement(&g_raceResets); // a new map
     g_tileHeight(self, edx, height);
@@ -776,6 +806,7 @@ bool install(const Callbacks& callbacks) {
     g_lensFlare = reinterpret_cast<LensFlareFn>(inlineHook(kLensFlareSite, reinterpret_cast<void*>(&lensFlareDetour)));
     g_readInput = reinterpret_cast<ReadInputFn>(inlineHook(kReadInputSite, reinterpret_cast<void*>(&readInputDetour)));
     g_interfaceSet = reinterpret_cast<InterfaceSetFn>(inlineHook(kInterfaceSetSite, reinterpret_cast<void*>(&interfaceSetDetour)));
+    g_loadScene = reinterpret_cast<LoadSceneFn>(inlineHook(kLoadSceneSite, reinterpret_cast<void*>(&loadSceneDetour)));
     patchFx(0, reinterpret_cast<void*>(&bloomCanActiveDetour));
     patchFx(1, reinterpret_cast<void*>(&colorsCanActiveDetour));
     g_active = true;
@@ -785,6 +816,18 @@ bool install(const Callbacks& callbacks) {
 
 bool active() {
     return g_active;
+}
+
+void setNightAtLoad(bool (*decide)(float dayTime)) {
+    g_wantNight = decide;
+}
+
+float mapDayTime() {
+    return g_mapDayTime;
+}
+
+bool mapLitAtNight() {
+    return g_nightForced;
 }
 
 const CameraInfo& currentCamera() {
@@ -800,9 +843,18 @@ bool waterHeights(float& blockY, float& seaY) {
     if (!g_mapLoaded) return false;
     // Water blocks only exist in Stadium; elsewhere a surface at their height is no water.
     blockY = seaY = stadium() ? kBlockWaterY : -1e30f; // no sea: both the same
+    // The sea level alone is no proof of water: on Rally it is the level of the flat ground
+    // (28 m), and every road there became a mirror. Only a water plane the game is drawing
+    // the reflection of right now counts.
     float y = 0.0f;
-    if (g_lastWater != 0 && GetTickCount() - g_lastWater < 2000 && levelPlaneHeight(g_waterPlaneEq, y)) seaY = y;
-    else if (g_seaLevel != -1.0f) seaY = g_seaLevel;
+    const bool plane = g_lastWater != 0 && GetTickCount() - g_lastWater < 2000 && levelPlaneHeight(g_waterPlaneEq, y);
+    if (plane) seaY = y;
+    // Once per map: the first water plane (the owner's log tells which maps have one).
+    static long s_loggedMap = -1;
+    if (plane && s_loggedMap != g_mapLoads) {
+        s_loggedMap = g_mapLoads;
+        TMVS_LOG("engine: water plane at %.2f (sea level %.2f)", y, g_seaLevel);
+    }
     return true;
 }
 

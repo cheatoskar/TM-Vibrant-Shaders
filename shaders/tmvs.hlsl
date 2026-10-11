@@ -221,11 +221,22 @@ float4 PS_DownsampleND(float2 uv : TEXCOORD0) : COLOR0 {
 // Stored heights are offset by +10000 m; 0 = never seen.
 // ---------------------------------------------------------------------------------
 // s0 = previous height map, s1 = this frame's splat, u_Pass0.xy = uv shift of the map
-// origin since last frame, u_Pass0.z = 1 to drop the history, u_Pass0.w = decay (m)
+// origin since last frame, u_Pass0.z = 1 to drop the history, u_Pass0.w = decay (m),
+// u_Pass1.x = texel size of the map
 float4 PS_HeightMerge(float2 uv : TEXCOORD0) : COLOR0 {
     float2 puv = uv + u_Pass0.xy;
     float previous = (u_Pass0.z > 0.5 || any(puv < 0.0) || any(puv > 1.0)) ? 0.0 : tex2Dlod(s0, float4(puv, 0, 0)).r;
     float seen = tex2Dlod(s1, float4(uv, 0, 0)).r;
+    if (seen <= 0.0) {
+        // A one-texel gap between samples of the same surface: fill it with the lower of the
+        // two sides (never higher than what was seen, and a wall's edge has only one side).
+        float t = u_Pass1.x;
+        float l = tex2Dlod(s1, float4(uv - float2(t, 0), 0, 0)).r, r = tex2Dlod(s1, float4(uv + float2(t, 0), 0, 0)).r;
+        float u = tex2Dlod(s1, float4(uv - float2(0, t), 0, 0)).r, d = tex2Dlod(s1, float4(uv + float2(0, t), 0, 0)).r;
+        float fillX = l > 0.0 && r > 0.0 && abs(l - r) < 0.5 ? min(l, r) : 0.0;
+        float fillY = u > 0.0 && d > 0.0 && abs(u - d) < 0.5 ? min(u, d) : 0.0;
+        seen = max(fillX, fillY);
+    }
     if (seen <= 0.0) return float4(previous, 0, 0, 1);
     // Seen again: the new height wins, but walls only sink slowly. Points that hit a wall
     // top in one frame may miss it in the next; moving cars must not leave a ridge behind.
@@ -240,11 +251,14 @@ float4 PS_HeightSplat(float2 data : TEXCOORD0) : COLOR0 {
     return float4(data.x, 0, 0, 1);
 }
 
-// s2 = height map. Returns 0 (lit) .. 1 (shadowed).
-float longShadow(float3 pView, float3 nView, float noise) {
+// s2 = height map. Returns 0 (lit) .. 1 (shadowed). `jitter` (0..1 twice) moves the ray
+// sideways by up to a map cell: a low light stretches each 0.6 m cell into a long tooth along
+// the shadow's edge; dithered over a cell, the blur after this pass turns them into a soft edge.
+float longShadow(float3 pView, float3 nView, float noise, float2 jitter) {
     float3 sun = u_SunWorld.xyz;
     if (sun.y < 0.02) return 0.0;
     float3 origin = worldPosition(pView) + viewToWorldDir(nView) * 0.2;
+    origin.xz += (jitter - 0.5) * 0.7;
     float range = u_HeightMap.w;
     float steps = u_Quality.w;
     float occlusion = 0.0;
@@ -402,9 +416,11 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         sunVis = 1.0 - hit * saturate(1.5 - p.z / (300.0 * u_Water.w));
     }
     float longVis = 1.0;
-    if (u_Temporal.w > 0.0 && u_SunView.w > 0.5 && ndl > 0.0) {
+    // Also slightly away from the light: the lighting pass uses smoothed normals, so a noisy
+    // raw normal that faces away here would leave a lit dot in the middle of a shadow.
+    if (u_Temporal.w > 0.0 && u_SunView.w > 0.5 && ndl > -0.25) {
         // Interleaved gradient noise: even, so the blur below removes it (no blotches).
-        longVis = 1.0 - longShadow(p, n, frac(noise + 0.5)) * u_Temporal.w;
+        longVis = 1.0 - longShadow(p, n, frac(noise + 0.5), float2(noise2, frac(noise2 * 13.71 + noise))) * u_Temporal.w;
         sunVis = min(sunVis, longVis);
     }
     return float4(ao, sunVis, longVis, 1);

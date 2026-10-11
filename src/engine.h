@@ -86,6 +86,13 @@ bool escapeSwallowed();
 // A night sky replaces the sun: the game's halo around its sun (a lens flare drawn over the
 // geometry in front of the sun) fades out.
 void hideSunFlare(bool hide);
+// Real night under night skies: at each map load `decide` gets the map's time of day (0..1,
+// night outside (0.25, 0.75]) and answers whether the game lights the map at midnight
+// instead (its own moon, fog and sky; no baked sun). Visual only: the map stays as it is.
+void setNightAtLoad(bool (*decide)(float dayTime));
+// The loaded map's own time of day (-1 unknown) and whether it is lit at midnight instead.
+float mapDayTime();
+bool mapLitAtNight();
 // What the material being drawn is (from its shader file), Other between draws.
 enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4 };
 Material currentMaterial();

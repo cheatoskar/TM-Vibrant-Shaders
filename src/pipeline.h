@@ -276,6 +276,7 @@ private:
     bool m_ceilingValid = false;
     float m_heightHoldUntil = -1.0f; // no splats until the player's camera is back (or this time)
     bool m_heightSupported = true;
+    bool m_heightFilter = false;     // R32F can be filtered: the long-shadow trace reads it bilinear
     float m_heightOrigin[2] = {};
 
     IDirect3DVolumeTexture9* m_cloudNoise = nullptr;

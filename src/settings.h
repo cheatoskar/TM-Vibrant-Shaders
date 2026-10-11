@@ -25,6 +25,7 @@ struct Settings {
     int quality = 2;               // 0 low, 1 medium, 2 high (sample counts)
     bool readableGameDepth = true; // also hook the game's own depth buffers (menus, replay/video export)
     bool gameMaterials = true;     // lamps, cars, glass and grass from the game's own materials (not guessed from pixels)
+    bool gameNight = false;        // night skies over day maps: the game lights the map at midnight (map load), no baked sun
     bool disableGameFx = true;     // skip the game's bloom and colour filter (launcher "FX") while the mod shades
     // Neon light trail behind the car, kept for the whole run (0 = off).
     float neonTrail = 0.0f;
