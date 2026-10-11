@@ -340,6 +340,10 @@ void afterRender(IDirect3DDevice9* device, IDirect3DSurface9* frame) {
     g_rgb.clear();
 }
 
+void notify(const char* text, DWORD seconds) {
+    setStatus(text, seconds);
+}
+
 const char* status() {
     AcquireSRWLockExclusive(&g_statusLock);
     if (g_statusUntil && GetTickCount() > g_statusUntil) {

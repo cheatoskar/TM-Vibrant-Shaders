@@ -42,6 +42,8 @@ void afterRender(IDirect3DDevice9* device, IDirect3DSurface9* frame);
 
 // A line for the screen (photo mode on, progress, saved as ...), "" = nothing to show.
 const char* status();
+// Shows a line there for a few seconds (also outside photo mode).
+void notify(const char* text, DWORD seconds);
 
 } // namespace photo
 } // namespace tmshaders
