@@ -282,6 +282,16 @@ void init(HWND window, ID3D11Device* device, ID3D11DeviceContext* ctx) {
 void frame(ID3D11RenderTargetView* backBuffer) {
     if (!g_ready || !backBuffer) return;
     hotkeys();
+    // Saved two seconds after a change, whether or not the menu is open (F7 alone, or quitting the
+    // game with the menu open, used to lose it).
+    static ULONGLONG dirtySince = 0;
+    if (!g_dirty) dirtySince = 0;
+    else if (!dirtySince) dirtySince = GetTickCount64();
+    else if (GetTickCount64() - dirtySince > 2000) {
+        settings::save();
+        g_dirty = false;
+        dirtySince = 0;
+    }
     const bool showToast = GetTickCount64() < g_toastUntil;
     if (!g_open && !showToast) return;
 
