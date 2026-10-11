@@ -1311,7 +1311,15 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     if (len < 1e-3) return o;
     float age = c_Trail.z - lerp(abs(a.w), b.w, corner.y);
     float fade = c_Trail.w > 0.0 ? saturate(1.0 - age / c_Trail.w) : 1.0;
+    // It comes out behind the car: under and in it the line would flicker through the body
+    // and the rear wheels (it runs through their centres, almost at the depth of the tread),
+    // and at speed a frame of timing puts its end a metre or more off. Only the fresh part:
+    // an older line the car drives back over stays.
+    // (Dimmed, not dropped: a vertex thrown out would stretch its quad into a sliver.)
     if (fade <= 0.0) return o;
+    float3 car = trailPoint(c_Trail.y - 1.0).xyz;
+    float behind = smoothstep(1.6, 2.6, distance(lerp(a.xyz, b.xyz, corner.y), car));
+    fade *= lerp(behind, 1.0, saturate((age - 0.6) / 0.3));
     float3 dir = d / len;
     float3 right = cross(float3(0, 1, 0), dir);
     float rl = length(right);
