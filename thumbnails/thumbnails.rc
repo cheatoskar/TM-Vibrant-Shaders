@@ -1,0 +1,15 @@
+// Preset pictures for the F8 menu (tools/make-thumbnails.ps1), embedded as RCDATA.
+// Id = kThumbnailBase (src/thumbnails.cpp) + the preset's index in the Preset enum.
+200 RCDATA "vibrant.jpg"
+201 RCDATA "realistic.jpg"
+202 RCDATA "golden_hour.jpg"
+203 RCDATA "dreamy.jpg"
+204 RCDATA "neon.jpg"
+205 RCDATA "horizon.jpg"
+206 RCDATA "aurora.jpg"
+207 RCDATA "competition.jpg"
+208 RCDATA "performance.jpg"
+209 RCDATA "rainy.jpg"
+210 RCDATA "replay_cinema.jpg"
+211 RCDATA "storm.jpg"
+212 RCDATA "snowstorm.jpg"

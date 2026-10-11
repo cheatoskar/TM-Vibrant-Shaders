@@ -30,10 +30,41 @@ public:
         float jitter[2] = {};
         // Water surfaces from the game: block water height, sea level, state 1 = known,
         // -1 = unknown (guess from the colour).
-        float water[3] = {0.0f, 0.0f, -1.0f};
+        float water[3] = {0.0f, 0.0f, -1.0f}; // lowest, highest, kind: 1 sea, 2 Stadium water blocks, 0 none reported (measured), -1 no engine (colour guess)
         // The player drives (not a replay / intro): the neon trail records the car.
         bool driving = true;
+        // Photo mode: effects reach 3x farther, a larger height map, no car assumed in the
+        // middle of the screen.
+        bool photo = false;
+        // Focus on this point of the screen (uv), -1 = the usual spot (the car, the road ahead).
+        float focusPoint[2] = {-1.0f, -1.0f};
+        // Hi-res photo tiles: exposure, focus and the haze colour keep their values (each tile
+        // sees another part of the view).
+        bool freeze = false;
+        // Colour look-up table (setLut) mixed in after the grade: 0 = off, 1 = fully.
+        float lut = 0.0f;
+        // The stencil of the depth texture holds the game's material classes (the plugin
+        // tagged the game's draws): lamps, cars, glass, grass are known, not guessed.
+        bool materials = false;
     };
+
+    // A 3D colour look-up table (A8R8G8B8, x = red, y = green, z = blue; size 0 = none).
+    // Kept on the CPU and uploaded when needed (also after a device reset).
+    void setLut(const std::vector<uint32_t>& texels, int size);
+
+    // The game's materials in the stencil: classes 1..kMaterialClasses (engine::Material) in
+    // the low three bits, kAddedLightBit where the game added light on top (headlight pools,
+    // glows). Debug view "Materials" shows them (lamps yellow, cars red, glass cyan, water blue,
+    // added light magenta).
+    static constexpr int kMaterialView = 8;
+    static constexpr int kMaterialClasses = 5;
+    static constexpr unsigned long kAddedLightBit = 0x08;
+
+    // The sky replaces the game's sun (night skies, the black hole): its baked light comes out
+    // on day maps and its halo is hidden.
+    static bool skyReplacesSun(const Settings& s) {
+        return (s.skyMode >= 2 && s.skyMode != 5) || ((s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f);
+    }
 
     // Neon trail: start over (race restart, new map) / start a new line (respawn).
     void resetTrail() { m_trailReset = true; }
@@ -43,6 +74,14 @@ public:
     // car from outside the area kept out of the map, and the ground under the parked car is
     // never seen again to correct it: it would cast blotchy shadows around the car.
     void resetHeights() { m_heightReset = true; }
+    // A restart or a new map: the roofs and bridges remembered for the rain are gone too.
+    void resetCeilings() { m_ceilingValid = false; }
+    // A new map: the sea level measured from the water material is the last map's.
+    void resetSeaLevel() {
+        m_seaKnown = false;
+        m_waterMaterialSeen = false;
+        m_waterPending = -1;
+    }
 
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.
     bool init(IDirect3DDevice9* device, const std::wstring& shaderDir);
@@ -61,6 +100,9 @@ public:
     // Capture helpers.
     bool readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out);
     bool readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std::vector<float>& out);
+    // Copies part of the scene depth (area in pixels) into `out` (R32F, the area's size): the
+    // pipeline then runs on a camera that draws into part of the screen (MediaTracker editor).
+    bool copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth, const RECT& area, gfx::Target& out);
 
     // Resets temporal state (exposure, TAA, motion blur, long-shadow height map).
     void resetHistory() {
@@ -68,6 +110,7 @@ public:
         m_havePrevious = false;
         m_heightValid = false;
         m_skyValid = false;
+        m_shelterValid = false;
     }
 
     // GPU timing per pass with timestamp queries (results arrive a few frames late).
@@ -98,6 +141,7 @@ private:
         kSkyRing,
         kAuroraHalf,
         kSkyAverage,
+        kShelter,
         kClouds,
         kReflect,
         kSpillDown,
@@ -124,6 +168,7 @@ private:
         kSharpen,
         kCopy,
         kCopyDepth,
+        kWaterLevel,
         kPassCount
     };
 
@@ -138,8 +183,10 @@ private:
     void bind(IDirect3DDevice9* device, int stage, IDirect3DBaseTexture9* texture, bool linear);
     void passConstants(IDirect3DDevice9* device, float a, float b, float c = 0.0f, float d = 0.0f);
     bool ensureHeightMap(IDirect3DDevice9* device);
-    void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings);
+    void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, bool ceilings);
     bool ensureCloudNoise(IDirect3DDevice9* device);
+    bool ensureLut(IDirect3DDevice9* device);
+    bool buildMaterialMask(IDirect3DDevice9* device, const Inputs& in);
     bool ensureRain(IDirect3DDevice9* device);
     bool ensureTrail(IDirect3DDevice9* device);
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
@@ -169,6 +216,7 @@ private:
     gfx::Quad m_quad;
     IDirect3DPixelShader9* m_shaders[kPassCount] = {};
     IDirect3DStateBlock9* m_stateBlock = nullptr;
+    IDirect3DPixelShader9* m_solidPS = nullptr; // one colour (c32): the "Materials" debug view
 
     UINT m_width = 0;
     UINT m_height = 0;
@@ -185,12 +233,26 @@ private:
     gfx::Target m_skyAverage[2]; // 1x1 ping-pong: fog colour, eased over time
     int m_skyIndex = 0;
     bool m_skyValid = false;
+    gfx::Target m_shelter[2];    // 1x1 ping-pong: roof over the camera (lens drops dry off)
+    int m_shelterIndex = 0;
+    bool m_shelterValid = false;
     gfx::Target m_hdr;          // full HDR
     gfx::Target m_rays[2];      // half
     gfx::Target m_bloomDown[kBloomLevels];
     gfx::Target m_bloomUp[kBloomLevels];
     gfx::Target m_luminance;    // 1x1
     gfx::Target m_adapted[2];   // 1x1 ping-pong
+    gfx::Target m_waterLevel[2];          // 1x1: the water material on screen (sum of heights, count, lowest, highest)
+    IDirect3DSurface9* m_waterRead = nullptr; // system memory copy of one of them
+    int m_waterPending = -1;              // the one drawn and not read yet
+    int m_waterIndex = 0;
+    unsigned m_waterDrawn = 0;            // the frame it was drawn in
+    float m_seaLevel = 0.0f;              // measured (TMUF sea: the game reports none)
+    bool m_seaKnown = false;
+    bool m_waterMaterialSeen = false;     // this map's water was seen as the game's water material
+    bool m_materialsOn = false;           // the material mask exists this frame
+    void measureSeaLevel(IDirect3DDevice9* device);
+    gfx::Target m_materials;    // full: the game's material classes (r light, g car, b glass, a grass)
     gfx::Target m_ldr;          // full LDR
     gfx::Target m_ldr2;         // full LDR
     gfx::Target m_depthCopy;    // capture helper (R32F)
@@ -199,6 +261,9 @@ private:
     gfx::Target m_spill[2];     // quarter: neon light spill
     gfx::Target m_focus[2];     // 1x1 auto focus ping-pong
     gfx::Target m_dof;          // half: depth of field blur
+    gfx::Target m_dofFull;      // full: the same in photo mode
+    gfx::Target m_dofFull2;     // full: its second, smoothing pass
+    gfx::Target m_dof2;         // half: the smoothing pass of the normal blur
     gfx::Target m_hdr2;         // full: HDR after DOF / motion blur
     gfx::Target m_taa[2];       // full: TAA history ping-pong (rgb, view z)
     int m_adaptIndex = 0;
@@ -214,10 +279,11 @@ private:
     bool m_havePrevious = false;
 
     // Long-range shadows: world-space height map built from the depth buffer.
-    static constexpr UINT kHeightMapSize = 512;
-    static constexpr float kHeightMapWorld = 320.0f; // metres covered
+    UINT m_heightSize = 512;
+    float m_heightWorld = 320.0f;                    // metres covered (photo mode: 960)
     gfx::Target m_heightFrame;                       // this frame's splat
     gfx::Target m_heightMap[2];                         // accumulated, ping-pong
+    gfx::Target m_ceilingMap[2];                        // undersides (roofs, bridges), kept, ping-pong
     gfx::Target m_shadowHeight;                      // volumetric light: shadow height per column
     IDirect3DSurface9* m_heightDepth = nullptr;      // keeps the highest splat per texel
     IDirect3DVertexShader9* m_splatVS = nullptr;
@@ -227,11 +293,16 @@ private:
     int m_heightIndex = 0;
     bool m_heightValid = false;
     bool m_heightReset = false;
+    bool m_ceilingValid = false;
     float m_heightHoldUntil = -1.0f; // no splats until the player's camera is back (or this time)
     bool m_heightSupported = true;
+    bool m_heightFilter = false;     // R32F can be filtered: the long-shadow trace reads it bilinear
     float m_heightOrigin[2] = {};
 
     IDirect3DVolumeTexture9* m_cloudNoise = nullptr;
+    IDirect3DVolumeTexture9* m_lut = nullptr;
+    std::vector<uint32_t> m_lutTexels;
+    int m_lutSize = 0;
 
     // Rain particles: drops in a box around the camera, splashes on the height map.
     static constexpr UINT kRainDrops = 24000;    // at rain 2 (downpour)

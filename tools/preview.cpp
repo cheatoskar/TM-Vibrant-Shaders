@@ -14,12 +14,15 @@
 //     --bench                 GPU time per pass
 //     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
 //                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
+//   An output ending in .jpg is a preset picture for the menu (384x216, the middle 16:9).
 #include "audio.h"
 #include "config.h"
 #include "framecap.h"
 #include "gbx.h"
 #include "gfx.h"
+#include "image.h"
 #include "log.h"
+#include "lut.h"
 #include "pipeline.h"
 #include <windows.h>
 #include <cstdio>
@@ -229,13 +232,14 @@ int main(int argc, char** argv) {
     }
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
-                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--bench] "
+                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--lut file.cube] [--lutmix 0..1] [--photo] [--focus u,v] [--bench] "
                         "[--batch jobs.txt]\n"
                         "       tmvs_preview --sound <out.wav> [rain] [volume] [wind] | --play <seconds> [volume] [snow] | --decode <in.mp3> <out.wav>\n");
         return 2;
     }
 
     float waterHeight = -1e30f; // world height of the map's water (the game reports it in game)
+    float waterKind = 1.0f;     // 1 sea (--water), 2 Stadium water blocks (--blocks)
     Job defaults;
     defaults.capture = argv[1];
     defaults.output = argv[2];
@@ -246,6 +250,10 @@ int main(int argc, char** argv) {
     std::vector<const char*> overrides;
     bool sunOverride = false, sunColorOverride = false, bench = false;
     float sun[3] = {}, sunColor[3] = {};
+    const char* lutFile = nullptr;
+    float lutMix = 1.0f;
+    bool photoMode = false;              // the photo mode's look (3x reach, full-res blur)
+    float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
             applyPresetByName(defaults.settings, argv[++i]);
@@ -263,6 +271,17 @@ int main(int argc, char** argv) {
             batch = argv[++i];
         } else if (!strcmp(argv[i], "--water") && i + 1 < argc) {
             waterHeight = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--blocks") && i + 1 < argc) {
+            waterHeight = static_cast<float>(atof(argv[++i]));
+            waterKind = 2.0f;
+        } else if (!strcmp(argv[i], "--photo")) {
+            photoMode = true;
+        } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f", &focus[0], &focus[1]);
+        } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
+            lutFile = argv[++i];
+        } else if (!strcmp(argv[i], "--lutmix") && i + 1 < argc) {
+            lutMix = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             defaults.time = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--drive") && i + 1 < argc) {
@@ -315,6 +334,15 @@ int main(int argc, char** argv) {
         fprintf(stderr, "shader compilation failed:\n%s\n", pipeline.lastError().c_str());
         return 1;
     }
+    if (lutFile) {
+        lut::Table table;
+        std::string error;
+        if (!lut::loadCube(widen(lutFile), table, error)) {
+            fprintf(stderr, "%s: %s\n", lutFile, error.c_str());
+            return 1;
+        }
+        pipeline.setLut(table.texels, table.size);
+    }
 
     std::vector<LoadedCapture*> captures;
     auto loadCapture = [&](const std::string& path) -> LoadedCapture* {
@@ -345,6 +373,10 @@ int main(int argc, char** argv) {
         }
         const FrameCapture& cap = loaded->cap;
         Pipeline::Inputs in;
+        in.lut = lutFile ? lutMix : 0.0f;
+        in.photo = photoMode;
+        in.focusPoint[0] = focus[0];
+        in.focusPoint[1] = focus[1];
         in.color = loaded->color;
         in.depth = loaded->depth;
         in.width = cap.width;
@@ -369,7 +401,7 @@ int main(int argc, char** argv) {
         // t' = t - move * R.
         if (waterHeight > -1e29f) {
             in.water[0] = in.water[1] = waterHeight;
-            in.water[2] = 1.0f;
+            in.water[2] = waterKind;
         }
         Pipeline::Inputs moved = in;
         for (int j = 0; j < 3; j++) {
@@ -412,7 +444,13 @@ int main(int argc, char** argv) {
             continue;
         }
         QueryPerformanceCounter(&t1);
-        writeBmp(job.output.c_str(), pixels, cap.width, cap.height);
+        const size_t length = job.output.size();
+        if (length > 4 && !_stricmp(job.output.c_str() + length - 4, ".jpg")) {
+            image::writeThumbnail(widen(job.output.c_str()), pixels.data(), static_cast<int>(cap.width), static_cast<int>(cap.height),
+                                  static_cast<int>(cap.width));
+        } else {
+            writeBmp(job.output.c_str(), pixels, cap.width, cap.height);
+        }
         printf("%s: %ux%u, sun %s (%.3f %.3f %.3f), last frame incl. readback %.1f ms\n", job.output.c_str(), cap.width, cap.height,
                in.sunKnown ? "known" : "unknown", in.sunDirection[0], in.sunDirection[1], in.sunDirection[2],
                1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));

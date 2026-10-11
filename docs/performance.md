@@ -46,7 +46,7 @@ Approximate cost of single settings on the Arc 140V:
 | Depth of field (replays only by default) | 2 ms |
 | Effect quality High → Low | saves about 1 ms |
 
-Your own numbers are in the menu: **Advanced → Performance** shows the time of every effect on your GPU, measured live, and how many FPS you would gain by switching it off.
+Your own numbers are in the menu: the **Performance** page shows the time of every effect on your GPU, measured live, and how many FPS you would gain by switching it off.
 
 ## Auto quality
 

@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.4.0-preview (2026-10-11)
+
+- New `F8` menu. **Shaders:** every preset as a card with a picture, a line about it and its GPU load; rest the pointer on one and the game shows that look, click to use it, right click for day, sunset or night maps. Filters for day, night, weather and light presets. Your own presets get a picture of the game when you save them, and a line about them if you like (right click: edit description, update picture, delete). A preset is its .ini and .jpg in the presets folder (*Open the presets folder*): share both; files put there, and pictures replaced there, show up while the game runs. Pages for *Customize* (the main settings), *Studio* (every setting), *Maps* (preset per map mood, Author's Shader) and *Performance*. Segoe UI instead of the pixel font, sized for the screen. The menu opens big, leaving the right part of the game in view for the live preview (one button puts it over the whole screen); on a wide menu the settings stand in panels side by side. Deleting a preset and resetting your changes ask first.
+- Settings page: *Preset per map type*, *Picked preset applies to all maps of this type* (off: picking a preset no longer changes which preset that kind of map gets), Author's Shaders, live preview, menu size, update check, the game options and the folders. Every on/off setting is a switch now.
+- Studio shows which preset you are editing and whether it is saved; *Save changes* writes your changes into your own preset. Its groups start closed (a dot marks groups with changes), *Expand all* opens them.
+- Text fields in the menu take typing (the game never turned key presses into characters: preset names could not be entered).
+- Update check: when the game starts the mod asks GitHub for the newest release; a new version shows in the menu with its notes and a link to its release page (*About* page, can be switched off). Nothing is downloaded by itself.
+- Rain and snow stay outside (`WeatherShelter`, on by default): every drop and flake is traced back along its way, against the wind. Under roofs and bridges and behind walls nothing falls, around them it keeps falling; under a high roof a side wind still blows rain in. Under a wide roof the lens dries off (a pipe or a narrow bridge above doesn't). It knows the roofs the camera has seen, from above or from below.
+- Snowstorm: no snow on the ground by default (it lay across markings, kerbs and edges; *Snow on the ground* still turns it on, a snow texture pack looks better on the road). Thicker haze that closes in nearer (`FogDensity` 6, new `HazeDistance` 0.5).
+- Auto quality reworked: it measures every effect on your GPU and, below the target FPS, turns off just enough of them in one step (the ones that cost the most for the least look first). Before, it went down in fixed levels and gave up for two minutes when one level won less than 4 % - on many GPUs it never did anything. The light shafts, FXAA and sharpening can go now too; the menu shows what is off.
+- The log says why a screen-sized camera isn't shaded (size or depth buffer), and when a capture's depth is empty.
+- New setting *Haze distance* (`HazeDistance`): below 1 the haze closes in nearer the camera.
+- Snow: cars keep their paint with every camera (replays, outside and TV cameras, ghosts), not only behind the car.
+- Snow: the car on the start podium no longer turns white, and driving down from it leaves no bare rectangle in the snow.
+- TAA: the car no longer leaves see-through copies behind it while driving (the road just behind the car passed the depth check), nor its roof against the sky.
+- Light sources: your car (or anything else in front) no longer counts as dark surroundings for the surface behind it: a white barrier next to the car got a glowing echo of the car, which drove along like a ghost.
+- Horizon: more bloom (0.15).
+- Bounce light (GI): your car's coloured bounce light no longer stays on the road behind it as a trail.
+- Dry reflections: dirt roads only get a faint sheen (they mirrored the banners like a polished floor).
+- Photo mode (`F6`, on by itself with the free camera, cam 7): no HUD (the `F8` menu stays), full quality (auto quality pauses), ambient occlusion, shadows, bounce light and reflections reach three times as far, and long shadows cover 960 m. `F12` saves `photo_NNN.png` without the HUD; `Shift+F12` saves a hi-res photo from 2 x 2 to 4 x 4 tiles (about 1.7x to 3.4x the screen, pause the replay first). Middle click sets the focus, `Ctrl`+wheel the depth of field, `Shift`+wheel zooms in (up to 8x). Options on the *Settings* page ([details](docs/settings.md#photo-mode)). Photo mode also turns off the game's adaptive view distance (launcher *ZClip*), so far blocks stay in the picture.
+- The game's own FX post-processing (bloom and colour filter, launcher *Advanced*) is turned off while the mod shades (`DisableGameFX`, on by default, from the next map on): it glowed over the mod's image a second time (overexposed, smeared). The launcher setting itself is left alone; `F7` brings it back on the next map.
+- Night skies (and the black hole) over day maps: the game's sun halo and lens flare fade out.
+- Neon, Horizon and Aurora: the dry track has a sheen instead of a mirror (`Reflections` 0.8): every lamp mirrored in the road, brightened, looked overexposed.
+- Animated skies: filaments stream round the black hole (the way its bright side says it moves), the gas giants turn in about two minutes and their bands drift against each other.
+- Long shadows: no more bright boxes on the road around and ahead of the car under a low light (the black hole, sunsets). Everything close in the middle of the screen was kept out of the height map so the car would cast no shadow; the arch just driven under went too and counted as "nothing here". Only what stands up to a car's height above the road is kept out now.
+- Long shadows: smooth edges instead of saw teeth under a low light (the height map is read filtered and dithered over a cell; far ground no longer leaves striped gaps in it), no lit dots inside shadows.
+- United Forever: roads at the environment's sea level (Rally) no longer turn into a mirror. Only water the game draws a reflection for counts as sea.
+- New setting *Real night under night skies* (`GameNight`, off by default, experimental: once, on A01, the game played a loud noise when the map loaded at midnight; not seen again, cause unknown): with a night sky (or the black hole) over a day or sunset map, the game lights the map at midnight itself (its moon, no baked sun to take out: no overexposed white). The map, its replays and validation stay as they are. Switched while a map runs, the map is relit at once.
+- Night skies over sunset maps: the sunset clouds of the game's sky no longer show through the stars, and its sea no longer mirrors the sunset. New setting *Keep the game's clouds under night skies* (`GameSkyClouds`, off) keeps both (nice for photos).
+- Photo mode: the depth of field blurs the lamps of night maps too (they stayed sharp).
+- Long shadows without TAA: smooth edges instead of grain (the jitter was white noise, fixed per pixel; now an even pattern the blur removes).
+- Night maps: new setting *Floodlit surfaces at night* (`NightSurfaces`, 0.8): floodlit stands, lit roads and white walls keep this part of the game's white instead of burning out; lamps and neon always keep it in full (1 = as before).
+- New setting *Highlight roll-off* (`ToneKnee`, 0.5 = as before): where the tone curve starts to bend; higher keeps more of the game's bright mid-tones, brighter highlights.
+- Night sky over a sunset map: the sunset ring TMUF Island paints around the map isn't drawn (it stood like an orange wall at the horizon and the sea mirrored it; `GameSkyClouds` keeps it), the far distance loses its sunset colour.
+- Author's Shader: leaving the map (back to the menu) brings your own look back at once; before, the author's look stayed until the next map. The log says why a map's comments gave no look (no code in them, the switch off, a code cut off or broken); a code broken over lines by pasting is read.
+- The last run's log stays as `tmvs.prev.log`. Weather sound: a buffer of runaway full-scale noise (never reached by rain and thunder) goes out silent and the mixer starts over, with a line in the log.
+- *Picked preset applies to all maps of this type* is off by default: picking a preset on a map no longer changes the preset of every map of that kind unless you switch it on.
+- United Forever Island: the sea reports no height; it is measured from the sea's material now, so it gets the exact water plane like the pools (waves, clean reflections).
+- Water mirrors the sky you picked (planets, the black hole, stars) where the reflection finds nothing else, also far out on the sea; before it was a flat average colour.
+- Stadium: dirt at the height of the water blocks no longer turns into water. Once a map's water was seen as the game's water material, only that is water; before, dark brown ground never is.
+- Grass detail: the blades fade out over a longer distance, the mowing stripes have soft edges (hard lines ahead of the car).
+- MediaTracker editor detection: replay cameras that leave a few rows out are shaded as before (only real panels count).
+- The game's materials are read while it draws (`GameMaterials`, on): the TMUF sea is water by its material (and its height is measured from it). Not on Stadium, where the engine reports the water. Debug view *Materials* shows lamps, cars, glass, grass, water and light added on top.
+- The map's mood (day, sunset, night: which preset it gets) comes from the map's own time of day when the engine reports it, not from the colour of its sun (Rally at noon has a warm sun and got the sunset preset).
+- New setting *No MediaTracker clips of the map while driving* (`SkipMapClips`, off; `Shift+F7` switches it anywhere): the map's in-game clips (triggered while driving: forced cameras, black screens, texts) don't start, one that runs ends, also in replays (switch it any time with `Shift+F7`). Intro and end-race clips stay; the map itself is not changed. A look picked with or without a night sky relights the map with *Real night* after a moment.
+- Reflections while driving as clean as in photo mode: twice the steps, half the noise (dashed, grainy reflections without TAA).
+- MediaTracker editor: only its 3D view is shaded. The panels around it no longer get the preset's sky and colours, and the effects line up with the view.
+- Photo mode shows the aperture (f-stop), zoom and focus at the top left (never in the photos).
+- Colour looks from LUT files: put 3D `.cube` files (DaVinci Resolve, Lightroom, Photoshop, OBS, ...) into `Documents\TrackMania\TMVS\luts` and pick one on the *Customize* page (*Colour look*), with an amount. It sits on top of every preset ([details](docs/settings.md#colour-look-lut)).
+
 ## 1.3.0
 
 **Snow**

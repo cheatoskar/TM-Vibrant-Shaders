@@ -24,6 +24,11 @@ struct Settings {
     bool disableGameMSAA = true; // required for the depth buffer; post AA replaces it
     int quality = 2;               // 0 low, 1 medium, 2 high (sample counts)
     bool readableGameDepth = true; // also hook the game's own depth buffers (menus, replay/video export)
+    bool gameMaterials = true;     // lamps, cars, glass and grass from the game's own materials (not guessed from pixels)
+    bool skipMapClips = false;     // the map's in-game MediaTracker clips (forced cameras, black screens) don't play
+    bool gameSkyClouds = false;    // night skies over sunset maps: the game's clouds and their mirror image in the sea stay (photos)
+    bool gameNight = false;        // night skies over day maps: the game lights the map at midnight (map load), no baked sun
+    bool disableGameFx = true;     // skip the game's bloom and colour filter (launcher "FX") while the mod shades
     // Neon light trail behind the car, kept for the whole run (0 = off).
     float neonTrail = 0.0f;
     float trailColor[3] = {0.1f, 0.65f, 1.0f};
@@ -75,6 +80,7 @@ struct Settings {
     float fogDensity = 0.35f;
     float fogHeightFalloff = 0.6f;
     float fogSunScatter = 0.7f;
+    float hazeDistance = 1.0f;      // < 1: the haze closes in nearer the camera (less visibility)
 
     // Volumetric light shafts
     float godRays = 1.5f;
@@ -95,6 +101,8 @@ struct Settings {
     float exposure = 0.0f;         // EV
     float autoExposure = 0.5f;
     float contrast = 1.06f;
+    float toneKnee = 0.5f;         // tone curve: linear up to here, then the soft shoulder (higher = brighter highlights)
+    float nightSurfaces = 0.8f;    // night maps: floodlit surfaces kept at this part of the game's white (lamps always in full)
     float saturation = 1.08f;
     float vibrance = 0.25f;
     float temperature = 0.08f;
@@ -114,6 +122,7 @@ struct Settings {
     float waterSurfaces = 1.0f;   // waves, reflections and refraction on the game's water (pools, sea)
     float lightning = 0.0f;        // lightning flashes (how often)
     bool lensDrops = false;        // rain drops on the lens (only while it rains)
+    bool weatherShelter = true;    // no rain or snow under roofs, bridges and in buildings
     float weatherSound = 0.45f;    // volume of rain and thunder (only plays with rain or lightning)
     float reflections = 0.0f;      // dry glossy reflections on the track
     float reflectionBlur = 0.35f;  // 0 = a mirror, 1 = a soft sheen (dry track)

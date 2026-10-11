@@ -50,6 +50,68 @@ bool cinematicActive();
 // on, for TAA: each frame samples the pixels at a slightly different spot. 0, 0 = off.
 void setProjectionJitter(float x, float y);
 
+// Hi-res photos: every perspective projection zooms in on one tile of the view
+// (NDC x' = scaleX x + offsetX, y likewise). 1, 1, 0, 0 = off.
+void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY);
+
+// The camera (CHmsCamera) the plugin shades: zoom and tiles apply to its projection only.
+void setMainCamera(const void* camera);
+
+// Photo mode zoom: every perspective projection magnified about the centre (1 = off; only
+// in, never out, since the engine culls with its own field of view).
+void setProjectionZoom(float zoom);
+
+// Hides the race / replay interface (HUD) while true: the photo mode. Through the game's own
+// switch (CGamePlaygroundInterface), so menus and the 3D view are drawn as always.
+void hideOverlay(bool hide);
+
+// Skips the game's own FX post-processing (bloom and colour filter, the launcher's "FX"
+// option) while true: it worked on the same image as the mod (glow twice, smeared).
+// The game's setting itself is not touched. The engine asks only when it starts its
+// effects (map load), so a change shows from the next map on.
+void skipGameFx(bool skip);
+
+// No adaptive view distance (the launcher's "ZClip" cuts the far blocks when the frame rate
+// drops) while true: the photo mode wants the whole map.
+void fullViewDistance(bool full);
+
+// The game's material (CPlugShader) of the draw call being made, null between draws and
+// without the hooks. A first step towards per-material masks (lamps, glass, water).
+const void* currentShader();
+// The menu or photo mode used this Esc press: the game doesn't see it (it would pause) until
+// the key is released.
+void swallowEscape();
+bool escapeSwallowed();
+
+// A night sky replaces the sun: the game's halo around its sun (a lens flare drawn over the
+// geometry in front of the sun) fades out.
+void hideSunFlare(bool hide);
+// A night sky replaces the game's: the environment's painted horizon (Island's sunset ring) isn't drawn.
+void hideGameSky(bool hide);
+// Real night under night skies: at each map load `decide` gets the map's time of day (0..1,
+// night outside (0.25, 0.75]) and answers whether the game lights the map at midnight
+// instead (its own moon, fog and sky; no baked sun). Visual only: the map stays as it is.
+void setNightAtLoad(bool (*decide)(float dayTime));
+// The loaded map's own time of day (-1 unknown) and whether it is lit at midnight instead.
+float mapDayTime();
+bool mapLitAtNight();
+// Real night switched on or off while a map runs: the weather jumps to midnight or back to the
+// map's time (only call it in gameplay: the weather of a map that was left may be gone).
+bool relightNight(bool night);
+// The map's in-game MediaTracker clips (triggered while driving: forced cameras, black
+// screens, texts) don't start while true; one that runs ends. Intro, end-race clips and
+// replays are not affected, the map stays as it is. False without the hook.
+void skipMapClips(bool skip);
+bool mapClipsSkippable();
+// What the material being drawn is (from its shader file), Other between draws.
+enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5 };
+Material currentMaterial();
+// Development: log each material once with its file (tmvs.log "shader ...").
+void shaderCensus(bool on);
+
+// The free camera (cam 7 in replays, the editor's) is on. False without the hook.
+bool freeCamActive();
+
 // Counters of race (re)starts / map loads and of respawns (for the neon trail).
 int raceResets();
 int respawns();
@@ -67,6 +129,10 @@ bool waterHeights(float& blockY, float& seaY);
 // sit in the game's packs).
 int mapLoads();
 std::string mapComments();
+// Counts the times the game let go of its map (back to the menu, or before the next map), and
+// whether a map is open now (race, replay or editor).
+int mapCloses();
+bool mapOpen();
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.
 bool currentMapComments(std::string& comments);

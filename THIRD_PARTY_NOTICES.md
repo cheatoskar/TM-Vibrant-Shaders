@@ -34,6 +34,10 @@ SOFTWARE.
 
 MP3 decoder for the weather sounds (https://github.com/lieff/minimp3). Compiled into `TMVibrantShaders.dll`. Released under CC0 1.0 Universal (public domain), no conditions.
 
+## stb_image, stb_image_write
+
+JPEG reader and writer for the preset pictures in the menu (https://github.com/nothings/stb), by Sean Barrett. Compiled into `TMVibrantShaders.dll` and the previewer. Dual-licensed as public domain (Unlicense) or MIT; used here under the public domain terms, no conditions.
+
 ## Weather recordings
 
 The rain and thunder sounds embedded in `TMVibrantShaders.dll` are recordings from freesound.org under CC0 1.0 (public domain). Sources and authors: [sounds/CREDITS.md](sounds/CREDITS.md).

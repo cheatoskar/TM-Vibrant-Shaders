@@ -41,7 +41,13 @@ void setFileName(const wchar_t* name) {
 void write(const char* fmt, ...) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_file) {
-        g_file = _wfopen((dataDir() + L"\\" + g_fileName).c_str(), L"w");
+        // The last run's log stays as *.prev.log: a rare problem is often noticed only after
+        // the game was started again.
+        const std::wstring path = dataDir() + L"\\" + g_fileName;
+        if (path.size() > 4 && !_wcsicmp(path.c_str() + path.size() - 4, L".log")) {
+            MoveFileExW(path.c_str(), (path.substr(0, path.size() - 4) + L".prev.log").c_str(), MOVEFILE_REPLACE_EXISTING);
+        }
+        g_file = _wfopen(path.c_str(), L"w");
         if (!g_file) return;
     }
     SYSTEMTIME t;
