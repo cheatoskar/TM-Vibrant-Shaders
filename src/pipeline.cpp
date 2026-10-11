@@ -1311,15 +1311,14 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     if (len < 1e-3) return o;
     float age = c_Trail.z - lerp(abs(a.w), b.w, corner.y);
     float fade = c_Trail.w > 0.0 ? saturate(1.0 - age / c_Trail.w) : 1.0;
-    // It comes out behind the car: under and in it the line would flicker through the body
-    // and the rear wheels (it runs through their centres, almost at the depth of the tread),
-    // and at speed a frame of timing puts its end a metre or more off. Only the fresh part:
-    // an older line the car drives back over stays.
-    // (Dimmed, not dropped: a vertex thrown out would stretch its quad into a sliver.)
     if (fade <= 0.0) return o;
+    // It comes out behind the car: under and in it the line would flicker through the body
+    // and the rear wheels (it runs through their centres, almost at the depth of the tread).
+    // The distance to the car goes to the pixels (data.w): at speed the points lie 15 m apart,
+    // a fade per vertex would stretch over the whole first piece. Only the fresh part: an
+    // older line the car drives back over stays.
     float3 car = trailPoint(c_Trail.y - 1.0).xyz;
-    float behind = smoothstep(1.6, 2.6, distance(lerp(a.xyz, b.xyz, corner.y), car));
-    fade *= lerp(behind, 1.0, saturate((age - 0.6) / 0.3));
+    float fromCar = lerp(distance(lerp(a.xyz, b.xyz, corner.y), car), 100.0, saturate((age - 0.6) / 0.3));
     float3 dir = d / len;
     float3 right = cross(float3(0, 1, 0), dir);
     float rl = length(right);
@@ -1336,7 +1335,7 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float halfWidth = max(c_Trail2.y, pixel * 1.2);
     fade *= c_Trail2.y / halfWidth;
     o.pos = toClip(v + side / sl * halfWidth * corner.x);
-    o.data = float4(corner.x, fade, v.z, age);
+    o.data = float4(corner.x, fade, v.z, fromCar);
     return o;
 }
 )";
@@ -1499,7 +1498,8 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
     device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
     device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
-    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x7);
+    // Alpha too: it adds the trail's coverage to the 1 the lighting wrote (TAA's mask).
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
     bind(device, 0, m_nd.texture, false);
     device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailPoints.texture);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MINFILTER, D3DTEXF_POINT);
@@ -2240,6 +2240,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 0, current, in.jitter[0] != 0.0f || in.jitter[1] != 0.0f);
         bind(device, 1, m_taa[previous].texture, true);
         bind(device, 2, m_nd.texture, false);
+        bind(device, 3, m_hdr.texture, false); // alpha: where the neon trail lies
         const float taaValid[4] = {1.0f, (m_taaValid && m_temporalValid) ? 1.0f : 0.0f, static_cast<float>(m_frame % 64),
                                    longConstants[3]};
         device->SetPixelShaderConstantF(34, taaValid, 1);

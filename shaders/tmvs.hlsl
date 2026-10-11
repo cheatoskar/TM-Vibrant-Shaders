@@ -3215,6 +3215,10 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
         float onWater = saturate(1.0 - (y - level) / tol) * saturate((y - level + 3.0) / 0.3);
         weight = lerp(weight, max(weight, 0.5), onWater);
     }
+    // The neon trail (s3: the HDR image, alpha above 1 where it lies) floats above the road
+    // whose depth the reprojection uses: at speed its history came from the wrong place and
+    // the line broke up into smeared stripes. This frame only there.
+    weight = lerp(weight, 1.0, saturate(tex2Dlod(s3, float4(cuv, 0, 0)).a - 1.0));
     return float4(fromYCoCg(lerp(history, toYCoCg(current), weight)), z);
 }
 
@@ -3291,7 +3295,11 @@ float4 PS_Trail(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     clip(tex2Dlod(s0, float4(uv, 0, 0)).w - data.z * 0.995);
     float x = data.x;
     float light = exp(-x * x * 10.0) * 2.5 + exp(-x * x * 2.5) * 0.4;
-    return float4(u_Pass0.rgb * light * data.y, 0);
+    // data.w: metres from the car (fresh points): the line comes out behind it.
+    light *= data.y * smoothstep(1.6, 2.6, data.w);
+    // Alpha: where the trail lies (the HDR image's alpha is 1 elsewhere): TAA takes it from
+    // this frame only, see PS_TAA.
+    return float4(u_Pass0.rgb * light, saturate(light * 2.0));
 }
 
 // Snow flakes: soft discs, stretched into short streaks when they rush past the camera.
