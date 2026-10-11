@@ -86,6 +86,10 @@ float g_jitterUV[2] = {};         // TAA jitter of this frame (uv shift of the i
 UINT g_frameWidth = 0, g_frameHeight = 0;
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
 gfx::Target g_sceneCopy;
+// A camera that draws into part of the screen (the MediaTracker editor's 3D view between its
+// panels): its depth and the shaded image, the size of that part.
+gfx::Target g_partDepth;
+gfx::Target g_partOut;
 
 float seconds() {
     LARGE_INTEGER now;
@@ -371,27 +375,58 @@ void processScene(IDirect3DDevice9* device) {
 
     D3DSURFACE_DESC desc{};
     target->GetDesc(&desc);
+    // The MediaTracker editor draws its 3D view into part of the screen, its panels around it
+    // (drawn later, half transparent). Only that part is shaded: shading the whole screen
+    // turned the panels' background into sky, and the effects missed the view (the camera's
+    // projection belongs to its part of the screen).
+    D3DVIEWPORT9 viewport{};
+    device->GetViewport(&viewport);
+    const bool part = viewport.Width >= 320 && viewport.Height >= 200 && viewport.X + viewport.Width <= desc.Width &&
+                      viewport.Y + viewport.Height <= desc.Height && (viewport.Width < desc.Width || viewport.Height < desc.Height);
+    const RECT area = {static_cast<LONG>(viewport.X), static_cast<LONG>(viewport.Y), static_cast<LONG>(viewport.X + viewport.Width),
+                       static_cast<LONG>(viewport.Y + viewport.Height)};
+    const UINT width = part ? viewport.Width : desc.Width, height = part ? viewport.Height : desc.Height;
+    {
+        static bool s_loggedPart = false;
+        if (part && !s_loggedPart) {
+            s_loggedPart = true;
+            TMVS_LOG("scene: the camera draws into part of the screen (%ux%u at %u,%u): shading that part", width, height, viewport.X, viewport.Y);
+        }
+    }
     if (!g_pipeline.ready() && (g_pipelineFailed || !g_pipeline.init(device, g_dev.shaderDir))) {
         g_pipelineFailed = true;
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
     }
-    if (!g_sceneCopy.create(device, desc.Width, desc.Height, D3DFMT_A8R8G8B8)) {
+    if (!g_sceneCopy.create(device, width, height, D3DFMT_A8R8G8B8) || (part && !g_partOut.create(device, width, height, D3DFMT_A8R8G8B8))) {
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
     }
 
     g_pipeline.beginStateSave(device);
-    device->StretchRect(target, nullptr, g_sceneCopy.surface, nullptr, D3DTEXF_NONE);
+    device->StretchRect(target, part ? &area : nullptr, g_sceneCopy.surface, nullptr, D3DTEXF_NONE);
     device->SetDepthStencilSurface(nullptr);
+    if (part) {
+        if (!g_pipeline.copyDepthArea(device, sceneDepth, area, g_partDepth)) {
+            device->SetRenderTarget(0, target);
+            device->SetDepthStencilSurface(savedDepth);
+            g_pipeline.endStateSave(device);
+            target->Release();
+            if (savedDepth) savedDepth->Release();
+            return;
+        }
+        sceneDepth = g_partDepth.texture;
+    }
+    // Where the pipeline writes: the screen, or the part's own image (copied into place below).
+    IDirect3DSurface9* shaded = part ? g_partOut.surface : target;
 
     Pipeline::Inputs inputs;
     inputs.color = g_sceneCopy.texture;
     inputs.depth = sceneDepth;
-    inputs.width = desc.Width;
-    inputs.height = desc.Height;
+    inputs.width = width;
+    inputs.height = height;
     memcpy(inputs.view, g_scene.view, sizeof(inputs.view));
     memcpy(inputs.projection, g_scene.projection, sizeof(inputs.projection));
     inputs.sunKnown = sunDirection(inputs.sunDirection);
@@ -433,8 +468,8 @@ void processScene(IDirect3DDevice9* device) {
     inputs.freeze = photo::tiling();
     inputs.lut = updateLut();
     inputs.materials = materialsWanted();
-    g_frameWidth = desc.Width;
-    g_frameHeight = desc.Height;
+    g_frameWidth = width;
+    g_frameHeight = height;
 
     if (g_captureRequested) {
         g_captureRequested = false;
@@ -457,16 +492,17 @@ void processScene(IDirect3DDevice9* device) {
         photo::adjust(effective);
         LARGE_INTEGER renderStart, renderEnd;
         QueryPerformanceCounter(&renderStart);
-        g_pipeline.render(device, inputs, effective, target);
+        g_pipeline.render(device, inputs, effective, shaded);
+        if (part) device->StretchRect(g_partOut.surface, nullptr, target, &area, D3DTEXF_NONE);
         QueryPerformanceCounter(&renderEnd);
         countPipelineCpu(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart));
         g_shadedThisFrame = true;
         // The shaded frame before the HUD: a photo or a hi-res tile.
-        if (temporal) photo::afterRender(device, target);
+        if (temporal) photo::afterRender(device, shaded);
         // A preset was just saved: this frame (without HUD and menu) becomes its picture.
         std::string picture;
         if (temporal && Config::get().takePictureRequest(picture)) {
-            thumbnails::savePicture(device, target, Config::get().presetPicture(picture));
+            thumbnails::savePicture(device, shaded, Config::get().presetPicture(picture));
             Config::get().pictureTaken();
         }
         g_gameplayThisFrame = g_gameplayThisFrame || g_scene.projection[14] > -1.0f; // not a menu background
@@ -521,7 +557,8 @@ void onFrameBegin() {
         // The game's bloom and colour filter would work on the image the mod already graded.
         const Settings& s = Config::get().settings;
         engine::skipGameFx(s.enabled && s.disableGameFx);
-        engine::hideSunFlare(false); // light reset: the sun's halo as before (step by step later)
+        // A night sky (or the black hole) has no sun: the game's halo and flare go too.
+        engine::hideSunFlare(s.enabled && Pipeline::skyReplacesSun(s));
     }
     updateJitter();
     g_cameraIndex = 0;
@@ -673,6 +710,8 @@ void onDeviceCreated(IDirect3DDevice9* device) {
 void onPreReset() {
     g_pipeline.release();
     g_sceneCopy.destroy();
+    g_partDepth.destroy();
+    g_partOut.destroy();
     depth::onPreReset();
     overlay::preReset();
 }

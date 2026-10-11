@@ -637,14 +637,31 @@ float4 diskSample(float3 x, float3 dir, float3 n, float3 e1, float3 e2) {
     float r = length(x);
     if (r < inner * 0.9 || r > outer) return 0;
     float phi = atan2(dot(x, e2), dot(x, e1));
-    // Keplerian shear: inner gas orbits faster, which turns the noise into spiral streaks.
-    float spin = u_Proj2.z * 0.35 * pow(inner / r, 1.5);
-    float a = phi + spin + log(r) * 1.8;
-    float3 q = float3(cos(a) * 2.5, sin(a) * 2.5, r * 0.9);
-    float gas = noise3(q) * 0.65 + noise3(q * 2.7 + 11.0) * 0.35;
-    float lanes = 0.75 + 0.25 * noise3(float3(r * 2.5, cos(a) * 0.6, sin(a) * 0.6));
-    // Smooth, bright gas with faint lanes: Gargantua is clean, not noisy.
-    float density = saturate(gas * 0.7 + 0.35) * lerp(1.0, lanes, 0.5);
+    // The gas orbits towards +phi (the way the beaming below says it moves), the inner edge
+    // faster (Kepler). Turned on for good, the pattern would wind up tighter every second
+    // until it only flickered; instead two layers each wind up for a few seconds and start
+    // over, fading into each other (flow-map style), so the streaks keep flowing.
+    const float period = 6.0;
+    float omega = 0.7 * pow(inner / r, 1.5);
+    float cycle = u_Proj2.z / period;
+    float gas = 0.0, weightSum = 0.0, weightSq = 0.0;
+    [unroll] for (int layer = 0; layer < 2; layer++) {
+        float c = cycle + layer * 0.5;
+        float phase = frac(c);
+        float w = 1.0 - abs(phase * 2.0 - 1.0);     // 0 when the layer starts over
+        float a = phi - omega * phase * period + log(r) * 1.2;
+        float seed = floor(c) * 7.31 + layer * 3.7;  // a fresh pattern each round
+        // Filaments: long arcs along the orbit (low frequency around it), thin across it.
+        float3 q = float3(cos(a) * 1.6, sin(a) * 1.6, r * 3.2 + seed);
+        float n = noise3(q) * 0.6 + noise3(q * float3(2.3, 2.3, 2.9) + 5.0) * 0.4;
+        gas += n * w;
+        weightSum += w;
+        weightSq += w * w;
+    }
+    // Keep the contrast while the layers fade (an even mix would be greyer: it pulsed).
+    gas = 0.5 + (gas - 0.5 * weightSum) / sqrt(max(weightSq, 1e-3));
+    // Bright gas with dark lanes between the filaments: the lanes are what shows the flow.
+    float density = saturate(lerp(0.3, 1.1, smoothstep(0.2, 0.8, gas)));
     density *= smoothstep(inner * 0.9, inner * 1.15, r) * smoothstep(outer, outer * 0.55, r);
 
     // Temperature falls off outward: white-hot inside, deep orange at the rim.
@@ -658,7 +675,7 @@ float4 diskSample(float3 x, float3 dir, float3 n, float3 e1, float3 e2) {
     float beaming = clamp(g * g * g, 0.12, 3.5);
     float redshift = sqrt(saturate(1.0 - 1.0 / r));
     // White-hot and far brighter than anything else in the sky: it feeds a big bloom.
-    float3 emission = col * (0.6 + heat * 7.0) * beaming * redshift;
+    float3 emission = col * (0.6 + heat * 5.5) * beaming * redshift;
     return float4(emission * density, saturate(density * 1.4));
 }
 
@@ -748,12 +765,22 @@ float3 dirFromAngles(float azimuth, float elevation) {
     return float3(sin(azimuth) * cos(elevation), sin(elevation), cos(azimuth) * cos(elevation));
 }
 
-// Cloud bands of the planet. lat = -1..1 along the spin axis, lon = longitude (rad),
-// q = point on the unit sphere (for turbulence).
+// Cloud bands of the planet. lat = -1..1 along the spin axis, lon = longitude (rad).
 float wrapAngle(float a) { return a - 6.2831853 * floor(a / 6.2831853 + 0.5); }
 
-float3 planetAlbedo(int type, float lat, float lon, float3 q) {
+float3 planetAlbedo(int type, float lat, float lon) {
     float t = u_Proj2.z * 0.004;
+    // The planet turns, and neighbouring bands drift against each other (Jupiter's jets):
+    // the turbulent band edges shear while it turns. The bands themselves follow latitude
+    // only, so without the jets the turning would hardly show.
+    // A turn in about two minutes: slow and stately, but you see it move.
+    float turn = u_Proj2.z * 0.05;
+    float jet = sin(lat * 15.0) * 0.035;
+    float lonW = lon + turn + u_Proj2.z * jet;
+    float cl = sqrt(saturate(1.0 - lat * lat));
+    float3 q = float3(cos(lonW) * cl, lat, sin(lonW) * cl);   // point on the sphere, for turbulence
+    // Storms ride their own band (the Great Red Spot sits in a westward jet).
+    float spotLon = lon + turn + u_Proj2.z * sin(-0.38 * 15.0) * 0.035;
     // Turbulent band edges: the latitude is warped by noise.
     float warp = (noise3(q * 4.0 + float3(t, 0, 0)) - 0.5) * 0.09 + (noise3(q * 11.0 - float3(0, t, 0)) - 0.5) * 0.035;
     float l = lat + warp;
@@ -764,7 +791,7 @@ float3 planetAlbedo(int type, float lat, float lon, float3 q) {
         // Jupiter: cream zones, brown and rust belts, the Great Red Spot.
         col = lerp(float3(0.55, 0.36, 0.24), float3(0.95, 0.88, 0.76), smoothstep(0.35, 0.65, bands));
         col = lerp(col, float3(0.78, 0.5, 0.32), smoothstep(0.55, 0.8, fine) * 0.35);
-        float2 spot = float2(wrapAngle(lon - 1.2) * 0.55, (lat + 0.38) * 2.2);
+        float2 spot = float2(wrapAngle(spotLon - 1.2) * 0.55, (lat + 0.38) * 2.2);
         float swirl = noise3(float3(spot * 6.0, t * 3.0));
         float oval = smoothstep(0.32, 0.18, length(spot) + (swirl - 0.5) * 0.08);
         col = lerp(col, float3(0.8, 0.38, 0.24), oval * 0.85);
@@ -773,7 +800,7 @@ float3 planetAlbedo(int type, float lat, float lon, float3 q) {
         col = lerp(float3(0.13, 0.27, 0.72), float3(0.32, 0.52, 0.92), smoothstep(0.3, 0.7, bands));
         float streak = smoothstep(0.72, 0.9, noise3(float3(l * 40.0, 7.0, 0.0) + float3(0.0, q.x, q.z) * 3.0));
         col = lerp(col, float3(0.9, 0.95, 1.0), streak * 0.6);
-        float2 spot = float2(wrapAngle(lon + 0.8) * 0.6, (lat + 0.25) * 2.4);
+        float2 spot = float2(wrapAngle(spotLon + 0.8) * 0.6, (lat + 0.25) * 2.4);
         col *= 1.0 - smoothstep(0.22, 0.12, length(spot)) * 0.55;
     } else if (type == 3) {
         // Exotic: violet and rose bands with teal storms.
@@ -871,7 +898,7 @@ float4 ringedPlanet(float3 rd, float3 light, float3 dir) {
         float lat = dot(nrm, ringN);
         float3 e1 = normalize(cross(ringN, float3(0.3, 0.1, 0.9)));
         float lon = atan2(dot(nrm, cross(ringN, e1)), dot(nrm, e1));
-        float3 albedo = planetAlbedo((int)(u_Planet.x + 0.5), lat, lon, nrm);
+        float3 albedo = planetAlbedo((int)(u_Planet.x + 0.5), lat, lon);
         float ndl = dot(nrm, light);
         float lit = smoothstep(-0.08, 0.35, ndl);
         // Shadow of the rings on the planet.
@@ -971,10 +998,8 @@ float3 ringWorldSky(float3 rd) {
         float3 nrm = normalize(x - center);
         float lat = dot(nrm, axis);
         float3 e1 = normalize(cross(axis, float3(0.3, 0.1, 0.9)));
-        float lon = atan2(dot(nrm, cross(axis, e1)), dot(nrm, e1)) + u_Proj2.z * 0.01;
-        float cl = sqrt(saturate(1.0 - lat * lat));
-        float3 local = float3(cos(lon) * cl, lat, sin(lon) * cl);
-        float3 albedo = planetAlbedo(type, lat, lon, local);
+        float lon = atan2(dot(nrm, cross(axis, e1)), dot(nrm, e1));
+        float3 albedo = planetAlbedo(type, lat, lon);
         float ndl = dot(nrm, sun);
         float lit = smoothstep(-0.06, 0.4, ndl);
         // Shadow of the rings on the planet.
@@ -2971,8 +2996,9 @@ float4 PS_Sharpen(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // Utility: raw depth (INTZ) -> R32F, used for frame captures.
+// u_Pass0.xy = where the copied area starts, u_Pass0.zw = its size (uv of the source)
 float4 PS_CopyDepth(float2 uv : TEXCOORD0) : COLOR0 {
-    return float4(tex2Dlod(s0, float4(uv, 0, 0)).r, 0, 0, 1);
+    return float4(tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0)).r, 0, 0, 1);
 }
 
 // ---------------------------------------------------------------------------------

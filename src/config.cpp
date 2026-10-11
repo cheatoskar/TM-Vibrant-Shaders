@@ -892,11 +892,11 @@ void applyPreset(Settings& s, Preset preset) {
             s.chromaticAberration = 0.0f;
             s.filmGrain = 0.01f;
             s.neonLight = 0.35f;
-            s.reflections = 1.1f;   // night: the lit stadium mirrors in the dry track
+            s.reflections = 0.8f;   // night: a sheen, not a mirror (a mirror doubled every lamp, boosted)
             break;
         case Preset::Horizon:
             s.skyMode = 3;      // black hole sky: the hole lights the stadium, Saturn next to it
-            s.reflections = 1.1f;
+            s.reflections = 0.8f;
             s.planetType = 0;
             s.planetView = 1;
             // Saturn and the black hole, both in view from the start screen.
@@ -931,7 +931,7 @@ void applyPreset(Settings& s, Preset preset) {
         case Preset::Aurora:
             s.skyMode = 4;
             s.skyRotation = 150.0f;
-            s.reflections = 1.1f;
+            s.reflections = 0.8f;
             s.starAmount = 3.0f;
             s.skyColor[0] = 0.3f; s.skyColor[1] = 0.85f; s.skyColor[2] = 0.75f;
             s.ambientTint = 0.9f;

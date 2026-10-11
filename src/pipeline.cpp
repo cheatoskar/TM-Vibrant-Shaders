@@ -2225,12 +2225,29 @@ bool Pipeline::readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, s
     return ok;
 }
 
+bool Pipeline::copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth, const RECT& area, gfx::Target& out) {
+    if (!m_ready) return false;
+    D3DSURFACE_DESC desc{};
+    depth->GetLevelDesc(0, &desc);
+    const UINT w = static_cast<UINT>(area.right - area.left), h = static_cast<UINT>(area.bottom - area.top);
+    if (!out.create(device, w, h, D3DFMT_R32F)) return false;
+    const BOOL softwareVP = setPassStates(device);
+    bind(device, 0, depth, false);
+    passConstants(device, static_cast<float>(area.left) / desc.Width, static_cast<float>(area.top) / desc.Height,
+                  static_cast<float>(w) / desc.Width, static_cast<float>(h) / desc.Height);
+    runPass(device, kCopyDepth, out);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
 bool Pipeline::readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std::vector<float>& out) {
     D3DSURFACE_DESC desc{};
     depth->GetLevelDesc(0, &desc);
     if (!m_depthCopy.create(device, desc.Width, desc.Height, D3DFMT_R32F)) return false;
     const BOOL softwareVP = setPassStates(device);
     bind(device, 0, depth, false);
+    passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
     runPass(device, kCopyDepth, m_depthCopy);
     device->SetTexture(0, nullptr);
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
