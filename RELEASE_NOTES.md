@@ -29,7 +29,7 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 - `F12` saves a photo without the HUD, `Shift+F12` a larger one from tiles. Middle click sets the focus, `Ctrl`+wheel the depth of field, `Shift`+wheel zooms.
 
 **Night**
-- **Real night under night skies** (on by default): with a night sky or the black hole over a day or sunset map, the game lights the map at midnight itself. No more baked sunlight under the stars. Switching it in the menu relights the map at once. The map, its replays and validation stay as they are.
+- **Real night under night skies** (experimental, off by default, on the *Settings* page): with a night sky or the black hole over a day or sunset map, the game lights the map at midnight itself. No more baked sunlight under the stars. Switching it in the menu relights the map at once. The map, its replays and validation stay as they are.
 - Under a night sky the game's sunset clouds, the sunset ring around TMUF Island and the sunset in the sea are gone (*Keep the game's clouds under night skies* brings them back for photos).
 - *Floodlit surfaces at night*: floodlit stands and lit roads no longer burn out to flat white; lamps and neon stay bright.
 - The sun's halo and lens flare fade out under night skies.
@@ -42,6 +42,7 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 - Long shadows without bright boxes around the car, without saw teeth and without grain.
 - Reflections while driving as clean as in photo mode.
 - TMUF Island: the sea is water now, with waves and clean reflections. Rally roads no longer turn into a mirror.
+- Water mirrors the sky you picked (planets, the black hole) where nothing else is reflected. Stadium dirt at water height no longer turns into water.
 - Colour looks from `.cube` LUT files (*Customize* > *Colour look*).
 - *Highlight roll-off* sets where the tone curve starts to bend.
 
@@ -58,6 +59,7 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 
 - United Forever Island at night: headlights on very bright blocks burn out to white (the game draws them that way).
 - Floodlit stadiums at night keep part of the game's burned-out white (*Floodlit surfaces at night* sets how much).
+- *Real night under night skies*: on Stadium A01 the game can play a loud noise when the map loads. Off by default until this is understood.
 - If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
 Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md).
