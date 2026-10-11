@@ -94,3 +94,22 @@ jobs:
           body_path: dist/release-notes.md
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  # TM Vibrant Shaders for ManiaPlanet (TrackMania 2): a separate 64-bit D3D11 project.
+  maniaplanet:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S maniaplanet -B build-mp -A x64
+      - name: Build
+        run: cmake --build build-mp --config Release --target tmvs_mp
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-mp | Out-Null
+          Copy-Item build-mp/Release/d3d11.dll, maniaplanet/install.ps1, maniaplanet/README.md dist-mp/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TM-Vibrant-Shaders-ManiaPlanet
+          path: dist-mp/
