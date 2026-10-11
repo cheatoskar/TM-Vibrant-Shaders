@@ -1,8 +1,12 @@
-## TM Vibrant Shaders 1.4.0-preview
+## TM Vibrant Shaders 1.4.0-preview.2
 
 Real-time lighting, weather and skies for TrackMania Nations Forever and United Forever.
 
 **A preview of 1.4.0.** It brings a new menu, a photo mode, real nights under night skies and a switch for the map's MediaTracker clips. The work on the game's own rendering (materials, lights) follows in 1.4.0. Please report what looks wrong (`F12` there, then an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues) with the screenshot and the capture).
+
+**New in preview.2:** a *compare split* in photo mode (`Shift+F6`: the game without the mod on one side of a line, with it on the other, also in photos), and *Real night under night skies* is on by default.
+
+![The new F8 menu: every preset as a card with a picture](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.4.0-preview.2/docs/images/menu.jpg)
 
 ![Horizon: the black hole lights the stadium through the haze](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.4.0-preview/docs/images/black-hole-loop.jpg)
 
