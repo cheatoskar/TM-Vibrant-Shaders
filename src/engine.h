@@ -133,6 +133,10 @@ std::string mapComments();
 // whether a map is open now (race, replay or editor).
 int mapCloses();
 bool mapOpen();
+
+// Where the player's car is drawn now (world space), while a race runs (also with the car off
+// screen). False otherwise, or without the hooks (another game build).
+bool carLocation(float position[3]);
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.
 bool currentMapComments(std::string& comments);

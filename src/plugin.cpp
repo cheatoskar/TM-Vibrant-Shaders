@@ -453,6 +453,20 @@ void processScene(IDirect3DDevice9* device) {
         }
     }
     inputs.driving = !engine::cinematicActive();
+    inputs.carKnown = engine::carLocation(inputs.carPosition);
+    {
+        static DWORD s_carSeen = 0;
+        if (inputs.carKnown) s_carSeen = GetTickCount();
+        inputs.carFromEngine = s_carSeen && GetTickCount() - s_carSeen < 5000;
+    }
+    {
+        static int s_carSource = -1; // the log says once which way the trail finds the car
+        const int source = inputs.carKnown ? 1 : 0;
+        if (inputs.driving && source != s_carSource && (source == 1 || s_carSource < 0)) {
+            s_carSource = source;
+            TMVS_LOG("pipeline: neon trail follows the car %s", source ? "from the engine" : "in the depth buffer");
+        }
+    }
     {
         // Neon trail: a restart or a new map starts it over, a respawn starts a new line.
         static int s_resets = -1, s_respawns = -1;

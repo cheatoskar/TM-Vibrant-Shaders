@@ -3215,6 +3215,10 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
         float onWater = saturate(1.0 - (y - level) / tol) * saturate((y - level + 3.0) / 0.3);
         weight = lerp(weight, max(weight, 0.5), onWater);
     }
+    // The neon trail (s3: the HDR image, alpha above 1 where it lies) floats above the road
+    // whose depth the reprojection uses: at speed its history came from the wrong place and
+    // the line broke up into smeared stripes. This frame only there.
+    weight = lerp(weight, 1.0, saturate(tex2Dlod(s3, float4(cuv, 0, 0)).a - 1.0));
     return float4(fromYCoCg(lerp(history, toYCoCg(current), weight)), z);
 }
 
@@ -3266,10 +3270,12 @@ float4 PS_Spray(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     return float4(rainLight(uv) * a, 0);
 }
 
-// Neon trail, one point: where the car is (found in the depth buffer below the screen
-// centre, like the spray), lowered to the middle of the tyres.
+// Neon trail, one point: where the car is. From the engine when it knows (u_Pass0.y = 1,
+// u_Pass1.xyz: where the car is drawn, about the height of the wheel centres), else found in
+// the depth buffer below the screen centre (like the spray), lowered to the middle of the tyres.
 //   s0 = full normal/depth, u_Pass0.x = time stamp (< 0: a new line starts here)
 float4 PS_TrailPoint(float2 uv : TEXCOORD0) : COLOR0 {
+    if (u_Pass0.y > 0.5) return float4(u_Pass1.xyz, u_Pass0.x);
     float z0 = tex2Dlod(s0, float4(0.5, 0.6, 0, 0)).w;
     float z1 = tex2Dlod(s0, float4(0.5, 0.65, 0, 0)).w;
     float z2 = tex2Dlod(s0, float4(0.5, 0.7, 0, 0)).w;
@@ -3289,7 +3295,11 @@ float4 PS_Trail(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     clip(tex2Dlod(s0, float4(uv, 0, 0)).w - data.z * 0.995);
     float x = data.x;
     float light = exp(-x * x * 10.0) * 2.5 + exp(-x * x * 2.5) * 0.4;
-    return float4(u_Pass0.rgb * light * data.y, 0);
+    // data.w: metres from the car (fresh points): the line comes out behind it.
+    light *= data.y * smoothstep(1.6, 2.6, data.w);
+    // Alpha: where the trail lies (the HDR image's alpha is 1 elsewhere): TAA takes it from
+    // this frame only, see PS_TAA.
+    return float4(u_Pass0.rgb * light, saturate(light * 2.0));
 }
 
 // Snow flakes: soft discs, stretched into short streaks when they rush past the camera.

@@ -1303,7 +1303,7 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float4 a = trailPoint(first + k), b = trailPoint(first + k + 1.0);
     // No car found at one end, or b starts a new line (respawn).
     if (a.w == 0.0 || b.w <= 0.0) return o;
-    if (distance(a.xyz, b.xyz) > 40.0) return o; // teleported
+    if (distance(a.xyz, b.xyz) > 25.0) return o; // teleported (or a wrong find: 25 m in 1/30 s is 2700 km/h)
     a.xyz = smoothPoint(first + k, a);
     b.xyz = smoothPoint(first + k + 1.0, b);
     float3 d = b.xyz - a.xyz;
@@ -1312,6 +1312,13 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float age = c_Trail.z - lerp(abs(a.w), b.w, corner.y);
     float fade = c_Trail.w > 0.0 ? saturate(1.0 - age / c_Trail.w) : 1.0;
     if (fade <= 0.0) return o;
+    // It comes out behind the car: under and in it the line would flicker through the body
+    // and the rear wheels (it runs through their centres, almost at the depth of the tread).
+    // The distance to the car goes to the pixels (data.w): at speed the points lie 15 m apart,
+    // a fade per vertex would stretch over the whole first piece. Only the fresh part: an
+    // older line the car drives back over stays.
+    float3 car = trailPoint(c_Trail.y - 1.0).xyz;
+    float fromCar = lerp(distance(lerp(a.xyz, b.xyz, corner.y), car), 100.0, saturate((age - 0.6) / 0.3));
     float3 dir = d / len;
     float3 right = cross(float3(0, 1, 0), dir);
     float rl = length(right);
@@ -1328,7 +1335,7 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float halfWidth = max(c_Trail2.y, pixel * 1.2);
     fade *= c_Trail2.y / halfWidth;
     o.pos = toClip(v + side / sl * halfWidth * corner.x);
-    o.data = float4(corner.x, fade, v.z, age);
+    o.data = float4(corner.x, fade, v.z, fromCar);
     return o;
 }
 )";
@@ -1421,6 +1428,7 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         m_trailBreak = true;
         m_trailHead = m_trailCount = 0;
         m_trailClock = m_trailTime = 0.0f;
+        m_trailKeptValid = false;
         device->SetRenderTarget(0, m_trailPoints.surface);
         device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 0.0f, 0);
     }
@@ -1429,11 +1437,16 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     // Record the car while you drive (not in replays and intros): every frame into the next
     // slot (the live end of the trail, so it stays on the car), kept 30 times a second.
     bool live = false;
-    if (in.driving && dt > 0.0f && m_temporalValid) {
+    if (in.carFromEngine && !in.carKnown) m_trailBreak = true; // a gap: the next point starts a new line
+    if (in.driving && dt > 0.0f && m_temporalValid && (in.carKnown || !in.carFromEngine)) {
         live = true;
         bind(device, 0, m_nd.texture, false);
         const float stamp = m_trailTime + 1.0f; // never 0 (= no car)
-        passConstants(device, m_trailBreak ? -stamp : stamp, 0.0f);
+        // The engine's car position when known (exact, also off screen), else the shader
+        // finds the car in the depth buffer.
+        passConstants(device, m_trailBreak ? -stamp : stamp, in.carKnown ? 1.0f : 0.0f);
+        const float car[4] = {in.carPosition[0], in.carPosition[1], in.carPosition[2], 0.0f};
+        device->SetPixelShaderConstantF(33, car, 1);
         // One pixel of the ring buffer. (SetRenderTarget resets the scissor rect: set it after.)
         device->SetRenderTarget(0, m_trailPoints.surface);
         const RECT pixel = {static_cast<LONG>(m_trailHead % kTrailWidth), static_cast<LONG>(m_trailHead / kTrailWidth),
@@ -1444,8 +1457,18 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         m_quad.draw(device, kTrailWidth, kTrailHeight);
         profileMark(kTrailPoint);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-        if (m_trailClock >= 1.0f / 30.0f) {
-            m_trailClock = fmodf(m_trailClock, 1.0f / 30.0f);
+        // Kept 30 times a second, and every 2 m when the engine gives the position: at Island
+        // speeds 30 a second are 5-7 m apart, the line went angular in curves and its live
+        // end jumped that far every 33 ms.
+        float moved = 0.0f;
+        if (in.carKnown && m_trailKeptValid) {
+            const float dx = in.carPosition[0] - m_trailKept[0], dy = in.carPosition[1] - m_trailKept[1], dz = in.carPosition[2] - m_trailKept[2];
+            moved = sqrtf(dx * dx + dy * dy + dz * dz);
+        }
+        if (m_trailClock >= 1.0f / 30.0f || moved >= 2.0f) {
+            m_trailClock = moved >= 2.0f ? 0.0f : fmodf(m_trailClock, 1.0f / 30.0f);
+            memcpy(m_trailKept, in.carPosition, sizeof(m_trailKept));
+            m_trailKeptValid = in.carKnown;
             m_trailBreak = false;
             m_trailHead = (m_trailHead + 1) % kTrailPoints;
             if (m_trailCount < kTrailPoints) m_trailCount++;
@@ -1486,7 +1509,8 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
     device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
     device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
-    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x7);
+    // Alpha too: it adds the trail's coverage to the 1 the lighting wrote (TAA's mask).
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
     bind(device, 0, m_nd.texture, false);
     device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailPoints.texture);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MINFILTER, D3DTEXF_POINT);
@@ -2227,6 +2251,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 0, current, in.jitter[0] != 0.0f || in.jitter[1] != 0.0f);
         bind(device, 1, m_taa[previous].texture, true);
         bind(device, 2, m_nd.texture, false);
+        bind(device, 3, m_hdr.texture, false); // alpha: where the neon trail lies
         const float taaValid[4] = {1.0f, (m_taaValid && m_temporalValid) ? 1.0f : 0.0f, static_cast<float>(m_frame % 64),
                                    longConstants[3]};
         device->SetPixelShaderConstantF(34, taaValid, 1);
