@@ -1,6 +1,7 @@
 # Build directories
 build/
 build-mp/
+build-tmnf/
 dist-mp/
 bin/
 obj/

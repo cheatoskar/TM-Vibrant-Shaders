@@ -1,0 +1,50 @@
+#pragma once
+#include "imgui.h"
+#include <windows.h>
+#include <functional>
+#include <string>
+
+namespace tmshaders {
+struct Field;
+
+// The F8 menu, shared by the TMNF and the ManiaPlanet builds. The game side fills a Host.
+namespace menu {
+
+// GPU time per pass, for the Performance page.
+struct PassTimings {
+    virtual ~PassTimings() = default;
+    virtual int count() const = 0;
+    virtual const char* name(int pass) const = 0;
+    virtual float time(int pass) const = 0; // ms
+    virtual float total() const = 0;        // ms
+};
+
+struct Host {
+    bool depthAvailable = true;
+    bool engineHooks = true;
+    bool sunKnown = false;
+    float sunDirection[3] = {};
+    const char* shaderError = nullptr;
+    const PassTimings* timings = nullptr;
+    // The picture of a preset (0 = none).
+    std::function<ImTextureID(const std::string&)> picture;
+    // What auto quality turned off right now (null: nothing, or no auto quality in this game).
+    std::function<const char*()> autoQualityReduced;
+    // The comments of the map open in the editor (Author's Shader).
+    std::function<bool(std::string&)> mapComments;
+    std::function<bool(const std::string&)> setMapComments;
+    // Photo mode: the f-number of an aperture setting.
+    std::function<float(float)> fNumber;
+    // The settings this game can do (null: all); the others are not shown.
+    std::function<bool(const Field&)> supports;
+};
+
+// Colours, sizes and fonts (after ImGui::CreateContext, before the renderer backend).
+void setupStyle(HWND window);
+float scale();
+void draw(const Host& host);
+// Set when the user asks for a shader reload from the menu; cleared by the call.
+bool consumeReloadRequest();
+
+} // namespace menu
+} // namespace tmshaders

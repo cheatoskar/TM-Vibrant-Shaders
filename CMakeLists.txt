@@ -137,6 +137,7 @@ add_library(tm_vibrant_shaders SHARED
   src/tracer.cpp
   src/capture.cpp
   src/overlay.cpp
+  src/menu.cpp
   src/thumbnails.cpp
   src/photo.cpp
   src/update.cpp
