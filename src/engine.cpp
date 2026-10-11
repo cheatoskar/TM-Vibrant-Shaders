@@ -230,6 +230,7 @@ bool g_shaderCensus = false;           // log every material once (dev: finding 
 using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
 LensFlareFn g_lensFlare = nullptr;
 bool g_hideSunFlare = false;           // a night sky replaces the sun: its halo fades out
+volatile bool g_hideGameSky = false;   // a night sky replaces the game's: its painted horizon isn't drawn
 using LoadSceneFn = void(__fastcall*)(void*, void*);
 LoadSceneFn g_loadScene = nullptr;
 bool (*g_wantNight)(float dayTime) = nullptr; // the plugin: light this map at midnight?
@@ -459,6 +460,31 @@ Material materialOf(const void* shader) {
     return m;
 }
 
+// The environment's painted horizon: TMUF Island's IslandSkyPC1 is a ring around the map with
+// the sunset painted on (it writes depth, so the mod's sky can't replace it; the sea mirrors
+// it). Not Sky\SkyDay (the generic dome, at the sky's depth anyway).
+bool isPaintedHorizon(const void* shader) {
+    static std::unordered_map<const void*, bool> known;
+    static LONG knownLoads = -1;
+    if (!shader) return false;
+    if (knownLoads != g_mapLoads) {
+        known.clear();
+        knownLoads = g_mapLoads;
+    }
+    const auto it = known.find(shader);
+    if (it != known.end()) return it->second;
+    wchar_t path[512] = {};
+    bool horizon = false;
+    if (nodFilePath(shader, path, 512)) {
+        const wchar_t* file = wcsrchr(path, L'\\');
+        file = file ? file + 1 : path;
+        horizon = wcsstr(file, L"SkyPC") && !wcsstr(path, L"\\Sky\\") && !wcsstr(path, L"\\Menu");
+        if (horizon) TMVS_LOG("engine: %ls is the painted horizon (left out under night skies)", path);
+    }
+    if (known.size() < 8192) known.emplace(shader, horizon);
+    return horizon;
+}
+
 void censusShader(const void* shader) {
     static std::unordered_set<const void*> seen;
     if (!shader || seen.size() >= 4096 || !seen.insert(shader).second) return;
@@ -471,7 +497,7 @@ void __fastcall drawShaderDetour(void* self, void* edx, void* shader, void* corp
     const void* previous = g_currentShader;
     g_currentShader = shader;
     if (g_shaderCensus) censusShader(shader);
-    g_drawShader(self, edx, shader, corpus, tree, visual);
+    if (!(g_hideGameSky && isPaintedHorizon(shader))) g_drawShader(self, edx, shader, corpus, tree, visual);
     g_currentShader = previous;
 }
 
@@ -479,7 +505,7 @@ void __fastcall drawPassDetour(void* self, void* edx, void* delayed) {
     const void* previous = g_currentShader;
     g_currentShader = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedRenderShader);
     if (g_shaderCensus) censusShader(g_currentShader);
-    g_drawPass(self, edx, delayed);
+    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader))) g_drawPass(self, edx, delayed);
     g_currentShader = previous;
 }
 
@@ -1028,6 +1054,10 @@ void swallowEscape() {
 
 bool escapeSwallowed() {
     return g_swallowEscape;
+}
+
+void hideGameSky(bool hide) {
+    g_hideGameSky = hide;
 }
 
 void hideSunFlare(bool hide) {
