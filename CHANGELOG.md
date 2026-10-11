@@ -27,7 +27,7 @@
 - Long shadows: no more bright boxes on the road around and ahead of the car under a low light (the black hole, sunsets). Everything close in the middle of the screen was kept out of the height map so the car would cast no shadow; the arch just driven under went too and counted as "nothing here". Only what stands up to a car's height above the road is kept out now.
 - Long shadows: smooth edges instead of saw teeth under a low light (the height map is read filtered and dithered over a cell; far ground no longer leaves striped gaps in it), no lit dots inside shadows.
 - United Forever: roads at the environment's sea level (Rally) no longer turn into a mirror. Only water the game draws a reflection for counts as sea.
-- New setting *Real night under night skies* (`GameNight`, on by default): with a night sky (or the black hole) over a day or sunset map, the game lights the map at midnight itself (its moon, no baked sun to take out: no overexposed white). The map, its replays and validation stay as they are. Switched while a map runs, the map is relit at once.
+- New setting *Real night under night skies* (`GameNight`, off by default, experimental: on A01 the game played a loud noise when the map loaded at midnight): with a night sky (or the black hole) over a day or sunset map, the game lights the map at midnight itself (its moon, no baked sun to take out: no overexposed white). The map, its replays and validation stay as they are. Switched while a map runs, the map is relit at once.
 - Night skies over sunset maps: the sunset clouds of the game's sky no longer show through the stars, and its sea no longer mirrors the sunset. New setting *Keep the game's clouds under night skies* (`GameSkyClouds`, off) keeps both (nice for photos).
 - Photo mode: the depth of field blurs the lamps of night maps too (they stayed sharp).
 - Long shadows without TAA: smooth edges instead of grain (the jitter was white noise, fixed per pixel; now an even pattern the blur removes).
@@ -38,7 +38,7 @@
 - United Forever Island: the sea reports no height; it is measured from the sea's material now, so it gets the exact water plane like the pools (waves, clean reflections).
 - Water mirrors the sky you picked (planets, the black hole, stars) where the reflection finds nothing else, also far out on the sea; before it was a flat average colour.
 - Stadium: dirt at the height of the water blocks no longer turns into water. Once a map's water was seen as the game's water material, only that is water; before, dark brown ground never is.
-- Grass detail: the blades fade out over a longer distance (a hard edge ~30 m ahead of the car).
+- Grass detail: the blades fade out over a longer distance, the mowing stripes have soft edges (hard lines ahead of the car).
 - MediaTracker editor detection: replay cameras that leave a few rows out are shaded as before (only real panels count).
 - The game's materials are read while it draws (`GameMaterials`, on): the TMUF sea is water by its material (and its height is measured from it). Not on Stadium, where the engine reports the water. Debug view *Materials* shows lamps, cars, glass, grass, water and light added on top.
 - The map's mood (day, sunset, night: which preset it gets) comes from the map's own time of day when the engine reports it, not from the colour of its sun (Rally at noon has a warm sun and got the sunset preset).

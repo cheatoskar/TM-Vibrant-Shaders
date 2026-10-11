@@ -27,7 +27,7 @@ struct Settings {
     bool gameMaterials = true;     // lamps, cars, glass and grass from the game's own materials (not guessed from pixels)
     bool skipMapClips = false;     // the map's in-game MediaTracker clips (forced cameras, black screens) don't play
     bool gameSkyClouds = false;    // night skies over sunset maps: the game's clouds and their mirror image in the sea stay (photos)
-    bool gameNight = true;         // night skies over day maps: the game lights the map at midnight (map load), no baked sun
+    bool gameNight = false;        // night skies over day maps: the game lights the map at midnight (map load), no baked sun
     bool disableGameFx = true;     // skip the game's bloom and colour filter (launcher "FX") while the mod shades
     // Neon light trail behind the car, kept for the whole run (0 = off).
     float neonTrail = 0.0f;

@@ -1612,7 +1612,7 @@ float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
     // Mowing stripes, 8 m wide along the block grid. Like real mowed grass they swap
     // bright and dark depending on which way you look along them.
     if (u_Nature.y > 0.0) {
-        float stripe = clamp(sin(world.x * PI / 8.0) * 4.0, -1.0, 1.0);
+        float stripe = clamp(sin(world.x * PI / 8.0) * 1.6, -1.0, 1.0); // soft edges (a hard line ran ahead of the car)
         float2 v = normalize(rd.xz + 1e-4);
         g *= 1.0 + (stripe * v.y * 0.15 + 0.02) * u_Nature.y;
     }
@@ -2367,10 +2367,16 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         if (u_Sky.x > 0.5) {
             float3 rv = worldToViewDir(r);
             if (rv.z > 0.01) {
-                float2 suv = projectToUV(rv * 100.0);
-                if (all(suv > 0.0) && all(suv < 1.0)) {
-                    float4 sky = tex2Dlod(s5, float4(suv, 0, 0));
-                    skyR = lerp(skyR, sky.rgb, sky.a);
+                float2 suv = projectToUV(rv * 100.0) + distort * 2.0;
+                // Fades out toward the screen's edges (no hard border in the water).
+                float edge = saturate(min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y)) * 8.0);
+                if (edge > 0.0) {
+                    // Water smears what it mirrors up and down: a few taps along the screen's
+                    // vertical (a pasted, razor-sharp planet looked wrong).
+                    float4 sky = 0;
+                    [unroll] for (int k = 0; k < 4; k++) sky += tex2Dlod(s5, float4(suv + float2(0.0, (k - 1.5) * 0.008), 0, 0));
+                    sky *= 0.25;
+                    skyR = lerp(skyR, sky.rgb, sky.a * edge * 0.7);
                 }
             }
         }
