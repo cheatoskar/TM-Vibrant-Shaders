@@ -1,10 +1,10 @@
-## TM Vibrant Shaders 1.3
+## TM Vibrant Shaders 1.4.0-preview
 
 Real-time lighting, weather and skies for TrackMania Nations Forever and United Forever.
 
-This release brings **snow**, the **Author's Shader** (a look that travels with a map), a black hole that lights the space skies, a searchable menu and fixes for water and long shadows.
+**A preview of 1.4.0.** It brings a new menu, a photo mode, real nights under night skies and a switch for the map's MediaTracker clips. The work on the game's own rendering (materials, lights) follows in 1.4.0. Please report what looks wrong (`F12` there, then an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues) with the screenshot and the capture).
 
-![Horizon: the black hole lights the stadium through the haze](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.3.0/docs/images/black-hole-loop.jpg)
+![Horizon: the black hole lights the stadium through the haze](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.4.0-preview/docs/images/black-hole-loop.jpg)
 
 ### Download and install
 
@@ -18,38 +18,46 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 
 ### What's new
 
-**Snow**
-- Falling snow up to a blizzard: flakes that streak past the camera and drift with the wind, flakes on the lens, a white veil in the distance.
-- Snow on the ground: piles and drifts with bare patches between them, or a closed blanket at full cover. It sparkles in the sun and gathers on walls that face the wind.
-- Your car keeps its paint, powder snow flies up behind it, and the storm has its own wind sound.
-- New preset **Snowstorm**.
+**New menu**
+- Every preset as a card with a picture, a line about it and its GPU load. Point at one and the game shows that look; click to use it, right click to make it the preset for day, sunset or night maps.
+- *Customize* for the main settings, *Studio* for every setting, *Maps* for the preset per map type and the Author's Shader, *Performance* for what each effect costs.
+- Your own presets get a picture of the game when you save them; share the .ini and .jpg.
+- The menu tells you when a new version is out (can be switched off).
 
-**Author's Shader**
-- Map authors can store their look in the map: build the look, open the map in the editor, press *Set as Author's Shader* (Advanced menu) and save the map. Everyone with the mod sees the map that way; on the next map their own look is back. How it works: [README](https://github.com/cheatoskar/TM-Vibrant-Shaders#authors-shader).
+**Photo mode** (`F6`, on by itself with the free camera)
+- No HUD, full quality, shadows and reflections reach three times as far.
+- `F12` saves a photo without the HUD, `Shift+F12` a larger one from tiles. Middle click sets the focus, `Ctrl`+wheel the depth of field, `Shift`+wheel zooms.
 
-**Sky**
-- The black hole lights the space skies: light shafts, shadows, flare and glow come from it.
-- Move the black hole and the planet anywhere in the sky; size 0 turns either off.
-- Smoother Ring World planets and sharper rings, clouds that move with the wind, adjustable aurora speed.
+**Night**
+- **Real night under night skies** (on by default): with a night sky or the black hole over a day or sunset map, the game lights the map at midnight itself. No more baked sunlight under the stars. Switching it in the menu relights the map at once. The map, its replays and validation stay as they are.
+- Under a night sky the game's sunset clouds, the sunset ring around TMUF Island and the sunset in the sea are gone (*Keep the game's clouds under night skies* brings them back for photos).
+- *Floodlit surfaces at night*: floodlit stands and lit roads no longer burn out to flat white; lamps and neon stay bright.
+- The sun's halo and lens flare fade out under night skies.
 
-**Menu and presets**
-- Search box for every setting, a reset arrow next to each changed value, coloured sections.
-- Switching presets glides over a second instead of jumping.
-- Presets tuned. *Rainy Day* is now **Rainy**, **Horizon** uses the black hole sky.
+**MediaTracker**
+- **`Shift+F7`** switches the map's MediaTracker clips while driving on or off (forced cameras, black screens, texts). The map itself is not changed.
+- In the MediaTracker editor only the 3D view is shaded, not the panels around it.
 
-**Fixes**
-- Works again on GPUs whose drivers allow at most 4096 shader instructions (many NVIDIA cards showed "shader creation failed").
-- Other mods with their own Direct3D device (for example Twinkie) no longer turn the shaders off.
-- Water: no more stripes on pools and no "box" around the car where the water looked different. Water is at full strength in every preset.
-- Shadows no longer pop up for a moment near walls and buildings.
-- Snowstorm: the fog no longer comes and goes between walls and inside buildings.
-- No more black rectangles in the snow around the car.
-- Long-range shadows no longer leave blotches that slide with the camera.
-- `F12` captures on maps with water are complete again.
+**Light, shadow and water**
+- Long shadows without bright boxes around the car, without saw teeth and without grain.
+- Reflections while driving as clean as in photo mode.
+- TMUF Island: the sea is water now, with waves and clean reflections. Rally roads no longer turn into a mirror.
+- Colour looks from `.cube` LUT files (*Customize* > *Colour look*).
+- *Highlight roll-off* sets where the tone curve starts to bend.
+
+**Weather**
+- Rain and snow stay outside: nothing falls under roofs and bridges or behind walls, and the lens dries under a wide roof.
+- Snowstorm: thicker haze, no snow on the ground by default.
+
+**Other**
+- Auto quality measures every effect on your GPU and turns off just enough of them in one step. It no longer turns everything down when the game itself limits the frame rate.
+- The game's own bloom and colour filter are turned off while the mod shades (they glowed over the mod's image a second time).
+- *Picked preset applies to all maps of this type* is off by default.
 
 ### Known issues
 
-- Snow is work in progress: the snow on the ground doesn't follow the game's textures and surfaces well yet. On the start podium the car can turn white.
+- United Forever Island at night: headlights on very bright blocks burn out to white (the game draws them that way).
+- Floodlit stadiums at night keep part of the game's burned-out white (*Floodlit surfaces at night* sets how much).
 - If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
 Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md).
