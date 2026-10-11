@@ -868,6 +868,19 @@ void onPresent(IDirect3DDevice9* device) {
         g_screenshotRequested = false;
     }
     runDevAutomation(device);
+    {
+        // Back in the menu: an Author's Shader ends with its map, your own look is back (else
+        // it stayed until the next map). Only when no map is open any more: switching maps
+        // lets go of the old one too, and the next map's load decides then.
+        static int s_closes = 0;
+        if (engine::mapCloses() != s_closes) {
+            s_closes = engine::mapCloses();
+            if (!engine::mapOpen()) {
+                TMVS_LOG("engine: map closed");
+                Config::get().onMapComments(std::string());
+            }
+        }
+    }
     Config::get().tick();
     if (GetAsyncKeyState(VK_F11) & 1) tracer::arm();
     if (GetAsyncKeyState(VK_F12) & 1) {

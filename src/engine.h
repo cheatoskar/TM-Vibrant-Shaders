@@ -129,6 +129,10 @@ bool waterHeights(float& blockY, float& seaY);
 // sit in the game's packs).
 int mapLoads();
 std::string mapComments();
+// Counts the times the game let go of its map (back to the menu, or before the next map), and
+// whether a map is open now (race, replay or editor).
+int mapCloses();
+bool mapOpen();
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.
 bool currentMapComments(std::string& comments);

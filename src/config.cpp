@@ -468,7 +468,14 @@ bool lookFromComments(const std::string& comments, Settings& look, std::string& 
     const size_t compact = lower.find("[tmvs:");
     if (compact != std::string::npos) {
         const size_t end = comments.find(']', compact);
-        if (end != std::string::npos && lookFromCompact(comments.substr(compact + 6, end - compact - 6), look, base)) return true;
+        // Pasting (or a web page showing the comments) may break the code over lines.
+        std::string code;
+        for (size_t i = compact + 6; end != std::string::npos && i < end; i++) {
+            if (!isspace(static_cast<unsigned char>(comments[i]))) code += comments[i];
+        }
+        if (end != std::string::npos && lookFromCompact(code, look, base)) return true;
+        TMVS_LOG("config: the map's code \"%s\" can't be read%s", comments.substr(compact, end == std::string::npos ? 60 : end - compact + 1).c_str(),
+                 end == std::string::npos ? " (no closing ], cut off?)" : "");
     }
     const size_t at = lower.find("[tmvs]");
     if (at == std::string::npos) return false;
@@ -686,6 +693,9 @@ void Config::onMapComments(const std::string& comments) {
     Settings look = m_mapLook ? ownSettings() : settings;
     std::string base;
     if (!useMapLooks || !lookFromComments(comments, look, base)) {
+        // Why a map shows no Author's Shader, for players who expected one.
+        if (!comments.empty()) TMVS_LOG("config: map comments (%u characters), %s", static_cast<unsigned>(comments.size()),
+                                        !useMapLooks ? "Author's Shaders are off" : "no Author's Shader in them");
         leaveMapLook();
         return;
     }

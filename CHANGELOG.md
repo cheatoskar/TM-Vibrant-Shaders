@@ -34,6 +34,7 @@
 - Night maps: new setting *Floodlit surfaces at night* (`NightSurfaces`, 0.8): floodlit stands, lit roads and white walls keep this part of the game's white instead of burning out; lamps and neon always keep it in full (1 = as before).
 - New setting *Highlight roll-off* (`ToneKnee`, 0.5 = as before): where the tone curve starts to bend; higher keeps more of the game's bright mid-tones, brighter highlights.
 - Night sky over a sunset map: the sunset ring TMUF Island paints around the map isn't drawn (it stood like an orange wall at the horizon and the sea mirrored it; `GameSkyClouds` keeps it), the far distance loses its sunset colour.
+- Author's Shader: leaving the map (back to the menu) brings your own look back at once; before, the author's look stayed until the next map. The log says why a map's comments gave no look (no code in them, the switch off, a code cut off or broken); a code broken over lines by pasting is read.
 - *Picked preset applies to all maps of this type* is off by default: picking a preset on a map no longer changes the preset of every map of that kind unless you switch it on.
 - United Forever Island: the sea reports no height; it is measured from the sea's material now, so it gets the exact water plane like the pools (waves, clean reflections).
 - Water mirrors the sky you picked (planets, the black hole, stars) where the reflection finds nothing else, also far out on the sea; before it was a flat average colour.
