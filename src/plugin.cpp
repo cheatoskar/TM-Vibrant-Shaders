@@ -631,18 +631,28 @@ void onCameraBegin(void* camera) {
 bool g_stencilTagged = false;
 bool g_gameStencil = false;
 
+// The mask feeds the TMUF sea (water by material, its measured level) and the debug view: on
+// Stadium (its water height comes from the engine) every draw would be tagged for nothing.
 bool materialsWanted() {
     const Settings& s = Config::get().settings;
-    return s.enabled && s.gameMaterials && !g_gameStencil;
+    return s.enabled && s.gameMaterials && !g_gameStencil && (!engine::stadium() || s.debugView == 8);
 }
+
+// The stencil states the tagging changes, as the game had them (given back when it stops).
+constexpr D3DRENDERSTATETYPE kTagStates[] = {D3DRS_STENCILENABLE, D3DRS_TWOSIDEDSTENCILMODE, D3DRS_STENCILFUNC, D3DRS_STENCILPASS,
+                                             D3DRS_STENCILFAIL, D3DRS_STENCILZFAIL, D3DRS_STENCILWRITEMASK, D3DRS_STENCILREF};
+DWORD g_savedStencil[sizeof(kTagStates) / sizeof(kTagStates[0])] = {};
 
 void untagStencil(IDirect3DDevice9* device) {
     if (!g_stencilTagged) return;
-    device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    for (size_t i = 0; i < sizeof(kTagStates) / sizeof(kTagStates[0]); i++) device->SetRenderState(kTagStates[i], g_savedStencil[i]);
     g_stencilTagged = false;
 }
 
 void tagStencil(IDirect3DDevice9* device, DWORD value, DWORD mask) {
+    if (!g_stencilTagged) {
+        for (size_t i = 0; i < sizeof(kTagStates) / sizeof(kTagStates[0]); i++) device->GetRenderState(kTagStates[i], &g_savedStencil[i]);
+    }
     device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
     device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
     device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_ALWAYS);
@@ -917,18 +927,33 @@ bool nightAtLoad(float dayTime) {
     return nightFor(dayTime, true);
 }
 
-// Real night switched in the menu while a map runs: the map is relit now, not at the next one.
-// Only in gameplay (the weather of a map that was left may be gone); F7 (shaders off to
-// compare) doesn't relight.
+// Real night switched in the menu, or a look picked with or without a night sky while a map
+// runs: the map is relit now, not at the next one. It follows the look that is on (also an
+// Author's Shader, read after the map's light was set up), once that has held for 1.5 s
+// (pointing at presets in the menu previews them; transitions glide). Only in gameplay (the
+// weather of a map that was left may be gone); F7 (shaders off to compare) doesn't relight.
 void relightOnSwitch(const Settings& s) {
-    static int s_setting = -1;
-    const int setting = s.gameNight ? 1 : 0;
-    if (!g_gameplayThisFrame || setting == s_setting) return;
-    const bool switched = s_setting >= 0;
-    s_setting = setting;
+    static double s_since = -1.0;
+    static bool s_failed = false;
     const float dayTime = engine::mapDayTime();
-    if (!switched || dayTime < 0.0f) return;
-    if (!engine::relightNight(setting && nightFor(dayTime, true))) TMVS_LOG("config: real night: this map can't be relit now (next map)");
+    if (!g_gameplayThisFrame || dayTime < 0.0f) {
+        s_since = -1.0;
+        return;
+    }
+    const bool want = s.gameNight && moodOfDayTime(dayTime) != Mood::Night && Pipeline::skyReplacesSun(s);
+    if (want == engine::mapLitAtNight()) {
+        s_since = -1.0;
+        s_failed = false;
+        return;
+    }
+    if (s_failed) return;
+    if (s_since < 0.0) s_since = seconds();
+    if (seconds() - s_since < 1.5) return;
+    s_since = -1.0;
+    if (!engine::relightNight(want)) {
+        s_failed = true;
+        TMVS_LOG("config: real night: this map can't be relit now (next map)");
+    }
 }
 
 void bootOnce() {

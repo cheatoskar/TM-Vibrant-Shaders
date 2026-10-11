@@ -115,7 +115,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("TargetFPS", "Auto quality: target FPS", "Image", Float, targetFps, 30.0f, 240.0f),
         TMVS_FIELD("DisableGameMSAA", "Disable game MSAA (restart)", "Image", Bool, disableGameMSAA, 0.0f, 1.0f),
         TMVS_FIELD("ReadableGameDepth", "Effects in replay/video export (restart)", "Image", Bool, readableGameDepth, 0.0f, 1.0f),
-        TMVS_FIELD("GameMaterials", "Use the game's materials (lamps, cars, glass)", "Image", Bool, gameMaterials, 0.0f, 1.0f),
+        TMVS_FIELD("GameMaterials", "Read the game's materials (TMUF sea, debug view)", "Image", Bool, gameMaterials, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameFX", "Turn off the game's FX post-processing (next map)", "Image", Bool, disableGameFx, 0.0f, 1.0f),
         TMVS_FIELD("SkipMapClips", "No MediaTracker clips of the map while driving (Shift+F7)", "Image", Bool, skipMapClips, 0.0f, 1.0f),
         TMVS_FIELD("GameNight", "Real night under night skies", "Image", Bool, gameNight, 0.0f, 1.0f),

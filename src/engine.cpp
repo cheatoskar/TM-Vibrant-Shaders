@@ -439,7 +439,8 @@ Material classify(const wchar_t* path) {
         return wcsstr(file, L"Glass") ? Material::Glass : Material::Car;
     }
     if (!_wcsnicmp(file, L"Grass", 5)) return Material::Grass;
-    if (wcsstr(file, L"Sea") || wcsstr(file, L"Water")) return Material::Water;
+    const wchar_t* sea = wcsstr(file, L"Sea");
+    if ((sea && sea[3] != L't') || wcsstr(file, L"Water")) return Material::Water; // not "Seat..."
     return Material::Other;
 }
 
@@ -631,6 +632,11 @@ void readMapComments(const void* challenge) {
 
 void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     g_app = self;
+    // Another map (or none: back to the menu): the objects of the last one go with it.
+    g_freeCam = nullptr;
+    g_weather = nullptr;
+    g_nightForced = false;
+    g_mapDayTime = -1.0f;
     g_setChallenge(self, edx, challenge);
 }
 
@@ -715,6 +721,10 @@ void __fastcall loadSceneDetour(void* self, void* edx) {
     void* mood = readable(decoration + kDecorationMood, sizeof(void*)) ? *reinterpret_cast<void* const*>(decoration + kDecorationMood) : nullptr;
     float* time = mood && readable(static_cast<BYTE*>(mood) + kMoodDayTime, sizeof(float)) ? reinterpret_cast<float*>(static_cast<BYTE*>(mood) + kMoodDayTime) : nullptr;
     if (!time || !(*time >= 0.0f && *time <= 1.0f)) {
+        // Nothing of the last map carries over (its forced midnight, its time of day).
+        g_weather = nullptr;
+        g_nightForced = false;
+        g_mapDayTime = -1.0f;
         g_loadScene(self, edx);
         return;
     }
@@ -955,7 +965,12 @@ bool relightNight(bool night) {
     g_nightForced = night;
     TMVS_LOG("engine: real night %s during the map: weather %p to time of day %.3f", night ? "on" : "off", g_weather,
              night ? 0.0f : g_weatherTime);
-    g_jumpTime(g_weather, nullptr, night ? 0.0f : g_weatherTime);
+    __try {
+        g_jumpTime(g_weather, nullptr, night ? 0.0f : g_weatherTime);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_weather = nullptr;
+        return false;
+    }
     return true;
 }
 

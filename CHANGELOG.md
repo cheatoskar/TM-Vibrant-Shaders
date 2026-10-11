@@ -37,9 +37,9 @@
 - *Picked preset applies to all maps of this type* is off by default: picking a preset on a map no longer changes the preset of every map of that kind unless you switch it on.
 - United Forever Island: the sea reports no height; it is measured from the sea's material now, so it gets the exact water plane like the pools (waves, clean reflections).
 - MediaTracker editor detection: replay cameras that leave a few rows out are shaded as before (only real panels count).
-- The game's materials are read while it draws (`GameMaterials`, on): the TMUF sea is water by its material. Rear lights count as lights; smoke and tyre marks no longer as the car. Debug view *Materials* shows water (blue) and added light (magenta).
+- The game's materials are read while it draws (`GameMaterials`, on): the TMUF sea is water by its material (and its height is measured from it). Not on Stadium, where the engine reports the water. Debug view *Materials* shows lamps, cars, glass, grass, water and light added on top.
 - The map's mood (day, sunset, night: which preset it gets) comes from the map's own time of day when the engine reports it, not from the colour of its sun (Rally at noon has a warm sun and got the sunset preset).
-- New setting *No MediaTracker clips of the map while driving* (`SkipMapClips`, off; `Shift+F7` switches it anywhere): the map's in-game clips (triggered while driving: forced cameras, black screens, texts) don't start, one that runs ends. Intro and end-race clips and replays stay; the map itself is not changed.
+- New setting *No MediaTracker clips of the map while driving* (`SkipMapClips`, off; `Shift+F7` switches it anywhere): the map's in-game clips (triggered while driving: forced cameras, black screens, texts) don't start, one that runs ends, also in replays (switch it any time with `Shift+F7`). Intro and end-race clips stay; the map itself is not changed. A look picked with or without a night sky relights the map with *Real night* after a moment.
 - Reflections while driving as clean as in photo mode: twice the steps, half the noise (dashed, grainy reflections without TAA).
 - MediaTracker editor: only its 3D view is shaded. The panels around it no longer get the preset's sky and colours, and the effects line up with the view.
 - Photo mode shows the aperture (f-stop), zoom and focus at the top left (never in the photos).
