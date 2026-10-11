@@ -59,7 +59,7 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 
 - United Forever Island at night: headlights on very bright blocks burn out to white (the game draws them that way).
 - Floodlit stadiums at night keep part of the game's burned-out white (*Floodlit surfaces at night* sets how much).
-- *Real night under night skies*: on Stadium A01 the game can play a loud noise when the map loads. Off by default until this is understood.
+- Once, on Stadium A01, the game played a loud noise when the map loaded (with *Real night under night skies* on; it didn't come back in later tests, the cause is unknown). The setting stays off by default. If it happens to you, please send `tmvs.log` and `tmvs.prev.log` from `Documents\TrackMania\TMVS`.
 - If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
 Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md).
