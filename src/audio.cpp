@@ -352,12 +352,30 @@ void mixer() {
             mix.render(buffer.data(), kBufferFrames, g_rain.load(), g_wind.load());
             const float target = g_volume.load();
             int16_t* out = reinterpret_cast<int16_t*>(h.lpData);
+            double bufferSum = 0.0;
+            bool finite = true;
             for (int i = 0; i < kBufferFrames * 2; i++) {
                 volume += (target - volume) * 0.0005f;
                 const float v = tanhf(buffer[static_cast<size_t>(i)] * volume); // soft limit
-                out[i] = static_cast<int16_t>(v * 32000.0f);
-                levelSum += v * v;
+                finite = finite && std::isfinite(v);
+                out[i] = static_cast<int16_t>(std::isfinite(v) ? v * 32000.0f : 0.0f);
+                bufferSum += v * v;
             }
+            // Safety net: rain and thunder never come near a buffer of full-scale noise (~1 rms
+            // through the soft limit; the loudest buffer at rain 2, wind and volume 2 measured
+            // 0.73). Should a filter ever run away, this buffer goes out silent and the mixer
+            // starts over, instead of blasting.
+            const double bufferRms = finite ? sqrt(bufferSum / (kBufferFrames * 2)) : 1.0;
+            if (bufferRms > 0.9) {
+                static int s_runaways = 0;
+                if (s_runaways++ < 5) TMVS_LOG("audio: runaway output (%.2f rms%s), muted and reset", bufferRms, finite ? "" : ", not finite");
+                std::fill(out, out + kBufferFrames * 2, static_cast<int16_t>(0));
+                mix = Mixer();
+                mix.loadRain();
+                volume = 0.0f;
+                bufferSum = 0.0;
+            }
+            levelSum += bufferSum;
             levelSamples += kBufferFrames * 2;
             if (target < 0.01f) {
                 levelSum = 0.0;
