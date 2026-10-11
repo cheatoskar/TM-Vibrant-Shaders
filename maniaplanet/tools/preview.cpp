@@ -2,6 +2,11 @@
 // same renderer as the game, without the game.
 //
 //   mp_preview <capture folder> <out.bmp> [--preset Name] [--view N] [--set Key=Value ...]
+//              [--hdr] [--tonecb file]
+//
+// --hdr runs the HDR stage first (the mod's tone map and bloom on engine_hdr.dds with
+// engine_exposure.dds), with the engine's tone-map constants from tonemap_cb.bin in the capture
+// (captures from before 0.2 lack it: pass one with --tonecb).
 //
 // The capture holds the image the mod graded (input.dds and the view format it was drawn with),
 // the engine's textures (engine_*.dds) and its camera (scenev.bin). --view takes the menu's views:
@@ -116,12 +121,24 @@ int main(int argc, char** argv) {
     }
     tmshaders::log::setFileName(L"tmvs-mp-preview.log"); // never truncate the game's log
     const std::string folder = argv[1];
+    bool hdrStage = false;
+    std::string toneCbPath = folder + "/tonemap_cb.bin";
 
     Settings& s = settings::current();
     settings::applyPreset(s, "Vibrant");
-    for (int i = 3; i + 1 < argc; i += 2) {
-        const std::string opt = argv[i], value = argv[i + 1];
+    for (int i = 3; i < argc; i++) {
+        const std::string opt = argv[i];
+        if (opt == "--hdr") {
+            hdrStage = true;
+            continue;
+        }
+        if (i + 1 >= argc) {
+            printf("%s needs a value\n", opt.c_str());
+            return 2;
+        }
+        const std::string value = argv[++i];
         if (opt == "--preset") settings::applyPreset(s, value);
+        else if (opt == "--tonecb") toneCbPath = value;
         else if (opt == "--view") s.view = static_cast<View>(atoi(value.c_str()));
         else if (opt == "--set") {
             const size_t eq = value.find('=');
@@ -182,6 +199,42 @@ int main(int argc, char** argv) {
 
     Renderer renderer;
     if (!renderer.init(device)) return 2;
+    if (hdrStage) {
+        std::vector<char> cb;
+        if (FILE* f = fopen(toneCbPath.c_str(), "rb")) {
+            cb.resize(48);
+            if (fread(cb.data(), 1, cb.size(), f) != cb.size()) cb.clear();
+            fclose(f);
+        }
+        if (cb.empty() || !tex[kTexHdr] || !tex[kTexExposure]) {
+            printf("--hdr needs engine_hdr.dds, engine_exposure.dds and the tone-map constants (%s)\n", toneCbPath.c_str());
+            return 2;
+        }
+        D3D11_BUFFER_DESC bd = {};
+        bd.ByteWidth = static_cast<UINT>(cb.size());
+        bd.Usage = D3D11_USAGE_DEFAULT;
+        bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_SUBRESOURCE_DATA init = {cb.data(), 0, 0};
+        ID3D11Buffer* engineConstants = nullptr;
+        device->CreateBuffer(&bd, &init, &engineConstants);
+        ID3D11ShaderResourceView* in[2] = {};
+        for (int i = 0; i < 2; i++) {
+            ID3D11Texture2D* t = static_cast<ID3D11Texture2D*>(tex[i == 0 ? kTexHdr : kTexExposure]);
+            D3D11_TEXTURE2D_DESC td;
+            t->GetDesc(&td);
+            D3D11_SHADER_RESOURCE_VIEW_DESC sv = {};
+            sv.Format = readableFormat(td.Format);
+            sv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            sv.Texture2D.MipLevels = 1;
+            device->CreateShaderResourceView(t, &sv, &in[i]);
+        }
+        Renderer toneRenderer;
+        if (!toneRenderer.init(device) || !toneRenderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, s)) {
+            printf("the HDR stage failed\n");
+            return 1;
+        }
+        printf("  HDR stage: curve %d, bloom %.2f\n", static_cast<int>(s.toneCurve), s.bloom);
+    }
     const EngineView view{tex, haveCamera ? &camera : nullptr};
     if (!renderer.apply(ctx, rtv, view, s)) {
         printf("the renderer refused the image\n");

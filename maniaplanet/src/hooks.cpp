@@ -161,6 +161,8 @@ struct Frame {
     UINT dsW = 0, dsH = 0;
     Phase phase = Phase::Scene;
     ID3D11Resource* postImage = nullptr;   // where the tone map / post effects wrote last
+    ID3D11RenderTargetView* postRtv = nullptr; // the view they wrote it through (not owned)
+    bool toneMapped = false;               // the mod's HDR stage replaced the engine's tone map
     bool toneMapSeen = false;
     bool injected = false;
     bool texturesTaken = false;
@@ -340,7 +342,26 @@ void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed whe
     }
 }
 
-void onDraw(ID3D11DeviceContext* ctx) {
+// Runs the mod's HDR stage in place of the engine's tone-map draw (same inputs, same target).
+// True: the engine's draw is to be skipped.
+bool replaceToneMap(ID3D11DeviceContext* ctx) {
+    const Settings& s = settings::current();
+    if (!s.enabled || !g_rendererReady || !g_frame.rtv) return false;
+    // The engine's curve with nothing added is the game as it is: leave its draw alone.
+    if (s.toneCurve == ToneCurve::Engine && s.bloom <= 0.001f && s.hdrExposure == 0.0f) return false;
+    ID3D11ShaderResourceView* in[2] = {};
+    ctx->PSGetShaderResources(0, 2, in);
+    ID3D11Buffer* constants = nullptr;
+    ctx->PSGetConstantBuffers(0, 1, &constants);
+    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, s);
+    for (auto* v : in)
+        if (v) v->Release();
+    if (constants) constants->Release();
+    return done;
+}
+
+// Before a draw of the game on the main context. True: skip the game's draw.
+bool onDraw(ID3D11DeviceContext* ctx) {
     Frame& f = g_frame;
     f.draws++;
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
@@ -361,8 +382,10 @@ void onDraw(ID3D11DeviceContext* ctx) {
         }
         f.phase = Phase::Post;
         f.postImage = f.rt;
+        f.postRtv = f.rtv;
         f.toneMapSeen = true;
-        return;
+        f.toneMapped = replaceToneMap(ctx);
+        return f.toneMapped;
     }
     if (f.phase == Phase::Scene) {
         // The scene's depth: the last screen-shaped depth buffer a scene draw used.
@@ -385,27 +408,36 @@ void onDraw(ID3D11DeviceContext* ctx) {
                     if (v) v->Release();
             }
         }
-        return;
+        return false;
     }
-    if (f.phase != Phase::Post) return;
+    if (f.phase != Phase::Post) return false;
     if (role == Role::Post || role == Role::ToneMap) {
-        if (f.rt && screenSized(f.rtW, f.rtH)) f.postImage = f.rt;
-        return;
+        if (f.rt && screenSized(f.rtW, f.rtH)) {
+            f.postImage = f.rt;
+            f.postRtv = f.rtv;
+        }
+        return false;
     }
-    if (!f.rt || !screenSized(f.rtW, f.rtH)) return; // interface work off screen (atlases, minimap)
-    if (f.rt != f.postImage) {
-        // A draw that reads the post image into another target (an upscale or copy to the back
-        // buffer) carries it on.
-        if (readsResource(ctx, f.postImage)) f.postImage = f.rt;
-        return;
+    const bool full = f.rt && screenSized(f.rtW, f.rtH);
+    if (full && f.rt != f.postImage) {
+        // A draw that reads the post image into another full-size target (an upscale or copy to the
+        // back buffer) carries it on.
+        if (readsResource(ctx, f.postImage)) {
+            f.postImage = f.rt;
+            f.postRtv = f.rtv;
+        }
+        return false;
     }
-    // The first draw of something else on the finished image: the interface starts here.
+    // The interface starts here: the first other draw on the finished image, or one that reads it
+    // into a small target (the blurred backgrounds behind the interface's panels).
+    if (!full && !readsResource(ctx, f.postImage)) return false; // other interface work (atlases, minimap)
     f.phase = Phase::Done;
     f.hudShader = f.ps.name ? f.ps.name : "(unknown shader)";
-    if (settings::current().placement == Placement::BeforeHud && !f.injected) {
+    if (settings::current().placement == Placement::BeforeHud && !f.injected && f.postRtv) {
         f.injected = true;
-        inject(ctx, f.rtv, Placed::BeforeHud);
+        inject(ctx, f.postRtv, Placed::BeforeHud);
     }
+    return false;
 }
 
 // ---- device ----
@@ -484,22 +516,22 @@ void STDMETHODCALLTYPE omSetRenderTargetsAndUAVsDetour(ID3D11DeviceContext* ctx,
 }
 
 void STDMETHODCALLTYPE drawIndexedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, INT c) {
-    if (isMain(ctx)) onDraw(ctx);
+    if (isMain(ctx) && onDraw(ctx)) return;
     g_drawIndexed.get<DrawIndexedFn>(ctx)(ctx, a, b, c);
 }
 
 void STDMETHODCALLTYPE drawDetour(ID3D11DeviceContext* ctx, UINT a, UINT b) {
-    if (isMain(ctx)) onDraw(ctx);
+    if (isMain(ctx) && onDraw(ctx)) return;
     g_draw.get<DrawFn>(ctx)(ctx, a, b);
 }
 
 void STDMETHODCALLTYPE drawIndexedInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, INT d, UINT e) {
-    if (isMain(ctx)) onDraw(ctx);
+    if (isMain(ctx) && onDraw(ctx)) return;
     g_drawIndexedInstanced.get<DrawIndexedInstancedFn>(ctx)(ctx, a, b, c, d, e);
 }
 
 void STDMETHODCALLTYPE drawInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, UINT d) {
-    if (isMain(ctx)) onDraw(ctx);
+    if (isMain(ctx) && onDraw(ctx)) return;
     g_drawInstanced.get<DrawInstancedFn>(ctx)(ctx, a, b, c, d);
 }
 
@@ -653,6 +685,7 @@ void onPresent(IDXGISwapChain* sc) {
     g_stats.toneMapSeen = f.toneMapSeen;
     g_stats.placed = f.placed;
     g_stats.hudShader = f.hudShader;
+    g_stats.toneMapped = f.toneMapped;
     g_stats.drawsLastFrame = f.draws;
     g_stats.commandLists = f.commandLists;
     g_stats.depthFound = g_renderer.hasDepthView();

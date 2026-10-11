@@ -29,6 +29,7 @@ struct Stats {
     uint32_t commandLists = 0;     // ExecuteCommandList calls last frame
     uint32_t drawsLastFrame = 0;
     bool toneMapSeen = false;      // last frame
+    bool toneMapped = false;       // the mod's HDR stage ran in place of the engine's tone map
     Placed placed = Placed::None;  // last frame
     const char* hudShader = nullptr; // the draw the effect went in front of (last frame)
     bool depthFound = false;

@@ -4,6 +4,7 @@ EXPORTS
     D3D11CreateDeviceAndSwapChain
     TmvsMpStats
     TmvsMpCapture
+    TmvsMpSet
     CreateDirect3D11DeviceFromDXGIDevice
     CreateDirect3D11SurfaceFromDXGISurface
     D3D11CoreCreateDevice

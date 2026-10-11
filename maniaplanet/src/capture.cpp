@@ -286,6 +286,32 @@ void onToneMap(ID3D11Device* device, ID3D11DeviceContext* ctx) {
         if (res) res->Release();
         srv[i]->Release();
     }
+    // Its constants (curve and where the exposure is), for tools/preview.cpp.
+    ID3D11Buffer* cb = nullptr;
+    ctx->PSGetConstantBuffers(0, 1, &cb);
+    if (cb) {
+        hooks::Inside inside;
+        D3D11_BUFFER_DESC d;
+        cb->GetDesc(&d);
+        d.Usage = D3D11_USAGE_STAGING;
+        d.BindFlags = 0;
+        d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        d.MiscFlags = 0;
+        ID3D11Buffer* staging = nullptr;
+        if (SUCCEEDED(device->CreateBuffer(&d, nullptr, &staging))) {
+            ctx->CopyResource(staging, cb);
+            D3D11_MAPPED_SUBRESOURCE m;
+            if (SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &m))) {
+                if (FILE* f = _wfopen((g_folder + L"/tonemap_cb.bin").c_str(), L"wb")) {
+                    fwrite(m.pData, 1, d.ByteWidth, f);
+                    fclose(f);
+                }
+                ctx->Unmap(staging, 0);
+            }
+            staging->Release();
+        }
+        cb->Release();
+    }
     if (g_trace) fprintf(g_trace, "      ^ tone map: inputs saved as hdr_t*.dds\n");
 }
 

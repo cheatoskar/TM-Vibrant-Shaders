@@ -154,7 +154,8 @@ int main(int argc, char** argv) {
     const char* keys[][2] = {{"Enabled", "1"},   {"Preset", "Clean"},  {"Exposure", "1"},  {"Contrast", "0"},
                              {"Saturation", "1"}, {"Vibrance", "0"},    {"Warmth", "0"},    {"Tint", "0"},
                              {"Shadows", "0"},    {"Highlights", "0"},  {"Clarity", "0"},   {"Sharpen", "0"},
-                             {"Vignette", "0"},   {"Lut", ""},          {"Placement", "0"}, {"FallbackAtEnd", "1"}};
+                             {"Vignette", "0"},   {"Lut", ""},          {"Placement", "0"}, {"FallbackAtEnd", "1"},
+                             {"ToneCurve", "0"},  {"Bloom", "0"},       {"HdrExposure", "0"}};
     if (grade) {
         DeleteFileA(ini.c_str());
         WritePrivateProfileStringA("TMVS", "Preset", argv[9], ini.c_str());
@@ -169,7 +170,8 @@ int main(int argc, char** argv) {
     auto createDevice = reinterpret_cast<PFN_D3D11_CREATE_DEVICE>(GetProcAddress(proxy, "D3D11CreateDevice"));
     auto stats = reinterpret_cast<void(WINAPI*)(int*)>(GetProcAddress(proxy, "TmvsMpStats"));
     auto requestCapture = reinterpret_cast<void(WINAPI*)()>(GetProcAddress(proxy, "TmvsMpCapture"));
-    if (!createDevice || !stats || !requestCapture) {
+    auto set = reinterpret_cast<int(WINAPI*)(const char*, const char*)>(GetProcAddress(proxy, "TmvsMpSet"));
+    if (!createDevice || !stats || !requestCapture || !set) {
         printf("exports missing\n");
         return 2;
     }
@@ -294,6 +296,39 @@ int main(int argc, char** argv) {
     const float eye[3] = {10, 20, 30};
     const float viewProj[16] = {1, 0, 0, -eye[0], 0, 1, 0, -eye[1], 0, 0, 0, 0.1f, 0, 0, 1, -eye[2]}; // rows
 
+    // The engine's tone-map inputs: a 2x2 exposure texture (z = exposure 1) and its constants, a
+    // Hable curve with the classic Uncharted 2 values.
+    const float hable[7] = {0.15f, 0.50f, 0.10f, 0.20f, 0.02f, 0.30f, 11.2f}; // A B C D E F white
+    auto hableF = [&](float x) {
+        const float A = hable[0], B = hable[1], C = hable[2], D = hable[3], E = hable[4], F = hable[5];
+        return (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F;
+    };
+    const float toneCb[12] = {hable[0], hable[1], hable[1] * hable[2], 1.0f / hableF(hable[6]),
+                              hable[3] * hable[4], hable[3] * hable[5], hable[4] / hable[5], 0.0f,
+                              0.25f, 0.25f, 0.0f, 0.0f};
+    D3D11_BUFFER_DESC tbd = {};
+    tbd.ByteWidth = sizeof(toneCb);
+    tbd.Usage = D3D11_USAGE_DEFAULT;
+    tbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_SUBRESOURCE_DATA tbData = {toneCb, 0, 0};
+    ID3D11Buffer* toneConstants = nullptr;
+    device->CreateBuffer(&tbd, &tbData, &toneConstants);
+    const uint16_t half1 = 0x3C00; // 1.0 in half floats
+    const uint16_t exposureTexels[16] = {half1, half1, half1, half1, half1, half1, half1, half1,
+                                         half1, half1, half1, half1, half1, half1, half1, half1};
+    D3D11_TEXTURE2D_DESC ed = {};
+    ed.Width = ed.Height = 2;
+    ed.MipLevels = ed.ArraySize = 1;
+    ed.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    ed.SampleDesc.Count = 1;
+    ed.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA edData = {exposureTexels, 16, 0};
+    ID3D11Texture2D* exposureTex = nullptr;
+    ID3D11ShaderResourceView* exposureSrv = nullptr;
+    device->CreateTexture2D(&ed, &edData, &exposureTex);
+    device->CreateShaderResourceView(exposureTex, nullptr, &exposureSrv);
+    float hdrClear = 0.0f; // the HDR scene's brightness (0 for the grading checks)
+
     D3D11_TEXTURE2D_DESC st = {};
     backBuffer->GetDesc(&st);
     st.Usage = D3D11_USAGE_STAGING;
@@ -310,8 +345,8 @@ int main(int argc, char** argv) {
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(vs, nullptr, 0);
         // Scene: the engine's G-buffer shader with the depth buffer bound.
-        const float black[4] = {};
-        ctx->ClearRenderTargetView(hdrRtv, black);
+        const float hdrColour[4] = {hdrClear, hdrClear, hdrClear, 1};
+        ctx->ClearRenderTargetView(hdrRtv, hdrColour);
         ctx->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH, 0.25f, 0);
         ctx->OMSetRenderTargets(1, &hdrRtv, dsv);
         ctx->PSSetShader(scene, nullptr, 0);
@@ -340,6 +375,8 @@ int main(int argc, char** argv) {
         ctx->OMSetRenderTargets(1, &bbRtv, nullptr);
         ctx->PSSetShader(toneMap, nullptr, 0);
         ctx->PSSetShaderResources(0, 1, &hdrSrv);
+        ctx->PSSetShaderResources(1, 1, &exposureSrv);
+        ctx->PSSetConstantBuffers(0, 1, &toneConstants);
         viewport(ctx, 0, 0, 1, 1);
         ctx->Draw(3, 0);
         ID3D11ShaderResourceView* noSrv = nullptr;
@@ -391,9 +428,34 @@ int main(int argc, char** argv) {
           "the image is graded (grey 128 -> 175 with +1 stop)");
     check(hud[0] == 255 && hud[1] == 0 && hud[2] == 0, "the interface drawn after it is untouched (pure red)");
 
+    check(s[11] == 0, "with the engine's curve and nothing added, the engine's tone map runs");
     for (int i = 0; i < 2; i++) frame(false, centre, hud);
     stats(s);
     check(s[0] == 3, "without an interface draw the effects run at Present (fallback)");
+
+    // The HDR stage: the TMVS curve in place of the engine's, on a grey HDR scene (0.18 at exposure
+    // 1). It is matched to the engine's mid grey, so the grey comes out as the engine's curve would
+    // draw it.
+    set("Exposure", "0");
+    set("ToneCurve", "1");
+    hdrClear = 0.18f;
+    for (int i = 0; i < 3; i++) frame(true, centre, hud);
+    stats(s);
+    const float engineGrey = hableF(0.18f) / hableF(hable[6]);
+    const float stored = srgb ? (engineGrey <= 0.0031308f ? engineGrey * 12.92f : 1.055f * powf(engineGrey, 1.0f / 2.4f) - 0.055f)
+                              : engineGrey;
+    const int expected = static_cast<int>(stored * 255.0f + 0.5f);
+    printf("  tone map: centre %u (engine curve's grey %d), hud %u %u %u\n", centre[0], expected, hud[0], hud[1], hud[2]);
+    check(s[11] == 1, "the TMVS curve replaces the engine's tone map");
+    check(std::abs(static_cast<int>(centre[0]) - expected) <= 2, "mid grey matches the engine's curve");
+    check(hud[0] == 255 && hud[1] == 0 && hud[2] == 0, "the interface is still untouched");
+    set("Bloom", "0.3");
+    for (int i = 0; i < 2; i++) frame(true, centre, hud);
+    stats(s);
+    check(s[11] == 1 && centre[0] > 0, "with bloom the HDR stage runs and draws");
+    set("ToneCurve", "0");
+    set("Bloom", "0");
+    hdrClear = 0.0f;
 
     requestCapture();
     for (int i = 0; i < 3; i++) frame(true, centre, hud);

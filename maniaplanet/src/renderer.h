@@ -60,6 +60,12 @@ public:
     // Size-dependent resources (copies, blur targets, depth view): dropped on ResizeBuffers.
     void releaseTargets();
 
+    // The HDR stage in place of the engine's tone map: reads the HDR image and exposure the engine
+    // bound for its own draw and its tone-map constants, writes the picture into its target (bloom
+    // and the chosen curve). False: the engine's draw should run as usual.
+    bool toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, ID3D11ShaderResourceView* hdr,
+                 ID3D11ShaderResourceView* exposure, ID3D11Buffer* engineConstants, const Settings& s);
+
     // Grades the image of `target` in place.
     bool apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const EngineView& view, const Settings& s);
 
@@ -75,10 +81,13 @@ public:
 private:
     bool ensureCopy(ID3D11Texture2D* source, const D3D11_TEXTURE2D_DESC& desc, DXGI_FORMAT viewFormat);
     bool ensureBlur(UINT width, UINT height);
+    bool ensureBloom(UINT width, UINT height);
+    void setCommonState(ID3D11DeviceContext* ctx);
     ID3D11ShaderResourceView* textureView(int index, ID3D11Resource* res);
     void updateLut(const std::string& name);
     void pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, UINT width, UINT height,
-              ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY);
+              ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY, float z = 0.0f,
+              float w = 0.0f);
 
     ID3D11Device* m_device = nullptr;
     ID3D11VertexShader* m_vs = nullptr;
@@ -86,6 +95,10 @@ private:
     ID3D11PixelShader* m_blurH = nullptr;
     ID3D11PixelShader* m_blurV = nullptr;
     ID3D11PixelShader* m_grade = nullptr;
+    ID3D11PixelShader* m_bloomDown = nullptr;
+    ID3D11PixelShader* m_bloomUp = nullptr;
+    ID3D11PixelShader* m_toneMap = nullptr;
+    ID3D11Buffer* m_toneCb = nullptr;
     ID3D11Buffer* m_gradeCb = nullptr;
     ID3D11Buffer* m_passCb = nullptr;
     ID3D11SamplerState* m_linear = nullptr;
@@ -103,6 +116,14 @@ private:
     ID3D11RenderTargetView* m_blurRtv[2] = {};
     ID3D11ShaderResourceView* m_blurSrv[2] = {};
     UINT m_blurW = 0, m_blurH2 = 0;
+
+    // HDR bloom pyramid: [0] down levels, [1] up levels (half size and smaller).
+    static constexpr int kBloomLevels = 6;
+    ID3D11Texture2D* m_bloomTex[2][kBloomLevels] = {};
+    ID3D11RenderTargetView* m_bloomRtv[2][kBloomLevels] = {};
+    ID3D11ShaderResourceView* m_bloomSrv[2][kBloomLevels] = {};
+    UINT m_bloomW[kBloomLevels] = {}, m_bloomH[kBloomLevels] = {};
+    UINT m_bloomBaseW = 0, m_bloomBaseH = 0;
 
     // Views of the engine's textures, a few per kind: the engine alternates some of them between
     // frames (the exposure ping-pongs), and making a view every frame would be wasted work. A view

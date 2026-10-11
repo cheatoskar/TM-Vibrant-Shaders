@@ -1,8 +1,10 @@
 # TM Vibrant Shaders for ManiaPlanet (TrackMania 2)
 
-**Status: first version (0.1.0), tested offline only.** It grades ManiaPlanet's finished image:
-colour, contrast, local contrast, sharpening, vignette and LUT looks. The interface (HUD, menus,
-chat) is left alone.
+**Status: work in progress.** The interface (HUD, menus, chat) is left alone. What it does:
+- **HDR stage:** in place of the engine's tone map, it reads the engine's HDR image. A curve that
+  keeps the game's mid-tones but not its bleached highlights, and an HDR bloom.
+- **Grading:** colour, contrast, local contrast, sharpening, vignette and LUT looks, on the
+  finished image.
 
 ManiaPlanet 4 is a 64-bit Direct3D 11 game with a deferred HDR renderer. Real-time shadows,
 reflections, bloom and tone mapping are already the engine's own. So this build doesn't re-do
@@ -83,6 +85,33 @@ The D3D11 runtime rewrites a context's vtable when the game turns on multithread
 writes the draw slots back on Present. The hooks are therefore checked and patched again around
 every Present and before the game sets shaders or render targets.
 
+## HDR stage (tone mapping and bloom)
+
+The engine's tone map (`ToneMapGlobalFilmCurve`, disassembled with `fxc /dumpbin`):
+
+```
+x = min(hdr, 50000) * exposure            exposure = t1.z at TcAutoScale (2x2 texture, auto exposure)
+f = (x(Ax + BC) + DE) / (x(Ax + B) + DF) - E/F      Hable's filmic curve, per channel
+out = f * OutScale + (f.r + f.g + f.b) * Gray
+```
+
+Its input already holds the engine's bloom (`FxBloom_Final`). Per channel, Hable bleaches bright
+colours toward white.
+
+At that draw the mod runs its own passes on the same inputs, and the engine's draw is skipped:
+- It reads the engine's constants directly: its cbuffer 0 is bound as `b2`, so there is no read-back.
+- **Curves:**
+  - *Engine:* rebuilds the engine's exactly. On a race capture it is 1.4/255 off the game's image,
+    with constants fitted from that capture.
+  - *TMVS:* the TMNF mod's curve, linear up to a knee, then a long shoulder, half on the brightest
+    channel so lit colours keep their hue.
+  - *ACES.*
+- TMVS and ACES are scaled so mid grey (0.18) comes out as with the engine's curve: the game's
+  overall brightness stays.
+- **Bloom:** the TMNF mod's pyramid (Karis average, soft threshold, soft limit so the sun doesn't
+  whiten the sky), added to the HDR image.
+- With the engine's curve and nothing added, the engine's own draw runs.
+
 ## Captures (F12)
 
 Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
@@ -95,11 +124,13 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 | `output.dds/.bmp` | The finished frame |
 | `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion |
 | `camera.txt`, `scenev.bin` | The engine camera, decoded and raw |
+| `tonemap_cb.bin` | The engine's tone-map constants (for `mp_preview --hdr`) |
 
 `mp_preview` renders a capture through the same renderer as the game, without the game:
 
 ```powershell
 build-mp/Release/mp_preview.exe <capture folder> out.bmp [--preset Punchy] [--view 6] [--set Exposure=0.5]
+build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr [--set ToneCurve=1] [--set Bloom=0.3] [--tonecb file]
 ```
 
 ## Build and test
@@ -128,6 +159,7 @@ It checks that:
 - the depth buffer is found;
 - the camera is read from a SceneV upload (with multithread protection on, like the game);
 - the G-buffer and motion are found by name;
+- the TMVS curve replaces the engine's tone map and matches its mid grey (UNORM and sRGB);
 - the Present fallback works;
 - a capture writes its files;
 - ResizeBuffers still works.

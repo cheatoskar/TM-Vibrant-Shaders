@@ -29,7 +29,7 @@ struct Settings {
     float toneKnee = 0.6f;    // TMVS curve: where the shoulder starts
     float toneHue = 0.5f;     // TMVS curve: 0 per channel (bleaches like the engine), 1 keeps the hue
     float hdrExposure = 0.0f; // stops, on top of the engine's auto exposure
-    float bloom = 0.12f;      // the mod's HDR bloom (the engine's own bloom stays in its image)
+    float bloom = 0.15f;      // the mod's HDR bloom, added (the engine's own bloom stays in its image)
 
     // Grading of the engine's finished (tone-mapped) image.
     float exposure = 0.0f;   // stops

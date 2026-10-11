@@ -110,6 +110,12 @@ extern "C" void WINAPI TmvsMpStats(int* out) {
     out[6] = s.cameraFound ? 1 : 0;
     out[7] = static_cast<int>(s.textures);
     for (int i = 0; i < 3; i++) out[8 + i] = static_cast<int>(s.eye[i] * 100.0f + (s.eye[i] < 0 ? -0.5f : 0.5f));
+    out[11] = s.toneMapped ? 1 : 0;
+}
+
+// For tools/harness.cpp: change a setting by its settings.ini key while running.
+extern "C" int WINAPI TmvsMpSet(const char* key, const char* value) {
+    return settings::set(settings::current(), key, value) ? 1 : 0;
 }
 
 extern "C" void WINAPI TmvsMpCapture() {

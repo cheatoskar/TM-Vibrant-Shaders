@@ -75,7 +75,11 @@ float4 PS_BloomDown(VSOut i) : SV_Target
         float soft = clamp(br - 0.6, 0.0, 0.8);
         soft = soft * soft / (4.0 * 0.4 + 1e-4);
         float contrib = max(soft, br - 1.0) / max(br, 1e-4);
-        result *= lerp(0.08, 1.0, saturate(contrib));
+        result *= lerp(0.02, 1.0, saturate(contrib));
+        // Soft limit: the sun is thousands of times brighter than the sky; unlimited, its glow
+        // whitens a quarter of the screen.
+        float peak = max(result.r, max(result.g, result.b));
+        result *= 1.0 / (1.0 + peak / 6.0);
     }
     else
     {
@@ -155,7 +159,9 @@ float4 PS_ToneMap(VSOut i) : SV_Target
 {
     float4 hdr = g_src.SampleLevel(g_point, i.uv, 0);
     float3 x = min(hdr.rgb, 50000.0) * engineExposure() * exp2(g_tone0.w);
-    if (g_tone1.y > 0.5) x = lerp(x, g_bloom.SampleLevel(g_linear, i.uv, 0).rgb, g_tone1.x);
+    // Bloom adds light where it is bright (in the TMNF mod it was mixed in, which on real HDR
+    // only darkened the image).
+    if (g_tone1.y > 0.5) x += g_bloom.SampleLevel(g_linear, i.uv, 0).rgb * g_tone1.x;
     int mode = (int)(g_tone0.x + 0.5);
     if (mode != 0) x *= matchScale(mode);
     return float4(curve(x, mode), hdr.a);

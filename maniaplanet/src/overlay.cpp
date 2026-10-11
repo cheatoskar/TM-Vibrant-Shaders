@@ -118,7 +118,8 @@ bool slider(const char* label, float* v, float lo, float hi, const char* fmt = "
 void status() {
     const hooks::Stats& st = hooks::stats();
     const ImVec4 good(0.45f, 0.85f, 0.45f, 1), warn(0.95f, 0.75f, 0.3f, 1), bad(0.95f, 0.4f, 0.35f, 1);
-    if (st.toneMapSeen) ImGui::TextColored(good, "Scene found (the engine's tone map)");
+    if (st.toneMapSeen && st.toneMapped) ImGui::TextColored(good, "Scene found; HDR stage replaces the engine's tone map");
+    else if (st.toneMapSeen) ImGui::TextColored(good, "Scene found (the engine's tone map)");
     else ImGui::TextColored(warn, "Scene not found in this frame (menu or unknown shaders)");
     const ImVec4 placedColour = st.placed == hooks::Placed::BeforeHud || st.placed == hooks::Placed::EndOfFrame ? good
                                 : st.placed == hooks::Placed::Fallback                                         ? warn
@@ -171,6 +172,23 @@ void menu() {
         ImGui::EndCombo();
     }
 
+    if (ImGui::CollapsingHeader("Tone mapping and bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int curve = static_cast<int>(s.toneCurve);
+        if (ImGui::Combo("Curve", &curve, "Engine (the game as it is)\0TMVS (colours keep their hue)\0ACES (film)\0")) {
+            s.toneCurve = static_cast<ToneCurve>(curve);
+            g_dirty = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("How the engine's HDR image becomes the picture. TMVS and ACES keep the game's mid-tones;\n"
+                              "bright lights and sky keep colour and detail instead of washing out.");
+        if (s.toneCurve == ToneCurve::Tmvs) {
+            slider("Shoulder start", &s.toneKnee, 0.3f, 0.9f);
+            slider("Hue in highlights", &s.toneHue, 0.0f, 1.0f);
+        }
+        slider("HDR exposure", &s.hdrExposure, -2.0f, 2.0f, "%.2f stops");
+        slider("Bloom", &s.bloom, 0.0f, 0.6f);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The mod's bloom on the HDR image (the engine's own bloom stays).");
+    }
     if (ImGui::CollapsingHeader("Colour and light", ImGuiTreeNodeFlags_DefaultOpen)) {
         slider("Exposure", &s.exposure, -1.0f, 1.0f, "%.2f stops");
         slider("Contrast", &s.contrast, 0.0f, 1.0f);

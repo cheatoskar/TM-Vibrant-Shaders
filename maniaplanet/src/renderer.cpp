@@ -2,10 +2,13 @@
 #include "hooks.h"
 #include "log.h"
 #include "lut.h"
+#include "shaders/PS_BloomDown.h"
+#include "shaders/PS_BloomUp.h"
 #include "shaders/PS_BlurH.h"
 #include "shaders/PS_BlurV.h"
 #include "shaders/PS_Down4.h"
 #include "shaders/PS_Grade.h"
+#include "shaders/PS_ToneMap.h"
 #include "shaders/VS_Full.h"
 #include <algorithm>
 #include <cstring>
@@ -17,6 +20,11 @@ template <typename T> void safeRelease(T*& p) {
     if (p) p->Release();
     p = nullptr;
 }
+
+struct ToneConstants {
+    float tone0[4]; // curve, knee, hue keep, exposure (stops)
+    float tone1[4]; // bloom strength, has bloom
+};
 
 struct GradeConstants {
     float p[5][4];
@@ -129,6 +137,11 @@ bool Renderer::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreateBuffer(&cb, nullptr, &m_gradeCb));
     cb.ByteWidth = 16;
     ok &= SUCCEEDED(device->CreateBuffer(&cb, nullptr, &m_passCb));
+    cb.ByteWidth = sizeof(ToneConstants);
+    ok &= SUCCEEDED(device->CreateBuffer(&cb, nullptr, &m_toneCb));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_BloomDown, sizeof(g_PS_BloomDown), nullptr, &m_bloomDown));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_BloomUp, sizeof(g_PS_BloomUp), nullptr, &m_bloomUp));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_ToneMap, sizeof(g_PS_ToneMap), nullptr, &m_toneMap));
 
     D3D11_SAMPLER_DESC sd = {};
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -166,6 +179,14 @@ void Renderer::releaseTargets() {
         safeRelease(m_blurTex[i]);
     }
     m_blurW = m_blurH2 = 0;
+    for (int k = 0; k < 2; k++) {
+        for (int i = 0; i < kBloomLevels; i++) {
+            safeRelease(m_bloomSrv[k][i]);
+            safeRelease(m_bloomRtv[k][i]);
+            safeRelease(m_bloomTex[k][i]);
+        }
+    }
+    m_bloomBaseW = m_bloomBaseH = 0;
     for (int i = 0; i < kTexCount; i++) {
         for (auto& v : m_tex[i]) {
             safeRelease(v.srv);
@@ -186,6 +207,10 @@ void Renderer::release() {
     safeRelease(m_grade);
     safeRelease(m_gradeCb);
     safeRelease(m_passCb);
+    safeRelease(m_toneCb);
+    safeRelease(m_bloomDown);
+    safeRelease(m_bloomUp);
+    safeRelease(m_toneMap);
     safeRelease(m_linear);
     safeRelease(m_point);
     safeRelease(m_rs);
@@ -342,17 +367,145 @@ void Renderer::updateLut(const std::string& name) {
 }
 
 void Renderer::pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, UINT width, UINT height,
-                    ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY) {
+                    ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY, float z, float w) {
     ID3D11ShaderResourceView* none[4] = {};
     ctx->PSSetShaderResources(0, 4, none);
     ctx->OMSetRenderTargets(1, &rtv, nullptr);
     D3D11_VIEWPORT vp = {0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
     ctx->RSSetViewports(1, &vp);
-    const float texel[4] = {texelX, texelY, 0, 0};
+    const float texel[4] = {texelX, texelY, z, w};
     ctx->UpdateSubresource(m_passCb, 0, nullptr, texel, 0, 0);
     ctx->PSSetShaderResources(0, srvCount, srvs);
     ctx->PSSetShader(ps, nullptr, 0);
     ctx->Draw(3, 0);
+}
+
+void Renderer::setCommonState(ID3D11DeviceContext* ctx) {
+    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx->IASetInputLayout(nullptr);
+    ID3D11Buffer* noBuffer = nullptr;
+    UINT zero = 0;
+    ctx->IASetVertexBuffers(0, 1, &noBuffer, &zero, &zero);
+    ctx->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+    ctx->VSSetShader(m_vs, nullptr, 0);
+    ctx->GSSetShader(nullptr, nullptr, 0);
+    ctx->HSSetShader(nullptr, nullptr, 0);
+    ctx->DSSetShader(nullptr, nullptr, 0);
+    ctx->RSSetState(m_rs);
+    ctx->RSSetScissorRects(0, nullptr);
+    const float blendFactor[4] = {};
+    ctx->OMSetBlendState(m_blend, blendFactor, 0xffffffff);
+    ctx->OMSetDepthStencilState(m_dss, 0);
+    ID3D11SamplerState* samplers[2] = {m_linear, m_point};
+    ctx->PSSetSamplers(0, 2, samplers);
+}
+
+bool Renderer::ensureBloom(UINT width, UINT height) {
+    if (m_bloomTex[0][0] && m_bloomBaseW == width && m_bloomBaseH == height) return true;
+    for (int k = 0; k < 2; k++) {
+        for (int i = 0; i < kBloomLevels; i++) {
+            safeRelease(m_bloomSrv[k][i]);
+            safeRelease(m_bloomRtv[k][i]);
+            safeRelease(m_bloomTex[k][i]);
+        }
+    }
+    D3D11_TEXTURE2D_DESC d = {};
+    d.MipLevels = 1;
+    d.ArraySize = 1;
+    d.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+    d.SampleDesc.Count = 1;
+    d.Usage = D3D11_USAGE_DEFAULT;
+    d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    for (int i = 0; i < kBloomLevels; i++) {
+        m_bloomW[i] = std::max(1u, width >> (i + 1));
+        m_bloomH[i] = std::max(1u, height >> (i + 1));
+        d.Width = m_bloomW[i];
+        d.Height = m_bloomH[i];
+        for (int k = 0; k < 2; k++) {
+            if (k == 1 && i == kBloomLevels - 1) continue; // the smallest level has no up copy
+            if (FAILED(m_device->CreateTexture2D(&d, nullptr, &m_bloomTex[k][i])) ||
+                FAILED(m_device->CreateRenderTargetView(m_bloomTex[k][i], nullptr, &m_bloomRtv[k][i])) ||
+                FAILED(m_device->CreateShaderResourceView(m_bloomTex[k][i], nullptr, &m_bloomSrv[k][i]))) {
+                TMVS_LOG("renderer: bloom level %d (%ux%u) failed", i, d.Width, d.Height);
+                return false;
+            }
+        }
+    }
+    m_bloomBaseW = width;
+    m_bloomBaseH = height;
+    return true;
+}
+
+namespace {
+
+void sizeOfView(ID3D11View* view, UINT& w, UINT& h) {
+    w = h = 0;
+    ID3D11Resource* res = nullptr;
+    view->GetResource(&res);
+    ID3D11Texture2D* tex = nullptr;
+    if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)))) {
+        D3D11_TEXTURE2D_DESC d;
+        tex->GetDesc(&d);
+        w = d.Width;
+        h = d.Height;
+        tex->Release();
+    }
+    if (res) res->Release();
+}
+
+} // namespace
+
+bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, ID3D11ShaderResourceView* hdr,
+                       ID3D11ShaderResourceView* exposure, ID3D11Buffer* engineConstants, const Settings& s) {
+    if (!m_toneMap || !target || !hdr || !exposure || !engineConstants) return false;
+    UINT w = 0, h = 0, hw = 0, hh = 0;
+    sizeOfView(target, w, h);
+    sizeOfView(hdr, hw, hh);
+    if (!w || !h || !hw || !hh) return false;
+
+    hooks::Inside inside;
+    StateBackup backup;
+    backup.save(ctx);
+    setCommonState(ctx);
+    ID3D11Buffer* cbs[3] = {m_toneCb, m_passCb, engineConstants};
+    ctx->PSSetConstantBuffers(0, 3, cbs);
+
+    const bool bloom = s.bloom > 0.001f && ensureBloom(hw, hh);
+    ToneConstants tc = {};
+    tc.tone0[0] = static_cast<float>(static_cast<int>(s.toneCurve));
+    tc.tone0[1] = s.toneKnee;
+    tc.tone0[2] = s.toneHue;
+    tc.tone0[3] = s.hdrExposure;
+    tc.tone1[0] = s.bloom;
+    tc.tone1[1] = bloom ? 1.0f : 0.0f;
+    ctx->UpdateSubresource(m_toneCb, 0, nullptr, &tc, 0, 0);
+
+    ID3D11ShaderResourceView* bloomResult = nullptr;
+    if (bloom) {
+        // Down: the first level exposes and thresholds the HDR image, the rest halve it.
+        ID3D11ShaderResourceView* first[2] = {hdr, exposure};
+        pass(ctx, m_bloomDown, m_bloomRtv[0][0], m_bloomW[0], m_bloomH[0], first, 2, 1.0f / hw, 1.0f / hh, 1.0f);
+        for (int i = 1; i < kBloomLevels; i++) {
+            pass(ctx, m_bloomDown, m_bloomRtv[0][i], m_bloomW[i], m_bloomH[i], &m_bloomSrv[0][i - 1], 1, 1.0f / m_bloomW[i - 1],
+                 1.0f / m_bloomH[i - 1]);
+        }
+        // Up: each level adds the blurred smaller one.
+        for (int i = kBloomLevels - 2; i >= 0; i--) {
+            const int lower = i + 1;
+            ID3D11ShaderResourceView* src = lower == kBloomLevels - 1 ? m_bloomSrv[0][lower] : m_bloomSrv[1][lower];
+            ID3D11ShaderResourceView* srvs[3] = {src, nullptr, m_bloomSrv[0][i]};
+            pass(ctx, m_bloomUp, m_bloomRtv[1][i], m_bloomW[i], m_bloomH[i], srvs, 3, 1.0f / m_bloomW[lower],
+                 1.0f / m_bloomH[lower], 0.0f, 1.0f);
+        }
+        bloomResult = m_bloomSrv[1][0];
+    }
+    ID3D11ShaderResourceView* srvs[3] = {hdr, exposure, bloomResult};
+    pass(ctx, m_toneMap, target, w, h, srvs, 3, 1.0f / hw, 1.0f / hh);
+
+    ID3D11ShaderResourceView* none[3] = {};
+    ctx->PSSetShaderResources(0, 3, none);
+    backup.restore(ctx);
+    return true;
 }
 
 bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const EngineView& engine, const Settings& s) {
@@ -389,23 +542,7 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, c
     for (int i = 0; i < kTexCount; i++) views[i] = textureView(i, engine.tex ? engine.tex[i] : nullptr);
     ID3D11ShaderResourceView* depthSrv = views[kTexDepth];
 
-    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ctx->IASetInputLayout(nullptr);
-    ID3D11Buffer* noBuffer = nullptr;
-    UINT zero = 0;
-    ctx->IASetVertexBuffers(0, 1, &noBuffer, &zero, &zero);
-    ctx->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
-    ctx->VSSetShader(m_vs, nullptr, 0);
-    ctx->GSSetShader(nullptr, nullptr, 0);
-    ctx->HSSetShader(nullptr, nullptr, 0);
-    ctx->DSSetShader(nullptr, nullptr, 0);
-    ctx->RSSetState(m_rs);
-    ctx->RSSetScissorRects(0, nullptr);
-    const float blendFactor[4] = {};
-    ctx->OMSetBlendState(m_blend, blendFactor, 0xffffffff);
-    ctx->OMSetDepthStencilState(m_dss, 0);
-    ID3D11SamplerState* samplers[2] = {m_linear, m_point};
-    ctx->PSSetSamplers(0, 2, samplers);
+    setCommonState(ctx);
     ID3D11Buffer* cbs[2] = {m_gradeCb, m_passCb};
     ctx->PSSetConstantBuffers(0, 2, cbs);
 
