@@ -13,9 +13,23 @@ enum class Placement : int {
 // Normal and Split grade the image; the rest show what the mod reads from the engine (checks).
 enum class View : int { Normal = 0, Split = 1, Depth = 2, Normals = 3, Motion = 4, Light = 5, WorldGrid = 6 };
 
+// The curve that turns the engine's HDR image into the picture.
+enum class ToneCurve : int {
+    Engine = 0, // the engine's own (Hable filmic per channel): the game as it is
+    Tmvs = 1,   // the TMNF mod's: linear mid-tones, long shoulder, lit colours keep their hue
+    Aces = 2
+};
+
 struct Settings {
     bool enabled = true;
     std::string preset = "Vibrant";
+
+    // HDR stage, in place of the engine's tone map (on its HDR image, before FXAA and the interface).
+    ToneCurve toneCurve = ToneCurve::Tmvs;
+    float toneKnee = 0.6f;    // TMVS curve: where the shoulder starts
+    float toneHue = 0.5f;     // TMVS curve: 0 per channel (bleaches like the engine), 1 keeps the hue
+    float hdrExposure = 0.0f; // stops, on top of the engine's auto exposure
+    float bloom = 0.12f;      // the mod's HDR bloom (the engine's own bloom stays in its image)
 
     // Grading of the engine's finished (tone-mapped) image.
     float exposure = 0.0f;   // stops

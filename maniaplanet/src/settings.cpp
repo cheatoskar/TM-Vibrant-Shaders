@@ -132,7 +132,8 @@ bool set(Settings& s, const std::string& key, const std::string& value) {
                   {"Vibrance", &s.vibrance},     {"Warmth", &s.warmth},     {"Tint", &s.tint},
                   {"Shadows", &s.shadows},       {"Highlights", &s.highlights}, {"Clarity", &s.clarity},
                   {"Sharpen", &s.sharpen},       {"Vignette", &s.vignette}, {"LutMix", &s.lutMix},
-                  {"Split", &s.split}};
+                  {"Split", &s.split},           {"ToneKnee", &s.toneKnee}, {"ToneHue", &s.toneHue},
+                  {"HdrExposure", &s.hdrExposure}, {"Bloom", &s.bloom}};
     for (const auto& f : floats) {
         if (_stricmp(key.c_str(), f.key) == 0) {
             *f.value = static_cast<float>(atof(value.c_str()));
@@ -141,6 +142,7 @@ bool set(Settings& s, const std::string& key, const std::string& value) {
     }
     if (_stricmp(key.c_str(), "Lut") == 0) s.lut = value;
     else if (_stricmp(key.c_str(), "View") == 0) s.view = static_cast<View>(atoi(value.c_str()));
+    else if (_stricmp(key.c_str(), "ToneCurve") == 0) s.toneCurve = static_cast<ToneCurve>(atoi(value.c_str()));
     else if (_stricmp(key.c_str(), "Preset") == 0) applyPreset(s, value);
     else return false;
     return true;
@@ -149,6 +151,7 @@ bool set(Settings& s, const std::string& key, const std::string& value) {
 void load() {
     Settings& s = g_settings;
     int enabled = s.enabled, placement = static_cast<int>(s.placement), fallback = s.fallbackAtEnd;
+    int curve = static_cast<int>(s.toneCurve);
     readInt(L"Enabled", enabled);
     readString(L"Preset", s.preset);
     applyPreset(s, s.preset);
@@ -166,6 +169,12 @@ void load() {
     readString(L"Lut", s.lut);
     readFloat(L"LutMix", s.lutMix);
     readInt(L"Placement", placement);
+    readInt(L"ToneCurve", curve);
+    readFloat(L"ToneKnee", s.toneKnee);
+    readFloat(L"ToneHue", s.toneHue);
+    readFloat(L"HdrExposure", s.hdrExposure);
+    readFloat(L"Bloom", s.bloom);
+    s.toneCurve = static_cast<ToneCurve>(curve < 0 || curve > 2 ? 1 : curve);
     readInt(L"FallbackAtEnd", fallback);
     s.enabled = enabled != 0;
     s.placement = placement == 1 ? Placement::EndOfFrame : Placement::BeforeHud;
@@ -191,6 +200,11 @@ void save() {
     writeString(L"Lut", s.lut);
     writeFloat(L"LutMix", s.lutMix);
     writeInt(L"Placement", static_cast<int>(s.placement));
+    writeInt(L"ToneCurve", static_cast<int>(s.toneCurve));
+    writeFloat(L"ToneKnee", s.toneKnee);
+    writeFloat(L"ToneHue", s.toneHue);
+    writeFloat(L"HdrExposure", s.hdrExposure);
+    writeFloat(L"Bloom", s.bloom);
     writeInt(L"FallbackAtEnd", s.fallbackAtEnd ? 1 : 0);
 }
 

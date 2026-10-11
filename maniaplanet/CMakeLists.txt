@@ -26,24 +26,28 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(imgui)
 
 # Effect shaders, compiled at build time (shader model 4 so feature level 10 cards work too).
-set(MP_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/mp.hlsl")
 set(MP_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 file(MAKE_DIRECTORY "${MP_SHADER_OUT}")
 file(GLOB MP_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
 list(SORT MP_SDK_BINS ORDER DESCENDING)
 list(TRANSFORM MP_SDK_BINS APPEND "/x64")
 find_program(MP_FXC fxc HINTS "$ENV{WindowsSdkVerBinPath}x64" ${MP_SDK_BINS} REQUIRED)
-set(MP_ENTRIES VS_Full:vs_4_0 PS_Down4:ps_4_0 PS_BlurH:ps_4_0 PS_BlurV:ps_4_0 PS_Grade:ps_4_0)
+# file:entry:profile
+set(MP_ENTRIES
+  mp:VS_Full:vs_4_0 mp:PS_Down4:ps_4_0 mp:PS_BlurH:ps_4_0 mp:PS_BlurV:ps_4_0 mp:PS_Grade:ps_4_0
+  hdr:PS_BloomDown:ps_4_0 hdr:PS_BloomUp:ps_4_0 hdr:PS_ToneMap:ps_4_0)
 set(MP_SHADER_HEADERS)
 foreach(item ${MP_ENTRIES})
   string(REPLACE ":" ";" parts "${item}")
-  list(GET parts 0 entry)
-  list(GET parts 1 profile)
+  list(GET parts 0 file)
+  list(GET parts 1 entry)
+  list(GET parts 2 profile)
+  set(source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${file}.hlsl")
   set(out "${MP_SHADER_OUT}/${entry}.h")
   add_custom_command(
     OUTPUT "${out}"
-    COMMAND "${MP_FXC}" /nologo /O3 /T ${profile} /E ${entry} /Vn g_${entry} /Fh "${out}" "${MP_SHADER}"
-    DEPENDS "${MP_SHADER}"
+    COMMAND "${MP_FXC}" /nologo /O3 /T ${profile} /E ${entry} /Vn g_${entry} /Fh "${out}" "${source}"
+    DEPENDS "${source}"
     COMMENT "fxc ${entry}"
     VERBATIM)
   list(APPEND MP_SHADER_HEADERS "${out}")
