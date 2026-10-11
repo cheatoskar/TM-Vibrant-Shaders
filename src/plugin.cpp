@@ -444,9 +444,12 @@ void processScene(IDirect3DDevice9* device) {
     {
         float lo = 0.0f, hi = 0.0f;
         if (engine::waterHeights(lo, hi)) {
+            // -1e30 = none (TMUF Island reports no sea: 0, the pipeline measures it from the
+            // sea's material). Stadium: 2, its water blocks (only their height is known).
+            const bool known = lo > -1e29f || hi > -1e29f;
             inputs.water[0] = lo;
             inputs.water[1] = hi;
-            inputs.water[2] = 1.0f;
+            inputs.water[2] = !known ? 0.0f : (engine::stadium() ? 2.0f : 1.0f);
         }
     }
     inputs.driving = !engine::cinematicActive();
@@ -631,11 +634,9 @@ void onCameraBegin(void* camera) {
 bool g_stencilTagged = false;
 bool g_gameStencil = false;
 
-// The mask feeds the TMUF sea (water by material, its measured level) and the debug view: on
-// Stadium (its water height comes from the engine) every draw would be tagged for nothing.
 bool materialsWanted() {
     const Settings& s = Config::get().settings;
-    return s.enabled && s.gameMaterials && !g_gameStencil && (!engine::stadium() || s.debugView == 8);
+    return s.enabled && s.gameMaterials && !g_gameStencil;
 }
 
 // The stencil states the tagging changes, as the game had them (given back when it stops).

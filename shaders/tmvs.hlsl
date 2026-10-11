@@ -1623,7 +1623,8 @@ float3 grassDetail(float3 c, float3 world, float3 rd, float dist, float mask) {
         float tufts = noise2(world.xz * 2.2 + 3.3) * 0.6 + noise2(world.xz * 7.0 + 1.1) * 0.4;
         g *= lerp(1.0, lerp(0.62, 1.25, tufts), u_Nature.x * smoothstep(0.12, 0.04, footprint));
         // Blades close to the camera.
-        float fade = smoothstep(0.045, 0.018, footprint);
+        // A long fade (a hard edge ~30 m ahead of the car showed where they stopped).
+        float fade = smoothstep(0.085, 0.02, footprint);
         if (fade > 0.0) g *= lerp(1.0, grassBlades(world, rd, u_Proj2.z), fade * u_Nature.x);
     }
     return lerp(c, g, mask);
@@ -2228,6 +2229,13 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // The game's own water material (the TMUF sea, which reports no height): water wherever
     // it is flat, at any distance.
     water = max(water, mat.b * smoothstep(0.9, 0.98, nWorld.y) * u_Weather.w);
+    // Stadium water blocks (u_Water.z 2-3): only their height is known (8 m), and dirt lies
+    // there too. Once the map's water was seen as the water material, only on it; before,
+    // no dark brown (dirt).
+    if (u_Water.z > 2.5) water = min(water, mat.b);
+    else if (u_Water.z > 1.5) water *= 1.0 - smoothstep(1.05, 1.2, albedo.r / max(albedo.b, 1e-4)) * (1.0 - smoothstep(0.06, 0.15, luma(albedo)));
+    // The open sea far out (other materials than near the shore): whatever lies at its level.
+    if (u_Water.z > 0.5 && u_Water.z < 1.5 && nd.w > 400.0) water = max(water, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * u_Weather.w);
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
@@ -2285,7 +2293,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (u_Mat.z > 0.5) {
         // Far out the sea is drawn by other materials: whatever lies at the sea level.
         float sea = mat.b;
-        if (u_Water.z > 0.5) sea = max(sea, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * saturate(nd.w / 200.0 - 1.0));
+        if (u_Water.z > 0.5 && u_Water.z < 1.5) sea = max(sea, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * saturate(nd.w / 200.0 - 1.0));
         // The sunset painted on a ring around the map (TMUF Island), far islands: no sunset at night.
         sea = max(sea, smoothstep(1000.0, 1600.0, nd.w));
         c = lerp(c, luma(c) * float3(0.7, 0.85, 1.0), sea * 0.85);
@@ -2353,7 +2361,20 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         // sky everywhere made puddles look like camouflage patches).
         float F = max(0.02 + 0.98 * pow(1.0 - NdotV, 5.0), max(puddle, water) * lerp(0.1, 0.4, ssr.a));
         F = max(F, polish * lerp(0.05, 0.55, ssr.a));
-        float3 refl = lerp(skyReflection(r, skyAvg, daylight), ssr.rgb, ssr.a);
+        // Where the reflection traced nothing: the sky we draw in the mirrored direction, where
+        // that is on screen (planets, the black hole, stars in the far water), else its average.
+        float3 skyR = skyReflection(r, skyAvg, daylight);
+        if (u_Sky.x > 0.5) {
+            float3 rv = worldToViewDir(r);
+            if (rv.z > 0.01) {
+                float2 suv = projectToUV(rv * 100.0);
+                if (all(suv > 0.0) && all(suv < 1.0)) {
+                    float4 sky = tex2Dlod(s5, float4(suv, 0, 0));
+                    skyR = lerp(skyR, sky.rgb, sky.a);
+                }
+            }
+        }
+        float3 refl = lerp(skyR, ssr.rgb, ssr.a);
         c = lerp(c, refl, saturate(F * reflectivity * lerp(0.6, 1.0, smoothness)));
         // Sun glint (GGX): sharp on puddles and water, broad on wet asphalt.
         if (u_SunView.w > 0.5) {

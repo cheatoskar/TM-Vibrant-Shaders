@@ -574,9 +574,12 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
     // w: how much farther AO, shadows, bounce light and reflections reach (photo mode).
     // No sea level from the game (TMUF Island): the one measured from its water material.
-    const bool measured = in.water[2] <= 0.0f && m_seaKnown;
-    const float water[4] = {measured ? m_seaLevel : in.water[0], measured ? m_seaLevel : in.water[1], measured ? 1.0f : in.water[2],
-                            in.photo ? 3.0f : 1.0f};
+    // Stadium water blocks (2): once the water material was seen on the map, water only on
+    // it (3; dirt lies at the blocks' height too).
+    const bool measured = in.water[2] >= 0.0f && in.water[2] < 0.5f && m_seaKnown;
+    float kind = measured ? 1.0f : in.water[2];
+    if (kind > 1.5f && m_waterMaterialSeen && m_materialsOn) kind = 3.0f;
+    const float water[4] = {measured ? m_seaLevel : in.water[0], measured ? m_seaLevel : in.water[1], kind, in.photo ? 3.0f : 1.0f};
     device->SetPixelShaderConstantF(38, water, 1);
     // The direction the snow drifts (as the flakes in drawRain): walls facing it catch snow.
     const float drift[2] = {1.0f + s.wind * 7.0f, 0.5f + s.wind * 3.0f};
@@ -1816,6 +1819,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 
     // The game's materials (lamps, cars, glass, grass) for the lighting and the final pass.
     const bool materials = buildMaterialMask(device, in);
+    m_materialsOn = materials;
     // z: a night sky replaces the game's, its sunset clouds and their mirror image in the sea go.
     const float gameSkyOut = skyReplacesSun(s) && !s.gameSkyClouds ? 1.0f : 0.0f;
     const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, gameSkyOut, s.toneKnee};
@@ -1850,7 +1854,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     passConstants(device, 1.0f / in.width, 1.0f / in.height);
     runPass(device, kDownsampleND, m_ndHalf);
     // 1a. The sea the game reports no height for (TMUF Island), from its water material.
-    if (materials && in.water[2] <= 0.0f && s.waterSurfaces > 0.0f) measureSeaLevel(device);
+    if (materials && s.waterSurfaces > 0.0f && ((in.water[2] >= 0.0f && in.water[2] < 0.5f) || in.water[2] > 1.5f)) measureSeaLevel(device);
 
     // 1b. Long-range shadows: update the world-space height map.
     // Extra cameras (replay blends) use the map as it is: it follows the main camera.
@@ -2271,6 +2275,10 @@ void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
             float v[4];
             memcpy(v, locked.pBits, sizeof(v));
             m_waterRead->UnlockRect();
+            if (v[1] >= 8.0f && !m_waterMaterialSeen) {
+                m_waterMaterialSeen = true;
+                TMVS_LOG("pipeline: the map's water is the game's water material (%.0f points)", v[1]);
+            }
             if (v[1] >= 24.0f && v[3] - v[2] < 0.6f) {
                 const float level = v[0] / v[1];
                 if (!m_seaKnown || fabsf(level - m_seaLevel) > 0.3f)

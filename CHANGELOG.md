@@ -36,6 +36,9 @@
 - Night sky over a sunset map: the sunset ring TMUF Island paints around the map isn't drawn (it stood like an orange wall at the horizon and the sea mirrored it; `GameSkyClouds` keeps it), the far distance loses its sunset colour.
 - *Picked preset applies to all maps of this type* is off by default: picking a preset on a map no longer changes the preset of every map of that kind unless you switch it on.
 - United Forever Island: the sea reports no height; it is measured from the sea's material now, so it gets the exact water plane like the pools (waves, clean reflections).
+- Water mirrors the sky you picked (planets, the black hole, stars) where the reflection finds nothing else, also far out on the sea; before it was a flat average colour.
+- Stadium: dirt at the height of the water blocks no longer turns into water. Once a map's water was seen as the game's water material, only that is water; before, dark brown ground never is.
+- Grass detail: the blades fade out over a longer distance (a hard edge ~30 m ahead of the car).
 - MediaTracker editor detection: replay cameras that leave a few rows out are shaded as before (only real panels count).
 - The game's materials are read while it draws (`GameMaterials`, on): the TMUF sea is water by its material (and its height is measured from it). Not on Stadium, where the engine reports the water. Debug view *Materials* shows lamps, cars, glass, grass, water and light added on top.
 - The map's mood (day, sunset, night: which preset it gets) comes from the map's own time of day when the engine reports it, not from the colour of its sun (Rally at noon has a warm sun and got the sunset preset).
