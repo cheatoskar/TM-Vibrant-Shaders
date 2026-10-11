@@ -118,6 +118,7 @@ Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (a
 | `F8` | Open or close the menu |
 | `F7` | Shaders on or off, for a before/after look |
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
+| `Shift+F7` | Map clips off or on: the map's MediaTracker clips while driving (forced cameras, black screens) don't play |
 | `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms |
 
 ![The F8 menu](docs/images/UI.png)
@@ -150,6 +151,10 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 ## Known issues
 
 - **Snow on the ground** (*Snow on the ground*, off in every preset) doesn't follow the game's textures and surfaces well (it can lie across markings, kerbs and edges). For snowy roads a snow texture pack looks better.
+- **Headlights on very bright blocks** (United Forever Island at night): the game itself draws the light pool pure white, so there is no texture left under it.
+- **Floodlit stadiums at night** keep part of the game's burned-out white (*Floodlit surfaces at night* sets how much).
+- **Shaders off with the game's FX post-processing** was reported once (TMNF, shadows *High*). *Turn off the game's FX post-processing* (on by default) should prevent it; if not, switch FX off in the launcher.
+- **Bloom costs ~3 ms on integrated GPUs**; *Performance* preset or auto quality help.
 - If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
 ---

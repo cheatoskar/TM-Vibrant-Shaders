@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.1 (not released yet)
+## 1.4.0-preview (2026-10-11)
 
 - New `F8` menu. **Shaders:** every preset as a card with a picture, a line about it and its GPU load; rest the pointer on one and the game shows that look, click to use it, right click for day, sunset or night maps. Filters for day, night, weather and light presets. Your own presets get a picture of the game when you save them, and a line about them if you like (right click: edit description, update picture, delete). A preset is its .ini and .jpg in the presets folder (*Open the presets folder*): share both; files put there, and pictures replaced there, show up while the game runs. Pages for *Customize* (the main settings), *Studio* (every setting), *Maps* (preset per map mood, Author's Shader) and *Performance*. Segoe UI instead of the pixel font, sized for the screen. The menu opens big, leaving the right part of the game in view for the live preview (one button puts it over the whole screen); on a wide menu the settings stand in panels side by side. Deleting a preset and resetting your changes ask first.
 - Settings page: *Preset per map type*, *Picked preset applies to all maps of this type* (off: picking a preset no longer changes which preset that kind of map gets), Author's Shaders, live preview, menu size, update check, the game options and the folders. Every on/off setting is a switch now.
@@ -33,7 +33,7 @@
 - Long shadows without TAA: smooth edges instead of grain (the jitter was white noise, fixed per pixel; now an even pattern the blur removes).
 - Night maps: new setting *Floodlit surfaces at night* (`NightSurfaces`, 0.8): floodlit stands, lit roads and white walls keep this part of the game's white instead of burning out; lamps and neon always keep it in full (1 = as before).
 - New setting *Highlight roll-off* (`ToneKnee`, 0.5 = as before): where the tone curve starts to bend; higher keeps more of the game's bright mid-tones, brighter highlights.
-- Night sky over a sunset map: the far distance (TMUF Island's sunset ring around the map, far islands) loses its sunset colour.
+- Night sky over a sunset map: the sunset ring TMUF Island paints around the map isn't drawn (it stood like an orange wall at the horizon and the sea mirrored it; `GameSkyClouds` keeps it), the far distance loses its sunset colour.
 - *Picked preset applies to all maps of this type* is off by default: picking a preset on a map no longer changes the preset of every map of that kind unless you switch it on.
 - United Forever Island: the sea reports no height; it is measured from the sea's material now, so it gets the exact water plane like the pools (waves, clean reflections).
 - MediaTracker editor detection: replay cameras that leave a few rows out are shaded as before (only real panels count).
