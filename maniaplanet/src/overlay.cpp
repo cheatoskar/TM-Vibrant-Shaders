@@ -155,7 +155,7 @@ void menu() {
     int view = static_cast<int>(s.view);
     ImGui::SetNextItemWidth(150);
     if (ImGui::Combo("##view", &view,
-                     "Normal view\0Compare (split)\0Check: depth\0Check: normals\0Check: motion\0Check: light buffer\0"
+                     "Normal view\0Compare (split)\0Check: depth\0Check: normals\0Check: motion\0Check: albedo\0"
                      "Check: world grid\0"))
         s.view = static_cast<View>(view);
     if (s.view == View::Split) slider("Split", &s.split, 0.0f, 1.0f);

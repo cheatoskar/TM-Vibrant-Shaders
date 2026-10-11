@@ -167,9 +167,11 @@ void Renderer::releaseTargets() {
     }
     m_blurW = m_blurH2 = 0;
     for (int i = 0; i < kTexCount; i++) {
-        safeRelease(m_texSrv[i]);
-        m_texRes[i] = nullptr;
-        m_texTried[i] = false;
+        for (auto& v : m_tex[i]) {
+            safeRelease(v.srv);
+            v = TexView{};
+        }
+        m_texCurrent[i] = -1;
     }
 }
 
@@ -262,23 +264,32 @@ bool Renderer::ensureBlur(UINT width, UINT height) {
 }
 
 ID3D11ShaderResourceView* Renderer::textureView(int index, ID3D11Resource* res) {
-    if (res != m_texRes[index]) {
-        safeRelease(m_texSrv[index]);
-        m_texRes[index] = res;
-        m_texTried[index] = false;
-        m_texFormat[index] = DXGI_FORMAT_UNKNOWN;
+    m_texCurrent[index] = -1;
+    if (!res) return nullptr;
+    for (int k = 0; k < kViewsPerTexture; k++) {
+        if (m_tex[index][k].res == res) {
+            m_texCurrent[index] = k;
+            return m_tex[index][k].srv;
+        }
     }
-    if (!res || m_texTried[index]) return m_texSrv[index];
-    m_texTried[index] = true;
+    const int k = m_texNext[index];
+    m_texNext[index] = (k + 1) % kViewsPerTexture;
+    TexView& v = m_tex[index][k];
+    safeRelease(v.srv);
+    v = TexView{};
+    v.res = res;
+    m_texCurrent[index] = k;
     ID3D11Texture2D* tex = nullptr;
     if (FAILED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)))) return nullptr;
     D3D11_TEXTURE2D_DESC d;
     tex->GetDesc(&d);
-    m_texFormat[index] = d.Format;
+    v.format = d.Format;
+    const bool log = m_texLogged[index]++ < 2;
     const DXGI_FORMAT read = readableFormat(d.Format);
     if (!(d.BindFlags & D3D11_BIND_SHADER_RESOURCE) || read == DXGI_FORMAT_UNKNOWN || d.SampleDesc.Count > 1) {
-        TMVS_LOG("renderer: engine %s %ux%u format %d bind 0x%x samples %u is not readable", engineTextureName(index), d.Width,
-                 d.Height, d.Format, d.BindFlags, d.SampleDesc.Count);
+        if (log)
+            TMVS_LOG("renderer: engine %s %ux%u format %d bind 0x%x samples %u is not readable", engineTextureName(index), d.Width,
+                     d.Height, d.Format, d.BindFlags, d.SampleDesc.Count);
         tex->Release();
         return nullptr;
     }
@@ -291,11 +302,12 @@ ID3D11ShaderResourceView* Renderer::textureView(int index, ID3D11Resource* res) 
         sv.Texture2DArray.MipLevels = 1;
         sv.Texture2DArray.ArraySize = 1;
     }
-    if (FAILED(m_device->CreateShaderResourceView(tex, &sv, &m_texSrv[index]))) m_texSrv[index] = nullptr;
-    TMVS_LOG("renderer: engine %s %ux%u format %d -> %s", engineTextureName(index), d.Width, d.Height, d.Format,
-             m_texSrv[index] ? "readable" : "view failed");
+    if (FAILED(m_device->CreateShaderResourceView(tex, &sv, &v.srv))) v.srv = nullptr;
+    if (log)
+        TMVS_LOG("renderer: engine %s %ux%u format %d -> %s", engineTextureName(index), d.Width, d.Height, d.Format,
+                 v.srv ? "readable" : "view failed");
     tex->Release();
-    return m_texSrv[index];
+    return v.srv;
 }
 
 void Renderer::updateLut(const std::string& name) {

@@ -38,7 +38,7 @@ In the menu:
 - **Presets:** Vibrant (default), Natural, Punchy, Golden Hour, Cold Night, Clean.
 - **Sliders:** for every value.
 - **Compare (split):** shows the game's image left and the mod's right.
-- **Checks:** show what the mod reads from the engine: depth, normals, motion, light buffer, and
+- **Checks:** show what the mod reads from the engine: depth, normals, motion, albedo, and
   a world grid (lines every 8 m, bright every 32 m) drawn from depth and the engine's camera. The
   grid must stay on the ground while the camera moves. Magenta means not found.
 - **Status lines:** say where the effects were applied, whether the camera was found, and which
@@ -71,7 +71,7 @@ What else the mod reads from the engine:
 - **Scene depth:** the last screen-sized depth buffer a scene shader used.
 - **HDR image and exposure:** the tone map's two inputs.
 - **G-buffer by binding name:** the table also stores, per shader, the slot it reads
-  `TMapDeferredPixelNormalInC`, `TMapDeferredMDiffuse`/`MSpecular` (light buffers),
+  `TMapDeferredPixelNormalInC`, `TMapDeferredMDiffuse`/`MSpecular` (material colour and specular; the captures show `MDiffuse` is the albedo),
   `TMapDeferredLightMask` and `TMapMotion` at. The first lighting-read draw of a frame hands them
   over. Its second render target (R16G16 float) holds the motion vectors.
 - **Camera:** the `SceneV` constant buffer (vertex slot 13, 704 bytes; layout from
@@ -93,7 +93,7 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 | `hdr_t*.dds` | What the engine's tone map reads |
 | `input.dds/.bmp`, `view.txt` | The image before the mod, and the format it was drawn with |
 | `output.dds/.bmp` | The finished frame |
-| `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, diffuse and specular light, light mask, motion |
+| `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion |
 | `camera.txt`, `scenev.bin` | The engine camera, decoded and raw |
 
 `mp_preview` renders a capture through the same renderer as the game, without the game:
@@ -127,7 +127,7 @@ It checks that:
 - the interface stays untouched;
 - the depth buffer is found;
 - the camera is read from a SceneV upload (with multithread protection on, like the game);
-- the G-buffer, light buffers and motion are found by name;
+- the G-buffer and motion are found by name;
 - the Present fallback works;
 - a capture writes its files;
 - ResizeBuffers still works.

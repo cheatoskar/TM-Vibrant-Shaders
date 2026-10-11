@@ -66,8 +66,10 @@ public:
     // The copy of the image the last apply() graded (for captures).
     ID3D11Texture2D* lastInput() const { return m_copy; }
     DXGI_FORMAT lastViewFormat() const { return m_copyViewFormat; }
-    bool hasDepthView() const { return m_texSrv[kTexDepth] != nullptr; }
-    DXGI_FORMAT depthFormat() const { return m_texFormat[kTexDepth]; }
+    bool hasDepthView() const { return m_texCurrent[kTexDepth] >= 0 && m_tex[kTexDepth][m_texCurrent[kTexDepth]].srv; }
+    DXGI_FORMAT depthFormat() const {
+        return m_texCurrent[kTexDepth] >= 0 ? m_tex[kTexDepth][m_texCurrent[kTexDepth]].format : DXGI_FORMAT_UNKNOWN;
+    }
     const std::string& lutError() const { return m_lutError; }
 
 private:
@@ -102,11 +104,19 @@ private:
     ID3D11ShaderResourceView* m_blurSrv[2] = {};
     UINT m_blurW = 0, m_blurH2 = 0;
 
-    // Views of the engine's textures, cached per resource (the pointers are identities only).
-    ID3D11Resource* m_texRes[kTexCount] = {};
-    ID3D11ShaderResourceView* m_texSrv[kTexCount] = {};
-    DXGI_FORMAT m_texFormat[kTexCount] = {};
-    bool m_texTried[kTexCount] = {};
+    // Views of the engine's textures, a few per kind: the engine alternates some of them between
+    // frames (the exposure ping-pongs), and making a view every frame would be wasted work. A view
+    // holds its texture, so a cached pointer can't be reused by another texture.
+    struct TexView {
+        ID3D11Resource* res = nullptr;
+        ID3D11ShaderResourceView* srv = nullptr; // null: not readable
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    };
+    static constexpr int kViewsPerTexture = 4;
+    TexView m_tex[kTexCount][kViewsPerTexture] = {};
+    int m_texCurrent[kTexCount] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    int m_texNext[kTexCount] = {};
+    int m_texLogged[kTexCount] = {};
 
     std::string m_lutName;
     std::string m_lutError;

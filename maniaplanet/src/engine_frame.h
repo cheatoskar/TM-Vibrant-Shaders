@@ -35,8 +35,8 @@ enum EngineTexture : int {
     kTexExposure,     // the tone map's 2x2 average luminance / key value
     kTexDepth,        // the scene's depth buffer
     kTexNormal,       // TMapDeferredPixelNormalInC
-    kTexDiffuse,      // TMapDeferredMDiffuse
-    kTexSpecular,     // TMapDeferredMSpecular
+    kTexDiffuse,      // TMapDeferredMDiffuse: material colour (albedo)
+    kTexSpecular,     // TMapDeferredMSpecular: material specular
     kTexLightMask,    // TMapDeferredLightMask
     kTexMotion,       // TMapMotion (or the lighting pass's second target)
     kTexCount

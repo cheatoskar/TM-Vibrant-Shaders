@@ -24,7 +24,7 @@ Texture2D<float> g_depth : register(t2);
 Texture3D g_lut : register(t3);
 Texture2D g_normal : register(t4); // TMapDeferredPixelNormalInC
 Texture2D g_motion : register(t5); // TMapMotion
-Texture2D g_light : register(t6);  // TMapDeferredMDiffuse (diffuse light)
+Texture2D g_light : register(t6);  // TMapDeferredMDiffuse (material colour, albedo)
 SamplerState g_linear : register(s0);
 SamplerState g_point : register(s1);
 
