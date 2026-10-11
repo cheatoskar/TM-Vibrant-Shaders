@@ -1183,7 +1183,7 @@ void Config::load() {
     lutAmount = 1.0f;
     if (GetPrivateProfileStringW(L"General", L"LutAmount", L"", text, 128, ini)) lutAmount = static_cast<float>(_wtof(text));
     lutAmount = lutAmount < 0.0f ? 0.0f : (lutAmount > 1.0f ? 1.0f : lutAmount);
-    rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 1, ini) != 0;
+    rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 0, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         if (GetPrivateProfileStringW(L"General", kMoodKeys[i], L"", text, 128, ini)) moodPreset[i] = presetFromText(text, moodPreset[i]);
@@ -1197,7 +1197,7 @@ void Config::load() {
     settings.readableGameDepth = GetPrivateProfileIntW(L"Settings", L"ReadableGameDepth", 1, ini) != 0;
     settings.disableGameFx = GetPrivateProfileIntW(L"Settings", L"DisableGameFX", 1, ini) != 0;
     settings.gameMaterials = GetPrivateProfileIntW(L"Settings", L"GameMaterials", 1, ini) != 0;
-    settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 0, ini) != 0;
+    settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 1, ini) != 0;
     settings.gameSkyClouds = GetPrivateProfileIntW(L"Settings", L"GameSkyClouds", 0, ini) != 0;
     settings.skipMapClips = GetPrivateProfileIntW(L"Settings", L"SkipMapClips", 0, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;

@@ -69,3 +69,17 @@ Most of these ideas are still right; they failed together and untested. Bring th
 4. **Material mask for emissive**, after the debug view shows which materials the neon borders and floodlights are (add them to the light class), and keep the guess for anything unknown.
 5. **Spill only from lights** (fixes the doubled START text) - once 4 works.
 6. Sun halo off under night skies (`LensFlareAdd` hook is in place, switched off).
+
+## Reverted 2026-10-11 (owner: "lamps not like before, rectangles around them")
+
+- The "added light" stencil bit (draws with one-one blending, no depth writes) marks the whole
+  quad of a glow sprite, not just its glowing part. Turning `emissive` off there and flooring the
+  colour at 80 % of the game's (Island headlight pools) changed lamps in rectangles around them.
+  Both are out again, as is "only lamp material is boosted in reflections" (lamps are rarely in
+  the light class). The bit is still built and shown in the debug view.
+- Needed before the bit can be used for light: tag only where the sprite adds something (alpha
+  test or a colour threshold while the stencil is written), checked in the debug view on the
+  start arch and a floodlight.
+- "Only small light sources keep the game's white" (a ring of 8 samples in PS_Final) made the
+  night lamps clearly dimmer for the owner: reverted. Floodlit stands stay burned out on
+  Stadium night maps (the game's own image is 25 % clipped there).

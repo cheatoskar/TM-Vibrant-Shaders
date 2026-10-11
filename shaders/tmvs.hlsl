@@ -1944,12 +1944,9 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
             float confidence = saturate(edge * 10.0) * saturate((1.0 - t / maxDist) * 3.0);
             float3 hit = toLinear(tex2Dlod(s0, float4(quv, 0, 0)).rgb);
-            // Light sources stay bright in the reflection. With the game's materials only
-            // lamps: every bright hit (white paint, a floodlit wall, sun glare) was boosted
-            // into white dots and an overexposed road.
+            // Light sources stay bright in the reflection.
             float peak = max(hit.r, max(hit.g, hit.b));
-            float lamp = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(quv, 0, 0)).r : 1.0;
-            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak) * lamp;
+            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak);
             return float4(hit, confidence);
         }
         tPrev = t;
@@ -2205,7 +2202,6 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // surface) keeps the game's brightness but is no light source of its own: it was boosted
     // to flat white. Lamps keep their guess.
     float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
-    emissive *= 1.0 - mat.a * (1.0 - mat.r);
     float3 glow = c * u_Rays.w * emissive;
     // White lights and screens glow less than coloured ones, or they bleach to flat white.
     float peakC = max(c.r, max(c.g, c.b));
@@ -2284,7 +2280,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Water fills the pores: wet asphalt and puddles are darker.
     c *= lerp(1.0, 0.62, wet * lerp(0.4, 1.0, flatness)) * lerp(1.0, 0.6, puddle) * lerp(1.0, 0.55, water);
     // A night sky replaces the game's: the sunset its sea mirrors goes with it (GameSkyClouds keeps it).
-    if (u_Mat.z > 0.5) c = lerp(c, luma(c) * float3(0.7, 0.85, 1.0), mat.b * 0.85);
+    if (u_Mat.z > 0.5) {
+        // Far out the sea is drawn by other materials: whatever lies at the sea level.
+        float sea = mat.b;
+        if (u_Water.z > 0.5) sea = max(sea, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * saturate(nd.w / 200.0 - 1.0));
+        c = lerp(c, luma(c) * float3(0.7, 0.85, 1.0), sea * 0.85);
+    }
 
     // --- Sun and sky light ---
     float ao = lerp(1.0, occ.r, u_Light.x);
@@ -2400,7 +2401,6 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Light the game added on top (headlight pools) is no darker than the game drew it: the
     // night darkening turned the pools grey and flat. Only the part the game added (above
     // the night-darkened surface), a little below its brightness so it keeps a falloff.
-    c = max(c, albedo * mat.a * (1.0 - mat.r) * 0.8 * (1.0 - 0.6 * saturate(fogAmount)));
     // Lightning: a cold flash over everything (surfaces facing up and the haze most).
     if (u_Light2.z > 0.0) c += (c * 2.5 + fogColor * 0.4 * fogAmount + 0.01) * float3(0.8, 0.85, 1.0) * u_Light2.z * (0.6 + 0.4 * saturate(nWorld.y));
 
@@ -3055,7 +3055,7 @@ float4 PS_WaterLevel(float2 uv : TEXCOORD0) : COLOR0 {
             float2 suv = (float2(i, j) + 0.5) / float2(24.0, 16.0);
             if (tex2Dlod(s1, float4(suv, 0, 0)).b < 0.5) continue;
             float4 nd = tex2Dlod(s0, float4(suv, 0, 0));
-            if (nd.w > 300.0 || viewToWorldDir(nd.xyz).y < 0.97) continue;
+            if (nd.w > 800.0 || viewToWorldDir(nd.xyz).y < 0.95) continue;
             float y = worldPosition(viewPosition(suv, nd.w)).y;
             sum += y;
             n += 1.0;
