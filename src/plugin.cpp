@@ -508,18 +508,21 @@ void processScene(IDirect3DDevice9* device) {
         LARGE_INTEGER renderStart, renderEnd;
         QueryPerformanceCounter(&renderStart);
         g_pipeline.render(device, inputs, effective, shaded);
+        // A preset was just saved: this frame (without HUD and menu) becomes its picture, never
+        // with the compare split.
+        std::string picture;
+        if (temporal && Config::get().takePictureRequest(picture)) {
+            thumbnails::savePicture(device, shaded, Config::get().presetPicture(picture));
+            Config::get().pictureTaken();
+        }
+        // Photo mode's compare split: the game's image (copied before the pipeline) on one side.
+        photo::applySplit(device, g_sceneCopy.surface, shaded);
         if (part) device->StretchRect(g_partOut.surface, nullptr, target, &area, D3DTEXF_NONE);
         QueryPerformanceCounter(&renderEnd);
         countPipelineCpu(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart));
         g_shadedThisFrame = true;
         // The shaded frame before the HUD: a photo or a hi-res tile.
         if (temporal) photo::afterRender(device, shaded);
-        // A preset was just saved: this frame (without HUD and menu) becomes its picture.
-        std::string picture;
-        if (temporal && Config::get().takePictureRequest(picture)) {
-            thumbnails::savePicture(device, shaded, Config::get().presetPicture(picture));
-            Config::get().pictureTaken();
-        }
         g_gameplayThisFrame = g_gameplayThisFrame || g_scene.projection[14] > -1.0f; // not a menu background
     }
 

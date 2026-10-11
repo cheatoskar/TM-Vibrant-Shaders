@@ -62,6 +62,10 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
             config.markDirty();
             return 0;
         }
+        if (wparam == VK_F6 && GetKeyState(VK_SHIFT) < 0) {
+            photo::toggleSplit();
+            return 0;
+        }
         if (wparam == VK_F6) {
             photo::toggle();
             return 0;
@@ -1439,7 +1443,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "GameSkyClouds", "Keep the game's sunset clouds (and the sea mirroring them) under night skies");
                           return l;
                       }});
-    panels.push_back({"Photo mode", 8.0f, [&config] {
+    panels.push_back({"Photo mode", 11.0f, [&config] {
                           switchRow("With the free camera (cam 7)", &config.photoAuto,
                                     "Photo mode comes on by itself with the free camera: no HUD, full quality, effects that reach far.\nF6 turns it on or off anywhere.");
                           switchRow("Hide the HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
@@ -1453,8 +1457,21 @@ bool drawSettings(Config& config, Settings& s) {
                           snprintf(aperture, sizeof(aperture), "f/%.1f", photo::fNumber(config.photoDof));
                           if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("Like a camera lens: wide open (f/1.4) blurs most around the clicked focus point, f/16 keeps all sharp (Ctrl+wheel in the game).");
+                          bool& split = photo::splitOn();
+                          if (switchRow("Compare split", &split,
+                                        "One side of a line shows the game's image without the mod's effects, the other the mod's (Shift+F6).\n"
+                                        "In photos too, not in hi-res ones. The game's own changes stay on both sides (its bloom off, real night).")) {
+                              if (split && !photo::active()) photo::toggle();
+                          }
+                          ImGui::BeginDisabled(!split);
+                          ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                          ImGui::SliderFloat("Line", &photo::splitPosition(), 0.0f, 1.0f, "%.2f");
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where the line sits, from the left (Ctrl+Shift+wheel in the game).");
+                          ImGui::Checkbox("Game's image on the right", &photo::splitSwapped());
+                          ImGui::EndDisabled();
                           ImGui::TextDisabled("F12 photo  |  Shift+F12 hi-res  |  middle click: focus");
                           ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  F6: on/off");
+                          ImGui::TextDisabled("Shift+F6: compare split  |  Ctrl+Shift+wheel: move its line");
                           return false;
                       }});
     panels.push_back({"Files", 3.0f, [&config] {
@@ -1809,6 +1826,23 @@ void draw(IDirect3DDevice9* device) {
                          ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
         ImGui::TextUnformatted(photoHint);
         ImGui::End();
+    }
+    if (photo::splitShown()) {
+        // Which side is which, next to the line near the bottom (drawn at Present: not in photos).
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        const ImVec2 size = ImGui::GetIO().DisplaySize;
+        const float x = photo::splitPosition() * size.x, y = size.y - 48.0f * g_scale, pad = 10.0f * g_scale;
+        const char* left = photo::splitSwapped() ? "TMVS" : "Game";
+        const char* right = photo::splitSwapped() ? "Game" : "TMVS";
+        const ImVec2 lw = ImGui::CalcTextSize(left);
+        const auto label = [&](float at, const char* text) {
+            const ImVec2 s = ImGui::CalcTextSize(text);
+            draw->AddRectFilled(ImVec2(at - 4.0f * g_scale, y - 2.0f * g_scale), ImVec2(at + s.x + 4.0f * g_scale, y + s.y + 2.0f * g_scale),
+                                IM_COL32(0, 0, 0, 140), 3.0f * g_scale);
+            draw->AddText(ImVec2(at, y), IM_COL32(235, 235, 235, 255), text);
+        };
+        label(x - pad - lw.x, left);
+        label(x + pad, right);
     }
     ImGui::EndFrame();
     if (SUCCEEDED(device->BeginScene())) {

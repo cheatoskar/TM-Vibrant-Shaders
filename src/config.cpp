@@ -1209,7 +1209,7 @@ void Config::load() {
     settings.readableGameDepth = GetPrivateProfileIntW(L"Settings", L"ReadableGameDepth", 1, ini) != 0;
     settings.disableGameFx = GetPrivateProfileIntW(L"Settings", L"DisableGameFX", 1, ini) != 0;
     settings.gameMaterials = GetPrivateProfileIntW(L"Settings", L"GameMaterials", 1, ini) != 0;
-    settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 0, ini) != 0;
+    settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 1, ini) != 0;
     settings.gameSkyClouds = GetPrivateProfileIntW(L"Settings", L"GameSkyClouds", 0, ini) != 0;
     settings.skipMapClips = GetPrivateProfileIntW(L"Settings", L"SkipMapClips", 0, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;

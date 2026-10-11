@@ -40,6 +40,18 @@ void focusPoint(float out[2]);
 // After the pipeline shaded the main camera (before the HUD): takes the photo or the tile.
 void afterRender(IDirect3DDevice9* device, IDirect3DSurface9* frame);
 
+// Compare split (Shift+F6, also turns photo mode on): one side of the line shows the game's
+// image as it came in, without the mod's effects; in photos too, not in hi-res ones (the line
+// would sit in every tile). Ctrl+Shift+wheel moves the line.
+void toggleSplit();
+bool splitShown();      // switched on, photo mode on, no hi-res photo being taken
+bool& splitOn();        // the switch (for the menu)
+float& splitPosition(); // 0..1 from the left
+bool& splitSwapped();   // the game's image on the right instead of the left
+// Copies the unshaded image (`original`, same size) onto its side of `shaded` and draws the
+// line. Call it before afterRender, so the photo has it.
+void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3DSurface9* shaded);
+
 // A line for the screen (photo mode on, progress, saved as ...), "" = nothing to show.
 const char* status();
 // Shows a line there for a few seconds (also outside photo mode).
