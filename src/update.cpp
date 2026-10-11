@@ -147,7 +147,9 @@ bool newer(const std::string& version, const std::string& than) {
         if (*a < '0' || *a > '9') a = "0";
         if (*b < '0' || *b > '9') b = "0";
     }
-    return false;
+    // Same numbers: a pre-release (1.4.0-preview) is older than the release (1.4.0).
+    const bool preA = strchr(version.c_str(), '-') != nullptr, preB = strchr(than.c_str(), '-') != nullptr;
+    return !preA && preB;
 }
 
 } // namespace update

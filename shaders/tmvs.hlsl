@@ -71,7 +71,7 @@ sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
 sampler3D s12 : register(s12); // colour look-up table (final pass)
-sampler2D s13 : register(s13); // the game's materials: r light, g car, b glass, a grass (debug view "Materials")
+sampler2D s13 : register(s13); // the game's materials: r lamp, g car 1 / glass .5 / grass .25, b water, a light added on top
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -2688,7 +2688,7 @@ float4 PS_Adapt(float2 uv : TEXCOORD0) : COLOR0 {
 float3 shoulderCurve(float3 x) {
     // Linear below the knee (the game's mid-tones stay as they were), then a long
     // exponential shoulder that only reaches white for real light sources.
-    const float knee = u_Mat.w > 0.0 ? u_Mat.w : 0.5;
+    const float knee = u_Mat.w > 0.0 ? clamp(u_Mat.w, 0.2, 0.95) : 0.5;
     float3 over = max(x - knee, 0.0);
     float3 shoulder = knee + (1.0 - knee) * (1.0 - exp(-over / ((1.0 - knee) * 1.7)));
     return x < knee ? x : shoulder;

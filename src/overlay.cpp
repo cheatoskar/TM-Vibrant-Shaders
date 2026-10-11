@@ -1432,7 +1432,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "TAAJitter", "TAA sub-pixel jitter");
                           l |= drawKey(s, "DisableGameMSAA", "Turn off the game's MSAA (restart)");
                           l |= drawKey(s, "ReadableGameDepth", "Effects in replays and video export (restart)");
-                          l |= drawKey(s, "GameMaterials", "Use the game's materials (lamps, cars, glass)");
+                          l |= drawKey(s, "GameMaterials", "Read the game's materials (TMUF sea, debug view)");
                           l |= drawKey(s, "DisableGameFX", "Turn off the game's FX: bloom, colour filter (next map)");
                           l |= drawKey(s, "SkipMapClips", "No MediaTracker clips of the map while driving (Shift+F7)");
                           l |= drawKey(s, "GameNight", "Real night under night skies: the game lights day maps at midnight");
