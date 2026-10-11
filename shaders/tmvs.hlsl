@@ -54,7 +54,7 @@ float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
 float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
-float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass)
+float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go)
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
@@ -2283,6 +2283,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     }
     // Water fills the pores: wet asphalt and puddles are darker.
     c *= lerp(1.0, 0.62, wet * lerp(0.4, 1.0, flatness)) * lerp(1.0, 0.6, puddle) * lerp(1.0, 0.55, water);
+    // A night sky replaces the game's: the sunset its sea mirrors goes with it (GameSkyClouds keeps it).
+    if (u_Mat.z > 0.5) c = lerp(c, luma(c) * float3(0.7, 0.85, 1.0), mat.b * 0.85);
 
     // --- Sun and sky light ---
     float ao = lerp(1.0, occ.r, u_Light.x);
@@ -2792,31 +2794,20 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 srgb = toSRGB(c);
     // A .cube look works on display (sRGB) values, red = x, green = y, blue = z.
     if (u_Lut.x > 0.0) srgb = lerp(srgb, tex3D(s12, saturate(srgb) * u_Lut.y + u_Lut.z).rgb, u_Lut.x);
-    // Night maps: lamps the game drew (nearly) white stay at least that bright. Only small
-    // light sources: a floodlit stand, a lit road or a white wall around this pixel is no lamp
-    // (kept white, they burned out whole stands and dotted the road where it was just over the
-    // threshold). Light the game added on top (headlight pools) keeps it: without it the burned
-    // out pool turns flat grey. Not the sky (the sunset clouds of the game's sky came back
-    // over a night sky) and not where the depth of field blurs (sharp copies over the bokeh).
-    // u_Mat.y = s9 holds the focus distance.
+    // Night maps: what the game drew (nearly) white - lamps and what they light up close by -
+    // stays at least that bright. Under a night sky (u_Mat.z) not the game's sky and its water:
+    // the sunset clouds and their mirror image came back over the stars (GameSkyClouds keeps
+    // them). Not where the depth of field blurs (sharp copies over the bokeh; s9 = focus).
     if (u_Lut.w > 0.0) {
         float z = tex2D(s4, uv).w;
         float3 game = tex2D(s8, uv).rgb;
         float bright = smoothstep(0.78, 0.95, max(game.r, max(game.g, game.b)));
-        if (z < SKY_Z && bright > 0.0) {
-            float2 r = 20.0 * u_Screen.y / 1440.0 * u_Screen.zw;
-            const float2 ring[8] = {float2(1, 0), float2(0.7071, 0.7071), float2(0, 1), float2(-0.7071, 0.7071),
-                                    float2(-1, 0), float2(-0.7071, -0.7071), float2(0, -1), float2(0.7071, -0.7071)};
-            float around = 0.0;
-            [unroll] for (int k = 0; k < 8; k++) {
-                float3 g = tex2D(s8, uv + ring[k] * r).rgb;
-                around += smoothstep(0.78, 0.95, max(g.r, max(g.g, g.b)));
-            }
-            float keep = 1.0 - smoothstep(2.0, 4.5, around);
-            if (u_Mat.x > 0.5) keep = max(keep, tex2D(s13, uv).a);
-            if (u_Mat.y > 0.5) keep *= 1.0 - saturate(abs(circleOfConfusion(z, tex2D(s9, float2(0.5, 0.5)).r)) / (u_Cine.w * u_Screen.y / 1080.0) * 4.0);
-            srgb = max(srgb, game * bright * keep * u_Lut.w);
+        if (u_Mat.z > 0.5) {
+            if (z >= SKY_Z) bright = 0.0;
+            if (u_Mat.x > 0.5) bright *= 1.0 - tex2D(s13, uv).b;
         }
+        if (u_Mat.y > 0.5) bright *= 1.0 - saturate(abs(circleOfConfusion(z, tex2D(s9, float2(0.5, 0.5)).r)) / (u_Cine.w * u_Screen.y / 1080.0) * 4.0);
+        srgb = max(srgb, game * bright * u_Lut.w);
     }
     // Film grain + dithering (also hides banding of the 8-bit output).
     float grain = hash12(vpos + frac(u_Proj2.z) * 1000.0) - 0.5;
@@ -3053,6 +3044,28 @@ float4 PS_Sharpen(float2 uv : TEXCOORD0) : COLOR0 {
 
 // Utility: raw depth (INTZ) -> R32F, used for frame captures.
 // u_Pass0.xy = where the copied area starts, u_Pass0.zw = its size (uv of the source)
+// Pass: where the game's water material lies (1x1, read back by the CPU). TMUF Island reports no
+// sea level: measured here, the sea gets the exact water plane (waves, reflections) like a
+// reported one. s0 = full normal/depth, s1 = materials (b water).
+// out = sum of the heights, count, lowest, highest
+float4 PS_WaterLevel(float2 uv : TEXCOORD0) : COLOR0 {
+    float sum = 0.0, n = 0.0, lo = 1e6, hi = -1e6;
+    [loop] for (int j = 0; j < 16; j++) {
+        [loop] for (int i = 0; i < 24; i++) {
+            float2 suv = (float2(i, j) + 0.5) / float2(24.0, 16.0);
+            if (tex2Dlod(s1, float4(suv, 0, 0)).b < 0.5) continue;
+            float4 nd = tex2Dlod(s0, float4(suv, 0, 0));
+            if (nd.w > 300.0 || viewToWorldDir(nd.xyz).y < 0.97) continue;
+            float y = worldPosition(viewPosition(suv, nd.w)).y;
+            sum += y;
+            n += 1.0;
+            lo = min(lo, y);
+            hi = max(hi, y);
+        }
+    }
+    return float4(sum, n, lo, hi);
+}
+
 float4 PS_CopyDepth(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0)).r, 0, 0, 1);
 }

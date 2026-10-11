@@ -700,6 +700,7 @@ void __fastcall loadSceneDetour(void* self, void* edx) {
     if (g_nightForced) *time = 0.0f;
     g_loadScene(self, edx);
     *time = original;
+    g_weatherTime = original; // the load's jumps asked for the midnight forced above
 }
 
 void __fastcall tileHeightDetour(void* self, void* edx, float height) {
