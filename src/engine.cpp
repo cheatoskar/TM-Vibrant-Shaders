@@ -20,7 +20,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -38,6 +38,7 @@ struct GameBuild {
     uintptr_t fxCanActive[2];      // their CanActive(CHmsCamera*) (vtable slot 32)
     uintptr_t systemConfig;        // CSystemConfig* CSystemConfig::s_SystemConfig
     uintptr_t clipGroupStop;       // void CGameCtnMediaClipViewer::ClipGroupStop()
+    uintptr_t raceClipStop;        // void CGameRace::MediaClipStop()
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -47,14 +48,14 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
-     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0},
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
-     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0},
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340},
 };
 const GameBuild* g_build = nullptr;
 
@@ -142,6 +143,15 @@ constexpr InlineSite kLoadSceneSite = {kLoadScene, {0x83, 0xec, 0x18, 0x53, 0x56
 // The index of the running trigger clip is at +0x50 (-1 none).
 constexpr InlineSite kClipTriggersSite = {kClipTriggers, {0x83, 0xec, 0x1c, 0x56, 0x8b, 0xf1, 0x83, 0x7e, 0x44, 0x00}, 10, -1, "CGameCtnMediaClipViewer::ClipGroupCheckTriggers"};
 constexpr size_t kClipViewerTriggered = 0x50;
+// The same while driving (the viewer above plays them in replays): CGameRace checks the
+// player's position against the triggers every frame and starts the clip. The player keeps
+// the index of the last triggered clip at +0x48 (-1 none).
+constexpr InlineSite kRaceTriggersSite = {kRaceTriggers, {0x83, 0xec, 0x18, 0x53, 0x55, 0x8b, 0x6c, 0x24, 0x28}, 9, -1, "CGameRace::MediaClipCheckInGameTriggers"};
+constexpr size_t kPlayerTriggered = 0x48;
+// Every jump of a weather animation to a time of day (LoadScene3d at map load, and a time
+// set as a parameter later, e.g. when the race starts): 0 = midnight. Real night forces 0
+// here too, or the later jump puts the map's own time back.
+constexpr InlineSite kJumpTimeSite = {kJumpTime, {0x51, 0x56, 0x8b, 0xf1, 0xd9, 0x46, 0x28}, 7, -1, "CMotionManagerWeathers::JumpToTimeRemapped"};
 constexpr size_t kDecorationMood = 0x60; // CGameCtnDecorationMood*
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
@@ -223,9 +233,15 @@ bool g_hideSunFlare = false;           // a night sky replaces the sun: its halo
 using LoadSceneFn = void(__fastcall*)(void*, void*);
 LoadSceneFn g_loadScene = nullptr;
 bool (*g_wantNight)(float dayTime) = nullptr; // the plugin: light this map at midnight?
+using JumpTimeFn = void(__fastcall*)(void*, void*, float);
+JumpTimeFn g_jumpTime = nullptr;
+int g_jumpsLogged = 0;
 using ClipTriggersFn = void(__fastcall*)(void*, void*);
 ClipTriggersFn g_clipTriggers = nullptr;
+using RaceTriggersFn = void(__fastcall*)(void*, void*, void*, void*);
+RaceTriggersFn g_raceTriggers = nullptr;
 volatile bool g_skipMapClips = false;          // no in-game trigger clips of the map
+volatile bool g_stopRaceClip = false;          // just switched on: end the trigger clip that runs
 float g_mapDayTime = -1.0f;                   // the loaded map's own time of day (-1 unknown)
 bool g_nightForced = false;                   // the game lights it at midnight instead
 using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
@@ -625,6 +641,32 @@ void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMo
     strncpy_s(g_environment, name, _TRUNCATE);
 }
 
+void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
+    const float wanted = g_nightForced ? 0.0f : time;
+    if (g_jumpsLogged < 40) {
+        g_jumpsLogged++;
+        TMVS_LOG("engine: weather %p jumps to time of day %.3f%s", self, time, g_nightForced ? " -> 0 (real night)" : "");
+    }
+    g_jumpTime(self, edx, wanted);
+}
+
+void __fastcall raceTriggersDetour(void* self, void* edx, void* player, void* group) {
+    if (!g_skipMapClips) {
+        g_raceTriggers(self, edx, player, group);
+        return;
+    }
+    // Switched on while a trigger clip runs: it ends now, the race camera is back.
+    int* triggered = player ? reinterpret_cast<int*>(static_cast<BYTE*>(player) + kPlayerTriggered) : nullptr;
+    if (g_stopRaceClip) {
+        g_stopRaceClip = false;
+        if (triggered && readable(triggered, sizeof(int)) && *triggered != -1) {
+            reinterpret_cast<void(__fastcall*)(void*, void*)>(rebase(g_build->raceClipStop))(self, nullptr);
+            *triggered = -1;
+            TMVS_LOG("engine: map clip stopped (map clips off)");
+        }
+    }
+}
+
 void __fastcall clipTriggersDetour(void* self, void* edx) {
     if (!g_skipMapClips) {
         g_clipTriggers(self, edx);
@@ -840,6 +882,8 @@ bool install(const Callbacks& callbacks) {
     g_interfaceSet = reinterpret_cast<InterfaceSetFn>(inlineHook(kInterfaceSetSite, reinterpret_cast<void*>(&interfaceSetDetour)));
     g_loadScene = reinterpret_cast<LoadSceneFn>(inlineHook(kLoadSceneSite, reinterpret_cast<void*>(&loadSceneDetour)));
     g_clipTriggers = reinterpret_cast<ClipTriggersFn>(inlineHook(kClipTriggersSite, reinterpret_cast<void*>(&clipTriggersDetour)));
+    g_jumpTime = reinterpret_cast<JumpTimeFn>(inlineHook(kJumpTimeSite, reinterpret_cast<void*>(&jumpTimeDetour)));
+    g_raceTriggers = reinterpret_cast<RaceTriggersFn>(inlineHook(kRaceTriggersSite, reinterpret_cast<void*>(&raceTriggersDetour)));
     patchFx(0, reinterpret_cast<void*>(&bloomCanActiveDetour));
     patchFx(1, reinterpret_cast<void*>(&colorsCanActiveDetour));
     g_active = true;
@@ -860,11 +904,13 @@ float mapDayTime() {
 }
 
 void skipMapClips(bool skip) {
-    g_skipMapClips = skip && g_clipTriggers;
+    skip = skip && (g_clipTriggers || g_raceTriggers);
+    if (skip && !g_skipMapClips) g_stopRaceClip = true;
+    g_skipMapClips = skip;
 }
 
 bool mapClipsSkippable() {
-    return g_clipTriggers != nullptr;
+    return g_clipTriggers || g_raceTriggers;
 }
 
 bool mapLitAtNight() {

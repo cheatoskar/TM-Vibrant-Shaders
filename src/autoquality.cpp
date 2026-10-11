@@ -182,6 +182,22 @@ void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, c
         // Turn off just enough (by the measured cost) to win back the missing time, with a
         // little margin, in one step.
         const float need = frameMs - targetMs * 0.97f;
+        // More missing than all the effects cost together, and the effects a small part of
+        // the frame: the game or the CPU holds the frame rate (TMUF Island: 40 FPS, effects
+        // 4.6 of 25 ms, 8.2 ms missing). Cutting would turn everything down to the fewest
+        // samples (striped, grainy shadows and reflections) and still not reach the target.
+        // (A weak GPU, where the effects are a large part, still gets its cuts.)
+        if (timed && need > m_pipelineMs * 0.8f && m_pipelineMs < frameMs * 0.3f) {
+            m_noCutUntil = now + 30.0;
+            // What an earlier cut turned off comes back: it didn't help either.
+            for (int k = 0; k < kKnobs; k++) {
+                if (m_reduced[k]) restore(k, now);
+            }
+            m_lastChange = now;
+            TMVS_LOG("auto quality: %.0f FPS (target %.0f), %.1f ms missing but the effects take %.1f ms: the game limits the frame rate, nothing turned off",
+                     m_fps, target, need, m_pipelineMs);
+            return;
+        }
         float expected = 0.0f;
         m_lastCutCount = 0;
         for (int k = 0; k < kKnobs; k++) {

@@ -167,10 +167,12 @@ Mood classifyMood(const float c[3]) {
 }
 
 Mood moodOfDayTime(float t) {
-    // The engine calls it night outside (0.25, 0.75] (6:00 - 18:00). Sunrise and sunset: the
-    // first and last two hours of the day (a guess; the log has each map's time).
-    if (t <= 0.25f || t > 0.75f) return Mood::Night;
-    if (t < 0.34f || t > 0.66f) return Mood::Dusk;
+    // CMotionManagerWeathers::JumpToTimeRemapped maps the four quarters onto its day
+    // animation: up to 0.25 the night, then sunrise, 0.5 - 0.75 the day, then sunset. The
+    // first part of the day still has a low, warm sun (Rally at 0.515), and 0.75 itself is
+    // where the sunset starts (Stadium's sunset maps).
+    if (t <= 0.25f) return Mood::Night;
+    if (t < 0.55f || t >= 0.72f) return Mood::Dusk;
     return Mood::Day;
 }
 

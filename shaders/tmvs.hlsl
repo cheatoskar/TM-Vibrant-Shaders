@@ -1910,11 +1910,13 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Photo mode (u_Water.w 3): three times the steps and little noise; a still image shows
     // the gaps between coarse steps as dashed lines, and the noise as grain (no TAA to
     // average it).
+    // While driving too: without TAA the noise stands still, and 16 coarse steps showed as
+    // dashed, grainy reflections that only the photo mode didn't have.
     bool photo = u_Water.w > 1.5;
-    float noise = ign(vpos) * (photo ? 0.25 : 1.0);
+    float noise = ign(vpos) * (photo ? 0.25 : 0.5);
     float tPrev = 0.05;
     // A polished dry track is a mirror: finer steps so the reflection holds together.
-    float steps = (u_Nature.w > 1.0 ? 32.0 : 16.0) * (photo ? 3.0 : 1.0);
+    float steps = (u_Nature.w > 1.0 ? 48.0 : 32.0) * (photo ? 2.0 : 1.0);
     [loop] for (int i = 1; i <= (int)steps; i++) {
         float t = (i - 1 + noise) / steps;
         t = t * t * maxDist + 0.1;
@@ -1942,9 +1944,12 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
             float confidence = saturate(edge * 10.0) * saturate((1.0 - t / maxDist) * 3.0);
             float3 hit = toLinear(tex2Dlod(s0, float4(quv, 0, 0)).rgb);
-            // Light sources stay bright in the reflection.
+            // Light sources stay bright in the reflection. With the game's materials only
+            // lamps: every bright hit (white paint, a floodlit wall, sun glare) was boosted
+            // into white dots and an overexposed road.
             float peak = max(hit.r, max(hit.g, hit.b));
-            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak);
+            float lamp = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(quv, 0, 0)).r : 1.0;
+            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak) * lamp;
             return float4(hit, confidence);
         }
         tPrev = t;
@@ -2390,6 +2395,10 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         c += bhColor * pow(saturate(dot(rd, bh.xyz)), 6.0) * saturate(fogAmount * 2.0 + 0.05) * 0.4;
     }
     c += glow * (1.0 - 0.6 * saturate(fogAmount)); // lights shine through the haze
+    // Light the game added on top (headlight pools) is no darker than the game drew it: the
+    // night darkening turned the pools grey and flat. Only the part the game added (above
+    // the night-darkened surface), a little below its brightness so it keeps a falloff.
+    c = max(c, albedo * mat.a * (1.0 - mat.r) * 0.8 * (1.0 - 0.6 * saturate(fogAmount)));
     // Lightning: a cold flash over everything (surfaces facing up and the haze most).
     if (u_Light2.z > 0.0) c += (c * 2.5 + fogColor * 0.4 * fogAmount + 0.01) * float3(0.8, 0.85, 1.0) * u_Light2.z * (0.6 + 0.4 * saturate(nWorld.y));
 
