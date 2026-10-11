@@ -3266,10 +3266,12 @@ float4 PS_Spray(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     return float4(rainLight(uv) * a, 0);
 }
 
-// Neon trail, one point: where the car is (found in the depth buffer below the screen
-// centre, like the spray), lowered to the middle of the tyres.
+// Neon trail, one point: where the car is. From the engine when it knows (u_Pass0.y = 1,
+// u_Pass1.xyz: where the car is drawn, about the height of the wheel centres), else found in
+// the depth buffer below the screen centre (like the spray), lowered to the middle of the tyres.
 //   s0 = full normal/depth, u_Pass0.x = time stamp (< 0: a new line starts here)
 float4 PS_TrailPoint(float2 uv : TEXCOORD0) : COLOR0 {
+    if (u_Pass0.y > 0.5) return float4(u_Pass1.xyz, u_Pass0.x);
     float z0 = tex2Dlod(s0, float4(0.5, 0.6, 0, 0)).w;
     float z1 = tex2Dlod(s0, float4(0.5, 0.65, 0, 0)).w;
     float z2 = tex2Dlod(s0, float4(0.5, 0.7, 0, 0)).w;

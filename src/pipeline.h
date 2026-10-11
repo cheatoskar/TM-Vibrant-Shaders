@@ -33,6 +33,14 @@ public:
         float water[3] = {0.0f, 0.0f, -1.0f}; // lowest, highest, kind: 1 sea, 2 Stadium water blocks, 0 none reported (measured), -1 no engine (colour guess)
         // The player drives (not a replay / intro): the neon trail records the car.
         bool driving = true;
+        // Where the engine draws the player's car (world space, about the height of the wheel
+        // centres): the neon trail follows it, also off screen. Unknown (no engine): found in
+        // the depth buffer below the screen centre.
+        bool carKnown = false;
+        float carPosition[3] = {};
+        // The engine gave the car's position a moment ago: a frame without it records nothing
+        // (no fall back to the depth search, a new line starts after the gap).
+        bool carFromEngine = false;
         // Photo mode: effects reach 3x farther, a larger height map, no car assumed in the
         // middle of the screen.
         bool photo = false;

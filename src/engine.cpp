@@ -39,6 +39,7 @@ struct GameBuild {
     uintptr_t systemConfig;        // CSystemConfig* CSystemConfig::s_SystemConfig
     uintptr_t clipGroupStop;       // void CGameCtnMediaClipViewer::ClipGroupStop()
     uintptr_t raceClipStop;        // void CGameRace::MediaClipStop()
+    uintptr_t interpolatedLocation; // const GmIso4* CSceneMobil::GetInterpolatedLocation(CSceneSector*) const (vtable slot 32)
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -50,12 +51,12 @@ constexpr GameBuild kBuilds[] = {
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
      {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70},
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
-     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270},
+     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0},
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
-     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340},
+     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500},
 };
 const GameBuild* g_build = nullptr;
 
@@ -148,6 +149,14 @@ constexpr size_t kClipViewerTriggered = 0x50;
 // the index of the last triggered clip at +0x48 (-1 none).
 constexpr InlineSite kRaceTriggersSite = {kRaceTriggers, {0x83, 0xec, 0x18, 0x53, 0x55, 0x8b, 0x6c, 0x24, 0x28}, 9, -1, "CGameRace::MediaClipCheckInGameTriggers"};
 constexpr size_t kPlayerTriggered = 0x48;
+// The player's car (the same function reads it there): CGamePlayer +0x28 is its CGameMobil
+// (CGamePlayer::SetMobil), that one's +0x14 the CSceneMobil (the vehicle), +0x1c -1 while it
+// is not in the scene. The vehicle's vtable slot 32 is GetInterpolatedLocation(sector): with
+// no sector, the location of its first corpus, the one it is drawn with (between physics steps).
+constexpr size_t kPlayerMobil = 0x28;
+constexpr size_t kGameMobilScene = 0x14;
+constexpr size_t kGameMobilSceneId = 0x1c;
+constexpr int kInterpolatedLocationSlot = 32;
 // Every jump of a weather animation to a time of day (LoadScene3d at map load, and a time
 // set as a parameter later, e.g. when the race starts): 0 = midnight. Real night forces 0
 // here too, or the later jump puts the map's own time back.
@@ -243,6 +252,8 @@ ClipTriggersFn g_clipTriggers = nullptr;
 using RaceTriggersFn = void(__fastcall*)(void*, void*, void*, void*);
 RaceTriggersFn g_raceTriggers = nullptr;
 volatile bool g_skipMapClips = false;          // no in-game trigger clips of the map
+void* g_racePlayer = nullptr;                  // the player the race checked last (its car)
+DWORD g_racePlayerTick = 0;                    // when (a player of a race that ended is gone)
 volatile bool g_stopRaceClip = false;          // just switched on: end the trigger clip that runs
 float g_mapDayTime = -1.0f;                   // the loaded map's own time of day (-1 unknown)
 bool g_nightForced = false;                   // the game lights it at midnight instead
@@ -636,6 +647,7 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     // Another map (or none: back to the menu): the objects of the last one go with it.
     g_freeCam = nullptr;
     g_weather = nullptr;
+    g_racePlayer = nullptr;
     g_nightForced = false;
     g_mapDayTime = -1.0f;
     g_setChallenge(self, edx, challenge);
@@ -689,6 +701,9 @@ void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
 }
 
 void __fastcall raceTriggersDetour(void* self, void* edx, void* player, void* group) {
+    // Called every frame of a race with the local (or watched) player: the neon trail's car.
+    g_racePlayer = player;
+    g_racePlayerTick = GetTickCount();
     if (!g_skipMapClips) {
         g_raceTriggers(self, edx, player, group);
         return;
@@ -1010,6 +1025,32 @@ int mapLoads() {
 
 std::string mapComments() {
     return g_mapComments;
+}
+
+bool carLocation(float position[3]) {
+    // Only the player of a race that runs now (the hook calls come every frame); the build's
+    // own GetInterpolatedLocation in the slot, or nothing is called.
+    if (!g_build || !g_build->interpolatedLocation || !g_racePlayer || GetTickCount() - g_racePlayerTick > 300) return false;
+    __try {
+        const BYTE* gameMobil = *reinterpret_cast<BYTE* const*>(static_cast<const BYTE*>(g_racePlayer) + kPlayerMobil);
+        if (!gameMobil || *reinterpret_cast<const int*>(gameMobil + kGameMobilSceneId) == -1) return false;
+        void* mobil = *reinterpret_cast<void* const*>(gameMobil + kGameMobilScene);
+        if (!mobil) return false;
+        void* const* table = *reinterpret_cast<void* const* const*>(mobil);
+        if (reinterpret_cast<uintptr_t>(table[kInterpolatedLocationSlot]) != rebase(g_build->interpolatedLocation)) return false;
+        using LocationFn = const float*(__fastcall*)(void*, void*, void*);
+        const float* iso = reinterpret_cast<LocationFn>(table[kInterpolatedLocationSlot])(mobil, nullptr, nullptr);
+        if (!iso) return false;
+        // GmIso4: a row-major 3x3 (p' = M p + t: its columns are the car's axes), then t.
+        for (int i = 0; i < 3; i++) {
+            position[i] = iso[9 + i];
+            if (!(fabsf(position[i]) < 1e5f)) return false;
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_racePlayer = nullptr;
+        return false;
+    }
 }
 
 int mapCloses() {

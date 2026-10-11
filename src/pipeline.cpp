@@ -1303,7 +1303,7 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float4 a = trailPoint(first + k), b = trailPoint(first + k + 1.0);
     // No car found at one end, or b starts a new line (respawn).
     if (a.w == 0.0 || b.w <= 0.0) return o;
-    if (distance(a.xyz, b.xyz) > 40.0) return o; // teleported
+    if (distance(a.xyz, b.xyz) > 25.0) return o; // teleported (or a wrong find: 25 m in 1/30 s is 2700 km/h)
     a.xyz = smoothPoint(first + k, a);
     b.xyz = smoothPoint(first + k + 1.0, b);
     float3 d = b.xyz - a.xyz;
@@ -1429,11 +1429,16 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     // Record the car while you drive (not in replays and intros): every frame into the next
     // slot (the live end of the trail, so it stays on the car), kept 30 times a second.
     bool live = false;
-    if (in.driving && dt > 0.0f && m_temporalValid) {
+    if (in.carFromEngine && !in.carKnown) m_trailBreak = true; // a gap: the next point starts a new line
+    if (in.driving && dt > 0.0f && m_temporalValid && (in.carKnown || !in.carFromEngine)) {
         live = true;
         bind(device, 0, m_nd.texture, false);
         const float stamp = m_trailTime + 1.0f; // never 0 (= no car)
-        passConstants(device, m_trailBreak ? -stamp : stamp, 0.0f);
+        // The engine's car position when known (exact, also off screen), else the shader
+        // finds the car in the depth buffer.
+        passConstants(device, m_trailBreak ? -stamp : stamp, in.carKnown ? 1.0f : 0.0f);
+        const float car[4] = {in.carPosition[0], in.carPosition[1], in.carPosition[2], 0.0f};
+        device->SetPixelShaderConstantF(33, car, 1);
         // One pixel of the ring buffer. (SetRenderTarget resets the scissor rect: set it after.)
         device->SetRenderTarget(0, m_trailPoints.surface);
         const RECT pixel = {static_cast<LONG>(m_trailHead % kTrailWidth), static_cast<LONG>(m_trailHead / kTrailWidth),
