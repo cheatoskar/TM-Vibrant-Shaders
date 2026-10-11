@@ -93,6 +93,9 @@ void setNightAtLoad(bool (*decide)(float dayTime));
 // The loaded map's own time of day (-1 unknown) and whether it is lit at midnight instead.
 float mapDayTime();
 bool mapLitAtNight();
+// Real night switched on or off while a map runs: the weather jumps to midnight or back to the
+// map's time (only call it in gameplay: the weather of a map that was left may be gone).
+bool relightNight(bool night);
 // The map's in-game MediaTracker clips (triggered while driving: forced cameras, black
 // screens, texts) don't start while true; one that runs ends. Intro, end-race clips and
 // replays are not affected, the map stays as it is. False without the hook.

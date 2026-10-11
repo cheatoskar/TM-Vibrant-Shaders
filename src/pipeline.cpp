@@ -2029,6 +2029,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 
     // 5. Depth of field and motion blur (cinematic, HDR).
     gfx::Target* hdr = &m_hdr;
+    IDirect3DTexture9* dofFocus = nullptr; // the focus distance the blur used (final pass)
     const bool motionBlur = s.motionBlur > 0.0f && m_temporalValid;
     const bool dof = s.depthOfField > 0.0f;
     if ((motionBlur || dof) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
@@ -2049,6 +2050,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             bind(device, 0, m_hdr.texture, true);
             bind(device, 1, dofTarget == &m_dofFull ? m_nd.texture : m_ndHalf.texture, false);
             bind(device, 2, m_focus[focus].texture, false);
+            dofFocus = m_focus[focus].texture;
             // Photo mode: four times the samples and no per-pixel noise (nothing averages it
             // out over frames: TAA is off by default, tiles freeze it).
             passConstants(device, in.photo ? 64.0f : 16.0f, in.photo ? 0.0f : 1.0f, 1.0f);
@@ -2174,6 +2176,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night && s.debugView == 0;
     if (mapNight) bind(device, 8, in.color, false);
     bind(device, 13, materials ? m_materials.texture : nullptr, false);
+    // Where the depth of field blurs, the lamps aren't put back sharp: s9 = its focus distance.
+    if (dofFocus) bind(device, 9, dofFocus, false);
+    const float finalMaterials[4] = {materials ? 1.0f : 0.0f, dofFocus ? 1.0f : 0.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(44, finalMaterials, 1);
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
     passConstants(device, 1.0f / norm, 0.0f);

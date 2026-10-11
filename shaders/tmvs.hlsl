@@ -54,7 +54,7 @@ float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
 float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
-float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials")
+float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass)
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
@@ -2792,12 +2792,31 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 srgb = toSRGB(c);
     // A .cube look works on display (sRGB) values, red = x, green = y, blue = z.
     if (u_Lut.x > 0.0) srgb = lerp(srgb, tex3D(s12, saturate(srgb) * u_Lut.y + u_Lut.z).rgb, u_Lut.x);
-    // Night maps: what the game drew (nearly) white - lamps and what they light up close by -
-    // stays at least that bright.
+    // Night maps: lamps the game drew (nearly) white stay at least that bright. Only small
+    // light sources: a floodlit stand, a lit road or a white wall around this pixel is no lamp
+    // (kept white, they burned out whole stands and dotted the road where it was just over the
+    // threshold). Light the game added on top (headlight pools) keeps it: without it the burned
+    // out pool turns flat grey. Not the sky (the sunset clouds of the game's sky came back
+    // over a night sky) and not where the depth of field blurs (sharp copies over the bokeh).
+    // u_Mat.y = s9 holds the focus distance.
     if (u_Lut.w > 0.0) {
+        float z = tex2D(s4, uv).w;
         float3 game = tex2D(s8, uv).rgb;
         float bright = smoothstep(0.78, 0.95, max(game.r, max(game.g, game.b)));
-        srgb = max(srgb, game * bright * u_Lut.w);
+        if (z < SKY_Z && bright > 0.0) {
+            float2 r = 20.0 * u_Screen.y / 1440.0 * u_Screen.zw;
+            const float2 ring[8] = {float2(1, 0), float2(0.7071, 0.7071), float2(0, 1), float2(-0.7071, 0.7071),
+                                    float2(-1, 0), float2(-0.7071, -0.7071), float2(0, -1), float2(0.7071, -0.7071)};
+            float around = 0.0;
+            [unroll] for (int k = 0; k < 8; k++) {
+                float3 g = tex2D(s8, uv + ring[k] * r).rgb;
+                around += smoothstep(0.78, 0.95, max(g.r, max(g.g, g.b)));
+            }
+            float keep = 1.0 - smoothstep(2.0, 4.5, around);
+            if (u_Mat.x > 0.5) keep = max(keep, tex2D(s13, uv).a);
+            if (u_Mat.y > 0.5) keep *= 1.0 - saturate(abs(circleOfConfusion(z, tex2D(s9, float2(0.5, 0.5)).r)) / (u_Cine.w * u_Screen.y / 1080.0) * 4.0);
+            srgb = max(srgb, game * bright * keep * u_Lut.w);
+        }
     }
     // Film grain + dithering (also hides banding of the 8-bit output).
     float grain = hash12(vpos + frac(u_Proj2.z) * 1000.0) - 0.5;

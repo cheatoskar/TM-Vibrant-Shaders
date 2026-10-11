@@ -244,6 +244,8 @@ volatile bool g_skipMapClips = false;          // no in-game trigger clips of th
 volatile bool g_stopRaceClip = false;          // just switched on: end the trigger clip that runs
 float g_mapDayTime = -1.0f;                   // the loaded map's own time of day (-1 unknown)
 bool g_nightForced = false;                   // the game lights it at midnight instead
+void* g_weather = nullptr;                    // this map's weather (the last to jump in time)
+float g_weatherTime = -1.0f;                  // the time of day the game asked it for last
 using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
 ReadInputFn g_readInput = nullptr;
 volatile bool g_swallowEscape = false; // the menu or photo mode took this Esc press
@@ -642,6 +644,8 @@ void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMo
 }
 
 void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
+    g_weather = self;
+    g_weatherTime = time;
     const float wanted = g_nightForced ? 0.0f : time;
     if (g_jumpsLogged < 40) {
         g_jumpsLogged++;
@@ -690,6 +694,7 @@ void __fastcall loadSceneDetour(void* self, void* edx) {
     }
     const float original = *time;
     g_mapDayTime = original;
+    g_weather = nullptr; // the last map's (set again by the jumps of this load)
     g_nightForced = g_wantNight && g_wantNight(original);
     TMVS_LOG("engine: map time of day %.3f%s", original, g_nightForced ? ", lit at midnight (night sky)" : "");
     if (g_nightForced) *time = 0.0f;
@@ -915,6 +920,16 @@ bool mapClipsSkippable() {
 
 bool mapLitAtNight() {
     return g_nightForced;
+}
+
+bool relightNight(bool night) {
+    if (night == g_nightForced) return true;
+    if (!g_jumpTime || !g_weather || g_weatherTime < 0.0f || g_mapDayTime < 0.0f || !readable(g_weather, 0x30)) return false;
+    g_nightForced = night;
+    TMVS_LOG("engine: real night %s during the map: weather %p to time of day %.3f", night ? "on" : "off", g_weather,
+             night ? 0.0f : g_weatherTime);
+    g_jumpTime(g_weather, nullptr, night ? 0.0f : g_weatherTime);
+    return true;
 }
 
 const CameraInfo& currentCamera() {

@@ -116,7 +116,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("GameMaterials", "Use the game's materials (lamps, cars, glass)", "Image", Bool, gameMaterials, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameFX", "Turn off the game's FX post-processing (next map)", "Image", Bool, disableGameFx, 0.0f, 1.0f),
         TMVS_FIELD("SkipMapClips", "No MediaTracker clips of the map while driving (Shift+F7)", "Image", Bool, skipMapClips, 0.0f, 1.0f),
-        TMVS_FIELD("GameNight", "Real night under night skies (next map)", "Image", Bool, gameNight, 0.0f, 1.0f),
+        TMVS_FIELD("GameNight", "Real night under night skies", "Image", Bool, gameNight, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
         TMVS_FIELD("TrailColor", "Trail colour", "Neon trail", Color, trailColor, 0.0f, 1.0f),

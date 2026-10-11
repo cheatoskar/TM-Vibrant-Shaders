@@ -781,6 +781,8 @@ void onSetLight(DWORD, const D3DLIGHT9* light) {
     g_scene.haveLight = true;
 }
 
+void relightOnSwitch(const Settings& s);
+
 void onPresent(IDirect3DDevice9* device) {
     g_device = device;
     g_frame++;
@@ -817,6 +819,7 @@ void onPresent(IDirect3DDevice9* device) {
         s_cinematic = cinematic;
         TMVS_LOG("engine: cinematic %s (sources %u)", cinematic ? "on" : "off", engine::cinematicSources());
     }
+    relightOnSwitch(settings);
     g_shadedThisFrame = false;
     g_gameplayThisFrame = false;
 
@@ -890,18 +893,36 @@ DWORD WINAPI retryHooks(LPVOID) {
 // sky replaces the sun anyway; the game's own night has no baked sun to take out).
 // The map's mood comes from the same time of day (see processScene), so the look decided here
 // is the one the map gets.
-bool nightAtLoad(float dayTime) {
+bool nightFor(float dayTime, bool log) {
     const Config& config = Config::get();
-    const Settings& s = config.settings;
+    const Mood mood = moodOfDayTime(dayTime);
+    if (mood == Mood::Night) return false; // a night map already
+    const bool night = Pipeline::skyReplacesSun(config.lookForMood(mood));
+    if (!night && log) TMVS_LOG("config: real night: the %s look has no night sky", moodName(mood));
+    return night;
+}
+
+bool nightAtLoad(float dayTime) {
+    const Settings& s = Config::get().settings;
     if (!s.enabled || !s.gameNight) {
         TMVS_LOG("config: real night off (setting)");
         return false;
     }
-    const Mood mood = moodOfDayTime(dayTime);
-    if (mood == Mood::Night) return false; // a night map already
-    const bool night = Pipeline::skyReplacesSun(config.lookForMood(mood));
-    if (!night) TMVS_LOG("config: real night: the %s look has no night sky", moodName(mood));
-    return night;
+    return nightFor(dayTime, true);
+}
+
+// Real night switched in the menu while a map runs: the map is relit now, not at the next one.
+// Only in gameplay (the weather of a map that was left may be gone); F7 (shaders off to
+// compare) doesn't relight.
+void relightOnSwitch(const Settings& s) {
+    static int s_setting = -1;
+    const int setting = s.gameNight ? 1 : 0;
+    if (!g_gameplayThisFrame || setting == s_setting) return;
+    const bool switched = s_setting >= 0;
+    s_setting = setting;
+    const float dayTime = engine::mapDayTime();
+    if (!switched || dayTime < 0.0f) return;
+    if (!engine::relightNight(setting && nightFor(dayTime, true))) TMVS_LOG("config: real night: this map can't be relit now (next map)");
 }
 
 void bootOnce() {
