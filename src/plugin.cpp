@@ -662,8 +662,16 @@ void onDraw(IDirect3DDevice9* device) {
         TMVS_LOG("materials: the game uses the stencil buffer itself, material masks off");
         return;
     }
-    DWORD zwrite = TRUE;
+    // Only draws with the depth test on: with it off the stencil is still written wherever
+    // they draw (the stencil test passes always), and a screen-wide draw without depth (the
+    // sky, effects at the end of the camera) wiped every class to "other".
+    DWORD zwrite = TRUE, ztest = TRUE;
     device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+    device->GetRenderState(D3DRS_ZENABLE, &ztest);
+    if (!ztest) {
+        untagStencil(device);
+        return;
+    }
     if (zwrite) {
         // Its class, in the low bits; clears the "added light" bit of what it covers.
         tagStencil(device, static_cast<DWORD>(engine::currentMaterial()), 0xFF);
@@ -671,11 +679,10 @@ void onDraw(IDirect3DDevice9* device) {
     }
     // Light the game adds on top of a surface (headlight pools, glows: one-one blending,
     // no depth writes) only sets bit 3 and keeps the class of the surface below.
-    DWORD blend = FALSE, dest = D3DBLEND_ZERO, ztest = TRUE;
+    DWORD blend = FALSE, dest = D3DBLEND_ZERO;
     device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
     device->GetRenderState(D3DRS_DESTBLEND, &dest);
-    device->GetRenderState(D3DRS_ZENABLE, &ztest);
-    if (blend && dest == D3DBLEND_ONE && ztest) tagStencil(device, Pipeline::kAddedLightBit, Pipeline::kAddedLightBit);
+    if (blend && dest == D3DBLEND_ONE) tagStencil(device, Pipeline::kAddedLightBit, Pipeline::kAddedLightBit);
     else untagStencil(device);
 }
 
