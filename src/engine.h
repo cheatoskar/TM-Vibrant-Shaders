@@ -93,6 +93,11 @@ void setNightAtLoad(bool (*decide)(float dayTime));
 // The loaded map's own time of day (-1 unknown) and whether it is lit at midnight instead.
 float mapDayTime();
 bool mapLitAtNight();
+// The map's in-game MediaTracker clips (triggered while driving: forced cameras, black
+// screens, texts) don't start while true; one that runs ends. Intro, end-race clips and
+// replays are not affected, the map stays as it is. False without the hook.
+void skipMapClips(bool skip);
+bool mapClipsSkippable();
 // What the material being drawn is (from its shader file), Other between draws.
 enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5 };
 Material currentMaterial();

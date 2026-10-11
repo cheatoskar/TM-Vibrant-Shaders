@@ -115,6 +115,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("ReadableGameDepth", "Effects in replay/video export (restart)", "Image", Bool, readableGameDepth, 0.0f, 1.0f),
         TMVS_FIELD("GameMaterials", "Use the game's materials (lamps, cars, glass)", "Image", Bool, gameMaterials, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameFX", "Turn off the game's FX post-processing (next map)", "Image", Bool, disableGameFx, 0.0f, 1.0f),
+        TMVS_FIELD("SkipMapClips", "No MediaTracker clips of the map while driving (Shift+F7)", "Image", Bool, skipMapClips, 0.0f, 1.0f),
         TMVS_FIELD("GameNight", "Real night under night skies (next map)", "Image", Bool, gameNight, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
@@ -225,7 +226,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight");
+           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "SkipMapClips");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {
@@ -766,6 +767,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepFx = s.disableGameFx;
     const bool keepMaterials = s.gameMaterials;
     const bool keepNight = s.gameNight;
+    const bool keepClips = s.skipMapClips;
     const bool keepEnabled = s.enabled;
     const bool keepAuto = s.autoQuality;
     const float keepTarget = s.targetFps;
@@ -788,6 +790,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.disableGameFx = keepFx;
     s.gameMaterials = keepMaterials;
     s.gameNight = keepNight;
+    s.skipMapClips = keepClips;
     s.enabled = keepEnabled;
     s.autoQuality = keepAuto;
     s.targetFps = keepTarget;
@@ -1190,6 +1193,7 @@ void Config::load() {
     settings.disableGameFx = GetPrivateProfileIntW(L"Settings", L"DisableGameFX", 1, ini) != 0;
     settings.gameMaterials = GetPrivateProfileIntW(L"Settings", L"GameMaterials", 1, ini) != 0;
     settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 0, ini) != 0;
+    settings.skipMapClips = GetPrivateProfileIntW(L"Settings", L"SkipMapClips", 0, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
     wchar_t target[32] = {};
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));

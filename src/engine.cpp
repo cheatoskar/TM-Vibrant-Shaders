@@ -20,7 +20,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -37,6 +37,7 @@ struct GameBuild {
     uintptr_t fxVTables[2];        // ??_7CSceneFxBloom@@6B@, ??_7CSceneFxColors@@6B@
     uintptr_t fxCanActive[2];      // their CanActive(CHmsCamera*) (vtable slot 32)
     uintptr_t systemConfig;        // CSystemConfig* CSystemConfig::s_SystemConfig
+    uintptr_t clipGroupStop;       // void CGameCtnMediaClipViewer::ClipGroupStop()
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -46,14 +47,14 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
-     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380},
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
-     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0},
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0},
 };
 const GameBuild* g_build = nullptr;
 
@@ -135,6 +136,12 @@ constexpr InlineSite kLensFlareSite = {kLensFlare, {0x83, 0xec, 0x48, 0x53, 0x55
 // So with the time at midnight the game lights the map with its own night (moon), nothing is
 // baked white. The map, its UID and replays are untouched: the mood's time is restored at once.
 constexpr InlineSite kLoadSceneSite = {kLoadScene, {0x83, 0xec, 0x18, 0x53, 0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x58}, 10, -1, "CGameCtnDecoration::LoadScene3d"};
+// Every frame while driving: when the car enters a cell of the map's in-game clip triggers
+// (MediaTracker: forced cameras, black screens, texts) it starts that clip. Skipped, no
+// trigger clip starts; the map itself is untouched (intro and end-race clips, replays stay).
+// The index of the running trigger clip is at +0x50 (-1 none).
+constexpr InlineSite kClipTriggersSite = {kClipTriggers, {0x83, 0xec, 0x1c, 0x56, 0x8b, 0xf1, 0x83, 0x7e, 0x44, 0x00}, 10, -1, "CGameCtnMediaClipViewer::ClipGroupCheckTriggers"};
+constexpr size_t kClipViewerTriggered = 0x50;
 constexpr size_t kDecorationMood = 0x60; // CGameCtnDecorationMood*
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
@@ -216,6 +223,9 @@ bool g_hideSunFlare = false;           // a night sky replaces the sun: its halo
 using LoadSceneFn = void(__fastcall*)(void*, void*);
 LoadSceneFn g_loadScene = nullptr;
 bool (*g_wantNight)(float dayTime) = nullptr; // the plugin: light this map at midnight?
+using ClipTriggersFn = void(__fastcall*)(void*, void*);
+ClipTriggersFn g_clipTriggers = nullptr;
+volatile bool g_skipMapClips = false;          // no in-game trigger clips of the map
 float g_mapDayTime = -1.0f;                   // the loaded map's own time of day (-1 unknown)
 bool g_nightForced = false;                   // the game lights it at midnight instead
 using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
@@ -615,6 +625,19 @@ void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMo
     strncpy_s(g_environment, name, _TRUNCATE);
 }
 
+void __fastcall clipTriggersDetour(void* self, void* edx) {
+    if (!g_skipMapClips) {
+        g_clipTriggers(self, edx);
+        return;
+    }
+    // A trigger clip that already runs ends now (as the game does when the car is teleported).
+    int* triggered = reinterpret_cast<int*>(static_cast<BYTE*>(self) + kClipViewerTriggered);
+    if (readable(triggered, sizeof(int)) && *triggered != -1) {
+        reinterpret_cast<void(__fastcall*)(void*, void*)>(rebase(g_build->clipGroupStop))(self, nullptr);
+        *triggered = -1;
+    }
+}
+
 void __fastcall loadSceneDetour(void* self, void* edx) {
     const BYTE* decoration = static_cast<const BYTE*>(self);
     void* mood = readable(decoration + kDecorationMood, sizeof(void*)) ? *reinterpret_cast<void* const*>(decoration + kDecorationMood) : nullptr;
@@ -816,6 +839,7 @@ bool install(const Callbacks& callbacks) {
     g_readInput = reinterpret_cast<ReadInputFn>(inlineHook(kReadInputSite, reinterpret_cast<void*>(&readInputDetour)));
     g_interfaceSet = reinterpret_cast<InterfaceSetFn>(inlineHook(kInterfaceSetSite, reinterpret_cast<void*>(&interfaceSetDetour)));
     g_loadScene = reinterpret_cast<LoadSceneFn>(inlineHook(kLoadSceneSite, reinterpret_cast<void*>(&loadSceneDetour)));
+    g_clipTriggers = reinterpret_cast<ClipTriggersFn>(inlineHook(kClipTriggersSite, reinterpret_cast<void*>(&clipTriggersDetour)));
     patchFx(0, reinterpret_cast<void*>(&bloomCanActiveDetour));
     patchFx(1, reinterpret_cast<void*>(&colorsCanActiveDetour));
     g_active = true;
@@ -833,6 +857,14 @@ void setNightAtLoad(bool (*decide)(float dayTime)) {
 
 float mapDayTime() {
     return g_mapDayTime;
+}
+
+void skipMapClips(bool skip) {
+    g_skipMapClips = skip && g_clipTriggers;
+}
+
+bool mapClipsSkippable() {
+    return g_clipTriggers != nullptr;
 }
 
 bool mapLitAtNight() {

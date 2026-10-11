@@ -566,6 +566,8 @@ void onFrameBegin() {
         engine::skipGameFx(s.enabled && s.disableGameFx);
         // A night sky (or the black hole) has no sun: the game's halo and flare go too.
         engine::hideSunFlare(s.enabled && Pipeline::skyReplacesSun(s));
+        // Not a shader setting: also with the shaders off (F7).
+        engine::skipMapClips(s.skipMapClips);
     }
     updateJitter();
     g_cameraIndex = 0;
