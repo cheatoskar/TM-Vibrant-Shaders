@@ -124,6 +124,28 @@ void applyPreset(Settings& s, const std::string& name) {
     }
 }
 
+bool set(Settings& s, const std::string& key, const std::string& value) {
+    const struct {
+        const char* key;
+        float* value;
+    } floats[] = {{"Exposure", &s.exposure},     {"Contrast", &s.contrast}, {"Saturation", &s.saturation},
+                  {"Vibrance", &s.vibrance},     {"Warmth", &s.warmth},     {"Tint", &s.tint},
+                  {"Shadows", &s.shadows},       {"Highlights", &s.highlights}, {"Clarity", &s.clarity},
+                  {"Sharpen", &s.sharpen},       {"Vignette", &s.vignette}, {"LutMix", &s.lutMix},
+                  {"Split", &s.split}};
+    for (const auto& f : floats) {
+        if (_stricmp(key.c_str(), f.key) == 0) {
+            *f.value = static_cast<float>(atof(value.c_str()));
+            return true;
+        }
+    }
+    if (_stricmp(key.c_str(), "Lut") == 0) s.lut = value;
+    else if (_stricmp(key.c_str(), "View") == 0) s.view = static_cast<View>(atoi(value.c_str()));
+    else if (_stricmp(key.c_str(), "Preset") == 0) applyPreset(s, value);
+    else return false;
+    return true;
+}
+
 void load() {
     Settings& s = g_settings;
     int enabled = s.enabled, placement = static_cast<int>(s.placement), fallback = s.fallbackAtEnd;

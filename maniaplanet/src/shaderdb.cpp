@@ -19,13 +19,14 @@ ShaderInfo identify(const void* bytecode, size_t size) {
     memcpy(&hi, static_cast<const char*>(bytecode) + 4, 8);
     memcpy(&lo, static_cast<const char*>(bytecode) + 12, 8);
     const auto* end = std::end(kShaderEntries);
-    const auto* it = std::lower_bound(std::begin(kShaderEntries), end, ShaderEntry{hi, lo, 0, 0},
+    const auto* it = std::lower_bound(std::begin(kShaderEntries), end, ShaderEntry{hi, lo, 0, 0, {}},
                                       [](const ShaderEntry& a, const ShaderEntry& b) {
                                           return a.hi != b.hi ? a.hi < b.hi : a.lo < b.lo;
                                       });
     if (it == end || it->hi != hi || it->lo != lo) return info;
     info.role = static_cast<Role>(it->role);
     info.name = kShaderNames[it->name];
+    memcpy(info.slots, it->slots, sizeof(info.slots));
     return info;
 }
 

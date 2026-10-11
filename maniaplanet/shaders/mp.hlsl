@@ -8,6 +8,9 @@ cbuffer GradeParams : register(b0)
     float4 g_p2; // vignette, shadows, highlights, LUT mix
     float4 g_p3; // texel size of the source (xy), source is an sRGB view (z), view: 0 normal, 1 split, 2 depth (w)
     float4 g_p4; // split position, has depth, has LUT, LUT size
+    float4 g_invViewProj[4]; // the engine's clip -> world (rows)
+    float4 g_camera; // eye in world (xyz), has camera (w)
+    float4 g_has;    // engine textures present: normals, motion, light buffer
 };
 
 cbuffer PassParams : register(b1)
@@ -19,6 +22,9 @@ Texture2D g_src : register(t0);
 Texture2D g_blur : register(t1);
 Texture2D<float> g_depth : register(t2);
 Texture3D g_lut : register(t3);
+Texture2D g_normal : register(t4); // TMapDeferredPixelNormalInC
+Texture2D g_motion : register(t5); // TMapMotion
+Texture2D g_light : register(t6);  // TMapDeferredMDiffuse (diffuse light)
 SamplerState g_linear : register(s0);
 SamplerState g_point : register(s1);
 
@@ -120,9 +126,46 @@ float4 PS_Grade(VSOut i) : SV_Target
 
     if (view > 1.5)
     {
-        // Depth (reversed Z: near = 1, far = 0), shown so near is bright.
+        // Checks of what the mod reads from the engine. Magenta: not found.
+        float3 v = float3(0.5, 0, 0.5);
         float d = g_p4.y > 0.5 ? g_depth.SampleLevel(g_point, uv, 0) : 0;
-        float3 v = g_p4.y > 0.5 ? pow(saturate(d), 0.25).xxx : float3(0.5, 0, 0.5);
+        if (view < 2.5)
+        {
+            // Depth (reversed Z: near = 1, far = 0), near bright.
+            if (g_p4.y > 0.5) v = pow(saturate(d), 0.25).xxx;
+        }
+        else if (view < 3.5)
+        {
+            if (g_has.x > 0.5) v = g_normal.SampleLevel(g_point, uv, 0).rgb;
+        }
+        else if (view < 4.5)
+        {
+            if (g_has.y > 0.5) v = saturate(g_motion.SampleLevel(g_point, uv, 0).rgb * float3(20, 20, 0) + float3(0.5, 0.5, 0.5));
+        }
+        else if (view < 5.5)
+        {
+            if (g_has.z > 0.5) v = toGamma(g_light.SampleLevel(g_point, uv, 0).rgb);
+        }
+        else if (g_camera.w > 0.5 && g_p4.y > 0.5)
+        {
+            // World grid: lines every 8 m (bright every 32 m, a block), from depth and the engine's
+            // camera. Correct when the lines stay on the ground while the camera moves.
+            v = original * 0.6;
+            if (d > 0)
+            {
+                float4 clip = float4(uv.x * 2 - 1, 1 - uv.y * 2, d, 1);
+                float4 w = float4(dot(g_invViewProj[0], clip), dot(g_invViewProj[1], clip), dot(g_invViewProj[2], clip),
+                                  dot(g_invViewProj[3], clip));
+                float3 p = w.xyz / w.w;
+                float3 f = fwidth(p) * 1.5 + 1e-4;
+                float3 minor = 1 - smoothstep(0, f, abs(frac(p / 8 + 0.5) - 0.5) * 8);
+                float3 major = 1 - smoothstep(0, f * 1.5, abs(frac(p / 32 + 0.5) - 0.5) * 32);
+                float line8 = max(minor.x, minor.z), line32 = max(major.x, major.z);
+                v = lerp(v, float3(0.2, 0.9, 1.0), line8 * 0.6);
+                v = lerp(v, float3(1.0, 0.85, 0.2), line32);
+                v = lerp(v, float3(1.0, 0.3, 0.3), minor.y * 0.5); // height every 8 m
+            }
+        }
         return float4(g_p3.z > 0.5 ? toLinear(v) : v, raw.a);
     }
 

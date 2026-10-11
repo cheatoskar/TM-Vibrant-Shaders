@@ -1,5 +1,6 @@
 #include "overlay.h"
 #include "capture.h"
+#include "engine_frame.h"
 #include "hooks.h"
 #include "log.h"
 #include "lut.h"
@@ -126,6 +127,15 @@ void status() {
     if (st.placed == hooks::Placed::BeforeHud && st.hudShader) ImGui::TextDisabled("  interface starts with %s", st.hudShader);
     if (st.depthFound) ImGui::TextColored(good, "Depth found (format %d)", static_cast<int>(st.depthFormat));
     else ImGui::TextDisabled("Depth not found yet");
+    if (st.cameraFound) ImGui::TextColored(good, "Camera found (eye %.0f %.0f %.0f)", st.eye[0], st.eye[1], st.eye[2]);
+    else ImGui::TextColored(warn, "Camera not found in this frame");
+    std::string found;
+    for (int i = 0; i < kTexCount; i++) {
+        if (!(st.textures & (1u << i))) continue;
+        if (!found.empty()) found += ", ";
+        found += engineTextureName(i);
+    }
+    ImGui::TextDisabled("Engine textures: %s", found.empty() ? "none" : found.c_str());
     ImGui::TextDisabled("Shaders recognised: %u of %u created, %u draws, %ux%u", st.shadersKnown, st.shadersCreated,
                         st.drawsLastFrame, st.width, st.height);
     if (st.deferredContexts) ImGui::TextColored(warn, "The game records on %u deferred contexts", st.deferredContexts);
@@ -144,7 +154,10 @@ void menu() {
     ImGui::SameLine();
     int view = static_cast<int>(s.view);
     ImGui::SetNextItemWidth(150);
-    if (ImGui::Combo("##view", &view, "Normal view\0Compare (split)\0Depth view\0")) s.view = static_cast<View>(view);
+    if (ImGui::Combo("##view", &view,
+                     "Normal view\0Compare (split)\0Check: depth\0Check: normals\0Check: motion\0Check: light buffer\0"
+                     "Check: world grid\0"))
+        s.view = static_cast<View>(view);
     if (s.view == View::Split) slider("Split", &s.split, 0.0f, 1.0f);
 
     if (ImGui::BeginCombo("Preset", s.preset.c_str())) {

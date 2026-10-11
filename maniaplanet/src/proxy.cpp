@@ -98,7 +98,7 @@ extern "C" HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter* adapter, D
     return hr;
 }
 
-// For tools/harness.cpp: what the last frame did, and a capture of the next one.
+// For tools/harness.cpp: what the last frame did (12 ints), and a capture of the next one.
 extern "C" void WINAPI TmvsMpStats(int* out) {
     const hooks::Stats& s = hooks::stats();
     out[0] = static_cast<int>(s.placed);
@@ -107,6 +107,9 @@ extern "C" void WINAPI TmvsMpStats(int* out) {
     out[3] = static_cast<int>(s.shadersCreated);
     out[4] = s.depthFound ? 1 : 0;
     out[5] = static_cast<int>(s.drawsLastFrame);
+    out[6] = s.cameraFound ? 1 : 0;
+    out[7] = static_cast<int>(s.textures);
+    for (int i = 0; i < 3; i++) out[8 + i] = static_cast<int>(s.eye[i] * 100.0f + (s.eye[i] < 0 ? -0.5f : 0.5f));
 }
 
 extern "C" void WINAPI TmvsMpCapture() {

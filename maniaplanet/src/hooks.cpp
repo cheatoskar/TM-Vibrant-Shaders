@@ -8,6 +8,7 @@
 // When the interface start can't be found, the pass runs at Present (interface graded too).
 #include "hooks.h"
 #include "capture.h"
+#include "engine_frame.h"
 #include "log.h"
 #include "overlay.h"
 #include "renderer.h"
@@ -29,10 +30,13 @@ enum ContextSlot {
     kPSSetShader = 9,
     kDrawIndexed = 12,
     kDraw = 13,
+    kMap = 14,
+    kUnmap = 15,
     kDrawIndexedInstanced = 20,
     kDrawInstanced = 21,
     kOMSetRenderTargets = 33,
     kOMSetRenderTargetsAndUAVs = 34,
+    kUpdateSubresource = 48,
     kExecuteCommandList = 58
 };
 enum SwapSlot { kPresent = 8, kResizeBuffers = 13, kPresent1 = 22 };
@@ -97,6 +101,11 @@ using OMSetRenderTargetsAndUAVsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext
                                                              ID3D11DepthStencilView*, UINT, UINT,
                                                              ID3D11UnorderedAccessView* const*, const UINT*);
 using ExecuteCommandListFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
+using MapFn = HRESULT(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, D3D11_MAP, UINT,
+                                          D3D11_MAPPED_SUBRESOURCE*);
+using UnmapFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT);
+using UpdateSubresourceFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, const D3D11_BOX*, const void*,
+                                                     UINT, UINT);
 using PresentFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
 using Present1Fn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
 using ResizeBuffersFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
@@ -115,6 +124,9 @@ Hook g_drawInstanced;
 Hook g_omSetRenderTargets;
 Hook g_omSetRenderTargetsAndUAVs;
 Hook g_executeCommandList;
+Hook g_map;
+Hook g_unmap;
+Hook g_updateSubresource;
 Hook g_present;
 Hook g_present1;
 Hook g_resizeBuffers;
@@ -151,19 +163,125 @@ struct Frame {
     ID3D11Resource* postImage = nullptr;   // where the tone map / post effects wrote last
     bool toneMapSeen = false;
     bool injected = false;
+    bool texturesTaken = false;
     Placed placed = Placed::None;
     const char* hudShader = nullptr;
     uint32_t draws = 0;
     uint32_t commandLists = 0;
 };
 Frame g_frame;
-ID3D11Resource* g_sceneDepth = nullptr; // owned reference
+// The engine's textures of this frame (owned references, kept until replaced) and its camera.
+ID3D11Resource* g_tex[kTexCount] = {};
+Camera g_camera;
+bool g_cameraThisFrame = false;
+
+void setTexture(int index, ID3D11Resource* res) {
+    if (res == g_tex[index]) return;
+    if (g_tex[index]) g_tex[index]->Release();
+    g_tex[index] = res;
+    if (res) res->AddRef();
+}
 
 void setSceneDepth(ID3D11Resource* depth) {
-    if (depth == g_sceneDepth) return;
-    if (g_sceneDepth) g_sceneDepth->Release();
-    g_sceneDepth = depth;
-    if (g_sceneDepth) g_sceneDepth->AddRef();
+    setTexture(kTexDepth, depth);
+}
+
+void releaseTextures() {
+    for (int i = 0; i < kTexCount; i++) setTexture(i, nullptr);
+}
+
+// Copies of the engine's SceneV constant buffers, taken while it uploads them (Map/Unmap or
+// UpdateSubresource), so the camera can be read without a GPU read-back.
+struct SceneVCopy {
+    ID3D11Resource* buffer = nullptr; // identity only
+    void* mapped = nullptr;
+    unsigned char data[kSceneVSize] = {};
+    bool filled = false;
+};
+SceneVCopy g_sceneV[8];
+std::unordered_map<ID3D11Resource*, bool> g_isSceneV;
+
+bool isSceneV(ID3D11Resource* res) {
+    auto it = g_isSceneV.find(res);
+    if (it != g_isSceneV.end()) return it->second;
+    D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    res->GetType(&dim);
+    bool yes = false;
+    if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
+        D3D11_BUFFER_DESC d;
+        static_cast<ID3D11Buffer*>(res)->GetDesc(&d);
+        yes = d.ByteWidth == kSceneVSize && (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER);
+    }
+    if (g_isSceneV.size() > 4096) g_isSceneV.clear();
+    g_isSceneV[res] = yes;
+    return yes;
+}
+
+SceneVCopy* sceneVCopy(ID3D11Resource* res, bool create) {
+    for (auto& c : g_sceneV)
+        if (c.buffer == res) return &c;
+    if (!create) return nullptr;
+    for (auto& c : g_sceneV) {
+        if (!c.buffer) {
+            c.buffer = res;
+            return &c;
+        }
+    }
+    g_sceneV[0] = SceneVCopy{};
+    g_sceneV[0].buffer = res;
+    return &g_sceneV[0];
+}
+
+// The main camera: the SceneV bound to the vertex shader of the lighting-read pass.
+void takeCamera(ID3D11DeviceContext* ctx) {
+    ID3D11Buffer* cb = nullptr;
+    ctx->VSGetConstantBuffers(13, 1, &cb);
+    if (!cb) return;
+    const SceneVCopy* copy = sceneVCopy(cb, false);
+    if (!copy || !copy->filled) {
+        // Not an upload we saw: log what the engine binds instead (once), to learn its scheme.
+        static int logged = 0;
+        if (logged++ < 3) {
+            D3D11_BUFFER_DESC d;
+            cb->GetDesc(&d);
+            TMVS_LOG("hooks: vertex constants 13 are %u bytes, usage %d, cpu 0x%x (no SceneV copy)", d.ByteWidth, d.Usage,
+                     d.CPUAccessFlags);
+        }
+        cb->Release();
+        return;
+    }
+    cb->Release();
+    memcpy(g_camera.raw, copy->data, kSceneVSize);
+    const bool was = g_camera.valid;
+    decodeCamera(g_camera);
+    g_cameraThisFrame = g_camera.valid;
+    static int logged = 0;
+    if (g_camera.valid != was && logged++ < 5) {
+        TMVS_LOG("hooks: camera %s (eye %.1f %.1f %.1f, matrix %s)", g_camera.valid ? "found" : "lost", g_camera.eye[0],
+                 g_camera.eye[1], g_camera.eye[2], g_camera.transposed ? "in columns" : "in rows");
+    }
+}
+
+// The textures a scene shader reads by name (normals, light buffers, motion).
+void takeSceneTextures(ID3D11DeviceContext* ctx, const ShaderInfo& ps) {
+    static const struct {
+        Slot slot;
+        int tex;
+    } kWanted[] = {{kSlotNormal, kTexNormal},       {kSlotDiffuse, kTexDiffuse}, {kSlotSpecular, kTexSpecular},
+                {kSlotLightMask, kTexLightMask}, {kSlotMotion, kTexMotion}};
+    for (const auto& m : kWanted) {
+        if (!ps.reads(m.slot)) continue;
+        ID3D11ShaderResourceView* srv = nullptr;
+        ctx->PSGetShaderResources(ps.slots[m.slot], 1, &srv);
+        if (!srv) continue;
+        ID3D11Resource* res = nullptr;
+        srv->GetResource(&res);
+        srv->Release();
+        if (res) {
+            setTexture(m.tex, res);
+            res->Release();
+        }
+    }
 }
 
 void sizeOf(ID3D11Resource* res, UINT& w, UINT& h) {
@@ -215,9 +333,10 @@ bool readsResource(ID3D11DeviceContext* ctx, ID3D11Resource* res) {
 void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed where) {
     const Settings& s = settings::current();
     if (!s.enabled || !g_rendererReady) return;
-    if (g_renderer.apply(ctx, target, g_sceneDepth, s)) {
+    const EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
+    if (g_renderer.apply(ctx, target, view, s)) {
         g_frame.placed = where;
-        if (capture::active()) capture::onGraded(g_device, ctx, g_renderer.lastInput(), g_sceneDepth);
+        if (capture::active()) capture::onGraded(g_device, ctx, g_renderer.lastInput(), g_renderer.lastViewFormat(), view);
     }
 }
 
@@ -229,6 +348,17 @@ void onDraw(ID3D11DeviceContext* ctx) {
 
     if (role == Role::ToneMap && f.rt && screenSized(f.rtW, f.rtH)) {
         if (capture::active() && !f.toneMapSeen) capture::onToneMap(g_device, ctx);
+        // The tone map reads the HDR image (t0) and the exposure (t1).
+        ID3D11ShaderResourceView* in[2] = {};
+        ctx->PSGetShaderResources(0, 2, in);
+        for (int i = 0; i < 2; i++) {
+            if (!in[i]) continue;
+            ID3D11Resource* res = nullptr;
+            in[i]->GetResource(&res);
+            in[i]->Release();
+            setTexture(i == 0 ? kTexHdr : kTexExposure, res);
+            if (res) res->Release();
+        }
         f.phase = Phase::Post;
         f.postImage = f.rt;
         f.toneMapSeen = true;
@@ -237,6 +367,24 @@ void onDraw(ID3D11DeviceContext* ctx) {
     if (f.phase == Phase::Scene) {
         // The scene's depth: the last screen-shaped depth buffer a scene draw used.
         if (role == Role::Scene && f.ds && screenSized(f.dsW, f.dsH)) setSceneDepth(f.ds);
+        // The lighting-read pass (it reads the normal and light buffers) runs with the main camera.
+        if (f.ps.reads(kSlotNormal) || f.ps.reads(kSlotDiffuse)) {
+            if (!g_cameraThisFrame) takeCamera(ctx);
+            if (!f.texturesTaken && f.rt && screenSized(f.rtW, f.rtH)) {
+                f.texturesTaken = true;
+                takeSceneTextures(ctx, f.ps);
+                // Its second target is the motion buffer (R16G16 float) that the motion blur reads.
+                ID3D11RenderTargetView* rtv[2] = {};
+                ctx->OMGetRenderTargets(2, rtv, nullptr);
+                if (rtv[1]) {
+                    D3D11_RENDER_TARGET_VIEW_DESC d;
+                    rtv[1]->GetDesc(&d);
+                    if (d.Format == DXGI_FORMAT_R16G16_FLOAT) setTexture(kTexMotion, resourceOf(rtv[1]));
+                }
+                for (auto* v : rtv)
+                    if (v) v->Release();
+            }
+        }
         return;
     }
     if (f.phase != Phase::Post) return;
@@ -360,6 +508,38 @@ void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11
     g_executeCommandList.get<ExecuteCommandListFn>(ctx)(ctx, list, restore);
 }
 
+HRESULT STDMETHODCALLTYPE mapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub, D3D11_MAP type, UINT flags,
+                                    D3D11_MAPPED_SUBRESOURCE* out) {
+    const HRESULT hr = g_map.get<MapFn>(ctx)(ctx, res, sub, type, flags, out);
+    if (SUCCEEDED(hr) && out && isMain(ctx) && sub == 0 && (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE) &&
+        isSceneV(res)) {
+        sceneVCopy(res, true)->mapped = out->pData;
+    }
+    return hr;
+}
+
+void STDMETHODCALLTYPE unmapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub) {
+    if (isMain(ctx) && sub == 0) {
+        SceneVCopy* copy = sceneVCopy(res, false);
+        if (copy && copy->mapped) {
+            memcpy(copy->data, copy->mapped, kSceneVSize);
+            copy->mapped = nullptr;
+            copy->filled = true;
+        }
+    }
+    g_unmap.get<UnmapFn>(ctx)(ctx, res, sub);
+}
+
+void STDMETHODCALLTYPE updateSubresourceDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub, const D3D11_BOX* box,
+                                               const void* data, UINT rowPitch, UINT depthPitch) {
+    if (isMain(ctx) && sub == 0 && !box && data && isSceneV(res)) {
+        SceneVCopy* copy = sceneVCopy(res, true);
+        memcpy(copy->data, data, kSceneVSize);
+        copy->filled = true;
+    }
+    g_updateSubresource.get<UpdateSubresourceFn>(ctx)(ctx, res, sub, box, data, rowPitch, depthPitch);
+}
+
 // ---- swap chain ----
 
 int installContextHooks(ID3D11DeviceContext* ctx) {
@@ -373,6 +553,9 @@ int installContextHooks(ID3D11DeviceContext* ctx) {
     patched += g_omSetRenderTargetsAndUAVs.install(ctx, kOMSetRenderTargetsAndUAVs,
                                                    reinterpret_cast<void*>(&omSetRenderTargetsAndUAVsDetour));
     patched += g_executeCommandList.install(ctx, kExecuteCommandList, reinterpret_cast<void*>(&executeCommandListDetour));
+    patched += g_map.install(ctx, kMap, reinterpret_cast<void*>(&mapDetour));
+    patched += g_unmap.install(ctx, kUnmap, reinterpret_cast<void*>(&unmapDetour));
+    patched += g_updateSubresource.install(ctx, kUpdateSubresource, reinterpret_cast<void*>(&updateSubresourceDetour));
     return patched;
 }
 
@@ -474,6 +657,11 @@ void onPresent(IDXGISwapChain* sc) {
     g_stats.commandLists = f.commandLists;
     g_stats.depthFound = g_renderer.hasDepthView();
     g_stats.depthFormat = g_renderer.depthFormat();
+    g_stats.cameraFound = g_cameraThisFrame;
+    g_stats.textures = 0;
+    for (int i = 0; i < kTexCount; i++)
+        if (g_tex[i]) g_stats.textures |= 1u << i;
+    if (g_cameraThisFrame) memcpy(g_stats.eye, g_camera.eye, sizeof(g_stats.eye));
 
     {
         Inside guard;
@@ -482,6 +670,7 @@ void onPresent(IDXGISwapChain* sc) {
     capture::endFrame();
 
     // Next frame. The bound targets stay as the game left them.
+    g_cameraThisFrame = false;
     const ShaderInfo ps = f.ps;
     ID3D11RenderTargetView* rtv = f.rtv;
     ID3D11Resource *rt = f.rt, *ds = f.ds;
@@ -520,7 +709,8 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
     if (sc == g_swapChain) {
         releaseBackBuffer();
         g_renderer.releaseTargets();
-        setSceneDepth(nullptr);
+        releaseTextures();
+        g_isSceneV.clear();
         g_frame = Frame{};
         TMVS_LOG("hooks: ResizeBuffers %ux%u", w, h);
     }

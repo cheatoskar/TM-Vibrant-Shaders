@@ -129,17 +129,18 @@ void viewport(ID3D11DeviceContext* ctx, float x, float y, float w, float h) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 5) {
-        printf("usage: mp_harness <d3d11.dll> <tonemap.dxbc> <ui.dxbc> <scene.dxbc> [--srgb | --grade in.bmp out.bmp preset]\n");
+    if (argc < 6) {
+        printf("usage: mp_harness <d3d11.dll> <tonemap.dxbc> <ui.dxbc> <scene.dxbc> <defread.dxbc> "
+               "[--srgb | --grade in.bmp out.bmp preset]\n");
         return 2;
     }
-    const bool srgb = argc > 5 && strcmp(argv[5], "--srgb") == 0;
+    const bool srgb = argc > 6 && strcmp(argv[6], "--srgb") == 0;
     // --grade: run one picture through a preset instead of the checks (to look at the presets).
-    const bool grade = argc > 8 && strcmp(argv[5], "--grade") == 0;
+    const bool grade = argc > 9 && strcmp(argv[6], "--grade") == 0;
     std::vector<unsigned char> picture;
     UINT W = 640, H = 360;
-    if (grade && !readBmp(argv[6], picture, W, H)) {
-        printf("cannot read %s (24 or 32-bit BMP)\n", argv[6]);
+    if (grade && !readBmp(argv[7], picture, W, H)) {
+        printf("cannot read %s (24 or 32-bit BMP)\n", argv[7]);
         return 2;
     }
     // Test settings: exposure +1 stop and nothing else.
@@ -156,7 +157,7 @@ int main(int argc, char** argv) {
                              {"Vignette", "0"},   {"Lut", ""},          {"Placement", "0"}, {"FallbackAtEnd", "1"}};
     if (grade) {
         DeleteFileA(ini.c_str());
-        WritePrivateProfileStringA("TMVS", "Preset", argv[8], ini.c_str());
+        WritePrivateProfileStringA("TMVS", "Preset", argv[9], ini.c_str());
     } else {
         for (const auto& k : keys) WritePrivateProfileStringA("TMVS", k[0], k[1], ini.c_str());
     }
@@ -256,15 +257,42 @@ int main(int argc, char** argv) {
     ID3D11PixelShader* red = nullptr;
     device->CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(), nullptr, &vs);
     device->CreatePixelShader(redCode->GetBufferPointer(), redCode->GetBufferSize(), nullptr, &red);
-    ID3D11PixelShader* engine[3] = {};
-    for (int i = 0; i < 3; i++) {
+    ID3D11PixelShader* engine[4] = {};
+    for (int i = 0; i < 4; i++) {
         const std::vector<char> code = readFile(argv[2 + i]);
         if (code.empty() || FAILED(device->CreatePixelShader(code.data(), code.size(), nullptr, &engine[i]))) {
             printf("cannot create engine shader %s\n", argv[2 + i]);
             return 2;
         }
     }
-    ID3D11PixelShader *toneMap = engine[0], *ui = engine[1], *scene = engine[2];
+    ID3D11PixelShader *toneMap = engine[0], *ui = engine[1], *scene = engine[2], *lightRead = engine[3];
+
+    // The engine's G-buffer and light buffers (contents don't matter) and its motion target.
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    ID3D11Texture2D* gbuffer[4] = {};
+    ID3D11ShaderResourceView* gbufferSrv[4] = {};
+    for (int i = 0; i < 4; i++) {
+        device->CreateTexture2D(&td, nullptr, &gbuffer[i]);
+        device->CreateShaderResourceView(gbuffer[i], nullptr, &gbufferSrv[i]);
+    }
+    td.Format = DXGI_FORMAT_R16G16_FLOAT;
+    ID3D11Texture2D* motion = nullptr;
+    ID3D11RenderTargetView* motionRtv = nullptr;
+    device->CreateTexture2D(&td, nullptr, &motion);
+    device->CreateRenderTargetView(motion, nullptr, &motionRtv);
+
+    // SceneV like the engine uploads it: a dynamic 704-byte constant buffer at vertex slot 13, with
+    // an eye at (10, 20, 30) looking along +z (reversed infinite projection, near 0.1).
+    D3D11_BUFFER_DESC cbd = {};
+    cbd.ByteWidth = 704;
+    cbd.Usage = D3D11_USAGE_DYNAMIC;
+    cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    ID3D11Buffer* sceneV = nullptr;
+    device->CreateBuffer(&cbd, nullptr, &sceneV);
+    const float eye[3] = {10, 20, 30};
+    const float viewProj[16] = {1, 0, 0, -eye[0], 0, 1, 0, -eye[1], 0, 0, 0, 0.1f, 0, 0, 1, -eye[2]}; // rows
 
     D3D11_TEXTURE2D_DESC st = {};
     backBuffer->GetDesc(&st);
@@ -289,6 +317,23 @@ int main(int argc, char** argv) {
         ctx->PSSetShader(scene, nullptr, 0);
         viewport(ctx, 0, 0, 1, 1);
         ctx->Draw(3, 0);
+        // Light-read pass: camera at vertex slot 13, the buffers at the shader's own slots
+        // (Block_DefReadP1: light mask t1, diffuse t2, specular t3, normals t4), motion as target 1.
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(ctx->Map(sceneV, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+            memset(mapped.pData, 0, 704);
+            memcpy(static_cast<char*>(mapped.pData) + 560, viewProj, sizeof(viewProj));
+            memcpy(static_cast<char*>(mapped.pData) + 624, eye, sizeof(eye));
+            ctx->Unmap(sceneV, 0);
+        }
+        ctx->VSSetConstantBuffers(13, 1, &sceneV);
+        ID3D11RenderTargetView* lightTargets[2] = {hdrRtv, motionRtv};
+        ctx->OMSetRenderTargets(2, lightTargets, dsv);
+        ctx->PSSetShaderResources(1, 4, gbufferSrv);
+        ctx->PSSetShader(lightRead, nullptr, 0);
+        ctx->Draw(3, 0);
+        ID3D11ShaderResourceView* noGbuffer[4] = {};
+        ctx->PSSetShaderResources(1, 4, noGbuffer);
         // Tone map into the back buffer.
         if (grade) ctx->UpdateSubresource(backBuffer, 0, nullptr, picture.data(), W * 4, 0);
         else ctx->ClearRenderTargetView(bbRtv, clear);
@@ -321,18 +366,22 @@ int main(int argc, char** argv) {
         swapChain->Present(0, 0);
     };
 
-    int s[8] = {};
+    int s[12] = {};
     unsigned char centre[4] = {}, hud[4] = {};
     if (grade) {
         for (int i = 0; i < 3; i++) frame(false, centre, hud);
-        return writeBmp(argv[7], picture, W, H) ? 0 : 1;
+        return writeBmp(argv[8], picture, W, H) ? 0 : 1;
     }
     printf("harness: %s back buffer view\n", srgb ? "sRGB" : "UNORM");
     for (int i = 0; i < 3; i++) frame(true, centre, hud);
     stats(s);
-    printf("  stats: placed %d, tone map %d, shaders %d/%d, depth %d, draws %d; centre %u %u %u, hud %u %u %u\n", s[0], s[1],
-           s[2], s[3], s[4], s[5], centre[0], centre[1], centre[2], hud[0], hud[1], hud[2]);
-    check(s[2] == 3, "the three engine shaders are recognised (and only those)");
+    printf("  stats: placed %d, tone map %d, shaders %d/%d, depth %d, draws %d, camera %d, textures 0x%x; centre %u %u %u, "
+           "hud %u %u %u\n", s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], centre[0], centre[1], centre[2], hud[0], hud[1], hud[2]);
+    check(s[2] == 4, "the four engine shaders are recognised (and only those)");
+    check(s[6] == 1, "the engine camera is read from its SceneV upload");
+    check(s[8] == 1000 && s[9] == 2000 && s[10] == 3000, "the camera's eye is (10, 20, 30)");
+    const int wanted = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7);
+    check((s[7] & wanted) == wanted, "HDR, depth, normals, light buffers, light mask and motion are found by name");
     check(s[1] == 1, "the tone map is found");
     check(s[0] == 1, "the effects go in before the interface");
     check(s[4] == 1, "the scene depth is found and readable");
@@ -361,7 +410,7 @@ int main(int argc, char** argv) {
     auto exists = [&](const char* file) {
         return GetFileAttributesA((folder + "\\" + file).c_str()) != INVALID_FILE_ATTRIBUTES;
     };
-    check(!last.empty() && exists("trace.txt") && exists("input.dds") && exists("input.bmp") && exists("depth.dds") &&
+    check(!last.empty() && exists("trace.txt") && exists("input.dds") && exists("input.bmp") && exists("engine_depth.dds") && exists("engine_normal.dds") && exists("camera.txt") &&
               exists("output.dds") && exists("hdr_t0.dds"),
           "a capture writes trace, HDR input, input, depth and output");
     printf("  capture: %s\n", folder.c_str());

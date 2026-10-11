@@ -1,4 +1,5 @@
 #pragma once
+#include "engine_frame.h"
 #include "settings.h"
 #include <d3d11.h>
 #include <string>
@@ -46,6 +47,12 @@ private:
     ID3D11DepthStencilView* dsv = nullptr;
 };
 
+// What the engine handed over this frame (hooks.cpp): its textures (any may be null) and camera.
+struct EngineView {
+    ID3D11Resource* const* tex = nullptr; // kTexCount entries
+    const Camera* camera = nullptr;       // null: not found this frame
+};
+
 class Renderer {
 public:
     bool init(ID3D11Device* device);
@@ -53,19 +60,20 @@ public:
     // Size-dependent resources (copies, blur targets, depth view): dropped on ResizeBuffers.
     void releaseTargets();
 
-    // Grades the image of `target` in place. `depth` is the scene's depth buffer or null.
-    bool apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, ID3D11Resource* depth, const Settings& s);
+    // Grades the image of `target` in place.
+    bool apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const EngineView& view, const Settings& s);
 
     // The copy of the image the last apply() graded (for captures).
     ID3D11Texture2D* lastInput() const { return m_copy; }
-    bool hasDepthView() const { return m_depthSrv != nullptr; }
-    DXGI_FORMAT depthFormat() const { return m_depthFormat; }
+    DXGI_FORMAT lastViewFormat() const { return m_copyViewFormat; }
+    bool hasDepthView() const { return m_texSrv[kTexDepth] != nullptr; }
+    DXGI_FORMAT depthFormat() const { return m_texFormat[kTexDepth]; }
     const std::string& lutError() const { return m_lutError; }
 
 private:
     bool ensureCopy(ID3D11Texture2D* source, const D3D11_TEXTURE2D_DESC& desc, DXGI_FORMAT viewFormat);
     bool ensureBlur(UINT width, UINT height);
-    ID3D11ShaderResourceView* depthView(ID3D11Resource* depth);
+    ID3D11ShaderResourceView* textureView(int index, ID3D11Resource* res);
     void updateLut(const std::string& name);
     void pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, UINT width, UINT height,
               ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY);
@@ -94,10 +102,11 @@ private:
     ID3D11ShaderResourceView* m_blurSrv[2] = {};
     UINT m_blurW = 0, m_blurH2 = 0;
 
-    ID3D11Resource* m_depthResource = nullptr; // not owned: identity of the cached view
-    ID3D11ShaderResourceView* m_depthSrv = nullptr;
-    DXGI_FORMAT m_depthFormat = DXGI_FORMAT_UNKNOWN;
-    bool m_depthTried = false;
+    // Views of the engine's textures, cached per resource (the pointers are identities only).
+    ID3D11Resource* m_texRes[kTexCount] = {};
+    ID3D11ShaderResourceView* m_texSrv[kTexCount] = {};
+    DXGI_FORMAT m_texFormat[kTexCount] = {};
+    bool m_texTried[kTexCount] = {};
 
     std::string m_lutName;
     std::string m_lutError;

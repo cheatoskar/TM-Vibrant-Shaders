@@ -289,10 +289,42 @@ void onToneMap(ID3D11Device* device, ID3D11DeviceContext* ctx) {
     if (g_trace) fprintf(g_trace, "      ^ tone map: inputs saved as hdr_t*.dds\n");
 }
 
-void onGraded(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Texture2D* input, ID3D11Resource* depth) {
+void writeCamera(const Camera& c) {
+    FILE* f = _wfopen((g_folder + L"/camera.txt").c_str(), L"w");
+    if (f) {
+        fprintf(f, "eye %.4f %.4f %.4f\n", c.eye[0], c.eye[1], c.eye[2]);
+        fprintf(f, "sun %.4f %.4f %.4f\n", c.sunColour[0], c.sunColour[1], c.sunColour[2]);
+        fprintf(f, "minmaxz %.6f %.6f %.6f %.6f\n", c.minMaxZ[0], c.minMaxZ[1], c.minMaxZ[2], c.minMaxZ[3]);
+        fprintf(f, "worldprcamera_stored_in %s\n", c.transposed ? "columns" : "rows");
+        for (int r = 0; r < 4; r++)
+            fprintf(f, "viewproj %.6f %.6f %.6f %.6f\n", c.viewProj[r * 4], c.viewProj[r * 4 + 1], c.viewProj[r * 4 + 2],
+                    c.viewProj[r * 4 + 3]);
+        for (int r = 0; r < 3; r++)
+            fprintf(f, "worldtocamera %.6f %.6f %.6f %.6f\n", c.worldToCamera[r * 4], c.worldToCamera[r * 4 + 1],
+                    c.worldToCamera[r * 4 + 2], c.worldToCamera[r * 4 + 3]);
+        fclose(f);
+    }
+    f = _wfopen((g_folder + L"/scenev.bin").c_str(), L"wb");
+    if (f) {
+        fwrite(c.raw, 1, sizeof(c.raw), f);
+        fclose(f);
+    }
+}
+
+void onGraded(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Texture2D* input, DXGI_FORMAT viewFormat,
+              const EngineView& engine) {
     save(device, ctx, input, L"input");
-    save(device, ctx, depth, L"depth");
-    if (g_trace) fprintf(g_trace, "      ^ the mod graded here (input.dds = before, depth.dds)\n");
+    if (FILE* f = _wfopen((g_folder + L"/view.txt").c_str(), L"w")) {
+        fprintf(f, "%d", static_cast<int>(viewFormat));
+        fclose(f);
+    }
+    for (int i = 0; engine.tex && i < kTexCount; i++) {
+        wchar_t name[32];
+        swprintf(name, 32, L"engine_%hs", engineTextureName(i));
+        save(device, ctx, engine.tex[i], name);
+    }
+    if (engine.camera) writeCamera(*engine.camera);
+    if (g_trace) fprintf(g_trace, "      ^ the mod graded here (input.dds = before, engine_*.dds)\n");
 }
 
 void onPresent(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* backBuffer) {

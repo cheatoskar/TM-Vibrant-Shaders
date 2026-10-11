@@ -10,7 +10,8 @@ enum class Placement : int {
     EndOfFrame = 1 // on the finished image at Present: the interface is graded too
 };
 
-enum class View : int { Normal = 0, Split = 1, Depth = 2 };
+// Normal and Split grade the image; the rest show what the mod reads from the engine (checks).
+enum class View : int { Normal = 0, Split = 1, Depth = 2, Normals = 3, Motion = 4, Light = 5, WorldGrid = 6 };
 
 struct Settings {
     bool enabled = true;
@@ -51,6 +52,8 @@ struct Preset {
 const std::vector<Preset>& presets();
 // Sets the grading values of a built-in preset (placement, view and LUT stay).
 void applyPreset(Settings& s, const std::string& name);
+// Sets one value by its settings.ini key (Exposure, Contrast, ...). False for an unknown key.
+bool set(Settings& s, const std::string& key, const std::string& value);
 
 } // namespace settings
 } // namespace tmvs_mp

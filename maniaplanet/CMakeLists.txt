@@ -49,12 +49,10 @@ foreach(item ${MP_ENTRIES})
   list(APPEND MP_SHADER_HEADERS "${out}")
 endforeach()
 
-add_library(tmvs_mp SHARED
-  src/dllmain.cpp
-  src/proxy.cpp
-  src/forward.asm
-  src/d3d11.def
+# Everything but the proxy: shared by the d3d11.dll and the offline previewer.
+add_library(tmvs_mp_core STATIC
   src/hooks.cpp
+  src/engine_frame.cpp
   src/shaderdb.cpp
   src/renderer.cpp
   src/overlay.cpp
@@ -70,19 +68,35 @@ add_library(tmvs_mp SHARED
   ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
 )
-# The game loads it as d3d11.dll from its own folder.
-set_target_properties(tmvs_mp PROPERTIES OUTPUT_NAME d3d11)
-target_include_directories(tmvs_mp PRIVATE src "${TMVS_ROOT}/src" "${CMAKE_CURRENT_BINARY_DIR}" ${imgui_SOURCE_DIR}
+target_include_directories(tmvs_mp_core PUBLIC src "${TMVS_ROOT}/src" "${CMAKE_CURRENT_BINARY_DIR}" ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends)
-target_compile_definitions(tmvs_mp PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
+target_compile_definitions(tmvs_mp_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
   TMVS_MP_VERSION="${PROJECT_VERSION}")
-target_compile_options(tmvs_mp PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
-target_link_libraries(tmvs_mp PRIVATE dxgi dxguid shell32 user32)
+target_compile_options(tmvs_mp_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
+# Never d3d11.lib here: the DLL *is* d3d11.dll and would import itself.
+target_link_libraries(tmvs_mp_core PUBLIC dxgi dxguid shell32 user32)
 set_source_files_properties(
   ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
   PROPERTIES COMPILE_OPTIONS "/W0")
+
+add_library(tmvs_mp SHARED
+  src/dllmain.cpp
+  src/proxy.cpp
+  src/forward.asm
+  src/d3d11.def
+)
+# The game loads it as d3d11.dll from its own folder.
+set_target_properties(tmvs_mp PROPERTIES OUTPUT_NAME d3d11)
+target_compile_options(tmvs_mp PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
+target_link_libraries(tmvs_mp PRIVATE tmvs_mp_core)
+
+# Offline previewer: renders a capture (F12 in the game) through the same renderer.
+#   mp_preview <capture folder> <out.bmp> [--preset Name] [--view N] [--set Key=Value ...]
+add_executable(mp_preview tools/preview.cpp)
+target_link_libraries(mp_preview PRIVATE tmvs_mp_core d3d11)
+target_compile_options(mp_preview PRIVATE /W4 /EHsc /permissive- /utf-8)
 
 # Offline test: a small D3D11 program that draws like the game (scene with depth, the engine's own
 # tone-map pixel shader, then an interface draw) through the proxy and checks where the effects land.

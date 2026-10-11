@@ -8,6 +8,7 @@
 #include "shaders/PS_Grade.h"
 #include "shaders/VS_Full.h"
 #include <algorithm>
+#include <cstring>
 
 namespace tmvs_mp {
 namespace {
@@ -19,20 +20,10 @@ template <typename T> void safeRelease(T*& p) {
 
 struct GradeConstants {
     float p[5][4];
+    float invViewProj[4][4]; // rows
+    float camera[4];         // eye xyz, has camera
+    float has[4];            // normal, motion, light (diffuse) textures present
 };
-
-// The typed view format a depth resource can be read with (null: not readable).
-DXGI_FORMAT depthReadFormat(DXGI_FORMAT f) {
-    switch (f) {
-    case DXGI_FORMAT_R24G8_TYPELESS: return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-    case DXGI_FORMAT_R32_TYPELESS: return DXGI_FORMAT_R32_FLOAT;
-    case DXGI_FORMAT_R32G8X24_TYPELESS: return DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
-    case DXGI_FORMAT_R16_TYPELESS: return DXGI_FORMAT_R16_UNORM;
-    case DXGI_FORMAT_R32_FLOAT: return DXGI_FORMAT_R32_FLOAT;
-    case DXGI_FORMAT_R16_UNORM: return DXGI_FORMAT_R16_UNORM;
-    default: return DXGI_FORMAT_UNKNOWN;
-    }
-}
 
 // The copy of the game's image is made typeless, so it can be read with the game's view format
 // (an sRGB view of a UNORM back buffer, for example).
@@ -175,9 +166,11 @@ void Renderer::releaseTargets() {
         safeRelease(m_blurTex[i]);
     }
     m_blurW = m_blurH2 = 0;
-    safeRelease(m_depthSrv);
-    m_depthResource = nullptr;
-    m_depthTried = false;
+    for (int i = 0; i < kTexCount; i++) {
+        safeRelease(m_texSrv[i]);
+        m_texRes[i] = nullptr;
+        m_texTried[i] = false;
+    }
 }
 
 void Renderer::release() {
@@ -268,24 +261,24 @@ bool Renderer::ensureBlur(UINT width, UINT height) {
     return true;
 }
 
-ID3D11ShaderResourceView* Renderer::depthView(ID3D11Resource* depth) {
-    if (depth != m_depthResource) {
-        safeRelease(m_depthSrv);
-        m_depthResource = depth;
-        m_depthTried = false;
-        m_depthFormat = DXGI_FORMAT_UNKNOWN;
+ID3D11ShaderResourceView* Renderer::textureView(int index, ID3D11Resource* res) {
+    if (res != m_texRes[index]) {
+        safeRelease(m_texSrv[index]);
+        m_texRes[index] = res;
+        m_texTried[index] = false;
+        m_texFormat[index] = DXGI_FORMAT_UNKNOWN;
     }
-    if (!depth || m_depthTried) return m_depthSrv;
-    m_depthTried = true;
+    if (!res || m_texTried[index]) return m_texSrv[index];
+    m_texTried[index] = true;
     ID3D11Texture2D* tex = nullptr;
-    if (FAILED(depth->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)))) return nullptr;
+    if (FAILED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)))) return nullptr;
     D3D11_TEXTURE2D_DESC d;
     tex->GetDesc(&d);
-    m_depthFormat = d.Format;
-    const DXGI_FORMAT read = depthReadFormat(d.Format);
+    m_texFormat[index] = d.Format;
+    const DXGI_FORMAT read = readableFormat(d.Format);
     if (!(d.BindFlags & D3D11_BIND_SHADER_RESOURCE) || read == DXGI_FORMAT_UNKNOWN || d.SampleDesc.Count > 1) {
-        TMVS_LOG("renderer: scene depth %ux%u format %d bind 0x%x samples %u is not readable", d.Width, d.Height, d.Format,
-                 d.BindFlags, d.SampleDesc.Count);
+        TMVS_LOG("renderer: engine %s %ux%u format %d bind 0x%x samples %u is not readable", engineTextureName(index), d.Width,
+                 d.Height, d.Format, d.BindFlags, d.SampleDesc.Count);
         tex->Release();
         return nullptr;
     }
@@ -298,10 +291,11 @@ ID3D11ShaderResourceView* Renderer::depthView(ID3D11Resource* depth) {
         sv.Texture2DArray.MipLevels = 1;
         sv.Texture2DArray.ArraySize = 1;
     }
-    if (FAILED(m_device->CreateShaderResourceView(tex, &sv, &m_depthSrv))) m_depthSrv = nullptr;
-    TMVS_LOG("renderer: scene depth %ux%u format %d -> %s", d.Width, d.Height, d.Format, m_depthSrv ? "readable" : "view failed");
+    if (FAILED(m_device->CreateShaderResourceView(tex, &sv, &m_texSrv[index]))) m_texSrv[index] = nullptr;
+    TMVS_LOG("renderer: engine %s %ux%u format %d -> %s", engineTextureName(index), d.Width, d.Height, d.Format,
+             m_texSrv[index] ? "readable" : "view failed");
     tex->Release();
-    return m_depthSrv;
+    return m_texSrv[index];
 }
 
 void Renderer::updateLut(const std::string& name) {
@@ -349,7 +343,7 @@ void Renderer::pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11Rende
     ctx->Draw(3, 0);
 }
 
-bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, ID3D11Resource* depth, const Settings& s) {
+bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const EngineView& engine, const Settings& s) {
     if (!m_vs || !target) return false;
     D3D11_RENDER_TARGET_VIEW_DESC rd;
     target->GetDesc(&rd);
@@ -379,7 +373,9 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, I
     tex->Release();
 
     updateLut(s.lut);
-    ID3D11ShaderResourceView* depthSrv = depthView(depth);
+    ID3D11ShaderResourceView* views[kTexCount] = {};
+    for (int i = 0; i < kTexCount; i++) views[i] = textureView(i, engine.tex ? engine.tex[i] : nullptr);
+    ID3D11ShaderResourceView* depthSrv = views[kTexDepth];
 
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ctx->IASetInputLayout(nullptr);
@@ -403,7 +399,8 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, I
 
     const UINT w = desc.Width, h = desc.Height;
     const bool split = s.view == View::Split;
-    const bool clarity = s.clarity > 0.001f && s.view != View::Depth && ensureBlur(w, h);
+    const bool debugView = static_cast<int>(s.view) >= static_cast<int>(View::Depth);
+    const bool clarity = s.clarity > 0.001f && !debugView && ensureBlur(w, h);
     if (clarity) {
         pass(ctx, m_down, m_blurRtv[0], m_blurW, m_blurH2, &m_copySrv, 1, 1.0f / w, 1.0f / h);
         pass(ctx, m_blurH, m_blurRtv[1], m_blurW, m_blurH2, &m_blurSrv[0], 1, 1.0f / m_blurW, 1.0f / m_blurH2);
@@ -431,12 +428,21 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, I
     c.p[4][1] = depthSrv ? 1.0f : 0.0f;
     c.p[4][2] = m_lutSrv ? 1.0f : 0.0f;
     c.p[4][3] = static_cast<float>(m_lutSize);
+    if (engine.camera) {
+        memcpy(c.invViewProj, engine.camera->invViewProj, sizeof(c.invViewProj));
+        memcpy(c.camera, engine.camera->eye, sizeof(float) * 3);
+        c.camera[3] = 1.0f;
+    }
+    c.has[0] = views[kTexNormal] ? 1.0f : 0.0f;
+    c.has[1] = views[kTexMotion] ? 1.0f : 0.0f;
+    c.has[2] = views[kTexDiffuse] ? 1.0f : 0.0f;
     ctx->UpdateSubresource(m_gradeCb, 0, nullptr, &c, 0, 0);
-    ID3D11ShaderResourceView* srvs[4] = {m_copySrv, clarity ? m_blurSrv[0] : nullptr, depthSrv, m_lutSrv};
-    pass(ctx, m_grade, target, w, h, srvs, 4, 1.0f / w, 1.0f / h);
+    ID3D11ShaderResourceView* srvs[7] = {m_copySrv,          clarity ? m_blurSrv[0] : nullptr, depthSrv, m_lutSrv,
+                                         views[kTexNormal], views[kTexMotion],                views[kTexDiffuse]};
+    pass(ctx, m_grade, target, w, h, srvs, 7, 1.0f / w, 1.0f / h);
 
-    ID3D11ShaderResourceView* none[4] = {};
-    ctx->PSSetShaderResources(0, 4, none);
+    ID3D11ShaderResourceView* none[7] = {};
+    ctx->PSSetShaderResources(0, 7, none);
     backup.restore(ctx);
     return true;
 }

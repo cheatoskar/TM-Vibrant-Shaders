@@ -32,6 +32,9 @@ struct Stats {
     Placed placed = Placed::None;  // last frame
     const char* hudShader = nullptr; // the draw the effect went in front of (last frame)
     bool depthFound = false;
+    bool cameraFound = false;       // last frame
+    unsigned textures = 0;          // bit i: engine texture i (engine_frame.h) found
+    float eye[3] = {};
     DXGI_FORMAT depthFormat = DXGI_FORMAT_UNKNOWN;
     uint32_t width = 0, height = 0;
 };
