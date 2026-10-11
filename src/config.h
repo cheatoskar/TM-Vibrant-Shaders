@@ -30,6 +30,8 @@ void applyPreset(Settings& settings, Preset preset);
 enum class Mood : int { Unknown = -1, Day = 0, Dusk, Night, Count };
 const char* moodName(Mood mood);
 Mood classifyMood(const float sunColor[3]);
+// The mood of a map's time of day (0..1, the engine's decoration mood).
+Mood moodOfDayTime(float dayTime);
 
 // Describes one tunable for the INI file and the overlay.
 struct Field {
@@ -118,6 +120,8 @@ public:
     std::string moodPreset[static_cast<int>(Mood::Count)] = {"Vibrant", "Golden Hour", "Horizon"};
     Mood mood = Mood::Unknown;
     void onMoodDetected(Mood m);
+    // The look a map of this mood gets once loaded (its mood preset, or the current look).
+    Settings lookForMood(Mood m) const;
 
     // Map looks: the map's author writes "[TMVS] Preset=Snowstorm Snow=1.5 ..." into the map's
     // comments (map editor). With the mod you get exactly that look on that map; on the next

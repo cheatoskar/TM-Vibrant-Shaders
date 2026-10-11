@@ -607,7 +607,7 @@ float4 c_Half : register(c6);   // half-texel offset of the map
 float4 c_Texel : register(c7);  // full-res texel size of the depth (x, y)
 float4 c_Mode  : register(c8);  // x: 1 = undersides (roofs, bridges) instead of top surfaces, y: max depth, z: 1 = keep the car out
 sampler2D s_depth : register(s0);
-struct VSOut { float4 pos : POSITION; float2 data : TEXCOORD0; };
+struct VSOut { float4 pos : POSITION; float2 data : TEXCOORD0; float size : PSIZE; };
 // World position of the depth at uv. D3D9 pixel centre: the game drew texel centre uv at
 // ndc 2(uv - texel / 2) - 1.
 float3 worldAt(float2 uv, out float z) {
@@ -615,6 +615,12 @@ float3 worldAt(float2 uv, out float z) {
     float2 ndc = float2(uv.x * 2.0 - 1.0 - c_Texel.x, 1.0 - uv.y * 2.0 + c_Texel.y);
     float3 v = float3((ndc.x - c_Proj.z) * z / c_Proj.x, (ndc.y - c_Proj.w) * z / c_Proj.y, z);
     return float3(c_V0.w, c_V1.w, c_V2.w) + v.x * c_V0.xyz + v.y * c_V1.xyz + v.z * c_V2.xyz;
+}
+// Height of what is seen at uv if it is close (the road beside and behind the car), else very high.
+float groundAt(float2 uv) {
+    float zz;
+    float3 g = worldAt(uv, zz);
+    return zz > 0.3 && zz < 24.0 ? g.y : 1e5;
 }
 VSOut main(float2 uv : TEXCOORD0) {
     VSOut o;
@@ -635,8 +641,14 @@ VSOut main(float2 uv : TEXCOORD0) {
     }
     // The player's car (close, in the middle of the lower screen) must not cast long
     // shadows: it moves on and would leave stale copies of itself behind (dark car shapes
-    // in the haze, shadows of a car that is gone).
-    if (c_Mode.z > 0.5 && z < 16.0 && uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.35) valid = false;
+    // in the haze, shadows of a car that is gone). Only what stands up to a car's height
+    // above the road there: excluding everything close left holes in the map (an arch just
+    // driven under, the road) that read as "nothing casts a shadow here", so a low light
+    // drew bright screen-sized boxes onto the road.
+    float road = min(min(groundAt(float2(0.3, 0.92)), groundAt(float2(0.7, 0.92))), groundAt(float2(0.5, 0.99)));
+    // No road close below (in the air): everything close there, as before.
+    bool carHeight = road > 1e4 || (w.y > road + 0.35 && w.y < road + 2.2);
+    if (c_Mode.z > 0.5 && z < 16.0 && uv.x > 0.25 && uv.x < 0.75 && uv.y > 0.35 && carHeight) valid = false;
     // Also wherever the car is on screen: a car-sized box around the closest surface below
     // the screen centre (found like the spray and the snow do).
     float z0 = tex2Dlod(s_depth, float4(0.5, 0.6, 0, 0)).r;
@@ -652,11 +664,23 @@ VSOut main(float2 uv : TEXCOORD0) {
         float3 d = w - (tail + f * 1.6);
         // Only at the height of the point found (the car's body): the road around it stays in
         // the map, also when that point is the car's nose and the box reaches over the road.
-        if (abs(dot(d, f)) < 3.0 && abs(dot(d, float3(f.z, 0.0, -f.x))) < 1.6 && d.y > -0.25 && d.y < 2.0) valid = false;
+        // A point on the road itself is no car: no box (it cut a hole into the road around it).
+        if (tail.y > road + 0.2 && abs(dot(d, f)) < 3.0 && abs(dot(d, float3(f.z, 0.0, -f.x))) < 1.6 && d.y > -0.25 && d.y < 2.0) valid = false;
     }
     o.pos = valid ? float4(m.x * 2.0 - 1.0 + c_Half.x, 1.0 - m.y * 2.0 + c_Half.y, saturate(0.5 - (w.y - c_Map.w) / 1000.0), 1.0)
                   : float4(-10.0, -10.0, 0.0, 1.0);
     o.data = float2(w.y + 10000.0, 0.0);
+    // Far ground seen at a grazing angle: the samples (every 5th pixel row) land metres apart
+    // and leave empty stripes in the map, which a low light draws as striped shadow edges.
+    // Each point covers the gap to the next row - only on one surface (about the same
+    // height), so wall tops don't spread onto the floor beside them.
+    o.size = 1.0;
+    if (valid && c_Mode.x < 0.5 && z > 25.0) {
+        float zn;
+        float3 wn = worldAt(uv + float2(0.0, c_Texel.y * 5.0), zn);
+        float gap = length(wn.xz - w.xz) * c_Map.z / c_Half.y; // in map texels
+        if (abs(wn.y - w.y) < 0.15 * gap / (c_Map.z / c_Half.y) + 0.3) o.size = clamp(gap, 1.0, 6.0);
+    }
     return o;
 }
 )";
@@ -676,7 +700,12 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
         device->GetDisplayMode(0, &mode);
         const bool vtf = d3d && SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format, D3DUSAGE_QUERY_VERTEXTEXTURE,
                                                                   D3DRTYPE_TEXTURE, D3DFMT_R32F));
+        // Bilinear heights give the long shadows smooth edges instead of 0.6 m stairs
+        // (stretched along a low light). Point sampling where the format can't be filtered.
+        m_heightFilter = d3d && SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format, D3DUSAGE_QUERY_FILTER,
+                                                                  D3DRTYPE_TEXTURE, D3DFMT_R32F));
         if (d3d) d3d->Release();
+        TMVS_LOG("pipeline: height map %s", m_heightFilter ? "filtered (smooth long-shadow edges)" : "point sampled, jittered");
         if (!vtf) {
             TMVS_LOG("pipeline: no vertex texture fetch for R32F - long-range shadows disabled");
             m_heightSupported = false;
@@ -812,6 +841,8 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
         bind(device, 0, map[previous].texture, false);
         bind(device, 1, m_heightFrame.texture, false);
         passConstants(device, shift[0], shift[1], fresh ? 1.0f : 0.0f, pass ? 0.0f : 0.08f);
+        const float texelSize[4] = {1.0f / m_heightSize, 0.0f, 0.0f, 0.0f};
+        device->SetPixelShaderConstantF(33, texelSize, 1);
         runPass(device, kHeightMerge, map[m_heightIndex]);
     }
     m_ceilingValid = ceilings;
@@ -1830,7 +1861,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (s.aoStrength > 0.0f || s.shadowStrength > 0.0f || s.debugView == 3 || s.debugView == 4 || s.debugView == 7) {
         bind(device, 0, m_ndHalf.texture, false);
         bind(device, 1, m_nd.texture, false);
-        bind(device, 2, longShadows ? m_heightMap[m_heightIndex].texture : nullptr, false);
+        bind(device, 2, longShadows ? m_heightMap[m_heightIndex].texture : nullptr, m_heightFilter);
         runPass(device, kOcclusionShadow, m_occlusion);
         bind(device, 0, m_occlusion.texture, false);
         bind(device, 1, m_ndHalf.texture, false);

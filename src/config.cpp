@@ -115,6 +115,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("ReadableGameDepth", "Effects in replay/video export (restart)", "Image", Bool, readableGameDepth, 0.0f, 1.0f),
         TMVS_FIELD("GameMaterials", "Use the game's materials (lamps, cars, glass)", "Image", Bool, gameMaterials, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameFX", "Turn off the game's FX post-processing (next map)", "Image", Bool, disableGameFx, 0.0f, 1.0f),
+        TMVS_FIELD("GameNight", "Real night under night skies (next map)", "Image", Bool, gameNight, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
         TMVS_FIELD("TrailColor", "Trail colour", "Neon trail", Color, trailColor, 0.0f, 1.0f),
@@ -164,6 +165,22 @@ Mood classifyMood(const float c[3]) {
     return Mood::Day;
 }
 
+Mood moodOfDayTime(float t) {
+    // The engine calls it night outside (0.25, 0.75] (6:00 - 18:00). Sunrise and sunset: the
+    // first and last two hours of the day (a guess; the log has each map's time).
+    if (t <= 0.25f || t > 0.75f) return Mood::Night;
+    if (t < 0.34f || t > 0.66f) return Mood::Dusk;
+    return Mood::Day;
+}
+
+Settings Config::lookForMood(Mood m) const {
+    Settings look = settings;
+    if (m_mapLook || preset == kCustomPreset || !autoMood || m == Mood::Unknown) return look;
+    const std::string& p = moodPreset[static_cast<int>(m)];
+    if (!p.empty()) namedSettings(p, look);
+    return look;
+}
+
 namespace {
 
 const wchar_t* const kMoodKeys[] = {L"PresetDay", L"PresetDusk", L"PresetNight"};
@@ -208,7 +225,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter");
+           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {
@@ -748,6 +765,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepDepth = s.readableGameDepth;
     const bool keepFx = s.disableGameFx;
     const bool keepMaterials = s.gameMaterials;
+    const bool keepNight = s.gameNight;
     const bool keepEnabled = s.enabled;
     const bool keepAuto = s.autoQuality;
     const float keepTarget = s.targetFps;
@@ -769,6 +787,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.readableGameDepth = keepDepth;
     s.disableGameFx = keepFx;
     s.gameMaterials = keepMaterials;
+    s.gameNight = keepNight;
     s.enabled = keepEnabled;
     s.autoQuality = keepAuto;
     s.targetFps = keepTarget;
@@ -1170,6 +1189,7 @@ void Config::load() {
     settings.readableGameDepth = GetPrivateProfileIntW(L"Settings", L"ReadableGameDepth", 1, ini) != 0;
     settings.disableGameFx = GetPrivateProfileIntW(L"Settings", L"DisableGameFX", 1, ini) != 0;
     settings.gameMaterials = GetPrivateProfileIntW(L"Settings", L"GameMaterials", 1, ini) != 0;
+    settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 0, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
     wchar_t target[32] = {};
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));

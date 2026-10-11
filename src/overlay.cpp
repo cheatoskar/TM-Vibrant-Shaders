@@ -331,7 +331,7 @@ const Field* findField(const char* key) {
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter");
+           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight");
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -1428,6 +1428,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "ReadableGameDepth", "Effects in replays and video export (restart)");
                           l |= drawKey(s, "GameMaterials", "Use the game's materials (lamps, cars, glass)");
                           l |= drawKey(s, "DisableGameFX", "Turn off the game's FX: bloom, colour filter (next map)");
+                          l |= drawKey(s, "GameNight", "Real night under night skies: the game lights day maps at midnight (next map)");
                           return l;
                       }});
     panels.push_back({"Photo mode", 8.0f, [&config] {

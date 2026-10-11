@@ -24,6 +24,11 @@
 - Night skies (and the black hole) over day maps: the game's sun halo and lens flare fade out.
 - Neon, Horizon and Aurora: the dry track has a sheen instead of a mirror (`Reflections` 0.8): every lamp mirrored in the road, brightened, looked overexposed.
 - Animated skies: filaments stream round the black hole (the way its bright side says it moves), the gas giants turn in about two minutes and their bands drift against each other.
+- Long shadows: no more bright boxes on the road around and ahead of the car under a low light (the black hole, sunsets). Everything close in the middle of the screen was kept out of the height map so the car would cast no shadow; the arch just driven under went too and counted as "nothing here". Only what stands up to a car's height above the road is kept out now.
+- Long shadows: smooth edges instead of saw teeth under a low light (the height map is read filtered and dithered over a cell; far ground no longer leaves striped gaps in it), no lit dots inside shadows.
+- United Forever: roads at the environment's sea level (Rally) no longer turn into a mirror. Only water the game draws a reflection for counts as sea.
+- New setting *Real night under night skies* (`GameNight`, off by default, from the next map on): with a night sky (or the black hole) over a day or sunset map, the game lights the map at midnight itself (its moon, no baked sun to take out: no overexposed white). The map, its replays and validation stay as they are.
+- MediaTracker editor detection: replay cameras that leave a few rows out are shaded as before (only real panels count).
 - MediaTracker editor: only its 3D view is shaded. The panels around it no longer get the preset's sky and colours, and the effects line up with the view.
 - Photo mode shows the aperture (f-stop), zoom and focus at the top left (never in the photos).
 - Colour looks from LUT files: put 3D `.cube` files (DaVinci Resolve, Lightroom, Photoshop, OBS, ...) into `Documents\TrackMania\TMVS\luts` and pick one on the *Customize* page (*Colour look*), with an amount. It sits on top of every preset ([details](docs/settings.md#colour-look-lut)).

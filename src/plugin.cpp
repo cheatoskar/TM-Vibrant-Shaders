@@ -346,7 +346,10 @@ void processScene(IDirect3DDevice9* device) {
         }
     }
     // Map mood from the sun light, only in gameplay: menu backgrounds have their own light.
-    if (g_scene.haveLight && g_scene.projection[14] > -1.0f) Config::get().onMoodDetected(classifyMood(g_scene.lightColor));
+    // A map the game lights at midnight (real night) keeps the mood of its own time of day.
+    if (g_scene.haveLight && g_scene.projection[14] > -1.0f) {
+        Config::get().onMoodDetected(engine::mapLitAtNight() ? moodOfDayTime(engine::mapDayTime()) : classifyMood(g_scene.lightColor));
+    }
 
     hook::InternalScope internal;
     IDirect3DSurface9* target = nullptr;
@@ -381,8 +384,10 @@ void processScene(IDirect3DDevice9* device) {
     // projection belongs to its part of the screen).
     D3DVIEWPORT9 viewport{};
     device->GetViewport(&viewport);
+    // Real panels only: replay cameras sometimes leave a few rows out (2560x1433 at 0,3).
     const bool part = viewport.Width >= 320 && viewport.Height >= 200 && viewport.X + viewport.Width <= desc.Width &&
-                      viewport.Y + viewport.Height <= desc.Height && (viewport.Width < desc.Width || viewport.Height < desc.Height);
+                      viewport.Y + viewport.Height <= desc.Height &&
+                      (viewport.Width < desc.Width * 0.95f || viewport.Height < desc.Height * 0.95f);
     const RECT area = {static_cast<LONG>(viewport.X), static_cast<LONG>(viewport.Y), static_cast<LONG>(viewport.X + viewport.Width),
                        static_cast<LONG>(viewport.Y + viewport.Height)};
     const UINT width = part ? viewport.Width : desc.Width, height = part ? viewport.Height : desc.Height;
@@ -859,6 +864,16 @@ DWORD WINAPI retryHooks(LPVOID) {
     return 0;
 }
 
+// Map load: light a day or sunset map at midnight when its look will have a night sky (the
+// sky replaces the sun anyway; the game's own night has no baked sun to take out).
+bool nightAtLoad(float dayTime) {
+    const Config& config = Config::get();
+    const Settings& s = config.settings;
+    const Mood mood = moodOfDayTime(dayTime);
+    if (!s.enabled || !s.gameNight || mood == Mood::Night) return false;
+    return Pipeline::skyReplacesSun(config.lookForMood(mood));
+}
+
 void bootOnce() {
     QueryPerformanceFrequency(&g_frequency);
     QueryPerformanceCounter(&g_startTime);
@@ -875,6 +890,7 @@ void bootOnce() {
     engineCallbacks.overlayEnd = onOverlayEnd;
     engineCallbacks.frameEnd = onFrameEnd;
     engine::install(engineCallbacks);
+    engine::setNightAtLoad(nightAtLoad);
 
     hook::DeviceCallbacks deviceCallbacks;
     deviceCallbacks.adjustPresentParams = onAdjustPresentParams;
