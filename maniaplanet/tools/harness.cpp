@@ -13,6 +13,7 @@
 // capture writes its files. Set TMVS_MP_DATA to a scratch folder first (settings, log, captures).
 #include <windows.h>
 #include <d3d11.h>
+#include <d3d10.h>
 #include <d3dcompiler.h>
 #include <dxgi.h>
 #include <cmath>
@@ -182,13 +183,18 @@ int main(int argc, char** argv) {
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* ctx = nullptr;
     const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
-    HRESULT hr = createDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_DEBUG, &level, 1,
-                              D3D11_SDK_VERSION, &device, nullptr, &ctx);
-    if (FAILED(hr))
-        hr = createDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &level, 1, D3D11_SDK_VERSION, &device, nullptr, &ctx);
+    // No debug layer: it wraps the context in an object of its own, unlike the game's device.
+    HRESULT hr = createDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &level, 1, D3D11_SDK_VERSION, &device, nullptr, &ctx);
     if (FAILED(hr)) {
         printf("device failed 0x%08lx\n", static_cast<unsigned long>(hr));
         return 2;
+    }
+    // Like ManiaPlanet: multithread protection switched on after the device exists. The runtime
+    // rewrites the context's vtable then (this once removed every hook of the mod).
+    ID3D10Multithread* multithread = nullptr;
+    if (SUCCEEDED(ctx->QueryInterface(__uuidof(ID3D10Multithread), reinterpret_cast<void**>(&multithread)))) {
+        multithread->SetMultithreadProtected(TRUE);
+        multithread->Release();
     }
 
     // Like the game: the swap chain comes from a DXGI factory, not from the device call.

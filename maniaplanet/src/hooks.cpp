@@ -42,22 +42,35 @@ thread_local int t_inside = 0;
 
 // One hooked vtable slot. Objects of different classes (a debug-layer device, another runtime's
 // swap chain) have their own vtables, so the original is kept per vtable.
+//
+// The D3D11 runtime keeps a device's and a context's vtable inside the object and rewrites all of
+// it when the game calls ID3D10Multithread::SetMultithreadProtected (the entries become locking
+// wrappers). ManiaPlanet does that after creating the device, which silently removed every hook.
+// install() is therefore repeated at every Present (refresh()): a slot that no longer holds the
+// detour takes the runtime's new function as its original and gets the detour again.
 struct Hook {
     void** vtables[4] = {};
     void* originals[4] = {};
     int count = 0;
 
-    void install(void* object, int slot, void* detour) {
+    // True when the slot had to be (re)patched.
+    bool install(void* object, int slot, void* detour) {
         void** vtable = *reinterpret_cast<void***>(object);
+        int index = -1;
         for (int i = 0; i < count; i++)
-            if (vtables[i] == vtable) return;
-        if (count == 4 || vtable[slot] == detour) return;
+            if (vtables[i] == vtable) index = i;
+        if (vtable[slot] == detour) return false;
+        if (index < 0) {
+            if (count == 4) return false;
+            index = count;
+        }
         DWORD old = 0;
-        if (!VirtualProtect(&vtable[slot], sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return;
-        originals[count] = vtable[slot];
+        if (!VirtualProtect(&vtable[slot], sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return false;
+        originals[index] = vtable[slot];
         vtable[slot] = detour;
         VirtualProtect(&vtable[slot], sizeof(void*), old, &old);
-        vtables[count++] = vtable;
+        if (index == count) vtables[count++] = vtable;
+        return true;
     }
 
     template <typename F> F get(const void* object) const {
@@ -67,6 +80,8 @@ struct Hook {
         return reinterpret_cast<F>(originals[0]);
     }
 };
+
+void repairDraws(ID3D11DeviceContext* ctx);
 
 using CreatePixelShaderFn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T, ID3D11ClassLinkage*,
                                                          ID3D11PixelShader**);
@@ -282,6 +297,7 @@ HRESULT STDMETHODCALLTYPE createDeferredContextDetour(ID3D11Device* device, UINT
 void STDMETHODCALLTYPE psSetShaderDetour(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11ClassInstance* const* inst,
                                          UINT count) {
     if (isMain(ctx)) {
+        repairDraws(ctx);
         ShaderInfo info;
         if (ps) {
             std::shared_lock<std::shared_mutex> lock(g_shaderLock);
@@ -304,7 +320,10 @@ void trackTargets(UINT count, ID3D11RenderTargetView* const* rtvs, ID3D11DepthSt
 
 void STDMETHODCALLTYPE omSetRenderTargetsDetour(ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* rtvs,
                                                 ID3D11DepthStencilView* dsv) {
-    if (isMain(ctx)) trackTargets(count, rtvs, dsv);
+    if (isMain(ctx)) {
+        repairDraws(ctx);
+        trackTargets(count, rtvs, dsv);
+    }
     g_omSetRenderTargets.get<OMSetRenderTargetsFn>(ctx)(ctx, count, rtvs, dsv);
 }
 
@@ -342,6 +361,49 @@ void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11
 }
 
 // ---- swap chain ----
+
+int installContextHooks(ID3D11DeviceContext* ctx) {
+    int patched = 0;
+    patched += g_psSetShader.install(ctx, kPSSetShader, reinterpret_cast<void*>(&psSetShaderDetour));
+    patched += g_drawIndexed.install(ctx, kDrawIndexed, reinterpret_cast<void*>(&drawIndexedDetour));
+    patched += g_draw.install(ctx, kDraw, reinterpret_cast<void*>(&drawDetour));
+    patched += g_drawIndexedInstanced.install(ctx, kDrawIndexedInstanced, reinterpret_cast<void*>(&drawIndexedInstancedDetour));
+    patched += g_drawInstanced.install(ctx, kDrawInstanced, reinterpret_cast<void*>(&drawInstancedDetour));
+    patched += g_omSetRenderTargets.install(ctx, kOMSetRenderTargets, reinterpret_cast<void*>(&omSetRenderTargetsDetour));
+    patched += g_omSetRenderTargetsAndUAVs.install(ctx, kOMSetRenderTargetsAndUAVs,
+                                                   reinterpret_cast<void*>(&omSetRenderTargetsAndUAVsDetour));
+    patched += g_executeCommandList.install(ctx, kExecuteCommandList, reinterpret_cast<void*>(&executeCommandListDetour));
+    return patched;
+}
+
+// The runtime may rewrite the draw slots between two Presents too: checked before the game sets
+// a pixel shader or render targets, which comes before its draws.
+void repairDraws(ID3D11DeviceContext* ctx) {
+    void** vt = *reinterpret_cast<void***>(ctx);
+    if (vt[kDraw] == reinterpret_cast<void*>(&drawDetour) && vt[kDrawIndexed] == reinterpret_cast<void*>(&drawIndexedDetour) &&
+        vt[kDrawInstanced] == reinterpret_cast<void*>(&drawInstancedDetour) &&
+        vt[kDrawIndexedInstanced] == reinterpret_cast<void*>(&drawIndexedInstancedDetour)) {
+        return;
+    }
+    const int patched = installContextHooks(ctx);
+    static int logged = 0;
+    if (patched && logged++ < 5) TMVS_LOG("hooks: %d context slots patched again during a frame", patched);
+}
+
+// Device and immediate-context hooks; also the repair after the runtime rewrote the vtables.
+// Returns the number of slots that had to be patched.
+int installDeviceHooks(ID3D11Device* device) {
+    int patched = 0;
+    patched += g_createPixelShader.install(device, kCreatePixelShader, reinterpret_cast<void*>(&createPixelShaderDetour));
+    patched += g_createDeferredContext.install(device, kCreateDeferredContext, reinterpret_cast<void*>(&createDeferredContextDetour));
+    ID3D11DeviceContext* ctx = nullptr;
+    device->GetImmediateContext(&ctx);
+    if (ctx) {
+        patched += installContextHooks(ctx);
+        ctx->Release();
+    }
+    return patched;
+}
 
 void releaseBackBuffer() {
     if (g_backBufferRtv) g_backBufferRtv->Release();
@@ -386,6 +448,10 @@ void beginWith(IDXGISwapChain* sc) {
 void onPresent(IDXGISwapChain* sc) {
     if (!g_swapChain) beginWith(sc);
     if (sc != g_swapChain || !g_ctx) return;
+    if (const int patched = installDeviceHooks(g_device)) {
+        static int logged = 0;
+        if (logged++ < 10) TMVS_LOG("hooks: %d device/context slots patched again (the runtime rewrote its vtables)", patched);
+    }
     ensureBackBuffer(sc);
 
     Frame& f = g_frame;
@@ -431,14 +497,23 @@ void onPresent(IDXGISwapChain* sc) {
     f.dsH = dsH;
 }
 
+// The runtime also writes the draw slots back while presenting, so they are patched again after it.
+void afterPresent(IDXGISwapChain* sc) {
+    if (sc == g_swapChain && g_device) installDeviceHooks(g_device);
+}
+
 HRESULT STDMETHODCALLTYPE presentDetour(IDXGISwapChain* sc, UINT sync, UINT flags) {
     if (!(flags & DXGI_PRESENT_TEST)) onPresent(sc);
-    return g_present.get<PresentFn>(sc)(sc, sync, flags);
+    const HRESULT hr = g_present.get<PresentFn>(sc)(sc, sync, flags);
+    afterPresent(sc);
+    return hr;
 }
 
 HRESULT STDMETHODCALLTYPE present1Detour(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* p) {
     if (!(flags & DXGI_PRESENT_TEST)) onPresent(sc);
-    return g_present1.get<Present1Fn>(sc)(sc, sync, flags, p);
+    const HRESULT hr = g_present1.get<Present1Fn>(sc)(sc, sync, flags, p);
+    afterPresent(sc);
+    return hr;
 }
 
 HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags) {
@@ -511,21 +586,7 @@ const Stats& stats() {
 
 void onDevice(ID3D11Device* device) {
     if (!device) return;
-    g_createPixelShader.install(device, kCreatePixelShader, reinterpret_cast<void*>(&createPixelShaderDetour));
-    g_createDeferredContext.install(device, kCreateDeferredContext, reinterpret_cast<void*>(&createDeferredContextDetour));
-    ID3D11DeviceContext* ctx = nullptr;
-    device->GetImmediateContext(&ctx);
-    if (ctx) {
-        g_psSetShader.install(ctx, kPSSetShader, reinterpret_cast<void*>(&psSetShaderDetour));
-        g_drawIndexed.install(ctx, kDrawIndexed, reinterpret_cast<void*>(&drawIndexedDetour));
-        g_draw.install(ctx, kDraw, reinterpret_cast<void*>(&drawDetour));
-        g_drawIndexedInstanced.install(ctx, kDrawIndexedInstanced, reinterpret_cast<void*>(&drawIndexedInstancedDetour));
-        g_drawInstanced.install(ctx, kDrawInstanced, reinterpret_cast<void*>(&drawInstancedDetour));
-        g_omSetRenderTargets.install(ctx, kOMSetRenderTargets, reinterpret_cast<void*>(&omSetRenderTargetsDetour));
-        g_omSetRenderTargetsAndUAVs.install(ctx, kOMSetRenderTargetsAndUAVs, reinterpret_cast<void*>(&omSetRenderTargetsAndUAVsDetour));
-        g_executeCommandList.install(ctx, kExecuteCommandList, reinterpret_cast<void*>(&executeCommandListDetour));
-        ctx->Release();
-    }
+    installDeviceHooks(device);
     hookFactory(device);
     TMVS_LOG("hooks: device %p hooked (feature level 0x%x)", static_cast<void*>(device), device->GetFeatureLevel());
 }

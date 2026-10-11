@@ -36,4 +36,4 @@ if (Test-Path $target) {
 }
 Copy-Item $Dll $target -Force
 Write-Host "Installed $target"
-Write-Host "Start ManiaPlanet (64-bit). F8 opens the menu, Shift+F8 switches the effects off and on."
+Write-Host "Start ManiaPlanet (64-bit). F8 opens the menu, F7 switches the effects off and on, F12 captures a frame."

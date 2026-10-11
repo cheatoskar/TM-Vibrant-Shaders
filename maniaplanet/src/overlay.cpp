@@ -58,7 +58,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         }
         // Keep clicks and typing in the menu away from the game (its window messages; the game may
         // also read the mouse directly).
-        if ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard && w != VK_F8)) return 0;
+        if ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard && w != VK_F7 && w != VK_F8 && w != VK_F12)) return 0;
     }
     return CallWindowProcW(g_originalProc, hwnd, msg, w, l);
 }
@@ -75,21 +75,21 @@ bool pressed(int key, bool& was) {
     return edge;
 }
 
+// The same keys as the TMNF mod: F8 menu, F7 effects on/off, F12 capture.
 void hotkeys() {
-    static bool f8 = false;
+    static bool f7 = false, f8 = false, f12 = false;
     if (GetForegroundWindow() != g_window) return;
-    if (!pressed(VK_F8, f8)) return;
-    const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-    const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
     Settings& s = settings::current();
-    if (shift) {
+    if (pressed(VK_F7, f7)) {
         s.enabled = !s.enabled;
         g_dirty = true;
         toast(s.enabled ? "TM Vibrant Shaders: on" : "TM Vibrant Shaders: off (the game's own image)");
-    } else if (ctrl) {
+    }
+    if (pressed(VK_F12, f12)) {
         capture::request();
-        toast("Capturing one frame ...");
-    } else {
+        toast("Frame captured (Documents\\ManiaPlanet\\TMVS\\captures)");
+    }
+    if (pressed(VK_F8, f8)) {
         g_open = !g_open;
         if (!g_open && g_dirty) {
             settings::save();
@@ -140,7 +140,7 @@ void menu() {
         ImGui::End();
         return;
     }
-    if (ImGui::Checkbox("Effects on (Shift+F8)", &s.enabled)) g_dirty = true;
+    if (ImGui::Checkbox("Effects on (F7)", &s.enabled)) g_dirty = true;
     ImGui::SameLine();
     int view = static_cast<int>(s.view);
     ImGui::SetNextItemWidth(150);
@@ -199,7 +199,7 @@ void menu() {
         if (ImGui::RadioButton("End of frame (interface too)", &placement, 1)) g_dirty = true;
         s.placement = static_cast<Placement>(placement);
         if (ImGui::Checkbox("End of frame when the interface start isn't found", &s.fallbackAtEnd)) g_dirty = true;
-        if (ImGui::Button("Capture this frame (Ctrl+F8)")) capture::request();
+        if (ImGui::Button("Capture this frame (F12)")) capture::request();
         if (!capture::lastFolder().empty()) {
             ImGui::SameLine();
             if (ImGui::Button("Open folder")) ShellExecuteW(nullptr, L"open", capture::lastFolder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -244,7 +244,7 @@ void init(HWND window, ID3D11Device* device, ID3D11DeviceContext* ctx) {
     ImGui_ImplDX11_Init(device, ctx);
     g_originalProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&windowProc)));
     g_ready = true;
-    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - F8 menu, Shift+F8 on/off", 8000);
+    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - F8 menu, F7 on/off", 8000);
     TMVS_LOG("overlay: ready on window %p", static_cast<void*>(window));
 }
 

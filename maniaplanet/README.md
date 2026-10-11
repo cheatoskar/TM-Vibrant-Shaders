@@ -29,8 +29,10 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 | Key | |
 |---|---|
 | F8 | Menu |
-| Shift+F8 | Effects off/on (compare with the game's own image) |
-| Ctrl+F8 | Capture one frame (for bug reports and development) |
+| F7 | Effects off/on (compare with the game's own image) |
+| F12 | Capture one frame (for bug reports and development) |
+
+The same keys as the TMNF mod.
 
 In the menu:
 - **Presets:** Vibrant (default), Natural, Punchy, Golden Hour, Cold Night, Clean.
@@ -65,7 +67,7 @@ ManiaPlanet ships its compiled shaders in `Packs\GpuCache_D3D11_SM*.zip`.
 The scene depth is the last screen-sized depth buffer a scene shader used. It is used for the
 depth view and the captures.
 
-## Captures (Ctrl+F8)
+## Captures (F12)
 
 Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 
