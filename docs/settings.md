@@ -68,6 +68,7 @@ For screenshots of replays. It comes on by itself with the free camera (cam 7 in
 - `Shift+F12` saves a larger photo, put together from tiles (*Hi-res photo*: 2 x 2 to 4 x 4 tiles, about 1.7x to 3.4x the screen size). **Pause the replay** first, because every tile is a separate frame. Exposure, focus and haze colour stay as they were while the tiles are taken. Vignette, film grain, chromatic aberration, lens flare and light shafts are left out of hi-res photos, since they would repeat in every tile.
 - Middle click sets the focus at that point (depth of field), `Ctrl` + middle click removes it, and `Ctrl` + mouse wheel sets how strong the blur is.
 - `Shift` + mouse wheel zooms in (up to 8x, like a telephoto lens), `Shift` + middle click goes back to 1x. Only in: the game decides what to draw from its own view.
+- `Shift+F6` splits the screen to compare (*Compare split*; it turns photo mode on too): on one side of a line the game's image without the mod's effects, on the other the mod's. `Ctrl` + `Shift` + mouse wheel moves the line; the menu has a slider for it and a switch for the sides. Photos (`F12`) keep the split, hi-res photos don't (the line would sit in every tile). What the mod changes inside the game itself is on both sides: the game's own bloom stays off, real night stays night.
 
 - The game's adaptive view distance (launcher *ZClip*) is off, so far blocks stay in the picture even when the frame rate drops.
 

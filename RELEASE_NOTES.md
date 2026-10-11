@@ -27,6 +27,7 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 **Photo mode** (`F6`, on by itself with the free camera)
 - No HUD, full quality, shadows and reflections reach three times as far.
 - `F12` saves a photo without the HUD, `Shift+F12` a larger one from tiles. Middle click sets the focus, `Ctrl`+wheel the depth of field, `Shift`+wheel zooms.
+- **Compare split** (`Shift+F6`): one side of a line shows the game without the mod, the other with it, also in photos. `Ctrl`+`Shift`+wheel moves the line.
 
 **Night**
 - **Real night under night skies** (experimental, off by default, on the *Settings* page): with a night sky or the black hole over a day or sunset map, the game lights the map at midnight itself. No more baked sunlight under the stars. Switching it in the menu relights the map at once. The map, its replays and validation stay as they are.

@@ -119,7 +119,7 @@ Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (a
 | `F7` | Shaders on or off, for a before/after look |
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
 | `Shift+F7` | Map clips off or on: the map's MediaTracker clips while driving (forced cameras, black screens) don't play |
-| `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms |
+| `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms, `Shift+F6` splits the screen: the game without and with the mod |
 
 ![The F8 menu](docs/images/UI.png)
 

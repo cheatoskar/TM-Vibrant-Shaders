@@ -45,7 +45,7 @@ Nur einen der beiden Wege nutzen. Eine andere `d3d9.dll` (zum Beispiel ReShade) 
 | `F8` | Menü öffnen oder schließen |
 | `F7` | Shader an/aus (Vorher/Nachher) |
 | `F12` | Screenshot und Frame-Capture speichern (für Fehlerberichte) |
-| `F6` | Fotomodus an/aus (geht mit der freien Kamera, Cam 7, von selbst an): kein HUD, volle Qualität. Darin speichert `F12` ein Foto ohne HUD (`photo_NNN.png`), `Shift+F12` ein größeres aus Kacheln (Replay vorher pausieren), Mittelklick setzt den Fokus, `Strg`+Mausrad die Unschärfe, `Shift`+Mausrad zoomt (bis 8x) |
+| `F6` | Fotomodus an/aus (geht mit der freien Kamera, Cam 7, von selbst an): kein HUD, volle Qualität. Darin speichert `F12` ein Foto ohne HUD (`photo_NNN.png`), `Shift+F12` ein größeres aus Kacheln (Replay vorher pausieren), Mittelklick setzt den Fokus, `Strg`+Mausrad die Unschärfe, `Shift`+Mausrad zoomt (bis 8x), `Shift+F6` teilt das Bild zum Vergleich: Spiel ohne und mit Mod (Linie mit `Strg`+`Shift`+Mausrad verschieben) |
 
 - **Shaders:** Alle Presets als Karten mit Bild und GPU-Last. Mit der Maus kurz auf einer Karte bleiben zeigt den Look direkt im Spiel, Klick übernimmt ihn. **Customize:** Himmel, Look und Wetter, dazu Farblooks aus `.cube`-LUT-Dateien (Ordner `Dokumente\TrackMania\TMVS\luts`). **Studio:** jede Einstellung. **Maps:** Preset pro Map-Stimmung, Author's Shader. **Performance:** Auto Quality und was jeder Effekt kostet.
 - **Presets:** Vibrant, Realistic, Golden Hour, Dreamy, Neon, Horizon, Aurora, Rainy Day, Storm, Replay Cinema, Competition, Performance.
