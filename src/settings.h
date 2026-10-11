@@ -101,6 +101,8 @@ struct Settings {
     float exposure = 0.0f;         // EV
     float autoExposure = 0.5f;
     float contrast = 1.06f;
+    float toneKnee = 0.5f;         // tone curve: linear up to here, then the soft shoulder (higher = brighter highlights)
+    float nightSurfaces = 0.8f;    // night maps: floodlit surfaces kept at this part of the game's white (lamps always in full)
     float saturation = 1.08f;
     float vibrance = 0.25f;
     float temperature = 0.08f;

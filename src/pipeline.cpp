@@ -1818,7 +1818,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool materials = buildMaterialMask(device, in);
     // z: a night sky replaces the game's, its sunset clouds and their mirror image in the sea go.
     const float gameSkyOut = skyReplacesSun(s) && !s.gameSkyClouds ? 1.0f : 0.0f;
-    const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, gameSkyOut, 0.0f};
+    const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, gameSkyOut, s.toneKnee};
     device->SetPixelShaderConstantF(44, materialConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
@@ -2188,11 +2188,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 13, materials ? m_materials.texture : nullptr, false);
     // Where the depth of field blurs, the lamps aren't put back sharp: s9 = its focus distance.
     if (dofFocus) bind(device, 9, dofFocus, false);
-    const float finalMaterials[4] = {materials ? 1.0f : 0.0f, dofFocus ? 1.0f : 0.0f, gameSkyOut, 0.0f};
+    const float finalMaterials[4] = {materials ? 1.0f : 0.0f, dofFocus ? 1.0f : 0.0f, gameSkyOut, s.toneKnee};
     device->SetPixelShaderConstantF(44, finalMaterials, 1);
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
-    passConstants(device, 1.0f / norm, 0.0f);
+    passConstants(device, 1.0f / norm, 0.0f, s.nightSurfaces);
     // Disabled post passes are skipped entirely, not just passed through.
     const bool fxaa = s.fxaa && post;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&

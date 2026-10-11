@@ -72,6 +72,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Exposure", "Exposure (EV)", "Colour", Float, exposure, -2.0f, 2.0f),
         TMVS_FIELD("AutoExposure", "Auto exposure", "Colour", Float, autoExposure, 0.0f, 1.0f),
         TMVS_FIELD("Contrast", "Contrast", "Colour", Float, contrast, 0.7f, 1.5f),
+        TMVS_FIELD("ToneKnee", "Highlight roll-off (tone curve knee)", "Colour", Float, toneKnee, 0.3f, 0.9f),
+        TMVS_FIELD("NightSurfaces", "Floodlit surfaces at night (1 = game white)", "Colour", Float, nightSurfaces, 0.4f, 1.0f),
         TMVS_FIELD("Saturation", "Saturation", "Colour", Float, saturation, 0.0f, 2.0f),
         TMVS_FIELD("Vibrance", "Vibrance", "Colour", Float, vibrance, -0.5f, 1.0f),
         TMVS_FIELD("Temperature", "Temperature", "Colour", Float, temperature, -1.0f, 1.0f),

@@ -54,7 +54,7 @@ float4 u_Water     : register(c38); // water heights (world y): blocks, sea; z: 
 float4 u_Snow      : register(c39); // snowfall, snow cover, wind direction (world x, z)
 float4 u_BlackHole : register(c40); // black hole direction (world, turns with the sky), size (0 = none)
 float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
-float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go)
+float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 
@@ -364,7 +364,9 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float noise = ign(vpos);
     // Changes every frame too (a fixed per-pixel pattern can't be averaged by TAA: the blur
     // turned it into blotches that slid over the floor with the camera).
-    float noise2 = frac(hash12(vpos + 17.31) + u_Temporal.z * 0.618034);
+    // Without TAA nothing averages it over frames: interleaved gradient noise then too (white
+    // noise stayed as grain in the long shadows after the blur).
+    float noise2 = u_Temporal.x > 0.5 ? frac(hash12(vpos + 17.31) + u_Temporal.z * 0.618034) : ign(vpos + float2(47.0, 17.0));
 
     // --- Ambient occlusion (horizon-based, normal-aware) ---
     float radius = u_Light.y;
@@ -2284,6 +2286,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         // Far out the sea is drawn by other materials: whatever lies at the sea level.
         float sea = mat.b;
         if (u_Water.z > 0.5) sea = max(sea, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * saturate(nd.w / 200.0 - 1.0));
+        // The sunset painted on a ring around the map (TMUF Island), far islands: no sunset at night.
+        sea = max(sea, smoothstep(1000.0, 1600.0, nd.w));
         c = lerp(c, luma(c) * float3(0.7, 0.85, 1.0), sea * 0.85);
     }
 
@@ -2684,7 +2688,7 @@ float4 PS_Adapt(float2 uv : TEXCOORD0) : COLOR0 {
 float3 shoulderCurve(float3 x) {
     // Linear below the knee (the game's mid-tones stay as they were), then a long
     // exponential shoulder that only reaches white for real light sources.
-    const float knee = 0.5;
+    const float knee = u_Mat.w > 0.0 ? u_Mat.w : 0.5;
     float3 over = max(x - knee, 0.0);
     float3 shoulder = knee + (1.0 - knee) * (1.0 - exp(-over / ((1.0 - knee) * 1.7)));
     return x < knee ? x : shoulder;
@@ -2807,6 +2811,20 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             if (u_Mat.x > 0.5) bright *= 1.0 - tex2D(s13, uv).b;
         }
         if (u_Mat.y > 0.5) bright *= 1.0 - saturate(abs(circleOfConfusion(z, tex2D(s9, float2(0.5, 0.5)).r)) / (u_Cine.w * u_Screen.y / 1080.0) * 4.0);
+        // Floodlit stands, lit roads, white walls (bright all around this pixel) only to
+        // u_Pass0.z of the game's white (NightSurfaces; 1 = as before): they burned out whole.
+        // Small lights (lamps, neon) always in full.
+        if (bright > 0.0 && u_Pass0.z < 0.999) {
+            float2 r = 20.0 * u_Screen.y / 1440.0 * u_Screen.zw;
+            const float2 ring[8] = {float2(1, 0), float2(0.7071, 0.7071), float2(0, 1), float2(-0.7071, 0.7071),
+                                    float2(-1, 0), float2(-0.7071, -0.7071), float2(0, -1), float2(0.7071, -0.7071)};
+            float around = 0.0;
+            [unroll] for (int k = 0; k < 8; k++) {
+                float3 g = tex2D(s8, uv + ring[k] * r).rgb;
+                around += smoothstep(0.78, 0.95, max(g.r, max(g.g, g.b)));
+            }
+            bright *= lerp(u_Pass0.z, 1.0, 1.0 - smoothstep(4.0, 7.0, around));
+        }
         srgb = max(srgb, game * bright * u_Lut.w);
     }
     // Film grain + dithering (also hides banding of the 8-bit output).

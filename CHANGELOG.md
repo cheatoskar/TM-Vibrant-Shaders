@@ -30,6 +30,10 @@
 - New setting *Real night under night skies* (`GameNight`, on by default): with a night sky (or the black hole) over a day or sunset map, the game lights the map at midnight itself (its moon, no baked sun to take out: no overexposed white). The map, its replays and validation stay as they are. Switched while a map runs, the map is relit at once.
 - Night skies over sunset maps: the sunset clouds of the game's sky no longer show through the stars, and its sea no longer mirrors the sunset. New setting *Keep the game's clouds under night skies* (`GameSkyClouds`, off) keeps both (nice for photos).
 - Photo mode: the depth of field blurs the lamps of night maps too (they stayed sharp).
+- Long shadows without TAA: smooth edges instead of grain (the jitter was white noise, fixed per pixel; now an even pattern the blur removes).
+- Night maps: new setting *Floodlit surfaces at night* (`NightSurfaces`, 0.8): floodlit stands, lit roads and white walls keep this part of the game's white instead of burning out; lamps and neon always keep it in full (1 = as before).
+- New setting *Highlight roll-off* (`ToneKnee`, 0.5 = as before): where the tone curve starts to bend; higher keeps more of the game's bright mid-tones, brighter highlights.
+- Night sky over a sunset map: the far distance (TMUF Island's sunset ring around the map, far islands) loses its sunset colour.
 - *Picked preset applies to all maps of this type* is off by default: picking a preset on a map no longer changes the preset of every map of that kind unless you switch it on.
 - United Forever Island: the sea reports no height; it is measured from the sea's material now, so it gets the exact water plane like the pools (waves, clean reflections).
 - MediaTracker editor detection: replay cameras that leave a few rows out are shaded as before (only real panels count).
