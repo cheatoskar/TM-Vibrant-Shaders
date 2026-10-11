@@ -871,14 +871,23 @@ void onPresent(IDirect3DDevice9* device) {
     {
         // Back in the menu: an Author's Shader ends with its map, your own look is back (else
         // it stayed until the next map). Only when no map is open any more: switching maps
-        // lets go of the old one too, and the next map's load decides then.
-        static int s_closes = 0;
+        // lets go of the old one too, and the next map's load decides then. The same map open
+        // again without a new load (its decoration kept) gets its look back.
+        static int s_closes = 0, s_loadsAtClose = -1;
         if (engine::mapCloses() != s_closes) {
             s_closes = engine::mapCloses();
-            if (!engine::mapOpen()) {
+            if (!engine::mapOpen() && s_loadsAtClose < 0) {
                 TMVS_LOG("engine: map closed");
+                s_loadsAtClose = engine::mapLoads();
                 Config::get().onMapComments(std::string());
             }
+        }
+        if (s_loadsAtClose >= 0 && engine::mapOpen()) {
+            if (engine::mapLoads() == s_loadsAtClose) {
+                TMVS_LOG("engine: the same map open again");
+                Config::get().onMapComments(engine::mapComments());
+            }
+            s_loadsAtClose = -1;
         }
     }
     Config::get().tick();
