@@ -80,7 +80,7 @@ public:
     std::string lutFile;
     float lutAmount = 1.0f;
     // Picking a preset also makes it the one for this kind of map (day / sunset / night).
-    bool rememberMoodPick = true;
+    bool rememberMoodPick = false;
     // The preset the menu points at: shown in the game until the pointer leaves (not saved).
     std::string previewPreset;
     // The pointed-at preset's values into `s` (its machine settings stay); false = none.
