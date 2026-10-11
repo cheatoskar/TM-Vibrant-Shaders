@@ -31,3 +31,6 @@ references/
 CLAUDE.md
 GOTCHA.md
 TODO.md
+
+# Python
+__pycache__/
