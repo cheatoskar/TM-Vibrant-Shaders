@@ -20,7 +20,7 @@ const char* const kEntryPoints[] = {
     "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail", "PS_SnowFlake",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
-    "PS_CopyDepth",
+    "PS_CopyDepth",   "PS_WaterLevel",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -278,6 +278,9 @@ void Pipeline::destroyTargets() {
     m_ldr.destroy();
     m_ldr2.destroy();
     m_materials.destroy();
+    for (auto& t : m_waterLevel) t.destroy();
+    gfx::release(m_waterRead);
+    m_waterPending = -1;
     m_depthCopy.destroy();
     m_clouds.destroy();
     m_reflect.destroy();
@@ -570,7 +573,10 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(0, &c[0][0], 32);
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
     // w: how much farther AO, shadows, bounce light and reflections reach (photo mode).
-    const float water[4] = {in.water[0], in.water[1], in.water[2], in.photo ? 3.0f : 1.0f};
+    // No sea level from the game (TMUF Island): the one measured from its water material.
+    const bool measured = in.water[2] <= 0.0f && m_seaKnown;
+    const float water[4] = {measured ? m_seaLevel : in.water[0], measured ? m_seaLevel : in.water[1], measured ? 1.0f : in.water[2],
+                            in.photo ? 3.0f : 1.0f};
     device->SetPixelShaderConstantF(38, water, 1);
     // The direction the snow drifts (as the flakes in drawRain): walls facing it catch snow.
     const float drift[2] = {1.0f + s.wind * 7.0f, 0.5f + s.wind * 3.0f};
@@ -1810,7 +1816,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 
     // The game's materials (lamps, cars, glass, grass) for the lighting and the final pass.
     const bool materials = buildMaterialMask(device, in);
-    const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    // z: a night sky replaces the game's, its sunset clouds and their mirror image in the sea go.
+    const float gameSkyOut = skyReplacesSun(s) && !s.gameSkyClouds ? 1.0f : 0.0f;
+    const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, gameSkyOut, 0.0f};
     device->SetPixelShaderConstantF(44, materialConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
@@ -1841,6 +1849,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 0, m_nd.texture, false);
     passConstants(device, 1.0f / in.width, 1.0f / in.height);
     runPass(device, kDownsampleND, m_ndHalf);
+    // 1a. The sea the game reports no height for (TMUF Island), from its water material.
+    if (materials && in.water[2] <= 0.0f && s.waterSurfaces > 0.0f) measureSeaLevel(device);
 
     // 1b. Long-range shadows: update the world-space height map.
     // Extra cameras (replay blends) use the map as it is: it follows the main camera.
@@ -2178,7 +2188,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 13, materials ? m_materials.texture : nullptr, false);
     // Where the depth of field blurs, the lamps aren't put back sharp: s9 = its focus distance.
     if (dofFocus) bind(device, 9, dofFocus, false);
-    const float finalMaterials[4] = {materials ? 1.0f : 0.0f, dofFocus ? 1.0f : 0.0f, 0.0f, 0.0f};
+    const float finalMaterials[4] = {materials ? 1.0f : 0.0f, dofFocus ? 1.0f : 0.0f, gameSkyOut, 0.0f};
     device->SetPixelShaderConstantF(44, finalMaterials, 1);
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
@@ -2245,6 +2255,41 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
     for (int i = 12; i < 16; i++) device->SetTexture(i, nullptr); // the LUT, the materials: nothing of ours stays bound (Reset)
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+}
+
+// Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back two
+// frames later, when the GPU is long done with it (no stall). A flat sheet of it (within 0.6 m)
+// is the sea.
+void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
+    if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2) {
+        const gfx::Target& t = m_waterLevel[m_waterPending];
+        m_waterPending = -1;
+        if (!m_waterRead) device->CreateOffscreenPlainSurface(1, 1, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &m_waterRead, nullptr);
+        D3DLOCKED_RECT locked{};
+        if (m_waterRead && t.surface && SUCCEEDED(device->GetRenderTargetData(t.surface, m_waterRead)) &&
+            SUCCEEDED(m_waterRead->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+            float v[4];
+            memcpy(v, locked.pBits, sizeof(v));
+            m_waterRead->UnlockRect();
+            if (v[1] >= 24.0f && v[3] - v[2] < 0.6f) {
+                const float level = v[0] / v[1];
+                if (!m_seaKnown || fabsf(level - m_seaLevel) > 0.3f)
+                    TMVS_LOG("pipeline: sea level %.2f m, measured on the water material (%.0f points)", level, v[1]);
+                m_seaLevel = level;
+                m_seaKnown = true;
+            }
+        }
+    }
+    if (m_waterPending < 0 && m_frame % 15 == 0) {
+        const int i = m_waterIndex ^= 1;
+        if (m_waterLevel[i].create(device, 1, 1, D3DFMT_A32B32G32R32F)) {
+            bind(device, 0, m_nd.texture, false);
+            bind(device, 1, m_materials.texture, false);
+            runPass(device, kWaterLevel, m_waterLevel[i]);
+            m_waterPending = i;
+            m_waterDrawn = m_frame;
+        }
+    }
 }
 
 bool Pipeline::readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out) {

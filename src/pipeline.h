@@ -76,6 +76,11 @@ public:
     void resetHeights() { m_heightReset = true; }
     // A restart or a new map: the roofs and bridges remembered for the rain are gone too.
     void resetCeilings() { m_ceilingValid = false; }
+    // A new map: the sea level measured from the water material is the last map's.
+    void resetSeaLevel() {
+        m_seaKnown = false;
+        m_waterPending = -1;
+    }
 
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.
     bool init(IDirect3DDevice9* device, const std::wstring& shaderDir);
@@ -162,6 +167,7 @@ private:
         kSharpen,
         kCopy,
         kCopyDepth,
+        kWaterLevel,
         kPassCount
     };
 
@@ -235,6 +241,14 @@ private:
     gfx::Target m_bloomUp[kBloomLevels];
     gfx::Target m_luminance;    // 1x1
     gfx::Target m_adapted[2];   // 1x1 ping-pong
+    gfx::Target m_waterLevel[2];          // 1x1: the water material on screen (sum of heights, count, lowest, highest)
+    IDirect3DSurface9* m_waterRead = nullptr; // system memory copy of one of them
+    int m_waterPending = -1;              // the one drawn and not read yet
+    int m_waterIndex = 0;
+    unsigned m_waterDrawn = 0;            // the frame it was drawn in
+    float m_seaLevel = 0.0f;              // measured (TMUF sea: the game reports none)
+    bool m_seaKnown = false;
+    void measureSeaLevel(IDirect3DDevice9* device);
     gfx::Target m_materials;    // full: the game's material classes (r light, g car, b glass, a grass)
     gfx::Target m_ldr;          // full LDR
     gfx::Target m_ldr2;         // full LDR

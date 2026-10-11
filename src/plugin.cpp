@@ -454,6 +454,11 @@ void processScene(IDirect3DDevice9* device) {
         // Neon trail: a restart or a new map starts it over, a respawn starts a new line.
         static int s_resets = -1, s_respawns = -1;
         const int resets = engine::raceResets(), respawns = engine::respawns();
+        static int s_maps = -1;
+        if (engine::mapLoads() != s_maps) {
+            s_maps = engine::mapLoads();
+            g_pipeline.resetSeaLevel();
+        }
         if (resets != s_resets) {
             if (s_resets >= 0) TMVS_LOG("engine: race reset (trail cleared)");
             s_resets = resets;
