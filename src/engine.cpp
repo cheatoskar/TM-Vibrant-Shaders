@@ -196,6 +196,7 @@ LoadDecorationFn g_loadDecoration = nullptr;
 char g_environment[32] = {}; // "Stadium", "Speed", ... ("" = not known yet)
 std::string g_mapComments;      // of the last map loaded
 volatile LONG g_mapLoads = 0;
+volatile LONG g_mapCloses = 0;  // the app let go of its map (back to the menu)
 using SetChallengeFn = void(__fastcall*)(void*, void*, void*);
 SetChallengeFn g_setChallenge = nullptr;
 void* g_app = nullptr;          // CGameCtnApp (holds the current map)
@@ -638,6 +639,7 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     g_nightForced = false;
     g_mapDayTime = -1.0f;
     g_setChallenge(self, edx, challenge);
+    if (!challenge) InterlockedIncrement(&g_mapCloses);
 }
 
 void* currentChallenge() {
@@ -1008,6 +1010,14 @@ int mapLoads() {
 
 std::string mapComments() {
     return g_mapComments;
+}
+
+int mapCloses() {
+    return static_cast<int>(g_mapCloses);
+}
+
+bool mapOpen() {
+    return currentChallenge() != nullptr;
 }
 
 bool currentMapComments(std::string& comments) {
