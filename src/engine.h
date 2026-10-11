@@ -94,7 +94,7 @@ void setNightAtLoad(bool (*decide)(float dayTime));
 float mapDayTime();
 bool mapLitAtNight();
 // What the material being drawn is (from its shader file), Other between draws.
-enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4 };
+enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5 };
 Material currentMaterial();
 // Development: log each material once with its file (tmvs.log "shader ...").
 void shaderCensus(bool on);

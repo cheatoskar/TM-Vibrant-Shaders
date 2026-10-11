@@ -375,6 +375,7 @@ HRESULT APIENTRY setTextureDetour(IDirect3DDevice9* device, DWORD stage, IDirect
 HRESULT APIENTRY drawPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count) {
     if (tracingGame()) traceDrawState(device, "DP", count);
     countDraw(device, count);
+    if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT)>(kDrawPrimitive)(device, type, start, count);
 }
 
@@ -390,6 +391,7 @@ HRESULT APIENTRY drawIndexedPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITI
 HRESULT APIENTRY drawPrimitiveUPDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride) {
     if (tracingGame()) traceDrawState(device, "DPUP", count);
     countDraw(device, count);
+    if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT)>(kDrawPrimitiveUP)(
         device, type, count, data, stride);
 }
@@ -398,6 +400,7 @@ HRESULT APIENTRY drawIndexedPrimitiveUPDetour(IDirect3DDevice9* device, D3DPRIMI
                                               UINT count, const void* indices, D3DFORMAT indexFormat, const void* data, UINT stride) {
     if (tracingGame()) traceDrawState(device, "DIPUP", count);
     countDraw(device, count);
+    if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void*, D3DFORMAT, const void*,
                                        UINT)>(kDrawIndexedPrimitiveUP)(device, type, minIndex, vertices, count, indices, indexFormat,
                                                                        data, stride);

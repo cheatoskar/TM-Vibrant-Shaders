@@ -393,15 +393,24 @@ bool nodFilePath(const void* nod, wchar_t* out, size_t size);
 // reuses the memory of freed shaders).
 //   TSelfI ...                       self-illuminated: lamps, light panels, screens (not the additive
 //                                    TAdd glows: they are drawn over whole blocks)
+//   Vehicles\...RearLights           the cars' rear lights (lights)
+//   Vehicles\Particle..., WheelMarks smoke, chunks, tyre marks: not the car
 //   Vehicles\...Glass               car windows
 //   Vehicles\...                    the cars
 //   Grass ...                        grass
+//   ...Sea... / ...Water...          the sea and other engine water (not in the menus)
 Material classify(const wchar_t* path) {
     const wchar_t* file = wcsrchr(path, L'\\');
     file = file ? file + 1 : path;
+    if (wcsstr(path, L"\\Menu")) return Material::Other; // the menu's planet and sea
     if (!_wcsnicmp(file, L"TSelfI", 6)) return Material::Light;
-    if (wcsstr(path, L"Vehicles\\") || wcsstr(path, L"Vehicles/")) return wcsstr(file, L"Glass") ? Material::Glass : Material::Car;
+    if (wcsstr(path, L"Vehicles\\") || wcsstr(path, L"Vehicles/")) {
+        if (wcsstr(file, L"Light")) return Material::Light;
+        if (!_wcsnicmp(file, L"Particle", 8) || !_wcsnicmp(file, L"WheelMarks", 10)) return Material::Other;
+        return wcsstr(file, L"Glass") ? Material::Glass : Material::Car;
+    }
     if (!_wcsnicmp(file, L"Grass", 5)) return Material::Grass;
+    if (wcsstr(file, L"Sea") || wcsstr(file, L"Water")) return Material::Water;
     return Material::Other;
 }
 

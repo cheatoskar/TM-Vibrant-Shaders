@@ -52,10 +52,13 @@ public:
     // Kept on the CPU and uploaded when needed (also after a device reset).
     void setLut(const std::vector<uint32_t>& texels, int size);
 
-    // Debug view "Materials": the game's material classes in colour (lamps yellow, cars red,
-    // glass cyan, grass green). Classes 1..kMaterialClasses as engine::Material.
+    // The game's materials in the stencil: classes 1..kMaterialClasses (engine::Material) in
+    // the low three bits, kAddedLightBit where the game added light on top (headlight pools,
+    // glows). Debug view "Materials" shows them (lamps yellow, cars red, glass cyan, water blue,
+    // added light magenta).
     static constexpr int kMaterialView = 8;
-    static constexpr int kMaterialClasses = 4;
+    static constexpr int kMaterialClasses = 5;
+    static constexpr unsigned long kAddedLightBit = 0x08;
 
     // The sky replaces the game's sun (night skies, the black hole): its baked light comes out
     // on day maps and its halo is hidden.
