@@ -1,11 +1,8 @@
 # Changelog
 
-## 1.4.0-preview.2 (2026-10-11)
+## 1.4.0-preview (2026-10-11)
 
 - Photo mode: *Compare split* (`Shift+F6`): one side of a line shows the game's image without the mod's effects, the other the mod's, also in photos (not in hi-res ones). `Ctrl`+`Shift`+wheel moves the line, the menu swaps the sides.
-- *Real night under night skies* (`GameNight`) is on by default.
-
-## 1.4.0-preview (2026-10-11)
 
 - New `F8` menu. **Shaders:** every preset as a card with a picture, a line about it and its GPU load; rest the pointer on one and the game shows that look, click to use it, right click for day, sunset or night maps. Filters for day, night, weather and light presets. Your own presets get a picture of the game when you save them, and a line about them if you like (right click: edit description, update picture, delete). A preset is its .ini and .jpg in the presets folder (*Open the presets folder*): share both; files put there, and pictures replaced there, show up while the game runs. Pages for *Customize* (the main settings), *Studio* (every setting), *Maps* (preset per map mood, Author's Shader) and *Performance*. Segoe UI instead of the pixel font, sized for the screen. The menu opens big, leaving the right part of the game in view for the live preview (one button puts it over the whole screen); on a wide menu the settings stand in panels side by side. Deleting a preset and resetting your changes ask first.
 - Settings page: *Preset per map type*, *Picked preset applies to all maps of this type* (off: picking a preset no longer changes which preset that kind of map gets), Author's Shaders, live preview, menu size, update check, the game options and the folders. Every on/off setting is a switch now.
