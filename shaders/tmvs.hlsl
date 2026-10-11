@@ -2280,7 +2280,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             slope += (float2(noise2(q), noise2(q + 9.7)) - 0.5) * 0.12 * wet * (1.0 - puddle);
         }
     }
-    float3 nRefl = normalize(nWorld + float3(-slope.x, 0.0, -slope.y));
+    // Water is flat: the normal from the depth steps row by row far out (striped mirror images).
+    float3 nRefl = normalize(lerp(nWorld, float3(0.0, 1.0, 0.0), saturate(water * 2.0)) + float3(-slope.x, 0.0, -slope.y));
     // Refraction: the pool floor seen through moving waves, a little bluer with depth.
     if (water > 0.0) {
         float2 refr = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.03;
