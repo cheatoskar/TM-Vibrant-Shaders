@@ -30,7 +30,7 @@ public:
         float jitter[2] = {};
         // Water surfaces from the game: block water height, sea level, state 1 = known,
         // -1 = unknown (guess from the colour).
-        float water[3] = {0.0f, 0.0f, -1.0f};
+        float water[3] = {0.0f, 0.0f, -1.0f}; // lowest, highest, kind: 1 sea, 2 Stadium water blocks, 0 none reported (measured), -1 no engine (colour guess)
         // The player drives (not a replay / intro): the neon trail records the car.
         bool driving = true;
         // Photo mode: effects reach 3x farther, a larger height map, no car assumed in the
@@ -79,6 +79,7 @@ public:
     // A new map: the sea level measured from the water material is the last map's.
     void resetSeaLevel() {
         m_seaKnown = false;
+        m_waterMaterialSeen = false;
         m_waterPending = -1;
     }
 
@@ -248,6 +249,8 @@ private:
     unsigned m_waterDrawn = 0;            // the frame it was drawn in
     float m_seaLevel = 0.0f;              // measured (TMUF sea: the game reports none)
     bool m_seaKnown = false;
+    bool m_waterMaterialSeen = false;     // this map's water was seen as the game's water material
+    bool m_materialsOn = false;           // the material mask exists this frame
     void measureSeaLevel(IDirect3DDevice9* device);
     gfx::Target m_materials;    // full: the game's material classes (r light, g car, b glass, a grass)
     gfx::Target m_ldr;          // full LDR

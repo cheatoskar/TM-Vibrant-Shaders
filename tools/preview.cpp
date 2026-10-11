@@ -239,6 +239,7 @@ int main(int argc, char** argv) {
     }
 
     float waterHeight = -1e30f; // world height of the map's water (the game reports it in game)
+    float waterKind = 1.0f;     // 1 sea (--water), 2 Stadium water blocks (--blocks)
     Job defaults;
     defaults.capture = argv[1];
     defaults.output = argv[2];
@@ -270,6 +271,9 @@ int main(int argc, char** argv) {
             batch = argv[++i];
         } else if (!strcmp(argv[i], "--water") && i + 1 < argc) {
             waterHeight = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--blocks") && i + 1 < argc) {
+            waterHeight = static_cast<float>(atof(argv[++i]));
+            waterKind = 2.0f;
         } else if (!strcmp(argv[i], "--photo")) {
             photoMode = true;
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
@@ -397,7 +401,7 @@ int main(int argc, char** argv) {
         // t' = t - move * R.
         if (waterHeight > -1e29f) {
             in.water[0] = in.water[1] = waterHeight;
-            in.water[2] = 1.0f;
+            in.water[2] = waterKind;
         }
         Pipeline::Inputs moved = in;
         for (int j = 0; j < 3; j++) {
