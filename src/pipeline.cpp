@@ -931,17 +931,25 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
     device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
     device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_EQUAL);
-    device->SetRenderState(D3DRS_STENCILMASK, 0xFF);
+    device->SetRenderState(D3DRS_STENCILMASK, 0x07);
     device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_KEEP);
-    // One channel per class: r light, g car, b glass, a grass.
+    // r light, g car 1 / glass 0.5 / grass 0.25, b water, a light added on top.
     for (int id = 1; id <= kMaterialClasses; id++) {
-        const float color[4] = {id == 1 ? 1.0f : 0.0f, id == 2 ? 1.0f : 0.0f, id == 3 ? 1.0f : 0.0f, id == 4 ? 1.0f : 0.0f};
+        const float color[4] = {id == 1 ? 1.0f : 0.0f, id == 2 ? 1.0f : (id == 3 ? 0.5f : (id == 4 ? 0.25f : 0.0f)), id == 5 ? 1.0f : 0.0f, 0.0f};
         device->SetPixelShaderConstantF(32, color, 1);
         device->SetRenderState(D3DRS_STENCILREF, static_cast<DWORD>(id));
         m_quad.draw(device, in.width, in.height);
     }
+    device->SetRenderState(D3DRS_STENCILMASK, kAddedLightBit);
+    device->SetRenderState(D3DRS_STENCILREF, kAddedLightBit);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_ALPHA);
+    const float added[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    device->SetPixelShaderConstantF(32, added, 1);
+    m_quad.draw(device, in.width, in.height);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0x0F);
+    device->SetRenderState(D3DRS_STENCILMASK, 0xFF);
     device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
     device->SetDepthStencilSurface(nullptr);
     ds->Release();

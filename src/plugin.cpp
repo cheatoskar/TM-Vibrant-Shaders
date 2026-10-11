@@ -345,10 +345,12 @@ void processScene(IDirect3DDevice9* device) {
             Config::get().onMapComments(engine::mapComments());
         }
     }
-    // Map mood from the sun light, only in gameplay: menu backgrounds have their own light.
-    // A map the game lights at midnight (real night) keeps the mood of its own time of day.
+    // Map mood, only in gameplay: menu backgrounds have their own light. From the map's time of
+    // day when the engine told it (a map lit at midnight keeps its own mood; Rally at noon has
+    // a sun warm enough for the colour test to call it sunset), else from the sun's colour.
     if (g_scene.haveLight && g_scene.projection[14] > -1.0f) {
-        Config::get().onMoodDetected(engine::mapLitAtNight() ? moodOfDayTime(engine::mapDayTime()) : classifyMood(g_scene.lightColor));
+        const float dayTime = engine::mapDayTime();
+        Config::get().onMoodDetected(dayTime >= 0.0f ? moodOfDayTime(dayTime) : classifyMood(g_scene.lightColor));
     }
 
     hook::InternalScope internal;
@@ -623,9 +625,7 @@ bool g_gameStencil = false;
 
 bool materialsWanted() {
     const Settings& s = Config::get().settings;
-    // For now only for the debug view "Materials" (the light handling is back on the confirmed
-    // 8e14c69 state; the masks come back into it one step at a time).
-    return s.enabled && s.gameMaterials && s.debugView == Pipeline::kMaterialView && !g_gameStencil;
+    return s.enabled && s.gameMaterials && !g_gameStencil;
 }
 
 void untagStencil(IDirect3DDevice9* device) {
@@ -634,6 +634,20 @@ void untagStencil(IDirect3DDevice9* device) {
     g_stencilTagged = false;
 }
 
+void tagStencil(IDirect3DDevice9* device, DWORD value, DWORD mask) {
+    device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
+    device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
+    device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_ALWAYS);
+    device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_REPLACE);
+    device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILWRITEMASK, mask);
+    device->SetRenderState(D3DRS_STENCILREF, value);
+    g_stencilTagged = true;
+}
+
+// Every draw call (all four kinds: a draw without its own tag must not write the tag of the
+// draw before it, the stencil state stays set).
 void onDraw(IDirect3DDevice9* device) {
     if (!g_scene.inMainCamera || !materialsWanted()) {
         untagStencil(device);
@@ -646,22 +660,21 @@ void onDraw(IDirect3DDevice9* device) {
         TMVS_LOG("materials: the game uses the stencil buffer itself, material masks off");
         return;
     }
-    const engine::Material m = engine::currentMaterial();
     DWORD zwrite = TRUE;
     device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
-    if (!zwrite) {
-        untagStencil(device);
+    if (zwrite) {
+        // Its class, in the low bits; clears the "added light" bit of what it covers.
+        tagStencil(device, static_cast<DWORD>(engine::currentMaterial()), 0xFF);
         return;
     }
-    device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
-    device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
-    device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_ALWAYS);
-    device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_REPLACE);
-    device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
-    device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
-    device->SetRenderState(D3DRS_STENCILWRITEMASK, 0xFF);
-    device->SetRenderState(D3DRS_STENCILREF, static_cast<DWORD>(m));
-    g_stencilTagged = true;
+    // Light the game adds on top of a surface (headlight pools, glows: one-one blending,
+    // no depth writes) only sets bit 3 and keeps the class of the surface below.
+    DWORD blend = FALSE, dest = D3DBLEND_ZERO, ztest = TRUE;
+    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+    device->GetRenderState(D3DRS_DESTBLEND, &dest);
+    device->GetRenderState(D3DRS_ZENABLE, &ztest);
+    if (blend && dest == D3DBLEND_ONE && ztest) tagStencil(device, Pipeline::kAddedLightBit, Pipeline::kAddedLightBit);
+    else untagStencil(device);
 }
 
 void onCameraEnd(void* camera, const engine::CameraInfo&) {
@@ -866,12 +879,20 @@ DWORD WINAPI retryHooks(LPVOID) {
 
 // Map load: light a day or sunset map at midnight when its look will have a night sky (the
 // sky replaces the sun anyway; the game's own night has no baked sun to take out).
+// The map's mood comes from the same time of day (see processScene), so the look decided here
+// is the one the map gets.
 bool nightAtLoad(float dayTime) {
     const Config& config = Config::get();
     const Settings& s = config.settings;
+    if (!s.enabled || !s.gameNight) {
+        TMVS_LOG("config: real night off (setting)");
+        return false;
+    }
     const Mood mood = moodOfDayTime(dayTime);
-    if (!s.enabled || !s.gameNight || mood == Mood::Night) return false;
-    return Pipeline::skyReplacesSun(config.lookForMood(mood));
+    if (mood == Mood::Night) return false; // a night map already
+    const bool night = Pipeline::skyReplacesSun(config.lookForMood(mood));
+    if (!night) TMVS_LOG("config: real night: the %s look has no night sky", moodName(mood));
+    return night;
 }
 
 void bootOnce() {

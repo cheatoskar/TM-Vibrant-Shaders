@@ -2195,6 +2195,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 
     // Expand the LDR image back toward HDR: light sources glow.
     float emissive = emissiveAmount(uv, c, nWorld, rd, dist, nd.w);
+    // The game's materials (in game; the previewer has none): r lamp, g car / glass / grass,
+    // b water, a light the game added on top. Added light (headlight pools, glows over a
+    // surface) keeps the game's brightness but is no light source of its own: it was boosted
+    // to flat white. Lamps keep their guess.
+    float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
+    emissive *= 1.0 - mat.a * (1.0 - mat.r);
     float3 glow = c * u_Rays.w * emissive;
     // White lights and screens glow less than coloured ones, or they bleach to flat white.
     float peakC = max(c.r, max(c.g, c.b));
@@ -2216,6 +2222,9 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float wet = u_Weather.x * (1.0 - grass * 0.5) * (1.0 - emissive);
     float puddle = puddleMask(world, flatness, grass) * (1.0 - emissive);
     float water = waterMask(c, nWorld, world, nd.w, emissive);
+    // The game's own water material (the TMUF sea, which reports no height): water wherever
+    // it is flat, at any distance.
+    water = max(water, mat.b * smoothstep(0.9, 0.98, nWorld.y) * u_Weather.w);
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
@@ -2786,11 +2795,14 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float grainAmount = u_Post.x * smoothstep(0.0, 0.45, luma(srgb)) * (1.2 - luma(srgb));
     srgb += grain * (grainAmount + 1.0 / 255.0);
     srgb = saturate(srgb);
-    // Debug view 8: the game's materials over the image (lamps yellow, cars red, glass cyan, grass green).
+    // Debug view 8: the game's materials over the image (lamps yellow, cars red, glass cyan,
+    // grass green, water blue, light added on top magenta).
     if (debugView == 8 && u_Mat.x > 0.5) {
         float4 m = tex2D(s13, uv);
-        float3 tint = m.r * float3(1.0, 0.9, 0.1) + m.g * float3(1.0, 0.15, 0.15) + m.b * float3(0.1, 1.0, 1.0) + m.a * float3(0.2, 1.0, 0.2);
-        srgb = lerp(srgb, tint, 0.6 * saturate(dot(m, 1.0)));
+        float car = step(0.75, m.g), glass = step(0.375, m.g) * (1.0 - car), grassM = step(0.125, m.g) * (1.0 - car - glass);
+        float3 tint = m.r * float3(1.0, 0.9, 0.1) + car * float3(1.0, 0.15, 0.15) + glass * float3(0.1, 1.0, 1.0) + grassM * float3(0.2, 1.0, 0.2) +
+                      m.b * float3(0.1, 0.3, 1.0) + m.a * float3(1.0, 0.2, 1.0);
+        srgb = lerp(srgb, saturate(tint), 0.6 * saturate(m.r + car + glass + grassM + m.b + m.a));
     }
     return float4(srgb, luma(srgb));
 }
