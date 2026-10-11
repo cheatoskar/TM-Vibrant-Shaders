@@ -2372,11 +2372,11 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
                 // Fades out toward the screen's edges (no hard border in the water).
                 float edge = saturate(min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y)) * 8.0);
                 if (edge > 0.0) {
-                    // Water smears what it mirrors up and down: a few taps along the screen's
+                    // Water smears what it mirrors up and down: three taps along the screen's
                     // vertical (a pasted, razor-sharp planet looked wrong).
                     float4 sky = 0;
-                    [unroll] for (int k = 0; k < 4; k++) sky += tex2Dlod(s5, float4(suv + float2(0.0, (k - 1.5) * 0.008), 0, 0));
-                    sky *= 0.25;
+                    [unroll] for (int k = 0; k < 3; k++) sky += tex2Dlod(s5, float4(suv + float2(0.0, (k - 1.0) * 0.011), 0, 0));
+                    sky /= 3.0;
                     skyR = lerp(skyR, sky.rgb, sky.a * edge * 0.7);
                 }
             }
