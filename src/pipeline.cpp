@@ -1428,6 +1428,7 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         m_trailBreak = true;
         m_trailHead = m_trailCount = 0;
         m_trailClock = m_trailTime = 0.0f;
+        m_trailKeptValid = false;
         device->SetRenderTarget(0, m_trailPoints.surface);
         device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 0.0f, 0);
     }
@@ -1456,8 +1457,18 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         m_quad.draw(device, kTrailWidth, kTrailHeight);
         profileMark(kTrailPoint);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-        if (m_trailClock >= 1.0f / 30.0f) {
-            m_trailClock = fmodf(m_trailClock, 1.0f / 30.0f);
+        // Kept 30 times a second, and every 2 m when the engine gives the position: at Island
+        // speeds 30 a second are 5-7 m apart, the line went angular in curves and its live
+        // end jumped that far every 33 ms.
+        float moved = 0.0f;
+        if (in.carKnown && m_trailKeptValid) {
+            const float dx = in.carPosition[0] - m_trailKept[0], dy = in.carPosition[1] - m_trailKept[1], dz = in.carPosition[2] - m_trailKept[2];
+            moved = sqrtf(dx * dx + dy * dy + dz * dz);
+        }
+        if (m_trailClock >= 1.0f / 30.0f || moved >= 2.0f) {
+            m_trailClock = moved >= 2.0f ? 0.0f : fmodf(m_trailClock, 1.0f / 30.0f);
+            memcpy(m_trailKept, in.carPosition, sizeof(m_trailKept));
+            m_trailKeptValid = in.carKnown;
             m_trailBreak = false;
             m_trailHead = (m_trailHead + 1) % kTrailPoints;
             if (m_trailCount < kTrailPoints) m_trailCount++;

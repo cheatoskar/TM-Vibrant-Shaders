@@ -329,7 +329,7 @@ private:
     // Neon trail: the car's positions in a ring buffer texture (xyz, time stamp; < 0 = a new
     // line starts here, 0 = no car found), drawn as a glowing ribbon.
     static constexpr UINT kTrailWidth = 128, kTrailHeight = 64;
-    static constexpr UINT kTrailPoints = kTrailWidth * kTrailHeight; // 4.5 min at 30 points/s
+    static constexpr UINT kTrailPoints = kTrailWidth * kTrailHeight; // 4.5 min at 30 points/s, less at speed (a point every 2 m: 100 s at 560 km/h)
     gfx::Target m_trailPoints;
     IDirect3DVertexShader9* m_trailVS = nullptr;
     IDirect3DVertexDeclaration9* m_trailDecl = nullptr;
@@ -341,6 +341,8 @@ private:
     UINT m_trailHead = 0;       // next point to write
     UINT m_trailCount = 0;      // points written (up to kTrailPoints)
     float m_trailClock = 0.0f;  // time since the last point
+    float m_trailKept[3] = {};  // where the last point was kept (engine positions only)
+    bool m_trailKeptValid = false;
     float m_trailTime = 0.0f;   // time since the reset (s)
     float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks)
     float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
