@@ -2,6 +2,7 @@
 
 ## 1.4.0-preview (2026-10-11)
 
+- Neon trail: it follows the car's real position from the game instead of looking for the car in the middle of the screen. No more flicker at speed, no line beside the car in curves or after a crash, and it keeps going while the car is off screen.
 - Photo mode: *Compare split* (`Shift+F6`): one side of a line shows the game's image without the mod's effects, the other the mod's, also in photos (not in hi-res ones). `Ctrl`+`Shift`+wheel moves the line, the menu swaps the sides.
 
 - New `F8` menu. **Shaders:** every preset as a card with a picture, a line about it and its GPU load; rest the pointer on one and the game shows that look, click to use it, right click for day, sunset or night maps. Filters for day, night, weather and light presets. Your own presets get a picture of the game when you save them, and a line about them if you like (right click: edit description, update picture, delete). A preset is its .ini and .jpg in the presets folder (*Open the presets folder*): share both; files put there, and pictures replaced there, show up while the game runs. Pages for *Customize* (the main settings), *Studio* (every setting), *Maps* (preset per map mood, Author's Shader) and *Performance*. Segoe UI instead of the pixel font, sized for the screen. The menu opens big, leaving the right part of the game in view for the live preview (one button puts it over the whole screen); on a wide menu the settings stand in panels side by side. Deleting a preset and resetting your changes ask first.
