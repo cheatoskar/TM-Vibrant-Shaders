@@ -2,11 +2,10 @@
 #include "hooks.h"
 #include "log.h"
 #include "lut.h"
+#include "options.h"
+#include "settings.h"
 #include "shaders/PS_BloomDown.h"
 #include "shaders/PS_BloomUp.h"
-#include "shaders/PS_BlurH.h"
-#include "shaders/PS_BlurV.h"
-#include "shaders/PS_Down4.h"
 #include "shaders/PS_Grade.h"
 #include "shaders/PS_ToneMap.h"
 #include "shaders/VS_Full.h"
@@ -21,16 +20,29 @@ template <typename T> void safeRelease(T*& p) {
     p = nullptr;
 }
 
+// hdr.hlsl ToneParams (b0)
 struct ToneConstants {
-    float tone0[4]; // curve, knee, hue keep, exposure (stops)
-    float tone1[4]; // bloom strength, has bloom
+    float tone0[4]; // has bloom
 };
 
+// mp.hlsl GradeParams (b0)
 struct GradeConstants {
-    float p[5][4];
+    float p3[4];             // texel (xy), sRGB view, view
+    float p4[4];             // split, has depth, HDR stage ran
     float invViewProj[4][4]; // rows
     float camera[4];         // eye xyz, has camera
-    float has[4];            // normal, motion, light (diffuse) textures present
+    float has[4];            // normal, motion, albedo textures present
+};
+
+// look.hlsli LookParams (b3)
+struct LookConstants {
+    float l0[4];  // exposure (EV), contrast, saturation, vibrance
+    float l1[4];  // temperature, tint, split toning, tone knee
+    float l2[4];  // lift, gamma, gain, vignette
+    float l3[4];  // film grain, chromatic aberration, sharpen, LUT amount (0 = no LUT)
+    float sun[4]; // sun colour, tone curve
+    float sky[4]; // sky colour, bloom
+    float l6[4];  // frame, LUT size, split, bloom radius
 };
 
 // The copy of the game's image is made typeless, so it can be read with the game's view format
@@ -55,6 +67,21 @@ bool isSrgb(DXGI_FORMAT f) {
            f == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB;
 }
 
+void sizeOfView(ID3D11View* view, UINT& w, UINT& h) {
+    w = h = 0;
+    ID3D11Resource* res = nullptr;
+    view->GetResource(&res);
+    ID3D11Texture2D* tex = nullptr;
+    if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)))) {
+        D3D11_TEXTURE2D_DESC d;
+        tex->GetDesc(&d);
+        w = d.Width;
+        h = d.Height;
+        tex->Release();
+    }
+    if (res) res->Release();
+}
+
 } // namespace
 
 void StateBackup::save(ID3D11DeviceContext* ctx) {
@@ -64,9 +91,9 @@ void StateBackup::save(ID3D11DeviceContext* ctx) {
     ctx->RSGetState(&rs);
     ctx->OMGetBlendState(&blend, blendFactor, &sampleMask);
     ctx->OMGetDepthStencilState(&dss, &stencilRef);
-    ctx->PSGetShaderResources(0, 4, psSrv);
+    ctx->PSGetShaderResources(0, kSrvs, psSrv);
     ctx->PSGetSamplers(0, 2, psSamplers);
-    ctx->PSGetConstantBuffers(0, 2, psCb);
+    ctx->PSGetConstantBuffers(0, kCbs, psCb);
     psInstCount = vsInstCount = gsInstCount = hsInstCount = dsInstCount = 256;
     ctx->PSGetShader(&ps, psInst, &psInstCount);
     ctx->VSGetShader(&vs, vsInst, &vsInstCount);
@@ -92,11 +119,11 @@ void StateBackup::restore(ID3D11DeviceContext* ctx) {
     ctx->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv);
     for (auto& r : rtvs) safeRelease(r);
     safeRelease(dsv);
-    ctx->PSSetShaderResources(0, 4, psSrv);
+    ctx->PSSetShaderResources(0, kSrvs, psSrv);
     for (auto& s : psSrv) safeRelease(s);
     ctx->PSSetSamplers(0, 2, psSamplers);
     for (auto& s : psSamplers) safeRelease(s);
-    ctx->PSSetConstantBuffers(0, 2, psCb);
+    ctx->PSSetConstantBuffers(0, kCbs, psCb);
     for (auto& b : psCb) safeRelease(b);
     ctx->PSSetShader(ps, psInst, psInstCount);
     safeRelease(ps);
@@ -125,23 +152,22 @@ void StateBackup::restore(ID3D11DeviceContext* ctx) {
 bool Renderer::init(ID3D11Device* device) {
     m_device = device;
     bool ok = SUCCEEDED(device->CreateVertexShader(g_VS_Full, sizeof(g_VS_Full), nullptr, &m_vs));
-    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Down4, sizeof(g_PS_Down4), nullptr, &m_down));
-    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_BlurH, sizeof(g_PS_BlurH), nullptr, &m_blurH));
-    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_BlurV, sizeof(g_PS_BlurV), nullptr, &m_blurV));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Grade, sizeof(g_PS_Grade), nullptr, &m_grade));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_BloomDown, sizeof(g_PS_BloomDown), nullptr, &m_bloomDown));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_BloomUp, sizeof(g_PS_BloomUp), nullptr, &m_bloomUp));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_ToneMap, sizeof(g_PS_ToneMap), nullptr, &m_toneMap));
 
     D3D11_BUFFER_DESC cb = {};
-    cb.ByteWidth = sizeof(GradeConstants);
     cb.Usage = D3D11_USAGE_DEFAULT;
     cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cb.ByteWidth = sizeof(GradeConstants);
     ok &= SUCCEEDED(device->CreateBuffer(&cb, nullptr, &m_gradeCb));
     cb.ByteWidth = 16;
     ok &= SUCCEEDED(device->CreateBuffer(&cb, nullptr, &m_passCb));
     cb.ByteWidth = sizeof(ToneConstants);
     ok &= SUCCEEDED(device->CreateBuffer(&cb, nullptr, &m_toneCb));
-    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_BloomDown, sizeof(g_PS_BloomDown), nullptr, &m_bloomDown));
-    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_BloomUp, sizeof(g_PS_BloomUp), nullptr, &m_bloomUp));
-    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_ToneMap, sizeof(g_PS_ToneMap), nullptr, &m_toneMap));
+    cb.ByteWidth = sizeof(LookConstants);
+    ok &= SUCCEEDED(device->CreateBuffer(&cb, nullptr, &m_lookCb));
 
     D3D11_SAMPLER_DESC sd = {};
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -173,12 +199,6 @@ void Renderer::releaseTargets() {
     safeRelease(m_copySrv);
     safeRelease(m_copy);
     m_copyDesc = {};
-    for (int i = 0; i < 2; i++) {
-        safeRelease(m_blurSrv[i]);
-        safeRelease(m_blurRtv[i]);
-        safeRelease(m_blurTex[i]);
-    }
-    m_blurW = m_blurH2 = 0;
     for (int k = 0; k < 2; k++) {
         for (int i = 0; i < kBloomLevels; i++) {
             safeRelease(m_bloomSrv[k][i]);
@@ -201,16 +221,14 @@ void Renderer::release() {
     safeRelease(m_lutSrv);
     m_lutName.clear();
     safeRelease(m_vs);
-    safeRelease(m_down);
-    safeRelease(m_blurH);
-    safeRelease(m_blurV);
     safeRelease(m_grade);
-    safeRelease(m_gradeCb);
-    safeRelease(m_passCb);
-    safeRelease(m_toneCb);
     safeRelease(m_bloomDown);
     safeRelease(m_bloomUp);
     safeRelease(m_toneMap);
+    safeRelease(m_gradeCb);
+    safeRelease(m_passCb);
+    safeRelease(m_toneCb);
+    safeRelease(m_lookCb);
     safeRelease(m_linear);
     safeRelease(m_point);
     safeRelease(m_rs);
@@ -255,36 +273,6 @@ bool Renderer::ensureCopy(ID3D11Texture2D* source, const D3D11_TEXTURE2D_DESC& d
     m_copyViewFormat = viewFormat;
     TMVS_LOG("renderer: image %ux%u, format %d (view %d)%s", desc.Width, desc.Height, desc.Format, viewFormat,
              msaa ? ", multisampled" : "");
-    return true;
-}
-
-bool Renderer::ensureBlur(UINT width, UINT height) {
-    const UINT w = std::max(1u, width / 4), h = std::max(1u, height / 4);
-    if (m_blurTex[0] && m_blurW == w && m_blurH2 == h) return true;
-    for (int i = 0; i < 2; i++) {
-        safeRelease(m_blurSrv[i]);
-        safeRelease(m_blurRtv[i]);
-        safeRelease(m_blurTex[i]);
-    }
-    D3D11_TEXTURE2D_DESC d = {};
-    d.Width = w;
-    d.Height = h;
-    d.MipLevels = 1;
-    d.ArraySize = 1;
-    d.Format = DXGI_FORMAT_R16_FLOAT;
-    d.SampleDesc.Count = 1;
-    d.Usage = D3D11_USAGE_DEFAULT;
-    d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-    for (int i = 0; i < 2; i++) {
-        if (FAILED(m_device->CreateTexture2D(&d, nullptr, &m_blurTex[i])) ||
-            FAILED(m_device->CreateRenderTargetView(m_blurTex[i], nullptr, &m_blurRtv[i])) ||
-            FAILED(m_device->CreateShaderResourceView(m_blurTex[i], nullptr, &m_blurSrv[i]))) {
-            TMVS_LOG("renderer: blur targets %ux%u failed", w, h);
-            return false;
-        }
-    }
-    m_blurW = w;
-    m_blurH2 = h;
     return true;
 }
 
@@ -366,20 +354,6 @@ void Renderer::updateLut(const std::string& name) {
     if (!m_lutSrv) m_lutError = "texture failed";
 }
 
-void Renderer::pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, UINT width, UINT height,
-                    ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY, float z, float w) {
-    ID3D11ShaderResourceView* none[4] = {};
-    ctx->PSSetShaderResources(0, 4, none);
-    ctx->OMSetRenderTargets(1, &rtv, nullptr);
-    D3D11_VIEWPORT vp = {0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
-    ctx->RSSetViewports(1, &vp);
-    const float texel[4] = {texelX, texelY, z, w};
-    ctx->UpdateSubresource(m_passCb, 0, nullptr, texel, 0, 0);
-    ctx->PSSetShaderResources(0, srvCount, srvs);
-    ctx->PSSetShader(ps, nullptr, 0);
-    ctx->Draw(3, 0);
-}
-
 void Renderer::setCommonState(ID3D11DeviceContext* ctx) {
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ctx->IASetInputLayout(nullptr);
@@ -398,6 +372,43 @@ void Renderer::setCommonState(ID3D11DeviceContext* ctx) {
     ctx->OMSetDepthStencilState(m_dss, 0);
     ID3D11SamplerState* samplers[2] = {m_linear, m_point};
     ctx->PSSetSamplers(0, 2, samplers);
+}
+
+// The shared look constants (b3) and the LUT (t7) for this frame.
+void Renderer::uploadLook(ID3D11DeviceContext* ctx, const Look& look) {
+    const tmshaders::Settings& s = *look.settings;
+    updateLut(look.lut);
+    LookConstants c = {};
+    c.l0[0] = s.exposure;
+    c.l0[1] = s.contrast;
+    c.l0[2] = s.saturation;
+    c.l0[3] = s.vibrance;
+    c.l1[0] = s.temperature;
+    c.l1[1] = s.tint;
+    c.l1[2] = s.shadowTint;
+    c.l1[3] = s.toneKnee;
+    c.l2[0] = s.lift;
+    c.l2[1] = s.gamma;
+    c.l2[2] = s.gain;
+    c.l2[3] = s.vignette;
+    c.l3[0] = s.filmGrain;
+    c.l3[1] = s.chromaticAberration;
+    c.l3[2] = s.sharpen;
+    c.l3[3] = m_lutSrv ? look.lutAmount : 0.0f;
+    // Split toning's warm side: the engine's light mixed with the preset's sun colour, as in TMNF.
+    for (int i = 0; i < 3; i++) {
+        c.sun[i] = s.sunColor[i] + (look.sun[i] - s.sunColor[i]) * s.gameSunColor;
+        c.sky[i] = s.skyColor[i];
+    }
+    c.sun[3] = static_cast<float>(s.toneCurve);
+    c.sky[3] = s.bloom;
+    c.l6[0] = static_cast<float>(look.frame % 4096) * 0.618034f;
+    c.l6[1] = static_cast<float>(m_lutSize);
+    c.l6[2] = look.split;
+    c.l6[3] = s.bloomRadius;
+    ctx->UpdateSubresource(m_lookCb, 0, nullptr, &c, 0, 0);
+    ctx->PSSetConstantBuffers(3, 1, &m_lookCb);
+    ctx->PSSetShaderResources(7, 1, &m_lutSrv);
 }
 
 bool Renderer::ensureBloom(UINT width, UINT height) {
@@ -436,28 +447,23 @@ bool Renderer::ensureBloom(UINT width, UINT height) {
     return true;
 }
 
-namespace {
-
-void sizeOfView(ID3D11View* view, UINT& w, UINT& h) {
-    w = h = 0;
-    ID3D11Resource* res = nullptr;
-    view->GetResource(&res);
-    ID3D11Texture2D* tex = nullptr;
-    if (res && SUCCEEDED(res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)))) {
-        D3D11_TEXTURE2D_DESC d;
-        tex->GetDesc(&d);
-        w = d.Width;
-        h = d.Height;
-        tex->Release();
-    }
-    if (res) res->Release();
+void Renderer::pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, UINT width, UINT height,
+                    ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY, float z, float w) {
+    ID3D11ShaderResourceView* none[7] = {};
+    ctx->PSSetShaderResources(0, 7, none); // t7 (the LUT) stays
+    ctx->OMSetRenderTargets(1, &rtv, nullptr);
+    D3D11_VIEWPORT vp = {0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
+    ctx->RSSetViewports(1, &vp);
+    const float texel[4] = {texelX, texelY, z, w};
+    ctx->UpdateSubresource(m_passCb, 0, nullptr, texel, 0, 0);
+    ctx->PSSetShaderResources(0, srvCount, srvs);
+    ctx->PSSetShader(ps, nullptr, 0);
+    ctx->Draw(3, 0);
 }
 
-} // namespace
-
 bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, ID3D11ShaderResourceView* hdr,
-                       ID3D11ShaderResourceView* exposure, ID3D11Buffer* engineConstants, const Settings& s) {
-    if (!m_toneMap || !target || !hdr || !exposure || !engineConstants) return false;
+                       ID3D11ShaderResourceView* exposure, ID3D11Buffer* engineConstants, const Look& look) {
+    if (!m_toneMap || !target || !hdr || !exposure || !engineConstants || !look.settings) return false;
     UINT w = 0, h = 0, hw = 0, hh = 0;
     sizeOfView(target, w, h);
     sizeOfView(hdr, hw, hh);
@@ -469,15 +475,12 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
     setCommonState(ctx);
     ID3D11Buffer* cbs[3] = {m_toneCb, m_passCb, engineConstants};
     ctx->PSSetConstantBuffers(0, 3, cbs);
+    uploadLook(ctx, look);
 
+    const tmshaders::Settings& s = *look.settings;
     const bool bloom = s.bloom > 0.001f && ensureBloom(hw, hh);
     ToneConstants tc = {};
-    tc.tone0[0] = static_cast<float>(static_cast<int>(s.toneCurve));
-    tc.tone0[1] = s.toneKnee;
-    tc.tone0[2] = s.toneHue;
-    tc.tone0[3] = s.hdrExposure;
-    tc.tone1[0] = s.bloom;
-    tc.tone1[1] = bloom ? 1.0f : 0.0f;
+    tc.tone0[0] = bloom ? 1.0f : 0.0f;
     ctx->UpdateSubresource(m_toneCb, 0, nullptr, &tc, 0, 0);
 
     ID3D11ShaderResourceView* bloomResult = nullptr;
@@ -489,27 +492,29 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
             pass(ctx, m_bloomDown, m_bloomRtv[0][i], m_bloomW[i], m_bloomH[i], &m_bloomSrv[0][i - 1], 1, 1.0f / m_bloomW[i - 1],
                  1.0f / m_bloomH[i - 1]);
         }
-        // Up: each level adds the blurred smaller one.
+        // Up: each level adds the blurred smaller one (TMNF's bloom radius scales it).
+        const float radius = std::max(0.3f, s.bloomRadius);
         for (int i = kBloomLevels - 2; i >= 0; i--) {
             const int lower = i + 1;
             ID3D11ShaderResourceView* src = lower == kBloomLevels - 1 ? m_bloomSrv[0][lower] : m_bloomSrv[1][lower];
             ID3D11ShaderResourceView* srvs[3] = {src, nullptr, m_bloomSrv[0][i]};
             pass(ctx, m_bloomUp, m_bloomRtv[1][i], m_bloomW[i], m_bloomH[i], srvs, 3, 1.0f / m_bloomW[lower],
-                 1.0f / m_bloomH[lower], 0.0f, 1.0f);
+                 1.0f / m_bloomH[lower], 0.0f, radius);
         }
         bloomResult = m_bloomSrv[1][0];
     }
     ID3D11ShaderResourceView* srvs[3] = {hdr, exposure, bloomResult};
     pass(ctx, m_toneMap, target, w, h, srvs, 3, 1.0f / hw, 1.0f / hh);
 
-    ID3D11ShaderResourceView* none[3] = {};
-    ctx->PSSetShaderResources(0, 3, none);
+    ID3D11ShaderResourceView* none[8] = {};
+    ctx->PSSetShaderResources(0, 8, none);
     backup.restore(ctx);
     return true;
 }
 
-bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const EngineView& engine, const Settings& s) {
-    if (!m_vs || !target) return false;
+bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, const EngineView& engine, const Look& look,
+                     const Options& options, bool hdrDone) {
+    if (!m_vs || !target || !look.settings) return false;
     D3D11_RENDER_TARGET_VIEW_DESC rd;
     target->GetDesc(&rd);
     if (rd.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D && rd.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2DMS) return false;
@@ -524,7 +529,9 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, c
     tex->GetDesc(&desc);
     if (desc.ArraySize != 1 || !ensureCopy(tex, desc, rd.Format)) {
         static int logged = 0;
-        if (logged++ < 5) TMVS_LOG("renderer: can't grade a %ux%u image (format %d, view %d, %u layers)", desc.Width, desc.Height, desc.Format, rd.Format, desc.ArraySize);
+        if (logged++ < 5)
+            TMVS_LOG("renderer: can't grade a %ux%u image (format %d, view %d, %u layers)", desc.Width, desc.Height, desc.Format,
+                     rd.Format, desc.ArraySize);
         tex->Release();
         return false;
     }
@@ -537,46 +544,23 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, c
     else ctx->CopyResource(m_copy, tex);
     tex->Release();
 
-    updateLut(s.lut);
     ID3D11ShaderResourceView* views[kTexCount] = {};
     for (int i = 0; i < kTexCount; i++) views[i] = textureView(i, engine.tex ? engine.tex[i] : nullptr);
-    ID3D11ShaderResourceView* depthSrv = views[kTexDepth];
 
     setCommonState(ctx);
     ID3D11Buffer* cbs[2] = {m_gradeCb, m_passCb};
     ctx->PSSetConstantBuffers(0, 2, cbs);
+    uploadLook(ctx, look);
 
     const UINT w = desc.Width, h = desc.Height;
-    const bool split = s.view == View::Split;
-    const bool debugView = static_cast<int>(s.view) >= static_cast<int>(View::Depth);
-    const bool clarity = s.clarity > 0.001f && !debugView && ensureBlur(w, h);
-    if (clarity) {
-        pass(ctx, m_down, m_blurRtv[0], m_blurW, m_blurH2, &m_copySrv, 1, 1.0f / w, 1.0f / h);
-        pass(ctx, m_blurH, m_blurRtv[1], m_blurW, m_blurH2, &m_blurSrv[0], 1, 1.0f / m_blurW, 1.0f / m_blurH2);
-        pass(ctx, m_blurV, m_blurRtv[0], m_blurW, m_blurH2, &m_blurSrv[1], 1, 1.0f / m_blurW, 1.0f / m_blurH2);
-    }
-
     GradeConstants c = {};
-    c.p[0][0] = s.exposure;
-    c.p[0][1] = s.contrast;
-    c.p[0][2] = s.saturation;
-    c.p[0][3] = s.vibrance;
-    c.p[1][0] = s.warmth;
-    c.p[1][1] = s.tint;
-    c.p[1][2] = clarity ? s.clarity : 0.0f;
-    c.p[1][3] = s.sharpen;
-    c.p[2][0] = s.vignette;
-    c.p[2][1] = s.shadows;
-    c.p[2][2] = s.highlights;
-    c.p[2][3] = s.lutMix;
-    c.p[3][0] = 1.0f / w;
-    c.p[3][1] = 1.0f / h;
-    c.p[3][2] = isSrgb(rd.Format) ? 1.0f : 0.0f;
-    c.p[3][3] = static_cast<float>(static_cast<int>(s.view));
-    c.p[4][0] = split ? s.split : 0.0f;
-    c.p[4][1] = depthSrv ? 1.0f : 0.0f;
-    c.p[4][2] = m_lutSrv ? 1.0f : 0.0f;
-    c.p[4][3] = static_cast<float>(m_lutSize);
+    c.p3[0] = 1.0f / w;
+    c.p3[1] = 1.0f / h;
+    c.p3[2] = isSrgb(rd.Format) ? 1.0f : 0.0f;
+    c.p3[3] = static_cast<float>(static_cast<int>(options.view));
+    c.p4[0] = look.split;
+    c.p4[1] = views[kTexDepth] ? 1.0f : 0.0f;
+    c.p4[2] = hdrDone ? 1.0f : 0.0f;
     if (engine.camera) {
         memcpy(c.invViewProj, engine.camera->invViewProj, sizeof(c.invViewProj));
         memcpy(c.camera, engine.camera->eye, sizeof(float) * 3);
@@ -586,12 +570,12 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, c
     c.has[1] = views[kTexMotion] ? 1.0f : 0.0f;
     c.has[2] = views[kTexDiffuse] ? 1.0f : 0.0f;
     ctx->UpdateSubresource(m_gradeCb, 0, nullptr, &c, 0, 0);
-    ID3D11ShaderResourceView* srvs[7] = {m_copySrv,          clarity ? m_blurSrv[0] : nullptr, depthSrv, m_lutSrv,
-                                         views[kTexNormal], views[kTexMotion],                views[kTexDiffuse]};
+    ID3D11ShaderResourceView* srvs[7] = {m_copySrv, nullptr, views[kTexDepth], nullptr, views[kTexNormal], views[kTexMotion],
+                                         views[kTexDiffuse]};
     pass(ctx, m_grade, target, w, h, srvs, 7, 1.0f / w, 1.0f / h);
 
-    ID3D11ShaderResourceView* none[7] = {};
-    ctx->PSSetShaderResources(0, 7, none);
+    ID3D11ShaderResourceView* none[8] = {};
+    ctx->PSSetShaderResources(0, 8, none);
     backup.restore(ctx);
     return true;
 }

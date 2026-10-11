@@ -37,6 +37,9 @@ struct Host {
     std::function<float(float)> fNumber;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
+    // The game's own options, a panel first on the Settings page (null: none).
+    const char* gamePanelTitle = nullptr;
+    std::function<void()> gamePanel;
 };
 
 // Colours, sizes and fonts (after ImGui::CreateContext, before the renderer backend).

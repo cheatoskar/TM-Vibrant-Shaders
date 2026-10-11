@@ -14,9 +14,12 @@
 #include "engine_frame.h"
 #include "log.h"
 #include "renderer.h"
+#include "config.h"
+#include "options.h"
 #include "settings.h"
 #include <windows.h>
 #include <d3d11.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -124,8 +127,10 @@ int main(int argc, char** argv) {
     bool hdrStage = false;
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
-    Settings& s = settings::current();
-    settings::applyPreset(s, "Vibrant");
+    // The look: a built-in or your preset (default Vibrant), then --set values on top.
+    tmshaders::Config& config = tmshaders::Config::get();
+    config.selectPreset("Vibrant");
+    Options& opts = options::current();
     for (int i = 3; i < argc; i++) {
         const std::string opt = argv[i];
         if (opt == "--hdr") {
@@ -137,12 +142,17 @@ int main(int argc, char** argv) {
             return 2;
         }
         const std::string value = argv[++i];
-        if (opt == "--preset") settings::applyPreset(s, value);
+        if (opt == "--preset") {
+            if (!config.selectPreset(value)) {
+                printf("unknown preset %s\n", value.c_str());
+                return 2;
+            }
+        }
         else if (opt == "--tonecb") toneCbPath = value;
-        else if (opt == "--view") s.view = static_cast<View>(atoi(value.c_str()));
+        else if (opt == "--view") opts.view = static_cast<View>(atoi(value.c_str()));
         else if (opt == "--set") {
             const size_t eq = value.find('=');
-            if (eq == std::string::npos || !settings::set(s, value.substr(0, eq), value.substr(eq + 1))) {
+            if (eq == std::string::npos || !setValue(value.substr(0, eq), value.substr(eq + 1))) {
                 printf("unknown setting %s\n", value.c_str());
                 return 2;
             }
@@ -197,6 +207,17 @@ int main(int argc, char** argv) {
     }
     printf("  camera %s\n", haveCamera ? "found" : "missing");
 
+    Look look;
+    look.settings = &config.settings;
+    look.lut = config.lutFile;
+    look.lutAmount = config.lutAmount;
+    if (haveCamera) {
+        const float peak = std::max(camera.sunColour[0], std::max(camera.sunColour[1], camera.sunColour[2]));
+        if (peak > 1e-3f)
+            for (int i = 0; i < 3; i++) look.sun[i] = camera.sunColour[i] / peak;
+    }
+    look.split = opts.view == View::Split ? opts.split : 0.0f;
+
     Renderer renderer;
     if (!renderer.init(device)) return 2;
     if (hdrStage) {
@@ -228,15 +249,15 @@ int main(int argc, char** argv) {
             sv.Texture2D.MipLevels = 1;
             device->CreateShaderResourceView(t, &sv, &in[i]);
         }
-        Renderer toneRenderer;
-        if (!toneRenderer.init(device) || !toneRenderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, s)) {
+        if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look)) {
             printf("the HDR stage failed\n");
             return 1;
         }
-        printf("  HDR stage: curve %d, bloom %.2f\n", static_cast<int>(s.toneCurve), s.bloom);
+        printf("  HDR stage: preset %s, curve %d, bloom %.2f\n", config.preset.c_str(), config.settings.toneCurve,
+               config.settings.bloom);
     }
     const EngineView view{tex, haveCamera ? &camera : nullptr};
-    if (!renderer.apply(ctx, rtv, view, s)) {
+    if (!renderer.apply(ctx, rtv, view, look, opts, hdrStage)) {
         printf("the renderer refused the image\n");
         return 1;
     }

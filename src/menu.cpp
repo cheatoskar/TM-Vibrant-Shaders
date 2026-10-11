@@ -1279,6 +1279,12 @@ bool drawPerformancePage(Settings& s) {
 bool drawSettings(Config& config, Settings& s) {
     pageTitle("Settings", "General options. They are not part of presets.");
     std::vector<PanelDef> panels;
+    if (g_host->gamePanel) {
+        panels.push_back({g_host->gamePanelTitle ? g_host->gamePanelTitle : "Game", 6.0f, [] {
+                              g_host->gamePanel();
+                              return false;
+                          }});
+    }
     panels.push_back({"Presets and maps", 4.0f, [&config] {
                           switchRow("Preset per map type", &config.autoMood,
                                     "Day, sunset and night maps each use their own preset (see Maps). Off: the same preset everywhere.");

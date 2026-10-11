@@ -2,12 +2,12 @@
 // Runs at the engine's ToneMapGlobalFilmCurve draw with the same inputs:
 //   t0 = the engine's HDR image (scene + its bloom), t1 = its 2x2 exposure texture,
 //   b2 = its tone-map constants (bound by the engine for its own draw: we read them on the GPU).
-// Per frame: PS_BloomDown x N (first level exposes and thresholds) -> PS_BloomUp x N-1 -> PS_ToneMap.
+// Per frame: PS_BloomDown x N (first level exposes and thresholds) -> PS_BloomUp x N-1 -> PS_ToneMap
+// (the TMNF mod's PS_Final: exposure, bloom, grade, curve, vignette, look, grain).
 
 cbuffer ToneParams : register(b0)
 {
-    float4 g_tone0; // curve (0 engine, 1 TMVS, 2 ACES), knee, hue keep, exposure (stops)
-    float4 g_tone1; // bloom strength, has bloom, 0, 0
+    float4 g_tone0; // has bloom, 0, 0, 0
 };
 
 cbuffer PassParams : register(b1)
@@ -29,13 +29,13 @@ Texture2D g_bloom : register(t2);
 SamplerState g_linear : register(s0);
 SamplerState g_point : register(s1);
 
+#include "look.hlsli"
+
 struct VSOut
 {
     float4 pos : SV_Position;
     float2 uv : TEXCOORD0;
 };
-
-static const float3 kLuma = float3(0.2126, 0.7152, 0.0722);
 
 float engineExposure()
 {
@@ -46,8 +46,8 @@ float engineExposure()
 
 float3 karis(float3 a, float3 b, float3 c, float3 d)
 {
-    float wa = 1.0 / (1.0 + dot(a, kLuma)), wb = 1.0 / (1.0 + dot(b, kLuma));
-    float wc = 1.0 / (1.0 + dot(c, kLuma)), wd = 1.0 / (1.0 + dot(d, kLuma));
+    float wa = 1.0 / (1.0 + lookLuma(a)), wb = 1.0 / (1.0 + lookLuma(b));
+    float wc = 1.0 / (1.0 + lookLuma(c)), wd = 1.0 / (1.0 + lookLuma(d));
     return (a * wa + b * wb + c * wc + d * wd) / (wa + wb + wc + wd);
 }
 
@@ -67,7 +67,7 @@ float4 PS_BloomDown(VSOut i) : SV_Target
     float3 result;
     if (g_texel.z > 0.5)
     {
-        float exposure = engineExposure() * exp2(g_tone0.w);
+        float exposure = engineExposure() * exp2(g_l0.x);
         result = (karis(d, e, ii, j) * 0.5 + karis(a, b, f, g) * 0.125 + karis(b, c, g, h) * 0.125 +
                   karis(f, g, k, l) * 0.125 + karis(g, h, l, m) * 0.125) * exposure;
         // Soft threshold: mostly the bright part, a little of everything.
@@ -110,7 +110,7 @@ float3 engineCurve(float3 x)
     return f * g_eA.w + dot(f, float3(1, 1, 1)) * g_eD.w;
 }
 
-// TMVS (from the TMNF mod): linear below the knee, a long exponential shoulder above; half per
+// TMVS (TMNF's tonemap()): linear below the knee, a long exponential shoulder above; half per
 // channel, half on the brightest channel so lit colours keep their hue instead of bleaching.
 float3 shoulder(float3 x, float knee)
 {
@@ -121,10 +121,10 @@ float3 shoulder(float3 x, float knee)
 
 float3 tmvsCurve(float3 x)
 {
-    float knee = clamp(g_tone0.y, 0.2, 0.95);
+    float knee = clamp(g_l1.w, 0.2, 0.95);
     float peak = max(x.r, max(x.g, x.b));
     float3 hue = x * (shoulder(peak.xxx, knee).x / max(peak, 1e-5));
-    return lerp(shoulder(x, knee), hue, saturate(g_tone0.z));
+    return lerp(shoulder(x, knee), hue, 0.5);
 }
 
 // ACES (Narkowicz's fit of the RRT+ODT).
@@ -145,12 +145,12 @@ float3 curve(float3 x, int mode)
 float matchScale(int mode)
 {
     const float m = 0.18;
-    float target = dot(engineCurve(m.xxx), kLuma);
+    float target = lookLuma(engineCurve(m.xxx));
     float lo = 0.01, hi = 100.0;
     [loop] for (int k = 0; k < 24; k++)
     {
         float mid = sqrt(lo * hi);
-        if (dot(curve((m * mid).xxx, mode), kLuma) < target) lo = mid; else hi = mid;
+        if (lookLuma(curve((m * mid).xxx, mode)) < target) lo = mid; else hi = mid;
     }
     return sqrt(lo * hi);
 }
@@ -158,11 +158,15 @@ float matchScale(int mode)
 float4 PS_ToneMap(VSOut i) : SV_Target
 {
     float4 hdr = g_src.SampleLevel(g_point, i.uv, 0);
-    float3 x = min(hdr.rgb, 50000.0) * engineExposure() * exp2(g_tone0.w);
-    // Bloom adds light where it is bright (in the TMNF mod it was mixed in, which on real HDR
-    // only darkened the image).
-    if (g_tone1.y > 0.5) x += g_bloom.SampleLevel(g_linear, i.uv, 0).rgb * g_tone1.x;
-    int mode = (int)(g_tone0.x + 0.5);
+    float3 x = min(hdr.rgb, 50000.0) * engineExposure();
+    // Compare (split): the game's own image on the left.
+    if (i.uv.x < g_l6.z) return float4(engineCurve(x), hdr.a);
+    x *= exp2(g_l0.x);
+    // Bloom adds light where it is bright (TMNF mixed it in, which on real HDR only darkened).
+    if (g_tone0.x > 0.5) x += g_bloom.SampleLevel(g_linear, i.uv, 0).rgb * g_lSky.w * 1.6;
+    x = lookGrade(x);
+    int mode = (int)(g_lSun.w + 0.5);
     if (mode != 0) x *= matchScale(mode);
-    return float4(curve(x, mode), hdr.a);
+    float3 c = curve(x, mode);
+    return float4(lookFinish(c, i.uv, i.pos.xy), hdr.a);
 }

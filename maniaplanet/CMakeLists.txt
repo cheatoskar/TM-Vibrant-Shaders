@@ -24,6 +24,17 @@ FetchContent_Declare(
   GIT_TAG v1.91.5
 )
 FetchContent_MakeAvailable(imgui)
+# JPEG reader and writer for the preset pictures (public domain / MIT, header only), as in TMNF.
+FetchContent_Declare(
+  stb
+  GIT_REPOSITORY https://github.com/nothings/stb.git
+  GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
+)
+FetchContent_MakeAvailable(stb)
+
+# The shared menu shows a version (About page).
+set(TM_SHADERS_VERSION "${PROJECT_VERSION} (ManiaPlanet)")
+configure_file("${TMVS_ROOT}/src/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/tm_shaders_version.h" @ONLY)
 
 # Effect shaders, compiled at build time (shader model 4 so feature level 10 cards work too).
 set(MP_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -34,7 +45,7 @@ list(TRANSFORM MP_SDK_BINS APPEND "/x64")
 find_program(MP_FXC fxc HINTS "$ENV{WindowsSdkVerBinPath}x64" ${MP_SDK_BINS} REQUIRED)
 # file:entry:profile
 set(MP_ENTRIES
-  mp:VS_Full:vs_4_0 mp:PS_Down4:ps_4_0 mp:PS_BlurH:ps_4_0 mp:PS_BlurV:ps_4_0 mp:PS_Grade:ps_4_0
+  mp:VS_Full:vs_4_0 mp:PS_Grade:ps_4_0
   hdr:PS_BloomDown:ps_4_0 hdr:PS_BloomUp:ps_4_0 hdr:PS_ToneMap:ps_4_0)
 set(MP_SHADER_HEADERS)
 foreach(item ${MP_ENTRIES})
@@ -47,7 +58,7 @@ foreach(item ${MP_ENTRIES})
   add_custom_command(
     OUTPUT "${out}"
     COMMAND "${MP_FXC}" /nologo /O3 /T ${profile} /E ${entry} /Vn g_${entry} /Fh "${out}" "${source}"
-    DEPENDS "${source}"
+    DEPENDS "${source}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/look.hlsli"
     COMMENT "fxc ${entry}"
     VERBATIM)
   list(APPEND MP_SHADER_HEADERS "${out}")
@@ -60,10 +71,16 @@ add_library(tmvs_mp_core STATIC
   src/shaderdb.cpp
   src/renderer.cpp
   src/overlay.cpp
-  src/settings.cpp
+  src/options.cpp
+  src/thumbnails11.cpp
   src/capture.cpp
   src/log.cpp
   ${TMVS_ROOT}/src/lut.cpp
+  # The TMNF mod's settings, presets and menu, shared.
+  ${TMVS_ROOT}/src/config.cpp
+  ${TMVS_ROOT}/src/menu.cpp
+  ${TMVS_ROOT}/src/image.cpp
+  ${TMVS_ROOT}/src/update.cpp
   ${MP_SHADER_HEADERS}
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -74,11 +91,12 @@ add_library(tmvs_mp_core STATIC
 )
 target_include_directories(tmvs_mp_core PUBLIC src "${TMVS_ROOT}/src" "${CMAKE_CURRENT_BINARY_DIR}" ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends)
+target_include_directories(tmvs_mp_core PRIVATE ${stb_SOURCE_DIR})
 target_compile_definitions(tmvs_mp_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
   TMVS_MP_VERSION="${PROJECT_VERSION}")
 target_compile_options(tmvs_mp_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
 # Never d3d11.lib here: the DLL *is* d3d11.dll and would import itself.
-target_link_libraries(tmvs_mp_core PUBLIC dxgi dxguid shell32 user32)
+target_link_libraries(tmvs_mp_core PUBLIC dxgi dxguid shell32 user32 winhttp)
 set_source_files_properties(
   ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
@@ -90,7 +108,10 @@ add_library(tmvs_mp SHARED
   src/proxy.cpp
   src/forward.asm
   src/d3d11.def
+  ${TMVS_ROOT}/thumbnails/thumbnails.rc
 )
+# The built-in presets' pictures, embedded like in the TMNF DLL.
+set_property(SOURCE ${TMVS_ROOT}/thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/thumbnails")
 # The game loads it as d3d11.dll from its own folder.
 set_target_properties(tmvs_mp PROPERTIES OUTPUT_NAME d3d11)
 target_compile_options(tmvs_mp PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)

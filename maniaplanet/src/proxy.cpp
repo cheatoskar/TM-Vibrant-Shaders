@@ -6,7 +6,8 @@
 #include "capture.h"
 #include "hooks.h"
 #include "log.h"
-#include "settings.h"
+#include "config.h"
+#include "options.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <iterator>
@@ -60,7 +61,8 @@ void startOnce() {
     if (started || !g_active) return;
     started = true;
     TMVS_LOG("TM Vibrant Shaders for ManiaPlanet %s", TMVS_MP_VERSION);
-    settings::load();
+    tmshaders::Config::get().load(); // the TMNF mod's settings and presets (settings.ini, presets\)
+    options::load();
 }
 
 } // namespace proxy
@@ -115,7 +117,7 @@ extern "C" void WINAPI TmvsMpStats(int* out) {
 
 // For tools/harness.cpp: change a setting by its settings.ini key while running.
 extern "C" int WINAPI TmvsMpSet(const char* key, const char* value) {
-    return settings::set(settings::current(), key, value) ? 1 : 0;
+    return setValue(key, value) ? 1 : 0;
 }
 
 extern "C" void WINAPI TmvsMpCapture() {

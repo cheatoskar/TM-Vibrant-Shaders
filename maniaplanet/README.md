@@ -36,18 +36,29 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 
 The same keys as the TMNF mod.
 
-In the menu:
-- **Presets:** Vibrant (default), Natural, Punchy, Golden Hour, Cold Night, Clean.
-- **Sliders:** for every value.
-- **Compare (split):** shows the game's image left and the mod's right.
-- **Checks:** show what the mod reads from the engine: depth, normals, motion, albedo, and
+The F8 menu is the TMNF mod's own (src/menu.cpp, shared). It has the same presets, preset gallery,
+own presets with pictures, presets per map type (day, sunset and night, from the engine's light
+colour), the Studio and the settings. It shows only what ManiaPlanet can do so far:
+- **Colour:** exposure, contrast, saturation, vibrance, temperature, tint, lift/gamma/gain, split toning.
+- **Tone curve:** the game's, TMVS or ACES, and the TMVS curve's knee.
+- **Bloom & lens:** bloom, bloom radius, vignette, film grain, chromatic aberration.
+- **Image:** sharpening.
+- **.cube looks.**
+
+Settings and your presets are in `Documents\ManiaPlanet\TMVS` (`settings.ini`, `presets\`), in
+the same format as in TMNF. ManiaPlanet's own options are in `maniaplanet.ini`, on the Settings
+page, panel "ManiaPlanet":
+- **HDR stage:** on = the look on the engine's HDR image, off = on its finished image.
+- **Placement**, and the **compare and check views**.
+- **Status lines.**
+- **Compare (split)** shows the game's image left and the mod's right.
+- **Checks** show what the mod reads from the engine: depth, normals, motion, albedo, and
   a world grid (lines every 8 m, bright every 32 m) drawn from depth and the engine's camera. The
   grid must stay on the ground while the camera moves. Magenta means not found.
-- **Status lines:** say where the effects were applied, whether the camera was found, and which
+- The **status lines** say where the effects were applied, whether the camera was found, and which
   engine textures were found.
 
-Settings, log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in
-`Documents\ManiaPlanet\TMVS`.
+The log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in `Documents\ManiaPlanet\TMVS` too.
 
 ## Online, Openplanet
 

@@ -143,25 +143,13 @@ int main(int argc, char** argv) {
         printf("cannot read %s (24 or 32-bit BMP)\n", argv[7]);
         return 2;
     }
-    // Test settings: exposure +1 stop and nothing else.
+    // Settings, log and captures go to a scratch folder; the test sets its values after start.
     char data[MAX_PATH] = {};
     if (!GetEnvironmentVariableA("TMVS_MP_DATA", data, MAX_PATH)) {
         printf("set TMVS_MP_DATA to a scratch folder first\n");
         return 2;
     }
     CreateDirectoryA(data, nullptr);
-    const std::string ini = std::string(data) + "\\settings.ini";
-    const char* keys[][2] = {{"Enabled", "1"},   {"Preset", "Clean"},  {"Exposure", "1"},  {"Contrast", "0"},
-                             {"Saturation", "1"}, {"Vibrance", "0"},    {"Warmth", "0"},    {"Tint", "0"},
-                             {"Shadows", "0"},    {"Highlights", "0"},  {"Clarity", "0"},   {"Sharpen", "0"},
-                             {"Vignette", "0"},   {"Lut", ""},          {"Placement", "0"}, {"FallbackAtEnd", "1"},
-                             {"ToneCurve", "0"},  {"Bloom", "0"},       {"HdrExposure", "0"}};
-    if (grade) {
-        DeleteFileA(ini.c_str());
-        WritePrivateProfileStringA("TMVS", "Preset", argv[9], ini.c_str());
-    } else {
-        for (const auto& k : keys) WritePrivateProfileStringA("TMVS", k[0], k[1], ini.c_str());
-    }
     HMODULE proxy = LoadLibraryA(argv[1]);
     if (!proxy) {
         printf("cannot load %s (%lu)\n", argv[1], GetLastError());
@@ -198,6 +186,29 @@ int main(int argc, char** argv) {
     if (SUCCEEDED(ctx->QueryInterface(__uuidof(ID3D10Multithread), reinterpret_cast<void**>(&multithread)))) {
         multithread->SetMultithreadProtected(TRUE);
         multithread->Release();
+    }
+
+    // The look for the checks: the engine's tone map, exposure +1 stop on the finished image and
+    // nothing else (the TMNF settings at their neutral values). --grade: a preset instead.
+    const char* neutral[][2] = {{"Enabled", "1"},     {"HdrStage", "0"},    {"Placement", "0"},  {"FallbackAtEnd", "1"},
+                                {"ToneCurve", "0"},   {"Exposure", "1"},    {"Contrast", "1"},   {"Saturation", "1"},
+                                {"Vibrance", "0"},    {"Temperature", "0"}, {"Tint", "0"},       {"Lift", "0"},
+                                {"Gamma", "1"},       {"Gain", "1"},        {"SplitToning", "0"}, {"Vignette", "0"},
+                                {"FilmGrain", "0"},   {"ChromaticAberration", "0"},              {"Sharpen", "0"},
+                                {"Bloom", "0"},       {"Lut", ""}};
+    if (grade) {
+        set("HdrStage", "0");
+        if (!set("Preset", argv[9])) {
+            printf("unknown preset %s\n", argv[9]);
+            return 2;
+        }
+    } else {
+        for (const auto& k : neutral) {
+            if (!set(k[0], k[1])) {
+                printf("unknown setting %s\n", k[0]);
+                return 2;
+            }
+        }
     }
 
     // Like the game: the swap chain comes from a DXGI factory, not from the device call.
@@ -428,7 +439,7 @@ int main(int argc, char** argv) {
           "the image is graded (grey 128 -> 175 with +1 stop)");
     check(hud[0] == 255 && hud[1] == 0 && hud[2] == 0, "the interface drawn after it is untouched (pure red)");
 
-    check(s[11] == 0, "with the engine's curve and nothing added, the engine's tone map runs");
+    check(s[11] == 0, "with the HDR stage off, the engine's tone map runs");
     for (int i = 0; i < 2; i++) frame(false, centre, hud);
     stats(s);
     check(s[0] == 3, "without an interface draw the effects run at Present (fallback)");
@@ -437,6 +448,7 @@ int main(int argc, char** argv) {
     // 1). It is matched to the engine's mid grey, so the grey comes out as the engine's curve would
     // draw it.
     set("Exposure", "0");
+    set("HdrStage", "1");
     set("ToneCurve", "1");
     hdrClear = 0.18f;
     for (int i = 0; i < 3; i++) frame(true, centre, hud);
@@ -453,8 +465,23 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 2; i++) frame(true, centre, hud);
     stats(s);
     check(s[11] == 1 && centre[0] > 0, "with bloom the HDR stage runs and draws");
+    set("HdrStage", "0");
     set("ToneCurve", "0");
     set("Bloom", "0");
+
+    // The F8 menu (the TMNF mod's, shared): each page once, with the preset gallery and its
+    // embedded pictures. It must draw over the image and not crash.
+    set("ShowMenu", "1");
+    for (int page = 0; page < 7; page++) {
+        set("MenuPage", std::to_string(page).c_str());
+        for (int i = 0; i < 2; i++) frame(true, centre, hud);
+    }
+    set("MenuPage", "0");
+    requestCapture();
+    for (int i = 0; i < 3; i++) frame(true, centre, hud);
+    stats(s);
+    check(s[0] == 1, "with the menu open the effects still go in before the interface");
+    set("ShowMenu", "0");
     hdrClear = 0.0f;
 
     requestCapture();

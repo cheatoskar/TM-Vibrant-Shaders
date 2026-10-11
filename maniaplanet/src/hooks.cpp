@@ -12,12 +12,15 @@
 #include "log.h"
 #include "overlay.h"
 #include "renderer.h"
-#include "settings.h"
+#include "options.h"
+#include "config.h"
+#include "thumbnails11.h"
 #include "shaderdb.h"
 #include <windows.h>
 #include <dxgi1_2.h>
 #include <mutex>
 #include <shared_mutex>
+#include <algorithm>
 #include <unordered_map>
 
 namespace tmvs_mp {
@@ -172,6 +175,14 @@ struct Frame {
     uint32_t commandLists = 0;
 };
 Frame g_frame;
+// The look of the frame being drawn: your settings, or the preset the menu points at (prepareLook).
+tmshaders::Settings g_lookSettings;
+Look g_look;
+unsigned g_frameCounter = 0;
+tmshaders::Mood g_seenMood = tmshaders::Mood::Unknown;
+int g_moodFrames = 0;
+void prepareLook();
+
 // The engine's textures of this frame (owned references, kept until replaced) and its camera.
 ID3D11Resource* g_tex[kTexCount] = {};
 Camera g_camera;
@@ -333,27 +344,29 @@ bool readsResource(ID3D11DeviceContext* ctx, ID3D11Resource* res) {
 }
 
 void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed where) {
-    const Settings& s = settings::current();
-    if (!s.enabled || !g_rendererReady) return;
+    if (!g_lookSettings.enabled || !g_rendererReady) return;
     const EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
-    if (g_renderer.apply(ctx, target, view, s)) {
-        g_frame.placed = where;
-        if (capture::active()) capture::onGraded(g_device, ctx, g_renderer.lastInput(), g_renderer.lastViewFormat(), view);
+    if (!g_renderer.apply(ctx, target, view, g_look, options::current(), g_frame.toneMapped)) return;
+    g_frame.placed = where;
+    if (capture::active()) capture::onGraded(g_device, ctx, g_renderer.lastInput(), g_renderer.lastViewFormat(), view);
+    // A picture for a preset you saved: the finished frame without the interface.
+    tmshaders::Config& config = tmshaders::Config::get();
+    std::string picture;
+    if (where == Placed::BeforeHud && config.takePictureRequest(picture)) {
+        thumbnails::savePicture(g_device, ctx, resourceOf(target), config.presetPicture(picture));
+        config.pictureTaken();
     }
 }
 
 // Runs the mod's HDR stage in place of the engine's tone-map draw (same inputs, same target).
 // True: the engine's draw is to be skipped.
 bool replaceToneMap(ID3D11DeviceContext* ctx) {
-    const Settings& s = settings::current();
-    if (!s.enabled || !g_rendererReady || !g_frame.rtv) return false;
-    // The engine's curve with nothing added is the game as it is: leave its draw alone.
-    if (s.toneCurve == ToneCurve::Engine && s.bloom <= 0.001f && s.hdrExposure == 0.0f) return false;
+    if (!g_lookSettings.enabled || !options::current().hdrStage || !g_rendererReady || !g_frame.rtv) return false;
     ID3D11ShaderResourceView* in[2] = {};
     ctx->PSGetShaderResources(0, 2, in);
     ID3D11Buffer* constants = nullptr;
     ctx->PSGetConstantBuffers(0, 1, &constants);
-    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, s);
+    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, g_look);
     for (auto* v : in)
         if (v) v->Release();
     if (constants) constants->Release();
@@ -433,7 +446,7 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     if (!full && !readsResource(ctx, f.postImage)) return false; // other interface work (atlases, minimap)
     f.phase = Phase::Done;
     f.hudShader = f.ps.name ? f.ps.name : "(unknown shader)";
-    if (settings::current().placement == Placement::BeforeHud && !f.injected && f.postRtv) {
+    if (options::current().placement == Placement::BeforeHud && !f.injected && f.postRtv) {
         f.injected = true;
         inject(ctx, f.postRtv, Placed::BeforeHud);
     }
@@ -653,11 +666,32 @@ void beginWith(IDXGISwapChain* sc) {
     {
         Inside guard; // the mod's own shaders aren't the game's
         g_rendererReady = g_renderer.init(device);
+        prepareLook();
         overlay::init(desc.OutputWindow, device, g_ctx);
     }
     TMVS_LOG("hooks: following swap chain %p (window %p, %ux%u), renderer %s", static_cast<void*>(sc),
              static_cast<void*>(desc.OutputWindow), desc.BufferDesc.Width, desc.BufferDesc.Height,
              g_rendererReady ? "ready" : "FAILED");
+}
+
+// The look of the next frame: your settings, or the preset the menu points at.
+void prepareLook() {
+    tmshaders::Config& config = tmshaders::Config::get();
+    g_lookSettings = config.settings;
+    if (config.showOverlay && config.hoverPreview) config.previewSettings(g_lookSettings);
+    g_look.settings = &g_lookSettings;
+    g_look.lut = config.lutFile;
+    g_look.lutAmount = config.lutAmount;
+    if (g_cameraThisFrame) {
+        // The engine's light colour, brightness taken out (split toning only wants its hue).
+        const float* c = g_camera.sunColour;
+        const float peak = std::max(c[0], std::max(c[1], c[2]));
+        if (peak > 1e-3f)
+            for (int i = 0; i < 3; i++) g_look.sun[i] = c[i] / peak;
+    }
+    g_look.frame = ++g_frameCounter;
+    const Options& o = options::current();
+    g_look.split = o.view == View::Split ? o.split : 0.0f;
 }
 
 void onPresent(IDXGISwapChain* sc) {
@@ -670,17 +704,16 @@ void onPresent(IDXGISwapChain* sc) {
     ensureBackBuffer(sc);
 
     Frame& f = g_frame;
-    const Settings& s = settings::current();
-    if (!f.injected && s.enabled && g_backBufferRtv) {
+    const Options& o = options::current();
+    if (!f.injected && g_lookSettings.enabled && g_backBufferRtv) {
         Placed where = Placed::None;
-        if (s.placement == Placement::EndOfFrame) where = Placed::EndOfFrame;
-        else if (s.fallbackAtEnd && f.toneMapSeen) where = Placed::Fallback;
+        if (o.placement == Placement::EndOfFrame) where = Placed::EndOfFrame;
+        else if (o.fallbackAtEnd && f.toneMapSeen) where = Placed::Fallback;
         if (where != Placed::None) {
             f.injected = true;
             inject(g_ctx, g_backBufferRtv, where);
         }
     }
-    if (capture::active()) capture::onPresent(g_device, g_ctx, g_backBuffer);
 
     g_stats.toneMapSeen = f.toneMapSeen;
     g_stats.placed = f.placed;
@@ -700,7 +733,19 @@ void onPresent(IDXGISwapChain* sc) {
         Inside guard;
         overlay::frame(g_backBufferRtv);
     }
+    // The frame as it is shown (with the menu when it's open).
+    if (capture::active()) capture::onPresent(g_device, g_ctx, g_backBuffer);
     capture::endFrame();
+
+    // The map's time of day from the engine's light (day, sunset, night presets, as in TMNF):
+    // only in frames with a scene, and only once it holds for a second.
+    if (g_cameraThisFrame && f.toneMapSeen) {
+        const tmshaders::Mood mood = tmshaders::classifyMood(g_camera.sunColour);
+        g_moodFrames = mood == g_seenMood ? g_moodFrames + 1 : 0;
+        g_seenMood = mood;
+        if (g_moodFrames == 60) tmshaders::Config::get().onMoodDetected(mood);
+    }
+    prepareLook();
 
     // Next frame. The bound targets stay as the game left them.
     g_cameraThisFrame = false;
