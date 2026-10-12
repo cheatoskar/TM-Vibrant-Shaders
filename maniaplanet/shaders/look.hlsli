@@ -19,6 +19,13 @@ Texture3D g_lookLut : register(t7);
 
 static const float3 kLookLuma = float3(0.2126, 0.7152, 0.0722);
 
+// Compare split: the game's own image on this side of the line (g_l6.z: position, 0 = off,
+// negative = the game on the right).
+bool lookGameSide(float u)
+{
+    return g_l6.z > 0.0 ? u < g_l6.z : (g_l6.z < 0.0 ? u > -g_l6.z : false);
+}
+
 float lookLuma(float3 c)
 {
     return dot(c, kLookLuma);

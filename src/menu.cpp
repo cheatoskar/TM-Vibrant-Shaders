@@ -1076,8 +1076,10 @@ bool drawStudio(Config& config, Settings& s) {
             config.selectPreset(config.basePreset());
         }
     }
-    sameLineIfRoom("Reload shaders (F9)");
-    if (ImGui::Button("Reload shaders (F9)")) g_reloadRequested = true;
+    if (g_host->reloadShaders) {
+        sameLineIfRoom("Reload shaders (F9)");
+        if (ImGui::Button("Reload shaders (F9)")) g_reloadRequested = true;
+    }
     ImGui::SameLine();
     if (ImGui::GetContentRegionAvail().x < 260.0f * g_scale) ImGui::NewLine();
     ImGui::AlignTextToFramePadding();
@@ -1462,8 +1464,9 @@ void drawAbout(Config& config) {
                           }
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("Settings, presets, tmvs.log and F12 captures. Attach tmvs.log to bug reports.");
                           ImGui::Spacing();
-                          ImGui::TextDisabled("F8  menu      F7  effects on/off");
-                          ImGui::TextDisabled("F9  reload shaders      F12  frame capture");
+                          ImGui::TextDisabled("F8  menu      %s  effects on/off", g_host->toggleKey);
+                          if (g_host->reloadShaders) ImGui::TextDisabled("F9  reload shaders      F12  frame capture");
+                          else ImGui::TextDisabled("F12  frame capture");
                           return false;
                       }});
     panels.push_back({"Credits", 6.0f, [] {
@@ -1537,14 +1540,16 @@ void drawHeader(Config& config, Settings& s) {
     const float h = ImGui::GetFrameHeight();
     const float right = ImGui::GetContentRegionMax().x;
     const float switchW = h * 1.8f, buttonW = h;
-    const float effectsW = ImGui::CalcTextSize("Effects (F7)").x;
+    char effectsLabel[32];
+    snprintf(effectsLabel, sizeof(effectsLabel), "Effects (%s)", g_host->toggleKey);
+    const float effectsW = ImGui::CalcTextSize(effectsLabel).x;
     ImGui::SameLine(right - buttonW * 2.0f - switchW - effectsW - ImGui::CalcTextSize(fps).x - 48.0f * g_scale);
     ImGui::TextDisabled("%s", fps);
     if (reduced && ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Turned off by auto quality: %s", reduced);
     }
     ImGui::SameLine(0.0f, 20.0f * g_scale);
-    ImGui::TextUnformatted("Effects (F7)");
+    ImGui::TextUnformatted(effectsLabel);
     ImGui::SameLine();
     if (toggle("enabled", &s.enabled)) config.markDirty();
     ImGui::SameLine(right - buttonW * 2.0f - 4.0f * g_scale);
@@ -1599,7 +1604,7 @@ void drawNavigation(Config& config) {
     const float space = ImGui::GetContentRegionAvail().y - lines;
     if (space > 0.0f) ImGui::Dummy(ImVec2(0.0f, space));
     ImGui::TextDisabled("F8  menu");
-    ImGui::TextDisabled("F7  effects on/off");
+    ImGui::TextDisabled("%s  effects on/off", g_host->toggleKey);
     ImGui::TextDisabled("F12 frame capture");
     ImGui::TextDisabled("Changes save automatically");
 }

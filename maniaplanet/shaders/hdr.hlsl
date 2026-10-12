@@ -168,7 +168,7 @@ float4 PS_ToneMap(VSOut i) : SV_Target
     float4 hdr = g_src.SampleLevel(g_point, i.uv, 0);
     float3 x = min(hdr.rgb, 50000.0) * inputExposure();
     // Compare (split): the game's own image on the left.
-    if (i.uv.x < g_l6.z)
+    if (lookGameSide(i.uv.x))
     {
         float3 game = g_tone0.y > 0.5 ? min(g_game.SampleLevel(g_point, i.uv, 0).rgb, 50000.0) * engineExposure() : x;
         return float4(engineCurve(game), hdr.a);

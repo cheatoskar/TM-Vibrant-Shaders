@@ -29,6 +29,16 @@ void request();
 // The look of this frame: full quality, depth of field on the focus point, no motion blur.
 void adjust(tmshaders::Settings& s);
 
+// Compare split (Shift+F6, as in TMNF): one side of a line shows the game's own image. Only in
+// photo mode (switching it on turns photo mode on). Ctrl+Shift+wheel moves the line.
+bool& splitOn();
+float& splitPosition();
+bool& splitSwapped();
+void toggleSplit();
+bool splitShown();
+// For the look: the line's position (0 = no split), negative = the game's image on the right.
+float splitForLook();
+
 // The focus point (uv), -1 = none.
 void focusPoint(float out[2]);
 

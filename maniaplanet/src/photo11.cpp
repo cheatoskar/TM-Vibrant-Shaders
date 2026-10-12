@@ -125,6 +125,40 @@ bool active() {
     return g_active;
 }
 
+namespace {
+bool g_splitOn = false;
+float g_splitPosition = 0.5f;
+bool g_splitSwapped = false;
+} // namespace
+
+bool& splitOn() {
+    return g_splitOn;
+}
+
+float& splitPosition() {
+    return g_splitPosition;
+}
+
+bool& splitSwapped() {
+    return g_splitSwapped;
+}
+
+void toggleSplit() {
+    g_splitOn = !g_splitOn;
+    if (g_splitOn && !g_active) toggle();
+    setStatus(g_splitOn ? "Compare split: the game's image on one side (Ctrl+Shift+wheel moves the line)" : "Compare split off", 3);
+}
+
+bool splitShown() {
+    return g_active && g_splitOn;
+}
+
+float splitForLook() {
+    if (!splitShown()) return 0.0f;
+    const float p = g_splitPosition < 0.01f ? 0.01f : (g_splitPosition > 0.99f ? 0.99f : g_splitPosition);
+    return g_splitSwapped ? -p : p;
+}
+
 void toggle() {
     const bool on = !g_active;
     g_active = on;
@@ -172,6 +206,12 @@ bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return true;
     }
     if (msg == WM_MBUTTONUP) return true;
+    if (msg == WM_MOUSEWHEEL && g_splitOn && (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL) && (GET_KEYSTATE_WPARAM(wparam) & MK_SHIFT)) {
+        const float steps = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
+        const float v = g_splitPosition + steps * 0.03f;
+        g_splitPosition = v < 0.01f ? 0.01f : (v > 0.99f ? 0.99f : v);
+        return true;
+    }
     if (msg == WM_MOUSEWHEEL && (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL)) {
         Config& config = Config::get();
         const float steps = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;

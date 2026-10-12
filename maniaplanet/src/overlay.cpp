@@ -196,7 +196,7 @@ bool isKeyboard(UINT msg) {
 }
 
 bool isHotkey(WPARAM w) {
-    return w == VK_F6 || w == VK_F7 || w == VK_F8 || w == VK_F12;
+    return w == VK_F5 || w == VK_F6 || w == VK_F8 || w == VK_F12;
 }
 
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
@@ -228,18 +228,21 @@ bool pressed(int key, bool& was) {
     return edge;
 }
 
-// The same keys as in TMNF: F8 menu, F7 effects on/off, F6 photo mode, F12 capture (photo in
+// TMNF's keys: F8 menu, F5 effects on/off (TMNF: F7, ManiaPlanet's friends list here), F6 photo mode, F12 capture (photo in
 // photo mode).
 void hotkeys() {
-    static bool f6 = false, f7 = false, f8 = false, f12 = false;
+    static bool f5 = false, f6 = false, f8 = false, f12 = false;
     if (GetForegroundWindow() != g_window) return;
     Config& config = Config::get();
-    if (pressed(VK_F7, f7)) {
+    if (pressed(VK_F5, f5)) {
         config.settings.enabled = !config.settings.enabled;
         config.markDirty();
         toast(config.settings.enabled ? "TM Vibrant Shaders: on" : "TM Vibrant Shaders: off (the game's own image)");
     }
-    if (pressed(VK_F6, f6)) photo::toggle();
+    if (pressed(VK_F6, f6)) {
+        if (GetKeyState(VK_SHIFT) < 0) photo::toggleSplit();
+        else photo::toggle();
+    }
     if (pressed(VK_F12, f12)) {
         if (photo::active()) {
             photo::request();
@@ -334,7 +337,7 @@ void init(HWND window, ID3D11Device* device, ID3D11DeviceContext* ctx) {
     ImGui_ImplDX11_Init(device, ctx);
     g_originalProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&windowProc)));
     g_ready = true;
-    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - F8 menu, F7 on/off", 8000);
+    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - F8 menu, F5 on/off", 8000);
     TMVS_LOG("overlay: ready on window %p", static_cast<void*>(window));
 }
 
@@ -347,7 +350,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     const bool showToast = GetTickCount64() < g_toastUntil;
     const char* photoLine = photo::status();
     if (!config.showOverlay) config.previewPreset.clear();
-    if (!config.showOverlay && !showToast && !*photoLine) return;
+    if (!config.showOverlay && !showToast && !*photoLine && !photo::splitShown()) return;
 
     std::vector<Message> messages;
     {
@@ -384,6 +387,8 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             };
             h.supports = supports;
             h.timings = &timings;
+            h.toggleKey = "F5"; // ManiaPlanet's F7 opens the friends list
+            h.reloadShaders = false;
             h.autoQualityReduced = [] { return hooks::autoQualityReduced(); };
             // The scene effects' debug views (scene.hlsl PS_Lighting; the stages use 20-49).
             h.debugViews = {{0, "Final image"},
@@ -403,6 +408,12 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {40, "Depth of field: blur size"},
                             {41, "Motion"}};
             h.fNumber = photo::fNumber;
+            h.splitOn = &photo::splitOn();
+            h.splitPosition = &photo::splitPosition();
+            h.splitSwapped = &photo::splitSwapped();
+            h.photoOn = [] {
+                if (!photo::active()) photo::toggle();
+            };
             h.gamePanelTitle = "ManiaPlanet";
             h.gamePanel = gamePanel;
             return h;
@@ -418,6 +429,22 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                          ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
         ImGui::TextUnformatted(photoLine);
         ImGui::End();
+    }
+    if (photo::splitShown()) {
+        // Which side is which, next to the line near the bottom (drawn at Present: not in photos).
+        const float sc = tmshaders::menu::scale();
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        const float x = photo::splitPosition() * io.DisplaySize.x, y = io.DisplaySize.y - 48.0f * sc, pad = 10.0f * sc;
+        const char* left = photo::splitSwapped() ? "TMVS" : "Game";
+        const char* right = photo::splitSwapped() ? "Game" : "TMVS";
+        const auto label = [&](float at, const char* text) {
+            const ImVec2 s = ImGui::CalcTextSize(text);
+            draw->AddRectFilled(ImVec2(at - 4.0f * sc, y - 2.0f * sc), ImVec2(at + s.x + 4.0f * sc, y + s.y + 2.0f * sc),
+                                IM_COL32(0, 0, 0, 140), 3.0f * sc);
+            draw->AddText(ImVec2(at, y), IM_COL32(235, 235, 235, 255), text);
+        };
+        label(x - pad - ImGui::CalcTextSize(left).x, left);
+        label(x + pad, right);
     }
     if (showToast) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 40), ImGuiCond_Always, ImVec2(0.5f, 0));

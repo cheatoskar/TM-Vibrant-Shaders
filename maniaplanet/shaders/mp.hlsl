@@ -116,7 +116,7 @@ float4 PS_Grade(VSOut i) : SV_Target
     {
         c = checkView(uv, original, view);
     }
-    else if (uv.x < g_p4.x)
+    else if (lookGameSide(uv.x))
     {
         // Compare (split): the game's image (the HDR stage drew its left side the game's way).
         c = original;
@@ -140,6 +140,6 @@ float4 PS_Grade(VSOut i) : SV_Target
             c = lookToGamma(lookFinish(lookGrade(lin), uv, i.pos.xy));
         }
     }
-    if (g_p4.x > 0 && abs(uv.x - g_p4.x) < g_p3.x) c = float3(1, 1, 1);
+    if (g_p4.x != 0 && abs(uv.x - abs(g_p4.x)) < g_p3.x) c = float3(1, 1, 1);
     return float4(g_p3.z > 0.5 ? lookToLinear(c) : c, raw.a);
 }

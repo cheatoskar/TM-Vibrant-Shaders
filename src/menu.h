@@ -45,6 +45,10 @@ struct Host {
     std::function<void()> photoOn;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
+    // The key that switches the effects on and off ("F7" in TMNF; ManiaPlanet's F7 opens its
+    // friends list), and whether shaders can be reloaded (F9, TMNF only).
+    const char* toggleKey = "F7";
+    bool reloadShaders = true;
     // The debug views (value of Settings::debugView, name); empty: TMNF's list.
     std::vector<std::pair<int, const char*>> debugViews;
     // The game's own options, a panel first on the Settings page (null: none).

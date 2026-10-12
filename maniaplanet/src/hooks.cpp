@@ -885,7 +885,7 @@ void prepareLook() {
     }
     g_look.frame = ++g_frameCounter;
     const Options& o = options::current();
-    g_look.split = o.view == View::Split ? o.split : 0.0f;
+    g_look.split = o.view == View::Split ? o.split : photo::splitForLook();
 }
 
 void onPresent(IDXGISwapChain* sc) {
