@@ -14,11 +14,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName", "cheatoskar"
-            VALUE "FileDescription", "TM Vibrant Shaders for TrackMania Forever"
+            VALUE "FileDescription", "@TMVS_FILE_DESCRIPTION@"
             VALUE "FileVersion", "@TM_SHADERS_VERSION@"
-            VALUE "InternalName", "TMVibrantShaders"
+            VALUE "InternalName", "@TMVS_INTERNAL_NAME@"
             VALUE "LegalCopyright", "(c) 2026 cheatoskar"
-            VALUE "OriginalFilename", "TMVibrantShaders.dll"
+            VALUE "OriginalFilename", "@TMVS_ORIGINAL_FILENAME@"
             VALUE "ProductName", "TM Vibrant Shaders"
             VALUE "ProductVersion", "@TM_SHADERS_VERSION@"
         END

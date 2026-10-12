@@ -23,8 +23,8 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 - The interface stays sharp: the mod draws before the HUD and its tone map replaces the engine's.
 
 **Install (TrackMania 2 / ManiaPlanet 4):**
-1. Download **`TM-Vibrant-Shaders-ManiaPlanet.zip`** and extract it.
-2. Close ManiaPlanet and double-click **`Install.cmd`** (puts `d3d11.dll` next to `ManiaPlanet.exe`).
+1. Download **`TM-Vibrant-Shaders-ManiaPlanet.zip`** (or `TM-Vibrant-Shaders.zip`) and extract it.
+2. Close ManiaPlanet and run **`TM-Vibrant-Shaders-Setup.exe`** (or double-click `Install.cmd`).
 3. Start ManiaPlanet **64-bit**. `F8` opens the menu, **`F5`** switches effects on/off (`F7` is ManiaPlanet's friends list).
 
 ---
@@ -56,7 +56,7 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 
 **Install (TrackMania Nations Forever / United Forever):**
 1. Download **`TM-Vibrant-Shaders.zip`** and extract it.
-2. Run **`TM-Vibrant-Shaders-Setup.exe`** to install directly or into TrackMania ModLoader.
+2. Run **`TM-Vibrant-Shaders-Setup.exe`** to install into TrackMania ModLoader or game folders.
 3. In-game: `F8` opens menu, `F7` toggles shaders.
 
 Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md).
@@ -66,10 +66,10 @@ Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders
 
 | File | SHA-256 |
 |---|---|
-| `TM-Vibrant-Shaders.zip` | `42306f3d6155c002332237265b579cfd72401c4a2246f4db1cd9a716adfaa41f` |
+| `TM-Vibrant-Shaders.zip` | `d7b0fd4bf0dd067bad314452aa6fcdd45b2708de117ddc52284d63d18904916a` |
 | `TMVibrantShaders.dll` | `4069c934afdafda76807698f4f0d4acd82e7af3bfa1fe0e9f8f99f5bea6f7083` |
-| `TM-Vibrant-Shaders-ManiaPlanet.zip` | `e2bbe392a9dc56a2fe513e967441a905caac8e39d766b3ff52d72820aff13cb2` |
-| `d3d11.dll` | `b417f377042105519147e3156de3f2a90504d6db7525314210b88ae28c615cfe` |
+| `TM-Vibrant-Shaders-ManiaPlanet.zip` | `52a2aea6e73b5195d6c0f3448d149df3449961ce7e29b375bd89e44467667638` |
+| `d3d11.dll` | `c0baec38d97ed5e01e88b4689baaf5bc6d3c3efe88e5f8c0b4101f902e3792e4` |
 
 Check a download in PowerShell: `Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256`
 </details>

@@ -30,11 +30,10 @@ depth of field and motion blur run in photo mode only), water surfaces, grass de
 ## Install
 
 1. Close ManiaPlanet.
-2. Double-click `Install.cmd` (or run `powershell -ExecutionPolicy Bypass -File install.ps1`).
-   It finds ManiaPlanet under Program Files or in the Steam libraries (else pass `-GameDir`) and
-   copies `d3d11.dll` next to `ManiaPlanet.exe`; under `C:\Program Files (x86)` Windows asks for
-   administrator rights. If `d3d11.dll` already exists and is not this mod (ReShade, another mod),
-   the script stops.
+2. Run **`TM-Vibrant-Shaders-Setup.exe`** (or double-click `Install.cmd`).
+   It finds ManiaPlanet under Program Files or in Steam libraries and copies `d3d11.dll` next to `ManiaPlanet.exe`; under Program Files Windows asks for
+       administrator rights. If `d3d11.dll` already exists and is not this mod (ReShade, another mod),
+       the setup will offer to backup and restore it.
 3. Start ManiaPlanet **64-bit**. A message at the top says the mod is running.
 
 Uninstall: `Uninstall.cmd` (`install.ps1 -Uninstall`), or delete `d3d11.dll` from the game folder.

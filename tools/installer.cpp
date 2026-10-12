@@ -1,11 +1,12 @@
 // TM Vibrant Shaders setup.
 //
 // Run from the extracted release zip. It copies the files that sit next to it - it carries no
-// plugin inside itself - in one of two ways:
+// plugin inside itself - for:
 //   ModLoader:   "TM Vibrant Shaders" folder -> %LOCALAPPDATA%\TMLoader\database\TmForever\products
-//   Game folder: TMVibrantShaders.dll -> <TrackMania>\d3d9.dll (no ModLoader needed)
+//   TM Forever:  TMVibrantShaders.dll -> <TrackMania>\d3d9.dll (no ModLoader needed)
+//   ManiaPlanet: d3d11.dll -> <ManiaPlanet>\d3d11.dll
 // Running it again offers an update or a clean uninstall. Settings and presets in
-// Documents\TrackMania\TMVS are never touched.
+// Documents\TrackMania\TMVS and Documents\ManiaPlanet\TMVS are never touched.
 //
 // Command line: /S install for the ModLoader silently, /U uninstall everything silently.
 // Internal (elevated helper): /game-install "<dir>", /game-remove "<dir>".
@@ -17,6 +18,7 @@
 #include <tlhelp32.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include "tm_shaders_version.h"
 
@@ -28,6 +30,14 @@ const wchar_t* const kRegistryKey = L"Software\\TM Vibrant Shaders";
 const std::wstring kTitle = std::wstring(L"TM Vibrant Shaders ") + TM_SHADERS_VERSION;
 
 enum ExitCode { kOk = 0, kFailed = 1, kNoLoader = 2, kGameRunning = 3, kFilesMissing = 4, kCancelled = 5 };
+
+enum class GameKind { Forever, ManiaPlanet };
+
+struct FoundGame {
+    GameKind kind;
+    std::wstring dir;
+    std::wstring name;
+};
 
 // --- Small helpers -----------------------------------------------------------
 
@@ -62,8 +72,28 @@ std::wstring sourceProduct() {
     return exeDir() + L"\\" + kProduct;
 }
 
-std::wstring sourceDll() {
+std::wstring sourceForeverDll() {
+    std::wstring direct = exeDir() + L"\\TMVibrantShaders.dll";
+    if (exists(direct)) return direct;
     return sourceProduct() + L"\\" + TM_SHADERS_VERSION + L"\\TMVibrantShaders.dll";
+}
+
+std::wstring sourceMpDll() {
+    std::wstring direct = exeDir() + L"\\d3d11.dll";
+    if (exists(direct)) return direct;
+    std::wstring inSub = exeDir() + L"\\ManiaPlanet\\d3d11.dll";
+    if (exists(inSub)) return inSub;
+    std::wstring inProduct = sourceProduct() + L"\\" + TM_SHADERS_VERSION + L"\\d3d11.dll";
+    if (exists(inProduct)) return inProduct;
+    return direct;
+}
+
+bool hasForeverSource() {
+    return exists(sourceForeverDll()) || exists(sourceProduct());
+}
+
+bool hasMpSource() {
+    return exists(sourceMpDll());
 }
 
 int message(const std::wstring& text, UINT flags) {
@@ -76,7 +106,11 @@ bool gameRunning() {
     PROCESSENTRY32W entry{sizeof(entry)};
     bool found = false;
     for (BOOL ok = Process32FirstW(snapshot, &entry); ok && !found; ok = Process32NextW(snapshot, &entry)) {
-        found = _wcsicmp(entry.szExeFile, L"TmForever.exe") == 0;
+        if (_wcsicmp(entry.szExeFile, L"TmForever.exe") == 0 ||
+            _wcsicmp(entry.szExeFile, L"ManiaPlanet.exe") == 0 ||
+            _wcsicmp(entry.szExeFile, L"ManiaPlanet32.exe") == 0) {
+            found = true;
+        }
     }
     CloseHandle(snapshot);
     return found;
@@ -102,20 +136,46 @@ bool canWrite(const std::wstring& dir) {
     return true;
 }
 
-// Our d3d9.dll is recognised by its version resource, so a ReShade/DXVK d3d9.dll is never deleted.
+// Our d3d9.dll and d3d11.dll are recognised by their version resource (ProductName "TM Vibrant Shaders"),
+// or fallback marker so ReShade / other mods are never deleted.
 bool isOurDll(const std::wstring& path) {
     DWORD handle = 0;
     const DWORD size = GetFileVersionInfoSizeW(path.c_str(), &handle);
-    if (!size) return false;
-    std::vector<BYTE> data(size);
-    if (!GetFileVersionInfoW(path.c_str(), 0, size, data.data())) return false;
-    wchar_t* name = nullptr;
-    UINT length = 0;
-    return VerQueryValueW(data.data(), L"\\StringFileInfo\\040904b0\\ProductName", reinterpret_cast<void**>(&name), &length) &&
-           name && wcscmp(name, kProduct) == 0;
+    if (size) {
+        std::vector<BYTE> data(size);
+        if (GetFileVersionInfoW(path.c_str(), 0, size, data.data())) {
+            wchar_t* name = nullptr;
+            UINT length = 0;
+            if (VerQueryValueW(data.data(), L"\\StringFileInfo\\040904b0\\ProductName", reinterpret_cast<void**>(&name), &length) &&
+                name && wcscmp(name, kProduct) == 0) {
+                return true;
+            }
+        }
+    }
+    // Fallback: check for ASCII marker string "TmvsMpStats" inside binary
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD readBytes = 0;
+        char buf[8192] = {};
+        bool foundMarker = false;
+        for (int i = 0; i < 2000; i++) {
+            if (!ReadFile(hFile, buf, sizeof(buf), &readBytes, nullptr) || readBytes == 0) break;
+            if (std::string(buf, readBytes).find("TmvsMpStats") != std::string::npos) {
+                foundMarker = true;
+                break;
+            }
+        }
+        CloseHandle(hFile);
+        if (foundMarker) return true;
+    }
+    return false;
 }
 
-// --- Finding TrackMania ------------------------------------------------------
+bool isMpGame(const std::wstring& dir) {
+    return exists(dir + L"\\ManiaPlanet.exe");
+}
+
+// --- Finding games -----------------------------------------------------------
 
 std::wstring regString(HKEY root, const std::wstring& key, const wchar_t* value, REGSAM view = 0) {
     wchar_t buffer[MAX_PATH * 2] = {};
@@ -124,20 +184,42 @@ std::wstring regString(HKEY root, const std::wstring& key, const wchar_t* value,
     return buffer;
 }
 
-void addGameDir(std::vector<std::wstring>& dirs, std::wstring dir) {
-    while (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
-    if (dir.empty() || !exists(dir + L"\\TmForever.exe")) return;
-    for (const auto& known : dirs) {
-        if (_wcsicmp(known.c_str(), dir.c_str()) == 0) return;
-    }
-    dirs.push_back(dir);
+std::wstring gameName(const std::wstring& dir) {
+    if (isMpGame(dir)) return L"TrackMania 2 (ManiaPlanet)";
+    wchar_t title[128] = {};
+    GetPrivateProfileStringW(L"TmForever", L"WindowTitle", L"", title, 128, (dir + L"\\Nadeo.ini").c_str());
+    if (title[0]) return title;
+    std::wstring lower = dir;
+    for (auto& ch : lower) ch = static_cast<wchar_t>(towlower(ch));
+    return lower.find(L"united") != std::wstring::npos ? L"TrackMania United Forever" : L"TrackMania Nations Forever";
 }
 
-std::vector<std::wstring> findGameDirs() {
-    std::vector<std::wstring> dirs;
-    // A previous game-folder install.
+void addGameDir(std::vector<FoundGame>& dirs, std::wstring dir) {
+    while (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
+    if (dir.empty()) return;
+
+    GameKind kind;
+    if (exists(dir + L"\\ManiaPlanet.exe")) {
+        kind = GameKind::ManiaPlanet;
+    } else if (exists(dir + L"\\TmForever.exe")) {
+        kind = GameKind::Forever;
+    } else {
+        return;
+    }
+
+    for (const auto& known : dirs) {
+        if (_wcsicmp(known.dir.c_str(), dir.c_str()) == 0) return;
+    }
+    dirs.push_back({kind, dir, gameName(dir)});
+}
+
+std::vector<FoundGame> findGameDirs() {
+    std::vector<FoundGame> dirs;
+    // Previous game-folder installs.
     addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder"));
-    // Installers (Nadeo's own is Inno Setup) register an uninstall entry with the location.
+    addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ManiaPlanet"));
+
+    // Installers register an uninstall entry with the location.
     const HKEY roots[] = {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER};
     const REGSAM views[] = {KEY_WOW64_32KEY, KEY_WOW64_64KEY};
     for (HKEY root : roots) {
@@ -154,36 +236,64 @@ std::vector<std::wstring> findGameDirs() {
                 const REGSAM flag = view == KEY_WOW64_32KEY ? RRF_SUBKEY_WOW6432KEY : RRF_SUBKEY_WOW6464KEY;
                 std::wstring display = regString(root, key, L"DisplayName", flag);
                 for (auto& ch : display) ch = static_cast<wchar_t>(towlower(ch));
-                if (display.find(L"trackmania") == std::wstring::npos && display.find(L"tmnations") == std::wstring::npos) continue;
+                if (display.find(L"trackmania") == std::wstring::npos &&
+                    display.find(L"tmnations") == std::wstring::npos &&
+                    display.find(L"maniaplanet") == std::wstring::npos) continue;
                 addGameDir(dirs, regString(root, key, L"InstallLocation", flag));
             }
             RegCloseKey(uninstall);
         }
     }
-    // Steam.
+
+    // Steam: check primary folder and all library folders from libraryfolders.vdf.
     const std::wstring steam = regString(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath");
     if (!steam.empty()) {
-        for (const wchar_t* game : {L"TrackMania Nations Forever", L"TrackMania United", L"TrackMania United Forever"}) {
-            addGameDir(dirs, steam + L"\\steamapps\\common\\" + game);
+        std::vector<std::wstring> steamLibs = {steam};
+        const std::wstring vdfPath = steam + L"\\steamapps\\libraryfolders.vdf";
+        HANDLE vdfFile = CreateFileW(vdfPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (vdfFile != INVALID_HANDLE_VALUE) {
+            DWORD fileSize = GetFileSize(vdfFile, nullptr);
+            if (fileSize > 0 && fileSize < 1024 * 1024) {
+                std::string vdf(fileSize, '\0');
+                DWORD readBytes = 0;
+                ReadFile(vdfFile, &vdf[0], fileSize, &readBytes, nullptr);
+                size_t pos = 0;
+                while ((pos = vdf.find("\"path\"", pos)) != std::string::npos) {
+                    pos += 6;
+                    size_t q1 = vdf.find('\"', pos);
+                    if (q1 == std::string::npos) break;
+                    size_t q2 = vdf.find('\"', q1 + 1);
+                    if (q2 == std::string::npos) break;
+                    std::string libStr = vdf.substr(q1 + 1, q2 - q1 - 1);
+                    std::wstring libW;
+                    for (size_t k = 0; k < libStr.size(); k++) {
+                        if (libStr[k] == '\\' && k + 1 < libStr.size() && libStr[k + 1] == '\\') k++;
+                        libW.push_back(static_cast<wchar_t>(libStr[k]));
+                    }
+                    if (!libW.empty()) steamLibs.push_back(libW);
+                    pos = q2 + 1;
+                }
+            }
+            CloseHandle(vdfFile);
+        }
+
+        for (const auto& lib : steamLibs) {
+            for (const wchar_t* game : {L"TrackMania Nations Forever", L"TrackMania United", L"TrackMania United Forever", L"ManiaPlanet"}) {
+                addGameDir(dirs, lib + L"\\steamapps\\common\\" + game);
+            }
         }
     }
-    // Usual places.
-    const std::wstring programs = knownFolder(FOLDERID_ProgramFilesX86);
+
+    // Usual program files locations.
+    const std::wstring prog32 = knownFolder(FOLDERID_ProgramFilesX86);
+    const std::wstring prog64 = knownFolder(FOLDERID_ProgramFiles);
     for (const wchar_t* folder : {L"\\TmNationsForever", L"\\TmUnitedForever", L"\\Nadeo\\TmNationsForever", L"\\Nadeo\\TmUnitedForever",
-                                  L"\\TrackMania Nations Forever", L"\\TrackMania United Forever"}) {
-        addGameDir(dirs, programs + folder);
+                                  L"\\TrackMania Nations Forever", L"\\TrackMania United Forever",
+                                  L"\\ManiaPlanet", L"\\Ubisoft\\ManiaPlanet"}) {
+        if (!prog32.empty()) addGameDir(dirs, prog32 + folder);
+        if (!prog64.empty()) addGameDir(dirs, prog64 + folder);
     }
     return dirs;
-}
-
-// United Forever sets its window title in Nadeo.ini; Nations Forever has none.
-std::wstring gameName(const std::wstring& dir) {
-    wchar_t title[128] = {};
-    GetPrivateProfileStringW(L"TmForever", L"WindowTitle", L"", title, 128, (dir + L"\\Nadeo.ini").c_str());
-    if (title[0]) return title;
-    std::wstring lower = dir;
-    for (auto& ch : lower) ch = static_cast<wchar_t>(towlower(ch));
-    return lower.find(L"united") != std::wstring::npos ? L"TrackMania United Forever" : L"TrackMania Nations Forever";
 }
 
 std::wstring pickGameDir(const std::wstring& suggestion) {
@@ -193,7 +303,7 @@ std::wstring pickGameDir(const std::wstring& suggestion) {
     DWORD options = 0;
     dialog->GetOptions(&options);
     dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-    dialog->SetTitle(L"Select your TrackMania folder (the one with TmForever.exe)");
+    dialog->SetTitle(L"Select your game folder (with TmForever.exe or ManiaPlanet.exe)");
     if (!suggestion.empty()) {
         IShellItem* folder = nullptr;
         if (SUCCEEDED(SHCreateItemFromParsingName(suggestion.c_str(), nullptr, IID_PPV_ARGS(&folder)))) {
@@ -214,7 +324,7 @@ std::wstring pickGameDir(const std::wstring& suggestion) {
     return result;
 }
 
-// --- The two installs ----------------------------------------------------------
+// --- The installs ------------------------------------------------------------
 
 bool installModLoader() {
     // Older versions stay next to the new one (the ModLoader lists every version folder).
@@ -235,13 +345,20 @@ bool removeModLoader() {
 }
 
 int gameInstall(const std::wstring& dir) {
-    const std::wstring target = dir + L"\\d3d9.dll";
-    const std::wstring backup = dir + L"\\d3d9.dll.tmvs-backup";
+    const bool isMp = isMpGame(dir);
+    const std::wstring dllName = isMp ? L"\\d3d11.dll" : L"\\d3d9.dll";
+    const std::wstring src = isMp ? sourceMpDll() : sourceForeverDll();
+    if (!exists(src)) return kFilesMissing;
+
+    const std::wstring target = dir + dllName;
+    const std::wstring backup = dir + dllName + L".tmvs-backup";
     if (exists(target) && !isOurDll(target) && !MoveFileExW(target.c_str(), backup.c_str(), MOVEFILE_REPLACE_EXISTING)) return kFailed;
-    if (!CopyFileW(sourceDll().c_str(), target.c_str(), FALSE)) return kFailed;
+    if (!CopyFileW(src.c_str(), target.c_str(), FALSE)) return kFailed;
+
     HKEY key = nullptr;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
-        RegSetValueExW(key, L"GameFolder", 0, REG_SZ, reinterpret_cast<const BYTE*>(dir.c_str()),
+        const wchar_t* valName = isMp ? L"GameFolder_ManiaPlanet" : L"GameFolder";
+        RegSetValueExW(key, valName, 0, REG_SZ, reinterpret_cast<const BYTE*>(dir.c_str()),
                        static_cast<DWORD>((dir.size() + 1) * sizeof(wchar_t)));
         RegCloseKey(key);
     }
@@ -249,18 +366,21 @@ int gameInstall(const std::wstring& dir) {
 }
 
 int gameRemove(const std::wstring& dir) {
-    const std::wstring target = dir + L"\\d3d9.dll";
-    const std::wstring backup = dir + L"\\d3d9.dll.tmvs-backup";
+    const bool isMp = isMpGame(dir);
+    const std::wstring dllName = isMp ? L"\\d3d11.dll" : L"\\d3d9.dll";
+    const std::wstring target = dir + dllName;
+    const std::wstring backup = dir + dllName + L".tmvs-backup";
     if (exists(target) && isOurDll(target) && !DeleteFileW(target.c_str())) return kFailed;
-    if (exists(backup) && !exists(target)) MoveFileW(backup.c_str(), target.c_str()); // give back what was there before
+    if (exists(backup) && !exists(target)) MoveFileW(backup.c_str(), target.c_str());
     return kOk;
 }
 
 bool gameInstalled(const std::wstring& dir) {
-    return exists(dir + L"\\d3d9.dll") && isOurDll(dir + L"\\d3d9.dll");
+    const bool isMp = isMpGame(dir);
+    const std::wstring dllName = isMp ? L"\\d3d11.dll" : L"\\d3d9.dll";
+    return exists(dir + dllName) && isOurDll(dir + dllName);
 }
 
-// Program Files needs admin rights: run this setup again elevated for just that step.
 int runGameStep(const wchar_t* step, const std::wstring& dir) {
     if (canWrite(dir)) return wcscmp(step, L"/game-install") == 0 ? gameInstall(dir) : gameRemove(dir);
     wchar_t self[MAX_PATH] = {};
@@ -272,7 +392,7 @@ int runGameStep(const wchar_t* step, const std::wstring& dir) {
     info.lpFile = self;
     info.lpParameters = args.c_str();
     info.nShow = SW_HIDE;
-    if (!ShellExecuteExW(&info) || !info.hProcess) return kCancelled; // UAC declined
+    if (!ShellExecuteExW(&info) || !info.hProcess) return kCancelled;
     WaitForSingleObject(info.hProcess, INFINITE);
     DWORD code = kFailed;
     GetExitCodeProcess(info.hProcess, &code);
@@ -280,7 +400,7 @@ int runGameStep(const wchar_t* step, const std::wstring& dir) {
     return static_cast<int>(code);
 }
 
-// --- Interactive flows -----------------------------------------------------------
+// --- Interactive flows -------------------------------------------------------
 
 void doModLoaderInstall() {
     if (!exists(loaderDir())) {
@@ -295,7 +415,7 @@ void doModLoaderInstall() {
         message(L"Could not copy the files to\n" + productsDir(), MB_OK | MB_ICONERROR);
         return;
     }
-    message(L"Installed for the ModLoader.\n\n"
+    message(L"Installed for the TrackMania ModLoader.\n\n"
             L"1. Open the TrackMania ModLoader.\n"
             L"2. Tick \"TM Vibrant Shaders\" in your profile.\n"
             L"3. Start the game.\n\n"
@@ -303,47 +423,62 @@ void doModLoaderInstall() {
             MB_OK | MB_ICONINFORMATION);
 }
 
-// dir: one of the games found, or empty to pick a folder.
 void doGameInstall(std::wstring dir) {
     if (dir.empty()) {
-        const std::vector<std::wstring> dirs = findGameDirs();
-        dir = pickGameDir(dirs.empty() ? L"" : dirs.front());
+        const std::vector<FoundGame> games = findGameDirs();
+        dir = pickGameDir(games.empty() ? L"" : games.front().dir);
     }
     if (dir.empty()) return;
-    if (!exists(dir + L"\\TmForever.exe")) {
-        message(L"TmForever.exe is not in\n" + dir + L"\n\nPlease select the TrackMania folder itself.", MB_OK | MB_ICONWARNING);
+
+    const bool isMp = isMpGame(dir);
+    const bool isForever = exists(dir + L"\\TmForever.exe");
+    if (!isMp && !isForever) {
+        message(L"Neither TmForever.exe nor ManiaPlanet.exe was found in\n" + dir + L"\n\nPlease select the TrackMania or ManiaPlanet folder itself.", MB_OK | MB_ICONWARNING);
         return;
     }
-    const std::wstring existing = dir + L"\\d3d9.dll";
+
+    const std::wstring dllName = isMp ? L"d3d11.dll" : L"d3d9.dll";
+    const std::wstring existing = dir + L"\\" + dllName;
     if (exists(existing) && !isOurDll(existing) &&
-        message(L"There already is a d3d9.dll in this folder (ReShade or another mod?).\n\n"
-                L"It will be kept as d3d9.dll.tmvs-backup and restored when you uninstall. Continue?",
+        message(L"There already is a " + dllName + L" in this folder (ReShade or another mod?).\n\n"
+                L"It will be kept as " + dllName + L".tmvs-backup and restored when you uninstall. Continue?",
                 MB_YESNO | MB_ICONWARNING) != IDYES) {
         return;
     }
     const int result = runGameStep(L"/game-install", dir);
     if (result == kCancelled) return;
     if (result != kOk) {
-        message(L"Could not copy d3d9.dll to\n" + dir, MB_OK | MB_ICONERROR);
+        message(L"Could not copy " + dllName + L" to\n" + dir, MB_OK | MB_ICONERROR);
         return;
     }
-    message(L"Installed into " + gameName(dir) + L"\n" + dir + L"\n\nJust start the game as usual (no ModLoader needed).\n"
-            L"In game: F8 opens the shader menu, F7 turns the shaders on/off.",
-            MB_OK | MB_ICONINFORMATION);
+
+    if (isMp) {
+        message(L"Installed into TrackMania 2 (ManiaPlanet)\n" + dir + L"\n\nStart ManiaPlanet (64-bit) as usual.\n"
+                L"In game: F8 opens the shader menu, F5 turns the shaders on/off.",
+                MB_OK | MB_ICONINFORMATION);
+    } else {
+        message(L"Installed into " + gameName(dir) + L"\n" + dir + L"\n\nStart the game as usual (no ModLoader needed).\n"
+                L"In game: F8 opens the shader menu, F7 turns the shaders on/off.",
+                MB_OK | MB_ICONINFORMATION);
+    }
 }
 
 void doUninstall() {
     bool ok = removeModLoader();
-    for (const auto& dir : findGameDirs()) {
-        if (gameInstalled(dir)) {
-            const int result = runGameStep(L"/game-remove", dir);
+    for (const auto& g : findGameDirs()) {
+        if (gameInstalled(g.dir)) {
+            const int result = runGameStep(L"/game-remove", g.dir);
             ok &= result == kOk;
         }
     }
-    if (ok) RegDeleteKeyW(HKEY_CURRENT_USER, kRegistryKey);
-    message(ok ? L"TM Vibrant Shaders was removed.\n\nYour settings and presets are kept in Documents\\TrackMania\\TMVS "
-                 L"(delete that folder to remove them too)."
-               : L"Some files could not be removed. Close TrackMania and try again.",
+    if (ok) {
+        RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder");
+        RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ManiaPlanet");
+        RegDeleteKeyW(HKEY_CURRENT_USER, kRegistryKey);
+    }
+    message(ok ? L"TM Vibrant Shaders was removed.\n\nYour settings and presets are kept in Documents\\TrackMania\\TMVS and Documents\\ManiaPlanet\\TMVS "
+                 L"(delete those folders to remove them too)."
+               : L"Some files could not be removed. Close the games and try again.",
             MB_OK | (ok ? MB_ICONINFORMATION : MB_ICONWARNING));
 }
 
@@ -360,10 +495,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (command == L"/game-install") return gameInstall(argument);
     if (command == L"/game-remove") return gameRemove(argument);
 
-    if (!exists(sourceDll())) {
+    if (!hasForeverSource() && !hasMpSource()) {
         if (command.empty()) {
             message(L"Please extract the whole zip first, then run the setup from the extracted folder.\n\n"
-                    L"(The folder \"TM Vibrant Shaders\" has to be next to this setup.)",
+                    L"(Neither TMVibrantShaders.dll nor d3d11.dll was found next to this setup.)",
                     MB_OK | MB_ICONWARNING);
         }
         return kFilesMissing;
@@ -377,49 +512,65 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (command == L"/U" || command == L"/u") {
         if (gameRunning()) return kGameRunning;
         bool ok = removeModLoader();
-        for (const auto& dir : findGameDirs()) {
-            if (gameInstalled(dir) && canWrite(dir)) ok &= gameRemove(dir) == kOk;
+        for (const auto& g : findGameDirs()) {
+            if (gameInstalled(g.dir) && canWrite(g.dir)) ok &= gameRemove(g.dir) == kOk;
         }
         return ok ? kOk : kFailed;
     }
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     while (gameRunning()) {
-        if (message(L"TrackMania is running. Please close the game, then press Retry.", MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY) {
+        if (message(L"TrackMania or ManiaPlanet is running. Please close the game, then press Retry.", MB_RETRYCANCEL | MB_ICONWARNING) != IDRETRY) {
             return kGameRunning;
         }
     }
 
-    // Current state, for the dialog text: the ModLoader and every game found (Nations and
-    // United Forever can both be installed; each gets its own button).
+    // Current state, for dialog text: the ModLoader and games found.
     const bool loaderFound = exists(loaderDir());
     const bool inLoader = exists(productsDir() + L"\\" + kProduct);
-    const std::vector<std::wstring> games = findGameDirs();
+    const std::vector<FoundGame> games = findGameDirs();
     bool inGame = false;
-    std::wstring status = L"Real-time lighting, weather and skies for TrackMania Nations & United Forever.\n\nInstalled: ";
+    std::wstring status = L"Real-time lighting, weather and skies for TrackMania Forever & TrackMania 2.\n\nInstalled: ";
     std::wstring installed;
     if (inLoader) installed = L"ModLoader";
-    for (const auto& dir : games) {
-        if (!gameInstalled(dir)) continue;
+    for (const auto& g : games) {
+        if (!gameInstalled(g.dir)) continue;
         inGame = true;
-        installed += (installed.empty() ? L"" : L", ") + gameName(dir);
+        installed += (installed.empty() ? L"" : L", ") + g.name;
     }
     status += installed.empty() ? L"not yet" : installed;
 
-    const std::wstring loaderButton = std::wstring(L"Install for the TrackMania ModLoader\n") +
-                                      (loaderFound ? L"Recommended. Switch the mod on or off in the ModLoader."
-                                                   : L"The ModLoader was not found - this opens its download page.");
-    std::vector<std::wstring> gameButtons;
-    for (const auto& dir : games) {
-        gameButtons.push_back(L"Install into " + gameName(dir) + (gameInstalled(dir) ? L" (update)" : L"") +
-                              L"\nAdds d3d9.dll to " + dir + L". No ModLoader needed.");
-    }
     std::vector<TASKDIALOG_BUTTON> buttons;
-    buttons.push_back({101, loaderButton.c_str()});
-    for (size_t i = 0; i < games.size(); i++) buttons.push_back({200 + static_cast<int>(i), gameButtons[i].c_str()});
-    buttons.push_back({102, games.empty() ? L"Install into the game folder (no ModLoader)\nAdds d3d9.dll next to TmForever.exe. Start TrackMania as usual."
-                                          : L"Install into another game folder\nChoose the folder with TmForever.exe yourself."});
-    if (inLoader || inGame) buttons.push_back({103, L"Uninstall\nRemoves the mod from the ModLoader and every game folder."});
+    std::vector<std::wstring> buttonTexts;
+
+    if (hasForeverSource()) {
+        buttonTexts.push_back(std::wstring(L"Install for the TrackMania ModLoader\n") +
+                              (loaderFound ? L"Recommended for TMNF/TMUF. Switch the mod on or off in the ModLoader."
+                                           : L"The ModLoader was not found - this opens its download page."));
+        buttons.push_back({101, buttonTexts.back().c_str()});
+    }
+
+    for (size_t i = 0; i < games.size(); i++) {
+        const auto& g = games[i];
+        const bool isMp = (g.kind == GameKind::ManiaPlanet);
+        if (isMp && !hasMpSource()) continue;
+        if (!isMp && !hasForeverSource()) continue;
+
+        const std::wstring note = isMp ? L"Adds d3d11.dll to " + g.dir + L". F5 toggles shaders in game."
+                                       : L"Adds d3d9.dll to " + g.dir + L". No ModLoader needed.";
+        buttonTexts.push_back(L"Install into " + g.name + (gameInstalled(g.dir) ? L" (update)" : L"") + L"\n" + note);
+        buttons.push_back({200 + static_cast<int>(i), buttonTexts.back().c_str()});
+    }
+
+    buttonTexts.push_back(games.empty() ? L"Install into a game folder\nChoose the folder with TmForever.exe or ManiaPlanet.exe yourself."
+                                        : L"Install into another game folder\nChoose the folder with TmForever.exe or ManiaPlanet.exe yourself.");
+    buttons.push_back({102, buttonTexts.back().c_str()});
+
+    if (inLoader || inGame) {
+        buttonTexts.push_back(L"Uninstall\nRemoves the mod from the ModLoader and every game folder.");
+        buttons.push_back({103, buttonTexts.back().c_str()});
+    }
+
     TASKDIALOGCONFIG config{sizeof(config)};
     config.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION;
     config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
@@ -430,7 +581,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     config.pButtons = buttons.data();
     config.cButtons = static_cast<UINT>(buttons.size());
     config.nDefaultButton = 101;
-    config.pszFooter = L"Settings and your presets live in Documents\\TrackMania\\TMVS.";
+    config.pszFooter = L"Settings and presets live in Documents\\TrackMania\\TMVS and Documents\\ManiaPlanet\\TMVS.";
     config.pszFooterIcon = TD_INFORMATION_ICON;
 
     int choice = 0;
@@ -440,7 +591,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         case 102: doGameInstall(L""); break;
         case 103: doUninstall(); break;
         default:
-            if (choice >= 200 && choice < 200 + static_cast<int>(games.size())) doGameInstall(games[static_cast<size_t>(choice - 200)]);
+            if (choice >= 200 && choice < 200 + static_cast<int>(games.size())) {
+                doGameInstall(games[static_cast<size_t>(choice - 200)].dir);
+            }
             break;
     }
     CoUninitialize();

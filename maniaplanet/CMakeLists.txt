@@ -44,8 +44,16 @@ FetchContent_MakeAvailable(minimp3)
 if(NOT DEFINED TM_SHADERS_VERSION)
   set(TM_SHADERS_VERSION "${PROJECT_VERSION}")
 endif()
-message(STATUS "TM Vibrant Shaders for ManiaPlanet version: ${TM_SHADERS_VERSION}")
 configure_file("${TMVS_ROOT}/src/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/tm_shaders_version.h" @ONLY)
+string(REGEX MATCHALL "[0-9]+" TMVS_VERSION_PARTS "${TM_SHADERS_VERSION}")
+list(APPEND TMVS_VERSION_PARTS 0 0 0)
+list(GET TMVS_VERSION_PARTS 0 TMVS_V0)
+list(GET TMVS_VERSION_PARTS 1 TMVS_V1)
+list(GET TMVS_VERSION_PARTS 2 TMVS_V2)
+set(TMVS_FILE_DESCRIPTION "TM Vibrant Shaders for TrackMania 2 (ManiaPlanet)")
+set(TMVS_INTERNAL_NAME "tmvs_mp")
+set(TMVS_ORIGINAL_FILENAME "d3d11.dll")
+configure_file("${TMVS_ROOT}/src/version.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc" @ONLY)
 
 # Effect shaders, compiled at build time (shader model 4 so feature level 10 cards work too).
 set(MP_SHADER_OUT "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -148,6 +156,7 @@ add_library(tmvs_mp SHARED
   src/d3d11.def
   ${TMVS_ROOT}/thumbnails/thumbnails.rc
   ${TMVS_ROOT}/sounds/sounds.rc
+  "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
 )
 # The built-in presets' pictures, embedded like in the TMNF DLL.
 set_property(SOURCE ${TMVS_ROOT}/thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/thumbnails")

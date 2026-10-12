@@ -48,6 +48,9 @@ list(APPEND TMVS_VERSION_PARTS 0 0 0)
 list(GET TMVS_VERSION_PARTS 0 TMVS_V0)
 list(GET TMVS_VERSION_PARTS 1 TMVS_V1)
 list(GET TMVS_VERSION_PARTS 2 TMVS_V2)
+set(TMVS_FILE_DESCRIPTION "TM Vibrant Shaders for TrackMania Forever")
+set(TMVS_INTERNAL_NAME "TMVibrantShaders")
+set(TMVS_ORIGINAL_FILENAME "TMVibrantShaders.dll")
 configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc" @ONLY)
 
 # Shaders are compiled at build time (fxc) and embedded as bytecode: no compile stall
@@ -207,13 +210,14 @@ add_custom_target(release_zip
   COMMAND ${CMAKE_COMMAND} -E copy "${TMVS_PACKAGING}/description.yaml" "${TMVS_STAGE_PRODUCT}/description.yaml"
   COMMAND ${CMAKE_COMMAND} -E copy "${TMVS_PACKAGING}/version.yaml" "${TMVS_STAGE_PRODUCT}/${TM_SHADERS_VERSION}/description.yaml"
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tm_vibrant_shaders> "${TMVS_STAGE_PRODUCT}/${TM_SHADERS_VERSION}/"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/build-mp/Release/d3d11.dll" "${TMVS_STAGE}/d3d11.dll"
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tmvs_installer> "${TMVS_STAGE}/"
   COMMAND ${CMAKE_COMMAND} -E copy "${TMVS_PACKAGING}/README.txt" "${TMVS_STAGE}/README.txt"
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${TMVS_STAGE}/LICENSE.txt"
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" "${TMVS_STAGE}/THIRD_PARTY_NOTICES.txt"
   COMMAND ${CMAKE_COMMAND} -E chdir "${TMVS_STAGE}"
           ${CMAKE_COMMAND} -E tar cf "${TMVS_DIST}/TM-Vibrant-Shaders.zip" --format=zip
-          "TM Vibrant Shaders" "TM-Vibrant-Shaders-Setup.exe" "README.txt" "LICENSE.txt" "THIRD_PARTY_NOTICES.txt"
+          "TM Vibrant Shaders" "TM-Vibrant-Shaders-Setup.exe" "d3d11.dll" "README.txt" "LICENSE.txt" "THIRD_PARTY_NOTICES.txt"
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tm_vibrant_shaders> "${TMVS_DIST}/"
   COMMAND ${CMAKE_COMMAND} -DDIR=${TMVS_DIST} -P "${CMAKE_CURRENT_SOURCE_DIR}/packaging/sha256sums.cmake"
   DEPENDS tm_vibrant_shaders tmvs_installer

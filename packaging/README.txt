@@ -1,5 +1,5 @@
 TM Vibrant Shaders - real-time lighting, weather and skies for
-TrackMania Nations / United Forever
+TrackMania Nations / United Forever & TrackMania 2 (ManiaPlanet)
 https://github.com/cheatoskar/TM-Vibrant-Shaders
 
 ======================================================================
@@ -8,17 +8,18 @@ ENGLISH
 
 INSTALL - the easy way
   1. Unzip this whole zip (right-click it, "Extract All...").
-  2. Close TrackMania, then run TM-Vibrant-Shaders-Setup.exe from the
+  2. Close the game, then run TM-Vibrant-Shaders-Setup.exe from the
      unzipped folder and choose one of:
-       - Install for the TrackMania ModLoader (recommended if you use it:
+       - Install for the TrackMania ModLoader (recommended for TMNF/TMUF:
          https://tomashu.dev/software/tmloader/), then tick
          "TM Vibrant Shaders" in the ModLoader and start the game.
-       - Install into TrackMania Nations Forever / United Forever (no
-         ModLoader needed): the setup lists every TrackMania it finds,
-         each with its own button. "Install into another game folder"
-         lets you pick the folder with TmForever.exe yourself. Then start
-         the game as usual. Windows asks for admin rights if the game is
-         in "Program Files".
+       - Install into TrackMania Nations Forever / United Forever (adds
+         d3d9.dll next to TmForever.exe).
+       - Install into TrackMania 2 / ManiaPlanet (adds d3d11.dll next to
+         ManiaPlanet.exe).
+       - "Install into another game folder" lets you pick the game folder
+         yourself. Windows asks for admin rights if the game is in
+         "Program Files".
 
 INSTALL - by hand, no .exe
   With the ModLoader:
@@ -55,17 +56,18 @@ DEUTSCH
 
 INSTALLIEREN - der einfache Weg
   1. Die ganze ZIP entpacken (Rechtsklick, "Alle extrahieren...").
-  2. TrackMania schließen, TM-Vibrant-Shaders-Setup.exe aus dem entpackten
+  2. Das Spiel schließen, TM-Vibrant-Shaders-Setup.exe aus dem entpackten
      Ordner starten und auswählen:
-       - Für den TrackMania ModLoader installieren (empfohlen, wenn du ihn
-         nutzt: https://tomashu.dev/software/tmloader/), dann im ModLoader
+       - Für den TrackMania ModLoader installieren (empfohlen für TMNF/TMUF:
+         https://tomashu.dev/software/tmloader/), dann im ModLoader
          "TM Vibrant Shaders" anhaken und das Spiel starten.
-       - In TrackMania Nations Forever / United Forever installieren (ohne
-         ModLoader): Das Setup zeigt jedes gefundene TrackMania mit eigenem
-         Button. Mit "Install into another game folder" wählst du den
-         Ordner mit der TmForever.exe selbst. Dann das Spiel ganz normal
-         starten. Liegt das Spiel unter "Programme", fragt Windows nach
-         Admin-Rechten.
+       - In TrackMania Nations Forever / United Forever installieren (kopiert
+         d3d9.dll neben die TmForever.exe).
+       - In TrackMania 2 / ManiaPlanet installieren (kopiert d3d11.dll
+         neben die ManiaPlanet.exe).
+       - Mit "Install into another game folder" wählst du den Ordner mit der
+         TmForever.exe oder ManiaPlanet.exe selbst. Liegt das Spiel unter
+         "Programme", fragt Windows nach Admin-Rechten.
 
 INSTALLIEREN - von Hand, ohne .exe
   Mit ModLoader:
