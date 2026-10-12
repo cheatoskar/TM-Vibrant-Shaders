@@ -92,6 +92,18 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         std::fill(m_points.begin(), m_points.end(), 0.0f);
     }
     if (carSeen) m_carSeenAt = frame.time;
+    // No car for a second (the editor, the menus, the podium): the trail goes with it, not left
+    // standing in the next scene.
+    if (!carSeen && (m_carSeenAt < 0.0 || frame.time - m_carSeenAt > 1.0)) {
+        if (m_count) {
+            m_head = m_count = 0;
+            m_time = m_clock = 0.0f;
+            m_keptValid = false;
+            std::fill(m_points.begin(), m_points.end(), 0.0f);
+        }
+        m_break = true;
+        return;
+    }
     if (s.neonTrail <= 0.0f) {
         m_break = true;
         return;

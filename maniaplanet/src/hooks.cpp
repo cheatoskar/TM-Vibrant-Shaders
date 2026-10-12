@@ -17,6 +17,7 @@
 #include "config.h"
 #include "thumbnails11.h"
 #include "photo11.h"
+#include "maplook.h"
 #include "shaderdb.h"
 #include <windows.h>
 #include <dxgi1_2.h>
@@ -667,7 +668,11 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     Frame& f = g_frame;
     f.draws++;
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
-    const Role role = f.ps.role;
+    // Only the effects' tone maps are the tone map: the editor draws Engines/CopyColor0_ToneMapT3
+    // into the HDR image in the middle of the scene (with depth), and the effects ran there, on
+    // half a scene (the editor was dark and foggy until Alt).
+    Role role = f.ps.role;
+    if (role == Role::ToneMap && (!f.ps.name || strncmp(f.ps.name, "Effects/", 8) != 0)) role = Role::Scene;
     if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/DeferredShadowPssm_p")) takeShadowPass(ctx);
     if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/CarSkin_DefWrite_p") && f.rt && screenSized(f.rtW, f.rtH))
         takeCar(ctx);
@@ -1111,6 +1116,8 @@ bool onPresent(IDXGISwapChain* sc) {
         g_seenMood = mood;
         if (g_moodFrames == 60) tmshaders::Config::get().onMoodDetected(mood);
     }
+    // The map's own look (the Author's Shader in its comments), before the next frame's look.
+    maplook::tick();
     prepareLook();
 
     // Next frame. The bound targets stay as the game left them.

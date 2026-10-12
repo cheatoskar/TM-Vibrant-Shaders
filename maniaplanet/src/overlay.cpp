@@ -13,6 +13,7 @@
 #include "shaderdb.h"
 #include "thumbnails11.h"
 #include "photo11.h"
+#include "maplook.h"
 #include "shaders/PS_UiComposite.h"
 #include "shaders/VS_Full.h"
 #include "imgui.h"
@@ -415,6 +416,8 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             h.photoOn = [] {
                 if (!photo::active()) photo::toggle();
             };
+            h.mapComments = [](std::string& comments) { return maplook::editorComments(comments); };
+            h.setMapComments = [](const std::string& comments) { return maplook::setEditorComments(comments); };
             h.gamePanelTitle = "ManiaPlanet";
             h.gamePanel = gamePanel;
             return h;
