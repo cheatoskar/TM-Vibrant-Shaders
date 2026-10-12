@@ -14,12 +14,13 @@ knows (its normals, material colours, sun shadow maps, motion vectors and HDR im
   engine's sun goes and "real night" brings its sky light down to moonlight; lamps and neon stay.
 - **Weather:** wet roads, puddles, screen-space reflections, snow cover, rain, snow, splashes,
   lightning, drops on the lens, the weather sound.
-- **Cinema:** depth of field, motion blur (the engine's motion vectors), TAA, photo mode.
+- **Cinema:** depth of field, motion blur (the engine's motion vectors), TAA, photo mode with the
+  compare split.
+- **Neon trail** behind the car (the car's position from the engine's own constants).
 - **Look:** the HDR stage in place of the engine's tone map (curves, bloom), grading, LUT looks.
 - **Auto quality** (the TMNF mod's, on the effects' GPU times) and the Performance page.
 
-What ManiaPlanet can't do (yet): the neon trail and the spray (they need the car's position),
-long-range shadows (the engine has its own shadow maps), TAA jitter, hi-res photos and zoom (they
+What ManiaPlanet can't do (yet): the spray behind the car, long-range shadows (the engine has its own shadow maps), TAA jitter, hi-res photos and zoom (they
 need the engine's projection), "only in replays" (replays aren't told from driving yet: with it on,
 depth of field and motion blur run in photo mode only), water surfaces, grass detail.
 
@@ -43,12 +44,15 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 | Key | |
 |---|---|
 | F8 | Menu |
-| F7 | Effects off/on (compare with the game's own image) |
+| F5 | Effects off/on (compare with the game's own image; TMNF: F7, which is ManiaPlanet's friends list) |
 | F12 | Capture one frame (for bug reports and development); in photo mode: a photo (PNG) |
 | F6 | Photo mode: no interface, full quality, depth of field on a clicked point |
+| Shift+F6 / Ctrl+Shift+wheel | Photo mode: compare split (the game's own image on one side) / move its line |
 | Middle click / Ctrl+middle click / Ctrl+wheel | Photo mode: focus here / no focus / aperture |
 
-The same keys as the TMNF mod.
+Otherwise the same keys as the TMNF mod. The night skies need *Real night under night skies*
+(Settings page) for their dark nights: ManiaPlanet's time of day can't be changed, so the mod
+brings the engine's sky light down to moonlight itself.
 
 The F8 menu is the TMNF mod's own (src/menu.cpp, shared). It has the same presets, preset gallery,
 own presets with pictures, presets per map type (day, sunset and night, from the engine's light

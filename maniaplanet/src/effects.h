@@ -8,6 +8,7 @@
 // Stages (sky, weather, cinema) live in their own files and use the helpers below.
 #include "effects_cinema.h"
 #include "effects_sky.h"
+#include "effects_trail.h"
 #include "effects_weather.h"
 #include "engine_frame.h"
 #include <d3d11.h>
@@ -108,6 +109,7 @@ struct SceneFrame {
     ID3D11ShaderResourceView* const* engine = nullptr; // kTexCount views of its textures (null = missing)
     const Camera* camera = nullptr;
     const EngineShadow* shadow = nullptr;         // the engine's sun shadow pass (volumetric light)
+    const EngineCar* car = nullptr;               // the player's car (neon trail)
     double time = 0.0;                            // seconds
     bool photo = false;                           // photo mode: effects reach farther
     bool driving = true;                          // not a replay (cinematic effects only in replays)
@@ -212,6 +214,7 @@ private:
     SkyStage m_sky;
     WeatherStage m_weather;
     CinemaStage m_cinema;
+    TrailStage m_trail;
 
     float m_c[48][4] = {};
     float m_prevW2C[12] = {};

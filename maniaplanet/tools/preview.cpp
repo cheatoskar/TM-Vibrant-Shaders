@@ -132,6 +132,8 @@ int main(int argc, char** argv) {
     double time = 10.0;
     int frames = 1;       // --frames: the HDR stage this many times, 1/60 s apart (TAA, motion blur, auto focus)
     bool photo = false;   // --photo: photo mode (full quality, full-res depth of field)
+    float trailCar[3] = {}; // --car x,y,z: a car driving to there over the frames (the neon trail)
+    bool haveTrailCar = false;
     float focus[2] = {-1.0f, -1.0f}; // --focus u,v: the photo mode's focus point
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
@@ -163,6 +165,7 @@ int main(int argc, char** argv) {
         else if (opt == "--tonecb") toneCbPath = value;
         else if (opt == "--time") time = atof(value.c_str());
         else if (opt == "--frames") frames = std::max(1, atoi(value.c_str()));
+        else if (opt == "--car") haveTrailCar = sscanf(value.c_str(), "%f,%f,%f", &trailCar[0], &trailCar[1], &trailCar[2]) == 3;
         else if (opt == "--focus") {
             if (sscanf(value.c_str(), "%f,%f", &focus[0], &focus[1]) != 2) {
                 printf("--focus wants u,v\n");
@@ -326,6 +329,15 @@ int main(int argc, char** argv) {
         engine.focus[1] = focus[1];
         for (int f = 0; f < frames; f++) {
             engine.time = time + (f - frames + 1) / 60.0;
+            // The car: from the camera's side towards --car, arriving in the last frame.
+            EngineCar car;
+            if (haveTrailCar && haveCamera) {
+                const float k = frames > 1 ? static_cast<float>(f) / (frames - 1) : 1.0f;
+                for (int i = 0; i < 3; i++) car.position[i] = camera.eye[i] + (trailCar[i] - camera.eye[i]) * (0.3f + 0.7f * k);
+                car.position[1] = trailCar[1];
+                car.valid = true;
+                engine.car = &car;
+            }
             if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look, engine)) {
                 printf("the HDR stage failed\n");
                 return 1;

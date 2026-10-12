@@ -541,5 +541,6 @@ float4 PS_Lighting(VSOut i) : SV_Target
     if (debug == 10) return float4(ambPart, 1);
     if (debug == 11) return float4(rest, 1);
     if (debug == 12) return float4(emissive, 1);
+    if (debug == 25) return float4(u_Pass1.x > 0.5 ? g_volume.SampleLevel(g_linear, uv, 0).rgg : float3(0.5, 0, 0.5), 1);
     return float4(result, 1);
 }

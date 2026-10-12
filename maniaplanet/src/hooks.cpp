@@ -288,7 +288,7 @@ struct SceneVCopy {
     ID3D11Resource* buffer = nullptr; // identity only
     void* mapped = nullptr;
     UINT size = 0;
-    unsigned char data[kSceneVSize] = {};
+    unsigned char data[kObjectVCarSize] = {};
     bool filled = false;
 };
 SceneVCopy g_sceneV[16];
@@ -304,7 +304,9 @@ UINT sceneBufferSize(ID3D11Resource* res) {
     if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
         D3D11_BUFFER_DESC d;
         static_cast<ID3D11Buffer*>(res)->GetDesc(&d);
-        if ((d.ByteWidth == kSceneVSize || d.ByteWidth == kScenePSize) && (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER)) size = d.ByteWidth;
+        if ((d.ByteWidth == kSceneVSize || d.ByteWidth == kScenePSize || d.ByteWidth == kObjectVCarSize) &&
+            (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER))
+            size = d.ByteWidth;
     }
     if (g_isSceneV.size() > 4096) g_isSceneV.clear();
     g_isSceneV[res] = size;
@@ -331,6 +333,59 @@ bool scenePRaster(ID3D11Buffer* buffer, float out[4]) {
     if (!p || !p->filled || p->size != kScenePSize) return false;
     memcpy(out, p->data + kScenePRasterPos, sizeof(float) * 4);
     return true;
+}
+
+// The cars of this frame (their G-buffer draws, VisualToCamera): resolved into the world once this
+// frame's camera is known (it is read later, at the lighting pass). The player's car is the one
+// that continues last frame's, else the one nearest the camera (the chase camera follows it).
+EngineCar g_car;
+float g_carLast[3] = {};
+bool g_carLastValid = false;
+float g_carCandidates[8][12] = {};
+int g_carCount = 0;
+
+void takeCar(ID3D11DeviceContext* ctx) {
+    if (g_carCount >= 8) return;
+    ID3D11Buffer* cb = nullptr;
+    ctx->VSGetConstantBuffers(0, 1, &cb);
+    if (!cb) return;
+    const SceneVCopy* copy = sceneVCopy(cb, false);
+    cb->Release();
+    if (!copy || !copy->filled || copy->size != kObjectVCarSize) return;
+    memcpy(g_carCandidates[g_carCount++], copy->data + kObjectVVisualToCamera, sizeof(float) * 12);
+}
+
+void resolveCar() {
+    g_car.valid = false;
+    if (!g_cameraThisFrame || !g_carCount) return;
+    const float* w = g_camera.worldToCamera; // camera space -> world: its rows are the camera's axes
+    auto toWorld = [&](float x, float y, float z, float out[3]) {
+        for (int i = 0; i < 3; i++) out[i] = x * w[i] + y * w[4 + i] + z * w[8 + i];
+    };
+    float best = g_carLastValid ? 30.0f * 30.0f : 1e30f;
+    for (int c = 0; c < g_carCount; c++) {
+        const float* m = g_carCandidates[c];
+        float pos[3];
+        toWorld(m[3], m[7], m[11], pos);
+        for (int i = 0; i < 3; i++) pos[i] += g_camera.eye[i];
+        if (!std::isfinite(pos[0] + pos[1] + pos[2])) continue;
+        const float* ref = g_carLastValid ? g_carLast : g_camera.eye;
+        const float dx = pos[0] - ref[0], dy = pos[1] - ref[1], dz = pos[2] - ref[2];
+        const float score = dx * dx + dy * dy + dz * dz;
+        if (score >= best) continue;
+        best = score;
+        g_car.valid = true;
+        memcpy(g_car.position, pos, sizeof(pos));
+        toWorld(m[0], m[4], m[8], g_car.right);
+        toWorld(m[1], m[5], m[9], g_car.up);
+        toWorld(m[2], m[6], m[10], g_car.forward);
+    }
+    static bool logged = false;
+    if (g_car.valid && !logged) {
+        logged = true;
+        TMVS_LOG("hooks: car found at %.1f %.1f %.1f (camera %.1f %.1f %.1f), up %.2f %.2f %.2f", g_car.position[0], g_car.position[1],
+                 g_car.position[2], g_camera.eye[0], g_camera.eye[1], g_camera.eye[2], g_car.up[0], g_car.up[1], g_car.up[2]);
+    }
 }
 
 // The main camera: the SceneV bound to the vertex shader of the lighting-read pass.
@@ -475,6 +530,8 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     ctx->PSGetConstantBuffers(0, 1, &constants);
     EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
+    resolveCar();
+    view.car = g_car.valid ? &g_car : nullptr;
     view.time = nowSeconds();
     view.photo = photo::active();
     photo::focusPoint(view.focus);
@@ -530,6 +587,8 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     const Role role = f.ps.role;
     if (f.phase == Phase::Scene && role == Role::Post && skipEngineBloom(ctx, f.ps.name)) return true;
     if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/DeferredShadowPssm_p")) takeShadowPass(ctx);
+    if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/CarSkin_DefWrite_p") && f.rt && screenSized(f.rtW, f.rtH))
+        takeCar(ctx);
 
     if (role == Role::ToneMap && f.rt && screenSized(f.rtW, f.rtH)) {
         if (capture::active() && !f.toneMapSeen) capture::onToneMap(g_device, ctx);
@@ -951,6 +1010,11 @@ void onPresent(IDXGISwapChain* sc) {
     // Next frame. The bound targets stay as the game left them.
     g_cameraThisFrame = false;
     g_shadow.valid = false;
+    // The car: what this frame found is the one to continue next frame.
+    g_carLastValid = g_car.valid;
+    if (g_car.valid) memcpy(g_carLast, g_car.position, sizeof(g_carLast));
+    g_car.valid = false;
+    g_carCount = 0;
     const ShaderInfo ps = f.ps;
     ID3D11RenderTargetView* rtv = f.rtv;
     ID3D11Resource *rt = f.rt, *ds = f.ds;

@@ -82,6 +82,16 @@ struct EngineShadow {
 };
 constexpr UINT kScenePRasterPos = 96;
 
+// The car (Tech3/CarSkin_DefWrite: its vertex constants ObjectV, 2752 bytes): VisualToCamera at
+// 112 (3 rows of 4, the car's axes and origin in camera space), for the neon trail.
+constexpr UINT kObjectVCarSize = 2752;
+constexpr UINT kObjectVVisualToCamera = 112;
+struct EngineCar {
+    bool valid = false;     // seen this frame
+    float position[3] = {}; // world
+    float right[3] = {}, up[3] = {}, forward[3] = {}; // the car's axes in the world (x, y, z of its model)
+};
+
 const char* engineTextureName(int index);
 
 // A typed format a shader resource view of `format` can use (typeless -> its UNORM/FLOAT form,

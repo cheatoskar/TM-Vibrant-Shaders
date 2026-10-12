@@ -502,6 +502,7 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
         frame.engine = views;
         frame.camera = engine.camera;
         frame.shadow = engine.shadow;
+        frame.car = engine.car;
         frame.time = engine.time;
         frame.photo = engine.photo;
         frame.focus[0] = engine.focus[0];

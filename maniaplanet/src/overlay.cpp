@@ -405,6 +405,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {22, "Sky"},
                             {23, "Sky average (haze colour)"},
                             {24, "Lens flare source"},
+                            {25, "Volumetric light (lit haze)"},
                             {40, "Depth of field: blur size"},
                             {41, "Motion"}};
             h.fNumber = photo::fNumber;

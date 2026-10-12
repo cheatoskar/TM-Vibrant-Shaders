@@ -60,6 +60,7 @@ struct EngineView {
     ID3D11Resource* const* tex = nullptr; // kTexCount entries
     const Camera* camera = nullptr;       // null: not found this frame
     const EngineShadow* shadow = nullptr; // the sun shadow pass (null: not seen this frame)
+    const EngineCar* car = nullptr;       // the player's car (null: not seen this frame)
     double time = 0.0;                    // seconds (animated effects)
     bool photo = false;
     float focus[2] = {-1.0f, -1.0f};      // photo mode: the focus point clicked (uv), -1 = auto focus
