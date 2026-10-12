@@ -394,7 +394,14 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {9, "Engine light: sun"},
                             {10, "Engine light: ambient"},
                             {11, "Engine light: the rest"},
-                            {12, "Light sources (lamps, neon)"}};
+                            {12, "Light sources (lamps, neon)"},
+                            {20, "Light shafts"},
+                            {21, "Volumetric clouds"},
+                            {22, "Sky"},
+                            {23, "Sky average (haze colour)"},
+                            {24, "Lens flare source"},
+                            {40, "Depth of field: blur size"},
+                            {41, "Motion"}};
             h.fNumber = photo::fNumber;
             h.gamePanelTitle = "ManiaPlanet";
             h.gamePanel = gamePanel;

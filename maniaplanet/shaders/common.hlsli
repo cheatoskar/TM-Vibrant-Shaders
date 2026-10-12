@@ -67,7 +67,8 @@ cbuffer Frame : register(b0)
     float4 u_Mat;       // c44: 0, 0, a night sky replaces the game's, tone knee
     float4 u_EngineSun; // c45: the engine's sun colour (rgb, linear, as it lights with it), 1 = known
     float4 u_Fog;       // c46: the engine's fog colour (rgb, linear), 0
-    float4 u_Misc;      // c47: engine exposure is applied in the input (1) or read here (0), photo mode, 0, 0
+    float4 u_Misc;      // c47: engine exposure is applied in the input (1) or read here (0), photo mode,
+                        //      TMNF colours -> display linear here (sky.hlsli tmnfScale), 0
 };
 
 cbuffer PassParams : register(b1)

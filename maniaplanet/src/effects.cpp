@@ -580,7 +580,19 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[36][0] = s.neonLight;
     c[36][1] = mapNight ? -1.0f : (cam.sunDirectionKnown ? 1.0f : 0.0f);
     c[36][2] = tmshaders::weather::lightningFlash(static_cast<float>(frame.time), s.lightning);
+    // The bolt of the current strike: its direction is picked once, near where the camera looks
+    // at that moment (a bolt behind you is a wasted strike), and then stays put.
     c[36][3] = -1.0f;
+    tmshaders::weather::Strike strike;
+    if (tmshaders::weather::currentStrike(static_cast<float>(frame.time), s.lightning, strike)) {
+        if (strike.slot != m_boltSlot) {
+            m_boltSlot = strike.slot;
+            m_boltAzimuth = atan2f(W[8], W[10]) + strike.side * 1.6f; // view forward (world x, z)
+            m_boltAzimuth = fmodf(m_boltAzimuth + 6.2831853f * 2.0f, 6.2831853f);
+        }
+        // Packed: azimuth (0..2pi) + 7 * distance step (0..50).
+        c[36][3] = m_boltAzimuth + 7.0f * floorf(strike.distance * 50.0f + 0.5f);
+    }
     c[37][0] = s.volumetricLight;
     c[37][1] = 160.0f;
     c[37][2] = s.globalIllumination;
@@ -608,6 +620,7 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     for (int i = 0; i < 3; i++) c[46][i] = cam.fog[i];
     c[47][0] = 0.0f; // the passes read the engine's HDR image and expose it themselves
     c[47][1] = frame.photo ? 1.0f : 0.0f;
+    c[47][2] = m_tmnfScale;
 }
 
 bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tmshaders::Settings& s) {

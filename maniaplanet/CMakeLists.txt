@@ -112,6 +112,7 @@ add_library(tmvs_mp_core STATIC
   ${TMVS_ROOT}/src/weather.cpp
   # The TMNF mod's weather sound (rain, thunder, the snow storm's wind), shared.
   ${TMVS_ROOT}/src/audio.cpp
+  ${TMVS_ROOT}/src/noise.cpp
   ${MP_SHADER_HEADERS}
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
