@@ -291,7 +291,7 @@ struct SceneVCopy {
     unsigned char data[kObjectVCarSize] = {};
     bool filled = false;
 };
-SceneVCopy g_sceneV[16];
+SceneVCopy g_sceneV[64];
 std::unordered_map<ID3D11Resource*, UINT> g_isSceneV;
 
 // The size of the engine's per-camera constant buffer this is (SceneV 704, SceneP 672), else 0.
@@ -346,13 +346,35 @@ int g_carCount = 0;
 
 void takeCar(ID3D11DeviceContext* ctx) {
     if (g_carCount >= 8) return;
-    ID3D11Buffer* cb = nullptr;
-    ctx->VSGetConstantBuffers(0, 1, &cb);
-    if (!cb) return;
-    const SceneVCopy* copy = sceneVCopy(cb, false);
-    cb->Release();
-    if (!copy || !copy->filled || copy->size != kObjectVCarSize) return;
-    memcpy(g_carCandidates[g_carCount++], copy->data + kObjectVVisualToCamera, sizeof(float) * 12);
+    ID3D11Buffer* cbs[8] = {};
+    ctx->VSGetConstantBuffers(0, 8, cbs);
+    const SceneVCopy* found = nullptr;
+    for (ID3D11Buffer* cb : cbs) {
+        if (!cb || found) continue;
+        const SceneVCopy* copy = sceneVCopy(cb, false);
+        if (copy && copy->filled && copy->size == kObjectVCarSize) found = copy;
+    }
+    if (found) {
+        memcpy(g_carCandidates[g_carCount++], found->data + kObjectVVisualToCamera, sizeof(float) * 12);
+    } else {
+        // Not an upload we saw: what is bound instead (a few times), to learn the engine's scheme.
+        static int logged = 0;
+        if (logged++ < 3) {
+            char line[512];
+            int n = snprintf(line, sizeof(line), "hooks: car draw without its constants; vertex constant buffers:");
+            for (int i = 0; i < 8 && n < static_cast<int>(sizeof(line)) - 48; i++) {
+                if (!cbs[i]) continue;
+                D3D11_BUFFER_DESC d;
+                cbs[i]->GetDesc(&d);
+                const SceneVCopy* copy = sceneVCopy(cbs[i], false);
+                n += snprintf(line + n, sizeof(line) - n, " b%d=%u%s", i, d.ByteWidth,
+                              copy ? (copy->filled ? "(copied)" : "(mapped)") : (d.Usage == D3D11_USAGE_DYNAMIC ? "(dynamic)" : ""));
+            }
+            TMVS_LOG("%s", line);
+        }
+    }
+    for (ID3D11Buffer* cb : cbs)
+        if (cb) cb->Release();
 }
 
 void resolveCar() {
@@ -542,10 +564,10 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     return done;
 }
 
-// The engine's bloom is added onto its HDR image by FxBloom_Final (blended: one + one). With the
-// mod's bloom on and "Turn off the game's FX" (DisableGameFX), that draw is skipped, so nothing
-// glows twice. Only when it really adds (checked on its blend state): anything else stays.
-bool skipEngineBloom(ID3D11DeviceContext* ctx, const char* name) {
+// The engine's bloom is added onto its HDR image by FxBloom_Final (blended: one + one), with the
+// streaks that give the lamps their flares. Skipping it (the mod's bloom instead) left the lamps
+// looking half on: it stays. Kept for a later switch.
+[[maybe_unused]] bool skipEngineBloom(ID3D11DeviceContext* ctx, const char* name) {
     if (!name || strcmp(name, "Effects/FxBloom_Final") != 0) return false;
     const tmshaders::Settings& s = g_lookSettings;
     if (!s.enabled || !s.disableGameFx || s.bloom <= 0.001f || !options::current().hdrStage) return false;
@@ -585,7 +607,6 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     f.draws++;
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
     const Role role = f.ps.role;
-    if (f.phase == Phase::Scene && role == Role::Post && skipEngineBloom(ctx, f.ps.name)) return true;
     if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/DeferredShadowPssm_p")) takeShadowPass(ctx);
     if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/CarSkin_DefWrite_p") && f.rt && screenSized(f.rtW, f.rtH))
         takeCar(ctx);
@@ -767,6 +788,7 @@ void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11
 HRESULT STDMETHODCALLTYPE mapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub, D3D11_MAP type, UINT flags,
                                     D3D11_MAPPED_SUBRESOURCE* out) {
     const HRESULT hr = g_map.get<MapFn>(ctx)(ctx, res, sub, type, flags, out);
+    if (isMain(ctx)) repairDraws(ctx);
     if (SUCCEEDED(hr) && out && isMain(ctx) && sub == 0 && (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE)) {
         if (const UINT size = sceneBufferSize(res)) {
             SceneVCopy* copy = sceneVCopy(res, true);
@@ -791,6 +813,7 @@ void STDMETHODCALLTYPE unmapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res
 
 void STDMETHODCALLTYPE updateSubresourceDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub, const D3D11_BOX* box,
                                                const void* data, UINT rowPitch, UINT depthPitch) {
+    if (isMain(ctx)) repairDraws(ctx);
     if (isMain(ctx) && sub == 0 && !box && data) {
         if (const UINT size = sceneBufferSize(res)) {
             SceneVCopy* copy = sceneVCopy(res, true);
@@ -804,20 +827,30 @@ void STDMETHODCALLTYPE updateSubresourceDetour(ID3D11DeviceContext* ctx, ID3D11R
 
 // ---- swap chain ----
 
+// The slots patched by the last install (names, for the log).
+char g_patchedNames[256] = {};
+
 int installContextHooks(ID3D11DeviceContext* ctx) {
     int patched = 0;
-    patched += g_psSetShader.install(ctx, kPSSetShader, reinterpret_cast<void*>(&psSetShaderDetour));
-    patched += g_drawIndexed.install(ctx, kDrawIndexed, reinterpret_cast<void*>(&drawIndexedDetour));
-    patched += g_draw.install(ctx, kDraw, reinterpret_cast<void*>(&drawDetour));
-    patched += g_drawIndexedInstanced.install(ctx, kDrawIndexedInstanced, reinterpret_cast<void*>(&drawIndexedInstancedDetour));
-    patched += g_drawInstanced.install(ctx, kDrawInstanced, reinterpret_cast<void*>(&drawInstancedDetour));
-    patched += g_omSetRenderTargets.install(ctx, kOMSetRenderTargets, reinterpret_cast<void*>(&omSetRenderTargetsDetour));
-    patched += g_omSetRenderTargetsAndUAVs.install(ctx, kOMSetRenderTargetsAndUAVs,
-                                                   reinterpret_cast<void*>(&omSetRenderTargetsAndUAVsDetour));
-    patched += g_executeCommandList.install(ctx, kExecuteCommandList, reinterpret_cast<void*>(&executeCommandListDetour));
-    patched += g_map.install(ctx, kMap, reinterpret_cast<void*>(&mapDetour));
-    patched += g_unmap.install(ctx, kUnmap, reinterpret_cast<void*>(&unmapDetour));
-    patched += g_updateSubresource.install(ctx, kUpdateSubresource, reinterpret_cast<void*>(&updateSubresourceDetour));
+    g_patchedNames[0] = 0;
+    auto one = [&](Hook& hook, int slot, void* detour, const char* name) {
+        if (!hook.install(ctx, slot, detour)) return;
+        patched++;
+        strncat_s(g_patchedNames, name, _TRUNCATE);
+        strncat_s(g_patchedNames, " ", _TRUNCATE);
+    };
+    one(g_psSetShader, kPSSetShader, reinterpret_cast<void*>(&psSetShaderDetour), "PSSetShader");
+    one(g_drawIndexed, kDrawIndexed, reinterpret_cast<void*>(&drawIndexedDetour), "DrawIndexed");
+    one(g_draw, kDraw, reinterpret_cast<void*>(&drawDetour), "Draw");
+    one(g_drawIndexedInstanced, kDrawIndexedInstanced, reinterpret_cast<void*>(&drawIndexedInstancedDetour), "DrawIndexedInstanced");
+    one(g_drawInstanced, kDrawInstanced, reinterpret_cast<void*>(&drawInstancedDetour), "DrawInstanced");
+    one(g_omSetRenderTargets, kOMSetRenderTargets, reinterpret_cast<void*>(&omSetRenderTargetsDetour), "OMSetRenderTargets");
+    one(g_omSetRenderTargetsAndUAVs, kOMSetRenderTargetsAndUAVs, reinterpret_cast<void*>(&omSetRenderTargetsAndUAVsDetour),
+        "OMSetRenderTargetsAndUAVs");
+    one(g_executeCommandList, kExecuteCommandList, reinterpret_cast<void*>(&executeCommandListDetour), "ExecuteCommandList");
+    one(g_map, kMap, reinterpret_cast<void*>(&mapDetour), "Map");
+    one(g_unmap, kUnmap, reinterpret_cast<void*>(&unmapDetour), "Unmap");
+    one(g_updateSubresource, kUpdateSubresource, reinterpret_cast<void*>(&updateSubresourceDetour), "UpdateSubresource");
     return patched;
 }
 
@@ -832,7 +865,7 @@ void repairDraws(ID3D11DeviceContext* ctx) {
     }
     const int patched = installContextHooks(ctx);
     static int logged = 0;
-    if (patched && logged++ < 5) TMVS_LOG("hooks: %d context slots patched again during a frame", patched);
+    if (patched && logged++ < 12) TMVS_LOG("hooks: %d context slots patched again during a frame (%s)", patched, g_patchedNames);
 }
 
 // Device and immediate-context hooks; also the repair after the runtime rewrote the vtables.
@@ -947,15 +980,26 @@ void prepareLook() {
     g_look.split = o.view == View::Split ? o.split : photo::splitForLook();
 }
 
-void onPresent(IDXGISwapChain* sc) {
+// True: the frame isn't shown (its draws went past the mod: the engine's own look, a flash).
+bool onPresent(IDXGISwapChain* sc) {
     if (!g_swapChain) beginWith(sc);
-    if (sc != g_swapChain || !g_ctx) return;
+    if (sc != g_swapChain || !g_ctx) return false;
+    bool drop = false;
+    static bool lastToneMapped = false;
+    static int dropsInARow = 0;
     if (const int patched = installDeviceHooks(g_device)) {
         static int logged = 0;
         static int lost = 0;
         lost++;
-        if (logged++ < 40) TMVS_LOG("hooks: %d device/context slots patched again at Present (the runtime rewrote its vtables; frames with draws past the mod: %d)", patched, lost);
+        // The tone map went past the mod, the frame before didn't: this one is left out (the last
+        // one stays on screen a frame longer). Never twice in a row.
+        drop = !g_frame.toneMapped && lastToneMapped && dropsInARow == 0 && g_lookSettings.enabled;
+        if (logged++ < 40)
+            TMVS_LOG("hooks: %d device/context slots patched again at Present (%s; frames with draws past the mod: %d%s)", patched,
+                     g_patchedNames, lost, drop ? ", not shown" : "");
     }
+    dropsInARow = drop ? dropsInARow + 1 : 0;
+    lastToneMapped = g_frame.toneMapped;
     ensureBackBuffer(sc);
 
     Frame& f = g_frame;
@@ -1028,6 +1072,7 @@ void onPresent(IDXGISwapChain* sc) {
     f.rtH = rtH;
     f.dsW = dsW;
     f.dsH = dsH;
+    return drop;
 }
 
 // The runtime also writes the draw slots back while presenting, so they are patched again after it.
@@ -1036,14 +1081,20 @@ void afterPresent(IDXGISwapChain* sc) {
 }
 
 HRESULT STDMETHODCALLTYPE presentDetour(IDXGISwapChain* sc, UINT sync, UINT flags) {
-    if (!(flags & DXGI_PRESENT_TEST)) onPresent(sc);
+    if (!(flags & DXGI_PRESENT_TEST) && onPresent(sc)) {
+        afterPresent(sc);
+        return S_OK;
+    }
     const HRESULT hr = g_present.get<PresentFn>(sc)(sc, sync, flags);
     afterPresent(sc);
     return hr;
 }
 
 HRESULT STDMETHODCALLTYPE present1Detour(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* p) {
-    if (!(flags & DXGI_PRESENT_TEST)) onPresent(sc);
+    if (!(flags & DXGI_PRESENT_TEST) && onPresent(sc)) {
+        afterPresent(sc);
+        return S_OK;
+    }
     const HRESULT hr = g_present1.get<Present1Fn>(sc)(sc, sync, flags, p);
     afterPresent(sc);
     return hr;

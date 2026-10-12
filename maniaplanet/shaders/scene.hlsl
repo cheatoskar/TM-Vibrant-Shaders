@@ -216,24 +216,42 @@ float4 PS_GITemporal(VSOut i) : SV_Target
     float3 current = t0_tex(uv).rgb;
     float z = t2_tex(uv).w;
     if (u_Pass0.x < 0.5 || z >= SKY_Z) return float4(current, z);
-    float prevZ;
-    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
-    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(current, z);
-    float4 history = t1_texL(prevUV);
-    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
-    float weight = lerp(0.1, 1.0, smoothstep(0.03, 0.1, error));
+    // The neighbourhood: its range clamps the history, its average stands in where there is none.
     float2 t = u_Screen.zw * 4.0;
-    float3 lo = current, hi = current;
-    [unroll] for (int k = 0; k < 4; k++)
+    float3 lo = current, hi = current, avg = current;
+    float avgW = 1.0;
+    [unroll] for (int k = 0; k < 8; k++)
     {
-        float2 o = k == 0 ? float2(t.x, 0) : (k == 1 ? float2(-t.x, 0) : (k == 2 ? float2(0, t.y) : float2(0, -t.y)));
-        float3 n = t0_tex(uv + o * 1.5).rgb;
+        float2 o = float2(k == 0 || k == 4 || k == 5 ? 1.0 : (k == 1 || k == 6 || k == 7 ? -1.0 : 0.0),
+                          k == 2 || k == 4 || k == 6 ? 1.0 : (k == 3 || k == 5 || k == 7 ? -1.0 : 0.0));
+        float3 n = t0_tex(uv + o * t * 1.5).rgb;
+        float w = exp(-abs(t2_tex(uv + o * t * 1.5).w - z) / (0.02 * z + 0.05));
+        avg += n * w;
+        avgW += w;
         lo = min(lo, n);
         hi = max(hi, n);
     }
+    avg /= avgW;
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
+    // Moving things (the car, the camera fixed to it): the engine's motion vectors.
+    if (u_Engine.w > 0.5)
+    {
+        float2 motion = t_motion.SampleLevel(g_point, uv, 0).xy;
+        float2 moved = uv - motion;
+        if (distance(moved, prevUV) * u_Screen.y > 2.0)
+        {
+            prevUV = moved;
+            prevZ = z;
+        }
+    }
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(avg, z);
+    float4 history = t1_texL(prevUV);
+    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
+    float weight = lerp(0.1, 1.0, smoothstep(0.03, 0.1, error));
     float3 margin = (hi - lo) * 0.25 + 0.01;
     history.rgb = clamp(history.rgb, lo - margin, hi + margin);
-    return float4(lerp(history.rgb, current, weight), z);
+    return float4(lerp(history.rgb, avg, weight), z);
 }
 
 // ---------------------------------------------------------------------------------
@@ -454,14 +472,13 @@ float4 PS_Lighting(VSOut i) : SV_Target
         ambPart = 0;
         engineShadow = 1;
     }
-    // The engine multiplies sun and ambient together by factors these estimates don't know (the
-    // clouds' shadows, the light map): where the estimate exceeds the image, both parts come down
-    // by the same factor. (Cutting the sun first left less ambient in sunlight than in the shade:
-    // with the sun gone at night, shadows came out brighter than the ground around them.)
-    float3 total = sunPart + ambPart;
-    float3 fit = total > c ? c / max(total, 1e-6) : 1.0;
-    sunPart *= fit;
-    ambPart *= fit;
+    // Where the estimate exceeds the image, the sun gives way: the ambient part (the light mask's,
+    // the same in sunlight and shade) is the reliable one, the sun's is often far too big (a low
+    // sun, the clouds' shadows). Cutting both by the same factor, or the sun's first, left less
+    // ambient in sunlight than in the shade: with the sun taken out under a night sky, shadows
+    // came out brighter than the ground around them.
+    ambPart = min(ambPart, c);
+    sunPart = min(sunPart, c - ambPart);
     float3 rest = c - sunPart - ambPart;
     float3 emissive = emissiveOf(rest, albedo, e, nWorld, rd);
     float3 restLight = rest - emissive; // light maps, local lights, reflections
