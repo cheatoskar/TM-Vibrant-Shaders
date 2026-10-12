@@ -1,6 +1,7 @@
 #include "options.h"
 #include "config.h"
 #include "log.h"
+#include "photo11.h"
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
@@ -55,6 +56,10 @@ bool setValue(const std::string& key, const std::string& value) {
     else if (!_stricmp(k, "Enabled")) s.enabled = atoi(value.c_str()) != 0;
     else if (!_stricmp(k, "ShowMenu")) config.showOverlay = atoi(value.c_str()) != 0; // F8, for the test
     else if (!_stricmp(k, "MenuPage")) config.menuPage = atoi(value.c_str());
+    else if (!_stricmp(k, "PhotoMode")) { // F6, for the test
+        if ((atoi(value.c_str()) != 0) != photo::active()) photo::toggle();
+    }
+    else if (!_stricmp(k, "PhotoShot")) photo::request(); // F12 in photo mode, for the test
     else if (!_stricmp(k, "Preset")) return config.selectPreset(value);
     else if (!_stricmp(k, "Lut")) config.lutFile = value;
     else if (!_stricmp(k, "LutAmount")) config.lutAmount = static_cast<float>(atof(value.c_str()));

@@ -12,6 +12,7 @@
 #include "renderer.h"
 #include "shaderdb.h"
 #include "thumbnails11.h"
+#include "photo11.h"
 #include "shaders/PS_UiComposite.h"
 #include "shaders/VS_Full.h"
 #include "imgui.h"
@@ -195,10 +196,14 @@ bool isKeyboard(UINT msg) {
 }
 
 bool isHotkey(WPARAM w) {
-    return w == VK_F7 || w == VK_F8 || w == VK_F12;
+    return w == VK_F6 || w == VK_F7 || w == VK_F8 || w == VK_F12;
 }
 
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    // Photo mode: focus click, aperture wheel and Esc, unless the menu has the mouse or keyboard
+    // (the game may read the mouse directly too: it still sees them there).
+    if (!(g_open && ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard))) && photo::handleMessage(hwnd, msg, w, l))
+        return 0;
     if (g_open && (isMouse(msg) || isKeyboard(msg) || msg == WM_SETFOCUS || msg == WM_KILLFOCUS)) {
         {
             std::lock_guard<std::mutex> lock(g_queueLock);
@@ -223,9 +228,10 @@ bool pressed(int key, bool& was) {
     return edge;
 }
 
-// The same keys as in TMNF: F8 menu, F7 effects on/off, F12 capture.
+// The same keys as in TMNF: F8 menu, F7 effects on/off, F6 photo mode, F12 capture (photo in
+// photo mode).
 void hotkeys() {
-    static bool f7 = false, f8 = false, f12 = false;
+    static bool f6 = false, f7 = false, f8 = false, f12 = false;
     if (GetForegroundWindow() != g_window) return;
     Config& config = Config::get();
     if (pressed(VK_F7, f7)) {
@@ -233,9 +239,14 @@ void hotkeys() {
         config.markDirty();
         toast(config.settings.enabled ? "TM Vibrant Shaders: on" : "TM Vibrant Shaders: off (the game's own image)");
     }
+    if (pressed(VK_F6, f6)) photo::toggle();
     if (pressed(VK_F12, f12)) {
-        capture::request();
-        toast("Frame captured (Documents\\ManiaPlanet\\TMVS\\captures)");
+        if (photo::active()) {
+            photo::request();
+        } else {
+            capture::request();
+            toast("Frame captured (Documents\\ManiaPlanet\\TMVS\\captures)");
+        }
     }
     if (pressed(VK_F8, f8)) config.showOverlay = !config.showOverlay;
 }
@@ -334,8 +345,9 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     hotkeys();
     g_open = config.showOverlay;
     const bool showToast = GetTickCount64() < g_toastUntil;
+    const char* photoLine = photo::status();
     if (!config.showOverlay) config.previewPreset.clear();
-    if (!config.showOverlay && !showToast) return;
+    if (!config.showOverlay && !showToast && !*photoLine) return;
 
     std::vector<Message> messages;
     {
@@ -372,11 +384,22 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             };
             h.supports = supports;
             h.timings = &timings;
+            h.fNumber = photo::fNumber;
             h.gamePanelTitle = "ManiaPlanet";
             h.gamePanel = gamePanel;
             return h;
         }();
         tmshaders::menu::draw(host);
+    }
+    if (*photoLine) {
+        // Photo mode line, top left. Drawn at Present: never in the photos.
+        ImGui::SetNextWindowPos(ImVec2(16.0f * tmshaders::menu::scale(), 16.0f * tmshaders::menu::scale()));
+        ImGui::SetNextWindowBgAlpha(0.55f);
+        ImGui::Begin("##photo", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
+                         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::TextUnformatted(photoLine);
+        ImGui::End();
     }
     if (showToast) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 40), ImGuiCond_Always, ImVec2(0.5f, 0));
