@@ -488,8 +488,15 @@ float4 PS_Lighting(VSOut i) : SV_Target
     // Ambient, light maps and reflections: occlusion, the sky's tint (more in shadow).
     float shade = 1.0 - saturate(engineShadow);
     float3 ambient = (ambPart + restLight) * ao * lerp(float3(1, 1, 1), skyTint, u_SkyColor.w * (0.15 + 0.25 * shade));
-    // Bounce light and neon light: albedo times the light that arrives.
+    // Bounce light: albedo times the light that arrives.
     if (u_Volume.z > 0.0) ambient += albedo * upsampleGI(uv, z, n) * u_Volume.z * 1.6 * lerp(0.5, 1.0, occ.r);
+    // Real night (GameNight) under a night sky over a day or sunset map: TMNF had the game light
+    // the map at midnight. The engine's time of day can't be changed from here, so its sky light,
+    // light maps, reflections and bounce come down to moonlight, cool; lamps and neon stay. The
+    // night presets were made on that dark picture (they brighten it again with their exposure).
+    float realNight = saturate(u_SunOut.x) * u_Mat.y;
+    ambient *= lerp(float3(1, 1, 1), float3(0.06, 0.075, 0.11), realNight);
+    // Neon light: what the lamps and neon cast on their surroundings.
     if (u_Light2.x > 0.0)
         ambient += albedo * upsampleSpill(uv, z) * u_Light2.x * 3.0 * lerp(1.0, 2.0, saturate(dist / 120.0)) * ao;
     // Light sources: as bright as the engine drew them, the preset's highlight boost on top.

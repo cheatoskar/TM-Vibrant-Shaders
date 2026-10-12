@@ -48,7 +48,7 @@ const char* const kSupported[] = {
     "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "NeonLight", "GlobalIllumination", "SunLight", "AmbientTint",
     "SunColor", "GameSunColor", "SkyColor", "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter",
     "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
-    "VolumetricLight"};
+    "VolumetricLight", "GameNight"};
 
 } // namespace
 
@@ -613,6 +613,7 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[43][0] = nightSky && !mapNight ? 1.0f : 0.0f;
     const float glen = sqrtf(gameSun[0] * gameSun[0] + gameSun[1] * gameSun[1] + gameSun[2] * gameSun[2]);
     for (int i = 0; i < 3; i++) c[43][1 + i] = glen > 1e-5f ? cam.sunDirection[i] / glen : 0.0f;
+    c[44][1] = s.gameNight ? 1.0f : 0.0f;
     c[44][2] = nightSky ? 1.0f : 0.0f;
     c[44][3] = s.toneKnee;
     for (int i = 0; i < 3; i++) c[45][i] = cam.sunColour[i];
