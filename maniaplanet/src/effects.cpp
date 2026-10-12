@@ -576,7 +576,7 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[37][0] = s.volumetricLight;
     c[37][1] = 160.0f;
     c[37][2] = s.globalIllumination;
-    c[37][3] = s.lensDrops ? 1.0f : 0.0f;
+    c[37][3] = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f; // drops on the lens, only while it rains
     c[38][3] = frame.photo ? 3.0f : 1.0f;
     const float drift[2] = {1.0f + s.wind * 7.0f, 0.5f + s.wind * 3.0f};
     const float driftLength = sqrtf(drift[0] * drift[0] + drift[1] * drift[1]);
