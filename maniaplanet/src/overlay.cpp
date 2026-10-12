@@ -12,6 +12,8 @@
 #include "renderer.h"
 #include "shaderdb.h"
 #include "thumbnails11.h"
+#include "shaders/PS_UiComposite.h"
+#include "shaders/VS_Full.h"
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
@@ -46,6 +48,141 @@ struct Message {
     WPARAM w;
     LPARAM l;
 };
+
+template <typename T> void safeRelease(T*& p) {
+    if (p) p->Release();
+    p = nullptr;
+}
+
+bool isSrgb(DXGI_FORMAT f) {
+    return f == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || f == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || f == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB;
+}
+
+DXGI_FORMAT typelessOf(DXGI_FORMAT f) {
+    switch (f) {
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+    case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: return DXGI_FORMAT_B8G8R8X8_TYPELESS;
+    default: return f;
+    }
+}
+
+// ImGui on an sRGB back buffer (ManiaPlanet's is B8G8R8A8_UNORM_SRGB): its display-value colours
+// went through the view's sRGB encoding a second time and the menu came out pale and glaring. It
+// draws into this UNORM layer instead, and ui.hlsl lays the layer over the frame in display values.
+struct UiLayer {
+    ID3D11VertexShader* vs = nullptr;
+    ID3D11PixelShader* ps = nullptr;
+    ID3D11RasterizerState* rs = nullptr;
+    ID3D11BlendState* blend = nullptr;
+    ID3D11DepthStencilState* dss = nullptr;
+    ID3D11Texture2D* layer = nullptr;
+    ID3D11RenderTargetView* layerRtv = nullptr;
+    ID3D11ShaderResourceView* layerSrv = nullptr;
+    ID3D11Texture2D* frame = nullptr; // copy of the back buffer
+    ID3D11ShaderResourceView* frameSrv = nullptr;
+    UINT w = 0, h = 0;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    bool failed = false;
+
+    void releaseTargets() {
+        safeRelease(layerSrv);
+        safeRelease(layerRtv);
+        safeRelease(layer);
+        safeRelease(frameSrv);
+        safeRelease(frame);
+        w = h = 0;
+    }
+
+    bool init(ID3D11Device* device) {
+        if (vs) return true;
+        bool ok = SUCCEEDED(device->CreateVertexShader(g_VS_Full, sizeof(g_VS_Full), nullptr, &vs));
+        ok &= SUCCEEDED(device->CreatePixelShader(g_PS_UiComposite, sizeof(g_PS_UiComposite), nullptr, &ps));
+        D3D11_RASTERIZER_DESC rd = {};
+        rd.FillMode = D3D11_FILL_SOLID;
+        rd.CullMode = D3D11_CULL_NONE;
+        rd.DepthClipEnable = TRUE;
+        ok &= SUCCEEDED(device->CreateRasterizerState(&rd, &rs));
+        D3D11_BLEND_DESC bd = {};
+        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        ok &= SUCCEEDED(device->CreateBlendState(&bd, &blend));
+        D3D11_DEPTH_STENCIL_DESC dd = {};
+        dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+        dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+        ok &= SUCCEEDED(device->CreateDepthStencilState(&dd, &dss));
+        if (!ok) TMVS_LOG("overlay: menu layer shaders failed, the menu draws straight into the back buffer");
+        failed = !ok;
+        return ok;
+    }
+
+    // The layer for a back buffer of this size and format; false: draw straight into it.
+    bool ensure(ID3D11Device* device, ID3D11Texture2D* backBuffer) {
+        if (failed || !init(device)) return false;
+        D3D11_TEXTURE2D_DESC bd;
+        backBuffer->GetDesc(&bd);
+        if (!isSrgb(bd.Format) || bd.SampleDesc.Count > 1) return false;
+        if (layer && w == bd.Width && h == bd.Height && format == bd.Format) return true;
+        releaseTargets();
+        D3D11_TEXTURE2D_DESC d = {};
+        d.Width = bd.Width;
+        d.Height = bd.Height;
+        d.MipLevels = 1;
+        d.ArraySize = 1;
+        d.SampleDesc.Count = 1;
+        d.Usage = D3D11_USAGE_DEFAULT;
+        d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        bool ok = SUCCEEDED(device->CreateTexture2D(&d, nullptr, &layer)) &&
+                  SUCCEEDED(device->CreateRenderTargetView(layer, nullptr, &layerRtv)) &&
+                  SUCCEEDED(device->CreateShaderResourceView(layer, nullptr, &layerSrv));
+        d.Format = typelessOf(bd.Format);
+        d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SHADER_RESOURCE_VIEW_DESC sv = {};
+        sv.Format = bd.Format;
+        sv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        sv.Texture2D.MipLevels = 1;
+        ok = ok && SUCCEEDED(device->CreateTexture2D(&d, nullptr, &frame)) &&
+             SUCCEEDED(device->CreateShaderResourceView(frame, &sv, &frameSrv));
+        if (!ok) {
+            TMVS_LOG("overlay: menu layer %ux%u (format %d) failed, the menu draws straight into the back buffer", bd.Width, bd.Height,
+                     bd.Format);
+            releaseTargets();
+            failed = true;
+            return false;
+        }
+        w = bd.Width;
+        h = bd.Height;
+        format = bd.Format;
+        TMVS_LOG("overlay: sRGB back buffer (format %d): the menu draws into its own layer", bd.Format);
+        return true;
+    }
+
+    // The menu layer over the frame (state saved by the caller).
+    void composite(ID3D11DeviceContext* ctx, ID3D11Texture2D* backBuffer, ID3D11RenderTargetView* backBufferRtv) {
+        ctx->CopyResource(frame, backBuffer);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ctx->IASetInputLayout(nullptr);
+        ctx->VSSetShader(vs, nullptr, 0);
+        ctx->GSSetShader(nullptr, nullptr, 0);
+        ctx->HSSetShader(nullptr, nullptr, 0);
+        ctx->DSSetShader(nullptr, nullptr, 0);
+        ctx->PSSetShader(ps, nullptr, 0);
+        ctx->RSSetState(rs);
+        ctx->RSSetScissorRects(0, nullptr);
+        const float factor[4] = {};
+        ctx->OMSetBlendState(blend, factor, 0xffffffff);
+        ctx->OMSetDepthStencilState(dss, 0);
+        ctx->OMSetRenderTargets(1, &backBufferRtv, nullptr);
+        D3D11_VIEWPORT vp = {0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ID3D11ShaderResourceView* srvs[2] = {frameSrv, layerSrv};
+        ctx->PSSetShaderResources(0, 2, srvs);
+        ctx->Draw(3, 0);
+        ID3D11ShaderResourceView* none[2] = {};
+        ctx->PSSetShaderResources(0, 2, none);
+    }
+};
+UiLayer g_layer;
 std::mutex g_queueLock;
 std::vector<Message> g_queue;
 
@@ -246,9 +383,27 @@ void frame(ID3D11RenderTargetView* backBuffer) {
 
     StateBackup backup;
     backup.save(g_ctx);
-    g_ctx->OMSetRenderTargets(1, &backBuffer, nullptr);
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    ID3D11Resource* res = nullptr;
+    backBuffer->GetResource(&res);
+    ID3D11Texture2D* bb = nullptr;
+    if (res) res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&bb));
+    if (res) res->Release();
+    if (bb && g_layer.ensure(g_device, bb)) {
+        const float clear[4] = {};
+        g_ctx->ClearRenderTargetView(g_layer.layerRtv, clear);
+        g_ctx->OMSetRenderTargets(1, &g_layer.layerRtv, nullptr);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        g_layer.composite(g_ctx, bb, backBuffer);
+    } else {
+        g_ctx->OMSetRenderTargets(1, &backBuffer, nullptr);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    }
+    if (bb) bb->Release();
     backup.restore(g_ctx);
+}
+
+void releaseTargets() {
+    g_layer.releaseTargets();
 }
 
 } // namespace overlay

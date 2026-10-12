@@ -9,6 +9,8 @@ namespace overlay {
 // mod's pass, onto the back buffer.
 void init(HWND window, ID3D11Device* device, ID3D11DeviceContext* ctx);
 void frame(ID3D11RenderTargetView* backBuffer);
+// Size-dependent resources (the menu layer on an sRGB back buffer): dropped on ResizeBuffers.
+void releaseTargets();
 
 } // namespace overlay
 } // namespace tmvs_mp

@@ -46,7 +46,8 @@ find_program(MP_FXC fxc HINTS "$ENV{WindowsSdkVerBinPath}x64" ${MP_SDK_BINS} REQ
 # file:entry:profile
 set(MP_ENTRIES
   mp:VS_Full:vs_4_0 mp:PS_Grade:ps_4_0
-  hdr:PS_BloomDown:ps_4_0 hdr:PS_BloomUp:ps_4_0 hdr:PS_ToneMap:ps_4_0)
+  hdr:PS_BloomDown:ps_4_0 hdr:PS_BloomUp:ps_4_0 hdr:PS_ToneMap:ps_4_0
+  ui:PS_UiComposite:ps_4_0)
 set(MP_SHADER_HEADERS)
 foreach(item ${MP_ENTRIES})
   string(REPLACE ":" ";" parts "${item}")

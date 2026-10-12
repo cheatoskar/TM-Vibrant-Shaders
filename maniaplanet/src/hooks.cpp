@@ -787,6 +787,7 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
     if (sc == g_swapChain) {
         releaseBackBuffer();
         g_renderer.releaseTargets();
+        overlay::releaseTargets();
         releaseTextures();
         g_isSceneV.clear();
         g_frame = Frame{};
