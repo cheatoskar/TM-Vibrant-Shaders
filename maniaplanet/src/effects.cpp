@@ -45,7 +45,7 @@ const char* const kSupported[] = {
     // scene
     "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "NeonLight", "GlobalIllumination", "SunLight", "AmbientTint",
     "SunColor", "GameSunColor", "SkyColor", "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter",
-    "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX"};
+    "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth"};
 
 } // namespace
 

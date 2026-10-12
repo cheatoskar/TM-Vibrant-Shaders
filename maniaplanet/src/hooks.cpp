@@ -7,6 +7,7 @@
 //   -> the first other draw on that image: the interface starts here, the mod's pass goes in front.
 // When the interface start can't be found, the pass runs at Present (interface graded too).
 #include "hooks.h"
+#include "autoquality11.h"
 #include "capture.h"
 #include "engine_frame.h"
 #include "log.h"
@@ -178,6 +179,7 @@ Frame g_frame;
 // The look of the frame being drawn: your settings, or the preset the menu points at (prepareLook).
 tmshaders::Settings g_lookSettings;
 Look g_look;
+AutoQuality g_autoQuality;
 unsigned g_frameCounter = 0;
 tmshaders::Mood g_seenMood = tmshaders::Mood::Unknown;
 int g_moodFrames = 0;
@@ -745,6 +747,7 @@ void prepareLook() {
     tmshaders::Config& config = tmshaders::Config::get();
     g_lookSettings = config.settings;
     if (config.showOverlay && config.hoverPreview) config.previewSettings(g_lookSettings);
+    g_autoQuality.apply(g_lookSettings);
     g_look.settings = &g_lookSettings;
     g_look.lut = config.lutFile;
     g_look.lutAmount = config.lutAmount;
@@ -797,6 +800,8 @@ void onPresent(IDXGISwapChain* sc) {
     for (int i = 0; i < kTexCount; i++)
         if (g_tex[i]) g_stats.textures |= 1u << i;
     if (g_cameraThisFrame) memcpy(g_stats.eye, g_camera.eye, sizeof(g_stats.eye));
+    if (g_rendererReady)
+        g_autoQuality.onFrame(nowSeconds(), g_stats.effectsRan, g_renderer.effects().profiler(), tmshaders::Config::get().settings);
 
     {
         Inside guard;
@@ -924,6 +929,10 @@ const Stats& stats() {
 
 Effects* effects() {
     return g_rendererReady ? &g_renderer.effects() : nullptr;
+}
+
+const char* autoQualityReduced() {
+    return g_autoQuality.reducedCount() ? g_autoQuality.summary() : nullptr;
 }
 
 void onDevice(ID3D11Device* device) {

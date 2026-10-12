@@ -89,6 +89,7 @@ add_library(tmvs_mp_core STATIC
   src/effects_sky.cpp
   src/effects_weather.cpp
   src/effects_cinema.cpp
+  src/autoquality11.cpp
   src/overlay.cpp
   src/options.cpp
   src/thumbnails11.cpp

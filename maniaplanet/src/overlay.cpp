@@ -372,6 +372,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             };
             h.supports = supports;
             h.timings = &timings;
+            h.autoQualityReduced = [] { return hooks::autoQualityReduced(); };
             h.gamePanelTitle = "ManiaPlanet";
             h.gamePanel = gamePanel;
             return h;

@@ -46,6 +46,8 @@ struct Stats {
 const Stats& stats();
 // The scene effects (their GPU times for the Performance page); null before the renderer is ready.
 Effects* effects();
+// What auto quality turned off right now (null: nothing).
+const char* autoQualityReduced();
 
 } // namespace hooks
 } // namespace tmvs_mp
