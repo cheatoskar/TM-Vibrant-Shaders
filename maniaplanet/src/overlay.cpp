@@ -373,6 +373,16 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             h.supports = supports;
             h.timings = &timings;
             h.autoQualityReduced = [] { return hooks::autoQualityReduced(); };
+            // The scene effects' debug views (scene.hlsl PS_Lighting; the stages use 20-49).
+            h.debugViews = {{0, "Final image"},
+                            {1, "Depth"},
+                            {2, "Normals (world)"},
+                            {3, "Ambient occlusion"},
+                            {4, "Sun shadows (engine + contact)"},
+                            {9, "Engine light: sun"},
+                            {10, "Engine light: ambient"},
+                            {11, "Engine light: the rest"},
+                            {12, "Light sources (lamps, neon)"}};
             h.gamePanelTitle = "ManiaPlanet";
             h.gamePanel = gamePanel;
             return h;

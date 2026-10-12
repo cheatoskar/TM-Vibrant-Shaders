@@ -3,6 +3,8 @@
 #include <windows.h>
 #include <functional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace tmshaders {
 struct Field;
@@ -43,6 +45,8 @@ struct Host {
     std::function<void()> photoOn;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
+    // The debug views (value of Settings::debugView, name); empty: TMNF's list.
+    std::vector<std::pair<int, const char*>> debugViews;
     // The game's own options, a panel first on the Settings page (null: none).
     const char* gamePanelTitle = nullptr;
     std::function<void()> gamePanel;

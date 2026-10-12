@@ -1084,7 +1084,19 @@ bool drawStudio(Config& config, Settings& s) {
     ImGui::TextUnformatted("Debug view");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(170.0f * g_scale);
-    ImGui::Combo("##debug", &s.debugView, kDebugViews, IM_ARRAYSIZE(kDebugViews));
+    if (g_host->debugViews.empty()) {
+        ImGui::Combo("##debug", &s.debugView, kDebugViews, IM_ARRAYSIZE(kDebugViews));
+    } else {
+        // The game's own list: (value, name) pairs.
+        const char* current = "Final image";
+        for (const auto& v : g_host->debugViews)
+            if (v.first == s.debugView) current = v.second;
+        if (ImGui::BeginCombo("##debug", current)) {
+            for (const auto& v : g_host->debugViews)
+                if (ImGui::Selectable(v.second, v.first == s.debugView)) s.debugView = v.first;
+            ImGui::EndCombo();
+        }
+    }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Debug view");
     // The search box: on the same line when there is room, else on its own.
     static char query[48] = "";
