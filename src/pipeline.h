@@ -328,8 +328,9 @@ private:
     bool m_rainSupported = true;
     // Neon trail: the car's positions in a ring buffer texture (xyz, time stamp; < 0 = a new
     // line starts here, 0 = no car found), drawn as a glowing ribbon.
-    static constexpr UINT kTrailWidth = 128, kTrailHeight = 64;
-    static constexpr UINT kTrailPoints = kTrailWidth * kTrailHeight; // 4.5 min at 30 points/s, less at speed (a point every 2 m: 100 s at 560 km/h)
+    static constexpr UINT kTrailWidth = 128, kTrailHeight = 128;
+    static constexpr UINT kTrailPoints = kTrailWidth * kTrailHeight; // 4.5 min at 60 points/s, less at speed (a point every metre: 100 s at 560 km/h)
+    static constexpr float kTrailMinStep = 0.3f; // m: closer points are no line (the car shaking in place)
     gfx::Target m_trailPoints;
     IDirect3DVertexShader9* m_trailVS = nullptr;
     IDirect3DVertexDeclaration9* m_trailDecl = nullptr;

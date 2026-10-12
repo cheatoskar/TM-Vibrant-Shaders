@@ -1,10 +1,10 @@
 # TM Vibrant Shaders
 
-**Real-time lighting, weather and skies for TrackMania Nations Forever and United Forever.**
+**Real-time lighting, weather and skies for TrackMania Nations Forever, United Forever and TrackMania 2 (ManiaPlanet).**
 
 [![Latest release](https://img.shields.io/github/v/release/cheatoskar/TM-Vibrant-Shaders?label=download)](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)
 [![Build](https://github.com/cheatoskar/TM-Vibrant-Shaders/actions/workflows/build.yml/badge.svg)](https://github.com/cheatoskar/TM-Vibrant-Shaders/actions/workflows/build.yml)
-![Game](https://img.shields.io/badge/game-TMNF%20%7C%20TMUF-orange)
+![Game](https://img.shields.io/badge/game-TMNF%20%7C%20TMUF%20%7C%20TM2-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -17,6 +17,10 @@
 A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
+
+**New in 1.4.1-preview: TrackMania 2 (ManiaPlanet 4).** The same mod for ManiaPlanet's Direct3D 11 renderer: download `TM-Vibrant-Shaders-ManiaPlanet.zip` from the [release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases), close the game, double-click `Install.cmd`. `F8` menu, `F5` on/off. Details in [maniaplanet/README.md](maniaplanet/README.md).
+
+![TrackMania 2 Stadium, photo mode's compare split: left the game, right with the mod and the black hole sky](docs/images/tm2-black-hole-split.jpg)
 
 ---
 

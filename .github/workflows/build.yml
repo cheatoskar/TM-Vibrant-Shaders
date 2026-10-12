@@ -94,3 +94,57 @@ jobs:
           body_path: dist/release-notes.md
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  # TM Vibrant Shaders for ManiaPlanet (TrackMania 2): a separate 64-bit D3D11 project. A tag adds
+  # its zip to the release the windows job made (after it, so there is one release).
+  maniaplanet:
+    runs-on: windows-latest
+    needs: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "flag=-DTM_SHADERS_VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure
+        shell: bash
+        run: cmake -S maniaplanet -B build-mp -A x64 ${{ steps.v.outputs.flag }}
+
+      - name: Build
+        run: cmake --build build-mp --config Release --target tmvs_mp
+
+      # dist-mp/TM-Vibrant-Shaders-ManiaPlanet.zip: the DLL, the install and uninstall scripts and
+      # the README; next to it the DLL and its SHA-256.
+      - name: Package
+        shell: pwsh
+        run: |
+          $stage = "package-mp/TM Vibrant Shaders for ManiaPlanet"
+          New-Item -ItemType Directory -Force $stage, dist-mp | Out-Null
+          Copy-Item build-mp/Release/d3d11.dll, maniaplanet/install.ps1, maniaplanet/Install.cmd, maniaplanet/Uninstall.cmd $stage
+          Copy-Item maniaplanet/README.md "$stage/README.md"
+          Copy-Item LICENSE "$stage/LICENSE.txt"
+          Copy-Item THIRD_PARTY_NOTICES.md "$stage/THIRD_PARTY_NOTICES.txt"
+          Compress-Archive -Path $stage -DestinationPath dist-mp/TM-Vibrant-Shaders-ManiaPlanet.zip
+          Get-FileHash dist-mp/TM-Vibrant-Shaders-ManiaPlanet.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  TM-Vibrant-Shaders-ManiaPlanet.zip" } | Set-Content -Encoding ascii dist-mp/SHA256SUMS-ManiaPlanet.txt
+          Get-Content dist-mp/SHA256SUMS-ManiaPlanet.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TM-Vibrant-Shaders-ManiaPlanet
+          path: dist-mp/
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-mp/TM-Vibrant-Shaders-ManiaPlanet.zip
+            dist-mp/SHA256SUMS-ManiaPlanet.txt
+          fail_on_unmatched_files: true

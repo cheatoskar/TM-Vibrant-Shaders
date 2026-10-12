@@ -73,6 +73,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("AutoExposure", "Auto exposure", "Colour", Float, autoExposure, 0.0f, 1.0f),
         TMVS_FIELD("Contrast", "Contrast", "Colour", Float, contrast, 0.7f, 1.5f),
         TMVS_FIELD("ToneKnee", "Highlight roll-off (tone curve knee)", "Colour", Float, toneKnee, 0.3f, 0.9f),
+        TMVS_FIELD("ToneCurve", "Tone curve", "Colour", Int, toneCurve, 0.0f, 2.0f),
         TMVS_FIELD("NightSurfaces", "Floodlit surfaces at night (1 = game white)", "Colour", Float, nightSurfaces, 0.4f, 1.0f),
         TMVS_FIELD("Saturation", "Saturation", "Colour", Float, saturation, 0.0f, 2.0f),
         TMVS_FIELD("Vibrance", "Vibrance", "Colour", Float, vibrance, -0.5f, 1.0f),
@@ -1101,7 +1102,11 @@ void applyPreset(Settings& s, Preset preset) {
             s.longShadows = 0.0f;
             s.ambientTint = 0.9f;
             s.skyColor[0] = 0.5f; s.skyColor[1] = 0.56f; s.skyColor[2] = 0.68f;
+#ifdef TMVS_MANIAPLANET
+            s.fogDensity = 5.0f; // ManiaPlanet: the storm closes in more
+#else
             s.fogDensity = 2.2f;
+#endif
             s.fogSunScatter = 0.0f;
             s.godRays = 0.0f;
             s.sunGlow = 0.0f;

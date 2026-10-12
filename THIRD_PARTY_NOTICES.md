@@ -32,7 +32,7 @@ SOFTWARE.
 
 ## minimp3
 
-MP3 decoder for the weather sounds (https://github.com/lieff/minimp3). Compiled into `TMVibrantShaders.dll`. Released under CC0 1.0 Universal (public domain), no conditions.
+MP3 decoder for the weather sounds (https://github.com/lieff/minimp3). Compiled into `TMVibrantShaders.dll` and the ManiaPlanet `d3d11.dll`. Released under CC0 1.0 Universal (public domain), no conditions.
 
 ## stb_image, stb_image_write
 
@@ -40,7 +40,7 @@ JPEG reader and writer for the preset pictures in the menu (https://github.com/n
 
 ## Weather recordings
 
-The rain and thunder sounds embedded in `TMVibrantShaders.dll` are recordings from freesound.org under CC0 1.0 (public domain). Sources and authors: [sounds/CREDITS.md](sounds/CREDITS.md).
+The rain, thunder and snow storm sounds embedded in `TMVibrantShaders.dll` and in the ManiaPlanet `d3d11.dll` are recordings from freesound.org under CC0 1.0 (public domain). Sources and authors: [sounds/CREDITS.md](sounds/CREDITS.md).
 
 ## AMD FidelityFX Contrast Adaptive Sharpening (CAS)
 

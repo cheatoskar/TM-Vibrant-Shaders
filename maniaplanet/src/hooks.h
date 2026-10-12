@@ -1,0 +1,53 @@
+#pragma once
+#include <d3d11.h>
+#include <dxgi.h>
+#include <cstdint>
+
+namespace tmvs_mp {
+class Effects;
+namespace hooks {
+
+// Set while the mod itself draws: our own context calls go through the patched vtables too and
+// must not be mistaken for the game's.
+struct Inside {
+    Inside();
+    ~Inside();
+    Inside(const Inside&) = delete;
+    Inside& operator=(const Inside&) = delete;
+};
+bool inside();
+
+// Called by the proxy for every device the game creates (D3D11CreateDevice*).
+void onDevice(ID3D11Device* device);
+void onSwapChain(IDXGISwapChain* swapChain);
+
+enum class Placed : int { None = 0, BeforeHud = 1, EndOfFrame = 2, Fallback = 3 };
+
+struct Stats {
+    uint32_t shadersCreated = 0;
+    uint32_t shadersKnown = 0;
+    uint32_t deferredContexts = 0;
+    uint32_t commandLists = 0;     // ExecuteCommandList calls last frame
+    uint32_t drawsLastFrame = 0;
+    bool toneMapSeen = false;      // last frame
+    bool toneMapped = false;       // the mod's HDR stage ran in place of the engine's tone map
+    bool effectsRan = false;       // the scene effects ran in it (last frame)
+    bool sunFromLighting = false;  // the sun comes from the lighting pass's constants (else the shadow matrix)
+    float sun[3] = {};             // towards the sun (world)
+    Placed placed = Placed::None;  // last frame
+    const char* hudShader = nullptr; // the draw the effect went in front of (last frame)
+    bool depthFound = false;
+    bool cameraFound = false;       // last frame
+    unsigned textures = 0;          // bit i: engine texture i (engine_frame.h) found
+    float eye[3] = {};
+    DXGI_FORMAT depthFormat = DXGI_FORMAT_UNKNOWN;
+    uint32_t width = 0, height = 0;
+};
+const Stats& stats();
+// The scene effects (their GPU times for the Performance page); null before the renderer is ready.
+Effects* effects();
+// What auto quality turned off right now (null: nothing).
+const char* autoQualityReduced();
+
+} // namespace hooks
+} // namespace tmvs_mp
