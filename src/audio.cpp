@@ -27,6 +27,9 @@ constexpr float kPi = 3.14159265f;
 
 // Recordings in sounds/ (CC0, see sounds/CREDITS.md), embedded as RCDATA (sounds/sounds.rc).
 constexpr int kRainClip = 1;
+// The snow storm's wind as a recording (ManiaPlanet's build, maniaplanet/sounds/wind.rc); without
+// it the wind is synthesised.
+constexpr int kWindClip = 2;
 constexpr int kThunderClips[3][4] = {
     {11, 12, 13, 14}, // close: a crack, then the roll
     {21, 22, 23, 0},  // medium
@@ -174,6 +177,25 @@ public:
             m_rain.samples.resize((n - blend) * 2);
         }
         TMVS_LOG("audio: rain recording loaded (%.1f s loop)", static_cast<float>(m_rain.frames()) / kRate);
+#ifdef TMVS_WIND_RECORDING
+        if (!m_windClip.frames() && loadClip(kWindClip, 0.11f, m_windClip)) {
+            // Seamless like the rain, over 2 s (the gusts howl, a short blend would be heard).
+            const size_t windBlend = kRate * 2, wn = m_windClip.frames();
+            if (wn > windBlend * 3) {
+                for (size_t i = 0; i < windBlend; i++) {
+                    const float t = static_cast<float>(i) / windBlend;
+                    const float a = sqrtf(t), b = sqrtf(1.0f - t);
+                    for (int c = 0; c < 2; c++) {
+                        int16_t& s = m_windClip.samples[i * 2 + c];
+                        s = static_cast<int16_t>(
+                            fmaxf(fminf(s * a + m_windClip.samples[(wn - windBlend + i) * 2 + c] * b, 32767.0f), -32768.0f));
+                    }
+                }
+                m_windClip.samples.resize((wn - windBlend) * 2);
+            }
+            TMVS_LOG("audio: wind recording loaded (%.1f s loop)", static_cast<float>(m_windClip.frames()) / kRate);
+        }
+#endif
         return true;
     }
 
@@ -217,6 +239,13 @@ public:
     void wind(float* out, float amount) {
         m_windLevel += (amount - m_windLevel) * 0.00003f; // ~1 s glide
         if (m_windLevel < 1e-3f) return;
+        // The recording, where there is one: a real storm (it brings its own gusts).
+        if (const size_t n = m_windClip.frames()) {
+            const float level = powf(fminf(m_windLevel, 2.0f), 0.8f) * m_windClip.gain;
+            for (int c = 0; c < 2; c++) out[c] += m_windClip.samples[m_windPosition * 2 + c] * level;
+            if (++m_windPosition >= n) m_windPosition = 0;
+            return;
+        }
         m_windTime += 1.0f / kRate;
         const float t = m_windTime;
         // Gusts: slow waves plus a wandering random part.
@@ -283,6 +312,8 @@ private:
         bool active = false;
     };
     Clip m_rain;
+    Clip m_windClip;
+    size_t m_windPosition = 0;
     BandPass m_howl[2], m_rush[2];
     OnePole m_rumble[2];
     float m_windLevel = 0.0f, m_windTime = 0.0f, m_windDrift = 0.0f;

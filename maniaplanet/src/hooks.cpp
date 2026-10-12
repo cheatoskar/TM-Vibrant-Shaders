@@ -365,7 +365,7 @@ float g_carCandidates[8][12] = {};
 int g_carCount = 0;
 
 // A 3x4 matrix (rows) that places an object near the camera: its 3x3 a rotation (unit, orthogonal
-// rows), its origin within 60 m.
+// rows), its origin within 400 m (replay cameras can be far).
 bool placesNearCamera(const float* m) {
     float rows[3][3];
     for (int r = 0; r < 3; r++)
@@ -378,12 +378,8 @@ bool placesNearCamera(const float* m) {
         if (!(std::fabs(dot) < 0.05f)) return false;
     }
     const float d = m[3] * m[3] + m[7] * m[7] + m[11] * m[11];
-    return d > 0.25f && d < 60.0f * 60.0f;
+    return d > 0.25f && d < 400.0f * 400.0f;
 }
-
-// Where in the car's constants VisualToCamera is: at 112 in the buffers seen so far, else the first
-// matrix that places the car near the camera (logged once).
-int g_carMatrixAt = kObjectVVisualToCamera;
 
 void takeCar(ID3D11DeviceContext* ctx) {
     if (g_carCount >= 8) return;
@@ -408,17 +404,19 @@ void takeCar(ID3D11DeviceContext* ctx) {
             if (logged++ < 4) TMVS_LOG("hooks: the car's vertex constants are %u bytes: copied from now on", d.ByteWidth);
         }
     }
-    if (found && !placesNearCamera(reinterpret_cast<const float*>(found->data + g_carMatrixAt))) {
-        int at = -1;
-        for (UINT o = 0; o + 48 <= found->size && at < 0; o += 16)
-            if (placesNearCamera(reinterpret_cast<const float*>(found->data + o))) at = static_cast<int>(o);
+    // Only where it is (112, in every car seen): other matrices in there place the wheels and
+    // parts (a search found those, the trail jumped between them). A copy that doesn't hold a
+    // placement near the camera now (the buffer was refilled for something else) is left out.
+    if (found && !placesNearCamera(reinterpret_cast<const float*>(found->data + kObjectVVisualToCamera))) {
+        found = nullptr;
         static int logged = 0;
-        if (at >= 0 && at != g_carMatrixAt && logged++ < 4) TMVS_LOG("hooks: the car's placement is at byte %d of its constants", at);
-        if (at >= 0) g_carMatrixAt = at;
-        else found = nullptr;
+        if (logged++ < 3) TMVS_LOG("hooks: the car's constants hold no placement near the camera this time: left out");
+        for (ID3D11Buffer* cb : cbs)
+            if (cb) cb->Release();
+        return;
     }
     if (found) {
-        memcpy(g_carCandidates[g_carCount++], found->data + g_carMatrixAt, sizeof(float) * 12);
+        memcpy(g_carCandidates[g_carCount++], found->data + kObjectVVisualToCamera, sizeof(float) * 12);
     } else if (!cbs[0] || sceneVCopy(cbs[0], false)) {
         // Not an upload we saw: what is bound instead (a few times), to learn the engine's scheme.
         static int logged = 0;

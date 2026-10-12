@@ -1,0 +1,3 @@
+// The snow storm's wind for the ManiaPlanet build: a CC0 recording from freesound.org (see
+// CREDITS.md), embedded as RCDATA next to sounds/sounds.rc. The id is kWindClip in src/audio.cpp.
+2  RCDATA "wind.mp3"
