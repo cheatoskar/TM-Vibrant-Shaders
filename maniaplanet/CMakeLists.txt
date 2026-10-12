@@ -156,6 +156,8 @@ set_source_files_properties(${TMVS_ROOT}/sounds/sounds.rc PROPERTIES OBJECT_DEPE
 set_property(SOURCE sounds/wind.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/sounds")
 set_source_files_properties(sounds/wind.rc PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sounds/wind.mp3")
 set_source_files_properties(${TMVS_ROOT}/src/audio.cpp PROPERTIES COMPILE_DEFINITIONS TMVS_WIND_RECORDING)
+# ManiaPlanet's own preset values (src/config.cpp).
+set_source_files_properties(${TMVS_ROOT}/src/config.cpp PROPERTIES COMPILE_DEFINITIONS TMVS_MANIAPLANET)
 # The game loads it as d3d11.dll from its own folder.
 set_target_properties(tmvs_mp PROPERTIES OUTPUT_NAME d3d11)
 target_compile_options(tmvs_mp PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)

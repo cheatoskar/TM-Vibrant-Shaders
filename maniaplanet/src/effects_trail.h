@@ -1,7 +1,8 @@
 #pragma once
 // Neon trail behind the car (the TMNF mod's): the car's position from the engine (hooks.cpp reads
-// it from the car's ObjectV at its G-buffer draw), kept 30 times a second (and every 2 m) in a ring
-// buffer, drawn as a glowing ribbon into the HDR image. Shaders: shaders/trail.hlsl.
+// it from the car's ObjectV at its G-buffer draw), kept 60 times a second (and every metre) while
+// it moves, in a ring buffer, drawn as a glowing ribbon into the HDR image. It stays until the run
+// starts again (the car back at its start) or the map changes. Shaders: shaders/trail.hlsl.
 #include <d3d11.h>
 #include <vector>
 
@@ -25,7 +26,8 @@ public:
     void draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s);
 
 private:
-    static constexpr UINT kPoints = 8192; // 4.5 min at 30 points a second, less at speed
+    static constexpr UINT kPoints = 16384; // 4.5 min at 60 points a second, ~3 min at full speed
+    void clear();
     ID3D11VertexShader* m_vs = nullptr;
     ID3D11PixelShader* m_ps = nullptr;
     ID3D11Texture2D* m_pointsTex = nullptr;
@@ -39,7 +41,9 @@ private:
     bool m_keptValid = false;
     bool m_break = true;
     double m_lastTime = -1.0;
-    double m_carSeenAt = -1.0;
+    float m_start[3] = {};   // where the run began (the first point after a clear)
+    bool m_startValid = false;
+    int m_mapSerial = -1;
     bool m_ready = false;
 };
 

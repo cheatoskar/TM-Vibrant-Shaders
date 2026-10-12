@@ -167,6 +167,7 @@ uintptr_t g_lastMap = 0;
 std::string g_lastComments;
 bool g_told = false;
 int g_frame = 0;
+int g_serial = 0;
 
 } // namespace
 
@@ -183,6 +184,7 @@ void tick() {
     std::string comments;
     if (map && !commentsOf(map, comments)) return;
     if (g_told && map == g_lastMap && comments == g_lastComments) return;
+    if (map != g_lastMap) g_serial++;
     if (map != g_lastMap || !g_told)
         TMVS_LOG("maplook: %s (%u characters of comments)", map ? (inEditor ? "map in the editor" : "map loaded") : "no map",
                  static_cast<unsigned>(comments.size()));
@@ -190,6 +192,10 @@ void tick() {
     g_lastComments = comments;
     g_told = true;
     tmshaders::Config::get().onMapComments(comments);
+}
+
+int mapSerial() {
+    return g_serial;
 }
 
 bool editorComments(std::string& comments) {

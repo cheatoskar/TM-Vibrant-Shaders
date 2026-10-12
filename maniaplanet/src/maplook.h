@@ -12,6 +12,9 @@ namespace maplook {
 // its comments (Config::onMapComments), no map gives it none.
 void tick();
 
+// Counts the maps seen (played or edited, and none between them): a new value is another scene.
+int mapSerial();
+
 // The comments of the map open in the editor. False: no map in the editor (or ManiaPlanet's build
 // isn't the one this was made for).
 bool editorComments(std::string& comments);

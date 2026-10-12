@@ -1102,7 +1102,11 @@ void applyPreset(Settings& s, Preset preset) {
             s.longShadows = 0.0f;
             s.ambientTint = 0.9f;
             s.skyColor[0] = 0.5f; s.skyColor[1] = 0.56f; s.skyColor[2] = 0.68f;
+#ifdef TMVS_MANIAPLANET
+            s.fogDensity = 5.0f; // ManiaPlanet: the storm closes in more
+#else
             s.fogDensity = 2.2f;
+#endif
             s.fogSunScatter = 0.0f;
             s.godRays = 0.0f;
             s.sunGlow = 0.0f;

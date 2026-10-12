@@ -1,6 +1,7 @@
 #include "effects_trail.h"
 #include "effects.h"
 #include "log.h"
+#include "maplook.h"
 #include "settings.h"
 #include "shaders/PS_Trail.h"
 #include "shaders/VS_Trail.h"
@@ -78,31 +79,33 @@ bool TrailStage::supports(const char* key) {
     return false;
 }
 
+void TrailStage::clear() {
+    m_head = m_count = 0;
+    m_time = m_clock = 0.0f;
+    m_keptValid = false;
+    m_startValid = false;
+    m_break = true;
+    std::fill(m_points.begin(), m_points.end(), 0.0f);
+}
+
 void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s) {
     if (!m_ready) return;
     const float dt = m_lastTime >= 0.0 ? static_cast<float>(std::clamp(frame.time - m_lastTime, 0.0, 0.25)) : 0.0f;
     m_lastTime = frame.time;
     const EngineCar* car = frame.car;
     const bool carSeen = car && car->valid;
-    // A new map or a long time without the car (menus, the replay of another car): start over.
-    if (carSeen && m_carSeenAt >= 0.0 && frame.time - m_carSeenAt > 5.0) {
-        m_head = m_count = 0;
-        m_time = m_clock = 0.0f;
-        m_keptValid = false;
-        std::fill(m_points.begin(), m_points.end(), 0.0f);
+    // Another map (or the editor): start over. Without the car (a free camera far away, a menu on
+    // top) the trail stays as it is.
+    if (maplook::mapSerial() != m_mapSerial) {
+        m_mapSerial = maplook::mapSerial();
+        clear();
     }
-    if (carSeen) m_carSeenAt = frame.time;
-    // No car for a second (the editor, the menus, the podium): the trail goes with it, not left
-    // standing in the next scene.
-    if (!carSeen && (m_carSeenAt < 0.0 || frame.time - m_carSeenAt > 1.0)) {
-        if (m_count) {
-            m_head = m_count = 0;
-            m_time = m_clock = 0.0f;
-            m_keptValid = false;
-            std::fill(m_points.begin(), m_points.end(), 0.0f);
-        }
-        m_break = true;
-        return;
+    // The run starts again: the car jumps back to where the trail began (a respawn at a checkpoint
+    // only breaks the line).
+    if (carSeen && m_keptValid && m_startValid) {
+        const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
+        const float sx = car->position[0] - m_start[0], sy = car->position[1] - m_start[1], sz = car->position[2] - m_start[2];
+        if (dx * dx + dy * dy + dz * dz > 25.0f * 25.0f && sx * sx + sy * sy + sz * sz < 12.0f * 12.0f) clear();
     }
     if (s.neonTrail <= 0.0f) {
         m_break = true;
@@ -112,10 +115,14 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     m_clock += dt;
 
     // Record the car: every frame into the next slot (the live end, so it stays on the car), kept
-    // 30 times a second or every 2 m. A respawn or restart (a jump) starts a new line.
+    // 60 times a second while it moves, or every metre. A jump (a respawn) starts a new line; a
+    // frame without the car doesn't (it left holes).
     bool live = false;
-    if (!carSeen) m_break = true;
     if (carSeen && dt > 0.0f) {
+        if (!m_startValid) {
+            memcpy(m_start, car->position, sizeof(m_start));
+            m_startValid = true;
+        }
         if (m_keptValid) {
             const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
             const float jump = sqrtf(dx * dx + dy * dy + dz * dz);
@@ -131,8 +138,9 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
             const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
             moved = sqrtf(dx * dx + dy * dy + dz * dz);
         }
-        if (m_clock >= 1.0f / 30.0f || moved >= 2.0f) {
-            m_clock = moved >= 2.0f ? 0.0f : fmodf(m_clock, 1.0f / 30.0f);
+        // Standing still keeps nothing (the ring would fill with the same spot).
+        if ((m_clock >= 1.0f / 60.0f && moved >= 0.05f) || moved >= 1.0f || !m_keptValid) {
+            m_clock = moved >= 1.0f ? 0.0f : fmodf(m_clock, 1.0f / 60.0f);
             memcpy(m_kept, car->position, sizeof(m_kept));
             m_keptValid = true;
             m_break = false;
