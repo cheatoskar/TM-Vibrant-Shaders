@@ -31,6 +31,13 @@ FetchContent_Declare(
   GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
 )
 FetchContent_MakeAvailable(stb)
+# MP3 decoder for the weather sounds (public domain / CC0, header only), as in TMNF.
+FetchContent_Declare(
+  minimp3
+  GIT_REPOSITORY https://github.com/lieff/minimp3.git
+  GIT_TAG ea99364f61c14656440e8d77e9c233ccf3124633
+)
+FetchContent_MakeAvailable(minimp3)
 
 # The shared menu shows a version (About page).
 set(TM_SHADERS_VERSION "${PROJECT_VERSION} (ManiaPlanet)")
@@ -102,6 +109,8 @@ add_library(tmvs_mp_core STATIC
   ${TMVS_ROOT}/src/image.cpp
   ${TMVS_ROOT}/src/update.cpp
   ${TMVS_ROOT}/src/weather.cpp
+  # The TMNF mod's weather sound (rain, thunder, the snow storm's wind), shared.
+  ${TMVS_ROOT}/src/audio.cpp
   ${MP_SHADER_HEADERS}
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -112,12 +121,12 @@ add_library(tmvs_mp_core STATIC
 )
 target_include_directories(tmvs_mp_core PUBLIC src "${TMVS_ROOT}/src" "${CMAKE_CURRENT_BINARY_DIR}" ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends)
-target_include_directories(tmvs_mp_core PRIVATE ${stb_SOURCE_DIR})
+target_include_directories(tmvs_mp_core PRIVATE ${stb_SOURCE_DIR} ${minimp3_SOURCE_DIR})
 target_compile_definitions(tmvs_mp_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
   TMVS_MP_VERSION="${PROJECT_VERSION}")
 target_compile_options(tmvs_mp_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
 # Never d3d11.lib here: the DLL *is* d3d11.dll and would import itself.
-target_link_libraries(tmvs_mp_core PUBLIC dxgi dxguid shell32 user32 winhttp)
+target_link_libraries(tmvs_mp_core PUBLIC dxgi dxguid shell32 user32 winhttp winmm)
 set_source_files_properties(
   ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
@@ -130,9 +139,14 @@ add_library(tmvs_mp SHARED
   src/forward.asm
   src/d3d11.def
   ${TMVS_ROOT}/thumbnails/thumbnails.rc
+  ${TMVS_ROOT}/sounds/sounds.rc
 )
 # The built-in presets' pictures, embedded like in the TMNF DLL.
 set_property(SOURCE ${TMVS_ROOT}/thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/thumbnails")
+# The weather sounds (src/audio.cpp loads them from the DLL that holds its code), found next to sounds.rc.
+set_property(SOURCE ${TMVS_ROOT}/sounds/sounds.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/sounds")
+file(GLOB MP_SOUND_FILES "${TMVS_ROOT}/sounds/*.mp3")
+set_source_files_properties(${TMVS_ROOT}/sounds/sounds.rc PROPERTIES OBJECT_DEPENDS "${MP_SOUND_FILES}")
 # The game loads it as d3d11.dll from its own folder.
 set_target_properties(tmvs_mp PROPERTIES OUTPUT_NAME d3d11)
 target_compile_options(tmvs_mp PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)

@@ -584,7 +584,7 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[37][0] = s.volumetricLight;
     c[37][1] = 160.0f;
     c[37][2] = s.globalIllumination;
-    c[37][3] = s.lensDrops ? 1.0f : 0.0f;
+    c[37][3] = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f; // drops on the lens, only while it rains
     c[38][3] = frame.photo ? 3.0f : 1.0f;
     const float drift[2] = {1.0f + s.wind * 7.0f, 0.5f + s.wind * 3.0f};
     const float driftLength = sqrtf(drift[0] * drift[0] + drift[1] * drift[1]);
@@ -752,14 +752,15 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     ID3D11ShaderResourceView* noVolume = nullptr;
     ctx->PSSetShaderResources(16, 1, &noVolume);
 
-    // On the HDR image: weather (particles, lens drops), cinema (depth of field, motion blur,
-    // TAA), then the sun's light shafts and lens flare.
-    m_weather.tick(s, frame.time);
-    m_weather.draw(ctx, *this, frame, s);
+    // On the HDR image: cinema (depth of field, motion blur, TAA), then the weather's particles and
+    // lens drops (after TAA as in TMNF: it would smear the streaks), then the sun's light shafts and
+    // lens flare.
+    m_cinema.run(ctx, *this, frame, s);
     bindFrame(ctx);
     ctx->PSSetConstantBuffers(2, 1, &engineTone);
     ctx->PSSetShaderResources(8, 8, engine);
-    m_cinema.run(ctx, *this, frame, s);
+    m_weather.tick(s, frame.time);
+    m_weather.draw(ctx, *this, frame, s);
     bindFrame(ctx);
     ctx->PSSetConstantBuffers(2, 1, &engineTone);
     ctx->PSSetShaderResources(8, 8, engine);
