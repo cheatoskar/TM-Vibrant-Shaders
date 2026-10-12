@@ -20,7 +20,7 @@ const char* const kEntryPoints[] = {
     "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail", "PS_SnowFlake",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
-    "PS_CopyDepth",   "PS_WaterLevel",
+    "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -1848,6 +1848,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const float gameSkyOut = skyReplacesSun(s) && !s.gameSkyClouds ? 1.0f : 0.0f;
     const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, gameSkyOut, s.toneKnee};
     device->SetPixelShaderConstantF(44, materialConstants, 1);
+    const float cleanConstants[4] = {s.cleanHighlights ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(45, cleanConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
@@ -2362,6 +2364,46 @@ bool Pipeline::copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth,
     device->SetTexture(0, nullptr);
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
     return true;
+}
+
+bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area) {
+    if (!m_ready) return false;
+    D3DSURFACE_DESC desc{};
+    target->GetDesc(&desc);
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target); // resets the scissor rect: set it after
+    device->SetScissorRect(&area);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    bind(device, 0, scene, false);
+    passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
+    runPass(device, kResolve, target, desc.Width, desc.Height);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+bool Pipeline::readHalfColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint16_t>& out) {
+    D3DSURFACE_DESC desc{};
+    surface->GetDesc(&desc);
+    if (desc.Format != D3DFMT_A16B16G16R16F) return false;
+    IDirect3DSurface9* system = nullptr;
+    if (FAILED(device->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &system, nullptr)))
+        return false;
+    bool ok = SUCCEEDED(device->GetRenderTargetData(surface, system));
+    D3DLOCKED_RECT locked{};
+    if (ok && SUCCEEDED(system->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+        out.resize(static_cast<size_t>(desc.Width) * desc.Height * 4);
+        for (UINT y = 0; y < desc.Height; y++) {
+            memcpy(&out[static_cast<size_t>(y) * desc.Width * 4], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(locked.Pitch) * y,
+                   desc.Width * 8);
+        }
+        system->UnlockRect();
+    } else {
+        ok = false;
+    }
+    system->Release();
+    return ok;
 }
 
 bool Pipeline::readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std::vector<float>& out) {

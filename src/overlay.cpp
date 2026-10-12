@@ -341,7 +341,8 @@ const Field* findField(const char* key) {
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "SkipMapClips") || !strcmp(f.key, "GameSkyClouds");
+           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "SkipMapClips") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr");
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -1441,6 +1442,8 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "SkipMapClips", "No MediaTracker clips of the map while driving (Shift+F7)");
                           l |= drawKey(s, "GameNight", "Real night under night skies: the game lights day maps at midnight");
                           l |= drawKey(s, "GameSkyClouds", "Keep the game's sunset clouds (and the sea mirroring them) under night skies");
+                          l |= drawKey(s, "GameHdr", "Game HDR test: the game draws into a float target, F12 also saves it (look unchanged)");
+                          l |= drawKey(s, "CleanHighlights", "Clean highlights: floodlit white at night stays even (off = as in 1.4.0)");
                           return l;
                       }});
     panels.push_back({"Photo mode", 11.0f, [&config] {

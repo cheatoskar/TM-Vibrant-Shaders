@@ -57,6 +57,7 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
+float4 u_Clean     : register(c45); // x: clean highlights (night maps: floodlit white isn't tamed as sun glare); y: the scene colour is the game's HDR (float target)
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -2215,6 +2216,11 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float sat = (max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3);
     // Below the tonemapper's knee the asphalt keeps its texture contrast.
     float glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, luma(c)) * (1.0 - smoothstep(0.25, 0.5, sat));
+    // Clean highlights: only where the game baked a sun. Night maps (and day maps lit at
+    // midnight) have none: floodlit white got x0.6 wherever the lamp guess said "no lamp" and
+    // stayed where it said "lamp", so the same white of the game became a patchwork (frost on
+    // the start ramp).
+    if (u_Clean.x > 0.5 && u_Light2.y < -0.5) glare = 0.0;
     c *= lerp(1.0, 0.6, glare);
     c *= removeGameSun(c, nWorld, rd, sat, u_Sky.y);
 
@@ -3114,6 +3120,12 @@ float4 PS_WaterLevel(float2 uv : TEXCOORD0) : COLOR0 {
 
 float4 PS_CopyDepth(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0)).r, 0, 0, 1);
+}
+
+// The game's image drawn into a float target (GameHdr), cut to 0..1 as the game's own 8-bit
+// target would have: s0 = float scene, u_Pass0 = area (xy offset, zw size, in uv).
+float4 PS_Resolve(float2 uv : TEXCOORD0) : COLOR0 {
+    return float4(saturate(tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0)).rgb), 1);
 }
 
 // ---------------------------------------------------------------------------------

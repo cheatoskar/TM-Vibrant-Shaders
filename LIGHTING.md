@@ -83,3 +83,51 @@ Most of these ideas are still right; they failed together and untested. Bring th
 - "Only small light sources keep the game's white" (a ring of 8 samples in PS_Final) made the
   night lamps clearly dimmer for the owner: reverted. Floodlit stands stay burned out on
   Stadium night maps (the game's own image is 25 % clipped there).
+
+## Findings 2026-10-12 (owner: "everything clips"; screens 004, 011, photo 3)
+
+Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Horizon.
+
+- **The game's own image is already clipped where it looks overexposed.** Pixels >= 250 in
+  the *game's* image: 7.2 % (004), 11.6 % (011): start ramp, banners, car body. No post
+  step can bring back what the 8-bit target cut. Hence the float target (`GameHdr`, below).
+- **The frost on floodlit white was the mod's.** The same game white (255) came out
+  anywhere between 160 and 255 (game 250 -> 224 on average, game 255 -> 209: not even
+  monotonic). Three per-pixel switches acted on the same clipped white:
+  1. the sun-glare taming (`c *= lerp(1, 0.6, glare)` in PS_Lighting), active on night maps
+     too, gated by `1 - emissive`;
+  2. the lamp guess (`emissiveAmount`), which on night maps calls any white facing up a lamp;
+  3. the night lamp floor's ring test (PS_Final): the border of a large floodlit surface has
+     few bright samples around it too and keeps full white (a frayed white band).
+  With all three off the ramp is even (255 -> 205..231), but lamps drop from 252 to 211.
+- **Fixed now (`CleanHighlights`, on by default):** no sun-glare taming on night maps (no sun
+  there). Ramp spread (std of game-255 pixels) 18.8 -> 15.1, lamps unchanged (252.5), day
+  captures pixel-identical, night captures 002-009 change (floodlit concrete closer to the game).
+- **Tried and dropped:** an "edge of a large surface" test (one side of an opposite pair
+  bright, the other dark) in `emissiveAmount` (no gain) and in the floor's ring (frost 18.8 ->
+  10.0, but the lamp clusters of the start arch are larger than the ring: lamps 252 -> 237,
+  beige and blotchy). In 8 bit a lamp and a floodlit wall are both 255: any pixel test for it
+  is a guess. The real fix is light above 1.0 from the game.
+- **Black crush** (day map under a night sky, 041): black pixels 0.4 % -> 2.7 %, 1st percentile
+  6 -> 0 (night darkening x0.16, contrast 1.18 in log space, vignette; the tone curve has no toe).
+- **Grain on the car at night** is the static `ign()` noise of AO, shadows and the reflection
+  blur without TAA (the owner has TAA off): noise measure 2.38, 1.85 with TAA, 2.30 without GI.
+  GI is not the cause.
+
+## The game's HDR (GameHdr, 2026-10-12)
+
+- The main camera draws straight into the back buffer (trace: 590 draws, 52 fixed function,
+  no StretchRect or target switch in between), and `TmForever.exe` compiles its shaders at run
+  time (`d3dx9_30.dll`: `D3DXCompileShader`, `D3DXAssembleShader`; ps_2_0 / ps_3_0).
+- `GameHdr` (off by default, diagnostic): at the main camera's begin a float target
+  (A16B16G16R16F) stands in for the game's; at its end it is resolved into the game's target,
+  cut to 0..1 (`PS_Resolve`), so the pipeline and the look are unchanged. The log says once
+  per map how much of the image lies above 1.0; F12 writes it next to the capture as
+  `capture_NNN.hdr16` ("TMH1", width, height, RGBA half floats, rows top-down).
+- `gameshaders`: when the folder `TMVS\gameshaders` exists, every shader the game compiles is
+  written there with its defines, includes and disassembly. Answers whether the game's output
+  is cut to 1.0 (`saturate`, `_sat` on `oC0`) and how the lightmap is scaled.
+- Next, depending on the result: light above 1.0 arrives -> tone curve and lamps tuned offline
+  on the `.hdr16` captures, the 8-bit guesses (emissive, night floor) off for HDR input; the
+  game's shaders cut it -> rewrite their source at compile time (drop the final saturate or
+  scale the output); neither -> the clean 8-bit path stays and flat white is a hard limit.

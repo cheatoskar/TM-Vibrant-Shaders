@@ -120,6 +120,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("SkipMapClips", "No MediaTracker clips of the map while driving (Shift+F7)", "Image", Bool, skipMapClips, 0.0f, 1.0f),
         TMVS_FIELD("GameNight", "Real night under night skies", "Image", Bool, gameNight, 0.0f, 1.0f),
         TMVS_FIELD("GameSkyClouds", "Keep the game's clouds under night skies", "Image", Bool, gameSkyClouds, 0.0f, 1.0f),
+        TMVS_FIELD("GameHdr", "Game HDR test (float target, for captures)", "Image", Bool, gameHdr, 0.0f, 1.0f),
+        TMVS_FIELD("CleanHighlights", "Clean highlights (no frost on floodlit white)", "Image", Bool, cleanHighlights, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
         TMVS_FIELD("TrailColor", "Trail colour", "Neon trail", Color, trailColor, 0.0f, 1.0f),
@@ -231,7 +233,8 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "SkipMapClips") || !strcmp(f.key, "GameSkyClouds");
+           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "SkipMapClips") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {
@@ -783,6 +786,8 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepMaterials = s.gameMaterials;
     const bool keepNight = s.gameNight;
     const bool keepSkyClouds = s.gameSkyClouds;
+    const bool keepClean = s.cleanHighlights;
+    const bool keepHdr = s.gameHdr;
     const bool keepClips = s.skipMapClips;
     const bool keepEnabled = s.enabled;
     const bool keepAuto = s.autoQuality;
@@ -807,6 +812,8 @@ void applyPreset(Settings& s, Preset preset) {
     s.gameMaterials = keepMaterials;
     s.gameNight = keepNight;
     s.gameSkyClouds = keepSkyClouds;
+    s.cleanHighlights = keepClean;
+    s.gameHdr = keepHdr;
     s.skipMapClips = keepClips;
     s.enabled = keepEnabled;
     s.autoQuality = keepAuto;
@@ -1211,6 +1218,8 @@ void Config::load() {
     settings.gameMaterials = GetPrivateProfileIntW(L"Settings", L"GameMaterials", 1, ini) != 0;
     settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 1, ini) != 0;
     settings.gameSkyClouds = GetPrivateProfileIntW(L"Settings", L"GameSkyClouds", 0, ini) != 0;
+    settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
+    settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 0, ini) != 0;
     settings.skipMapClips = GetPrivateProfileIntW(L"Settings", L"SkipMapClips", 0, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
     wchar_t target[32] = {};
