@@ -156,7 +156,8 @@ void beginFrame() {
         TMVS_LOG("photo: free camera %s", freeCam ? "on" : "off");
     }
     const Config& config = Config::get();
-    const bool wanted = config.settings.enabled && (g_manual >= 0 ? g_manual == 1 : (config.photoAuto && freeCam));
+    // Also with the shaders off (F7): free camera, zoom and photos of the game's own image.
+    const bool wanted = (g_manual >= 0 ? g_manual == 1 : (config.photoAuto && freeCam));
     if (wanted != g_active) {
         g_active = wanted;
         TMVS_LOG("photo: mode %s", wanted ? "on" : "off");
@@ -267,7 +268,7 @@ void adjust(Settings& s) {
     s.motionBlur = 0.0f;
     s.spray = 0.0f;
     const Config& config = Config::get();
-    if (g_focus[0] >= 0.0f && config.photoDof > 0.0f) {
+    if (config.photoDof > 0.0f) {
         s.depthOfField = config.photoDof;
         s.focusDistance = 0.0f;
     } else {
@@ -294,6 +295,10 @@ void focusPoint(float out[2]) {
     // Tiles keep the focus measured before (it is frozen): the point is in screen space.
     out[0] = g_focus[0];
     out[1] = g_focus[1];
+}
+
+bool pending() {
+    return g_active && g_job != Job::None;
 }
 
 void afterRender(IDirect3DDevice9* device, IDirect3DSurface9* frame) {

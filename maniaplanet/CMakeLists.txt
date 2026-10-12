@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.21)
 # Separate project from the TMNF plugin (that one is 32-bit D3D9):
 #   cmake -S maniaplanet -B build-mp -A x64
 #   cmake --build build-mp --config Release
-project(tmvs_maniaplanet VERSION 1.4.1 LANGUAGES CXX RC ASM_MASM)
+project(tmvs_maniaplanet VERSION 1.4.0 LANGUAGES CXX RC ASM_MASM)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "Build the ManiaPlanet proxy for ManiaPlanet.exe (64-bit): configure with -A x64.")

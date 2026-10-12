@@ -587,7 +587,7 @@ bool readsResource(ID3D11DeviceContext* ctx, ID3D11Resource* res) {
 }
 
 void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed where) {
-    if (!g_lookSettings.enabled || !g_rendererReady) return;
+    if ((!g_lookSettings.enabled && !photo::active()) || !g_rendererReady) return;
     EngineView view{g_tex, cameraUsable() ? &g_camera : nullptr};
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
     if (!g_renderer.apply(ctx, target, view, g_look, options::current(), g_frame.toneMapped)) return;
@@ -607,7 +607,7 @@ void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed whe
 // Runs the mod's HDR stage in place of the engine's tone-map draw (same inputs, same target).
 // True: the engine's draw is to be skipped.
 bool replaceToneMap(ID3D11DeviceContext* ctx) {
-    if (!g_lookSettings.enabled || !options::current().hdrStage || !g_rendererReady || !g_frame.rtv) return false;
+    if ((!g_lookSettings.enabled && !photo::active()) || !options::current().hdrStage || !g_rendererReady || !g_frame.rtv) return false;
     ID3D11ShaderResourceView* in[2] = {};
     ctx->PSGetShaderResources(0, 2, in);
     ID3D11Buffer* constants = nullptr;
@@ -1031,9 +1031,49 @@ void prepareLook() {
     // Photo mode is full quality: auto quality pauses (as in TMNF).
     if (!photo::active()) g_autoQuality.apply(g_lookSettings);
     photo::adjust(g_lookSettings);
+    float lutAmount = config.lutAmount;
+    if (!config.settings.enabled && photo::active()) {
+        // Vanilla photo mode: neutral look with only DoF and Sharpen on the game's image
+        g_lookSettings.aoStrength = 0.0f;
+        g_lookSettings.shadowStrength = 0.0f;
+        g_lookSettings.globalIllumination = 0.0f;
+        g_lookSettings.neonLight = 0.0f;
+        g_lookSettings.sunLight = 0.0f;
+        g_lookSettings.ambientTint = 0.0f;
+        g_lookSettings.fogDensity = 0.0f;
+        g_lookSettings.skyMode = 0;
+        g_lookSettings.skyEnhance = 0.0f;
+        g_lookSettings.volumetricClouds = 0.0f;
+        g_lookSettings.godRays = 0.0f;
+        g_lookSettings.volumetricLight = 0.0f;
+        g_lookSettings.bloom = 0.0f;
+        g_lookSettings.lensFlare = 0.0f;
+        g_lookSettings.wetness = 0.0f;
+        g_lookSettings.rain = 0.0f;
+        g_lookSettings.snow = 0.0f;
+        g_lookSettings.puddles = 0.0f;
+        g_lookSettings.reflections = 0.0f;
+        g_lookSettings.lightning = 0.0f;
+        g_lookSettings.neonTrail = 0.0f;
+        g_lookSettings.exposure = 0.0f;
+        g_lookSettings.contrast = 1.0f;
+        g_lookSettings.saturation = 1.0f;
+        g_lookSettings.vibrance = 0.0f;
+        g_lookSettings.temperature = 0.0f;
+        g_lookSettings.tint = 0.0f;
+        g_lookSettings.shadowTint = 0.0f;
+        g_lookSettings.lift = 0.0f;
+        g_lookSettings.gamma = 1.0f;
+        g_lookSettings.gain = 1.0f;
+        g_lookSettings.vignette = 0.0f;
+        g_lookSettings.filmGrain = 0.0f;
+        g_lookSettings.chromaticAberration = 0.0f;
+        g_lookSettings.toneCurve = 0; // game's curve
+        lutAmount = 0.0f;
+    }
     g_look.settings = &g_lookSettings;
     g_look.lut = config.lutFile;
-    g_look.lutAmount = config.lutAmount;
+    g_look.lutAmount = lutAmount;
     if (g_cameraThisFrame) {
         // The engine's light colour, brightness taken out (split toning only wants its hue).
         const float* c = g_camera.sunColour;
@@ -1071,7 +1111,7 @@ bool onPresent(IDXGISwapChain* sc) {
 
     Frame& f = g_frame;
     const Options& o = options::current();
-    if (!f.injected && g_lookSettings.enabled && g_backBufferRtv) {
+    if (!f.injected && (g_lookSettings.enabled || photo::active()) && g_backBufferRtv) {
         Placed where = Placed::None;
         if (o.placement == Placement::EndOfFrame) where = Placed::EndOfFrame;
         else if (o.fallbackAtEnd && f.toneMapSeen) where = Placed::Fallback;

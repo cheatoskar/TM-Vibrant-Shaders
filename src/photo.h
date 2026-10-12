@@ -31,6 +31,10 @@ void adjust(Settings& s);
 // A hi-res photo is being taken: TAA jitter off; exposure, focus and haze colour frozen.
 bool tiling();
 
+// A photo or a tile is waiting for the next frame (needed with the shaders off, where
+// the pipeline doesn't run and processScene only hands the game's image over).
+bool pending();
+
 // The depth of field amount (0..1) as a camera aperture: 1 = f/1.4 (most blur), 0 = f/16.
 float fNumber(float dof);
 

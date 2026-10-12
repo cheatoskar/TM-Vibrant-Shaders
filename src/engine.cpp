@@ -251,10 +251,8 @@ using ClipTriggersFn = void(__fastcall*)(void*, void*);
 ClipTriggersFn g_clipTriggers = nullptr;
 using RaceTriggersFn = void(__fastcall*)(void*, void*, void*, void*);
 RaceTriggersFn g_raceTriggers = nullptr;
-volatile bool g_skipMapClips = false;          // no in-game trigger clips of the map
 void* g_racePlayer = nullptr;                  // the player the race checked last (its car)
 DWORD g_racePlayerTick = 0;                    // when (a player of a race that ended is gone)
-volatile bool g_stopRaceClip = false;          // just switched on: end the trigger clip that runs
 float g_mapDayTime = -1.0f;                   // the loaded map's own time of day (-1 unknown)
 bool g_nightForced = false;                   // the game lights it at midnight instead
 void* g_weather = nullptr;                    // this map's weather (the last to jump in time)
@@ -704,33 +702,11 @@ void __fastcall raceTriggersDetour(void* self, void* edx, void* player, void* gr
     // Called every frame of a race with the local (or watched) player: the neon trail's car.
     g_racePlayer = player;
     g_racePlayerTick = GetTickCount();
-    if (!g_skipMapClips) {
-        g_raceTriggers(self, edx, player, group);
-        return;
-    }
-    // Switched on while a trigger clip runs: it ends now, the race camera is back.
-    int* triggered = player ? reinterpret_cast<int*>(static_cast<BYTE*>(player) + kPlayerTriggered) : nullptr;
-    if (g_stopRaceClip) {
-        g_stopRaceClip = false;
-        if (triggered && readable(triggered, sizeof(int)) && *triggered != -1) {
-            reinterpret_cast<void(__fastcall*)(void*, void*)>(rebase(g_build->raceClipStop))(self, nullptr);
-            *triggered = -1;
-            TMVS_LOG("engine: map clip stopped (map clips off)");
-        }
-    }
+    g_raceTriggers(self, edx, player, group);
 }
 
 void __fastcall clipTriggersDetour(void* self, void* edx) {
-    if (!g_skipMapClips) {
-        g_clipTriggers(self, edx);
-        return;
-    }
-    // A trigger clip that already runs ends now (as the game does when the car is teleported).
-    int* triggered = reinterpret_cast<int*>(static_cast<BYTE*>(self) + kClipViewerTriggered);
-    if (readable(triggered, sizeof(int)) && *triggered != -1) {
-        reinterpret_cast<void(__fastcall*)(void*, void*)>(rebase(g_build->clipGroupStop))(self, nullptr);
-        *triggered = -1;
-    }
+    g_clipTriggers(self, edx);
 }
 
 void __fastcall loadSceneDetour(void* self, void* edx) {
@@ -960,16 +936,6 @@ void setNightAtLoad(bool (*decide)(float dayTime)) {
 
 float mapDayTime() {
     return g_mapDayTime;
-}
-
-void skipMapClips(bool skip) {
-    skip = skip && (g_clipTriggers || g_raceTriggers);
-    if (skip && !g_skipMapClips) g_stopRaceClip = true;
-    g_skipMapClips = skip;
-}
-
-bool mapClipsSkippable() {
-    return g_clipTriggers || g_raceTriggers;
 }
 
 bool mapLitAtNight() {

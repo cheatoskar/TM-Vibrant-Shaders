@@ -331,8 +331,10 @@ void smoothLook(Settings& s, float now) {
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
 void processScene(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
-    if (!settings.enabled && !g_captureRequested) return;
     if (!g_scene.haveView || !g_scene.haveProjection) return;
+    if (!settings.enabled && !photo::active() && !g_captureRequested) {
+        return;
+    }
     if (g_sceneStart < 0.0f && g_scene.projection[14] > -1.0f) {
         g_sceneStart = seconds();
         TMVS_LOG("scene: first gameplay camera");
@@ -504,7 +506,7 @@ void processScene(IDirect3DDevice9* device) {
         g_captureRequested = false;
         writeCapture(device, inputs);
     }
-    if (settings.enabled) {
+    if (settings.enabled || inputs.photo) {
         // Auto quality renders a reduced copy; your settings stay untouched.
         Settings effective = settings;
         // The menu points at a preset: show it (it glides in like a chosen one).
@@ -592,8 +594,6 @@ void onFrameBegin() {
         // A night sky (or the black hole) has no sun: the game's halo and flare go too.
         engine::hideSunFlare(s.enabled && Pipeline::skyReplacesSun(s));
         engine::hideGameSky(s.enabled && Pipeline::skyReplacesSun(s) && !s.gameSkyClouds);
-        // Not a shader setting: also with the shaders off (F7).
-        engine::skipMapClips(s.skipMapClips);
     }
     updateJitter();
     g_cameraIndex = 0;

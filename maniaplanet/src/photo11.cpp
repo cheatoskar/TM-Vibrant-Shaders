@@ -237,7 +237,7 @@ void adjust(tmshaders::Settings& s) {
     s.quality = 2;
     s.motionBlur = 0.0f;
     const Config& config = Config::get();
-    if (g_focusU >= 0.0f && config.photoDof > 0.0f) {
+    if (config.photoDof > 0.0f) {
         s.depthOfField = config.photoDof;
         s.focusDistance = 0.0f;
     } else {

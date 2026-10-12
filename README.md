@@ -18,7 +18,7 @@ A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light s
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
 
-**New in 1.4.1-preview: TrackMania 2 (ManiaPlanet 4).** The same mod for ManiaPlanet's Direct3D 11 renderer: download `TM-Vibrant-Shaders-ManiaPlanet.zip` from the [release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases), close the game, double-click `Install.cmd`. `F8` menu, `F5` on/off. Details in [maniaplanet/README.md](maniaplanet/README.md).
+**New in 1.4.0-preview: TrackMania 2 (ManiaPlanet 4).** The same mod for ManiaPlanet's Direct3D 11 renderer: download `TM-Vibrant-Shaders-ManiaPlanet.zip` from the [release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases), close the game, double-click `Install.cmd`. `F8` menu, `F5` on/off. Details in [maniaplanet/README.md](maniaplanet/README.md).
 
 ![TrackMania 2 Stadium, photo mode's compare split: left the game, right with the mod and the black hole sky](docs/images/tm2-black-hole-split.jpg)
 
@@ -122,7 +122,6 @@ Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (a
 | `F8` | Open or close the menu |
 | `F7` | Shaders on or off, for a before/after look |
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
-| `Shift+F7` | Map clips off or on: the map's MediaTracker clips while driving (forced cameras, black screens) don't play |
 | `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms, `Shift+F6` splits the screen: the game without and with the mod |
 
 ![The F8 menu: every preset as a card with a picture](docs/images/menu.jpg)

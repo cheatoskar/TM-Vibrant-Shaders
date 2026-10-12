@@ -98,11 +98,6 @@ bool mapLitAtNight();
 // Real night switched on or off while a map runs: the weather jumps to midnight or back to the
 // map's time (only call it in gameplay: the weather of a map that was left may be gone).
 bool relightNight(bool night);
-// The map's in-game MediaTracker clips (triggered while driving: forced cameras, black
-// screens, texts) don't start while true; one that runs ends. Intro, end-race clips and
-// replays are not affected, the map stays as it is. False without the hook.
-void skipMapClips(bool skip);
-bool mapClipsSkippable();
 // What the material being drawn is (from its shader file), Other between draws.
 enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5 };
 Material currentMaterial();

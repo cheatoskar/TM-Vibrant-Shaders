@@ -45,12 +45,6 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
             config.showOverlay = !config.showOverlay;
             return 0;
         }
-        if (wparam == VK_F7 && GetKeyState(VK_SHIFT) < 0) {
-            config.settings.skipMapClips = !config.settings.skipMapClips;
-            config.markDirty();
-            photo::notify(config.settings.skipMapClips ? "Map clips off (MediaTracker triggers)" : "Map clips on", 3);
-            return 0;
-        }
         if (wparam == VK_F7) {
             config.settings.enabled = !config.settings.enabled;
             config.markDirty();

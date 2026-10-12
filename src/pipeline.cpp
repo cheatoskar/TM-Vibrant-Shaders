@@ -1901,6 +1901,58 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 0, m_nd.texture, false);
     passConstants(device, 1.0f / in.width, 1.0f / in.height);
     runPass(device, kDownsampleND, m_ndHalf);
+
+    if (!s.enabled && in.photo) {
+        // Vanilla photo mode: only depth of field and sharpening on the game's original image (in.color).
+        const float dt = m_historyValid ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
+        if (temporal) m_lastTime = in.time;
+        IDirect3DTexture9* current = in.color;
+        const bool dof = s.depthOfField > 0.0f;
+        if (dof && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
+            gfx::Target* dofTarget = &m_dof;
+            if (m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
+            int focus = m_focusIndex;
+            if (temporal && !in.freeze) {
+                focus ^= 1;
+                bind(device, 0, m_nd.texture, false);
+                bind(device, 1, m_focus[m_focusIndex].texture, false);
+                passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+                runPass(device, kFocus, m_focus[focus]);
+                m_focusIndex = focus;
+            }
+            bind(device, 0, in.color, true);
+            bind(device, 1, dofTarget == &m_dofFull ? m_nd.texture : m_ndHalf.texture, false);
+            bind(device, 2, m_focus[focus].texture, false);
+            passConstants(device, 64.0f, 0.0f, 1.0f);
+            runPass(device, kDofBlur, *dofTarget);
+            gfx::Target& second = dofTarget == &m_dofFull ? m_dofFull2 : m_dof2;
+            if (second.create(device, dofTarget->width, dofTarget->height, D3DFMT_A16B16G16R16F)) {
+                bind(device, 0, dofTarget->texture, true);
+                passConstants(device, 32.0f, 0.0f, 0.3f);
+                runPass(device, kDofBlur, second);
+                dofTarget = &second;
+            }
+            bind(device, 0, in.color, true);
+            bind(device, 1, dofTarget->texture, true);
+            bind(device, 2, m_nd.texture, false);
+            runPass(device, kCinematic, m_hdr2);
+            current = m_hdr2.texture;
+        }
+        const bool sharpen = s.sharpen > 0.001f;
+        bind(device, 0, current, false);
+        bind(device, 1, nullptr, false);
+        passConstants(device, 1.0f / in.width, 1.0f / in.height);
+        runPass(device, sharpen ? kSharpen : kCopy, output, in.width, in.height);
+        profileEnd();
+        if (temporal) {
+            memcpy(m_prevView, in.view, sizeof(m_prevView));
+            memcpy(m_prevProjection, in.projection, sizeof(m_prevProjection));
+            m_havePrevious = true;
+        }
+        for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
+        if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+        return;
+    }
     // 1a. The sea the game reports no height for (TMUF Island), from its water material.
     if (materials && s.waterSurfaces > 0.0f && ((in.water[2] >= 0.0f && in.water[2] < 0.5f) || in.water[2] > 1.5f)) measureSeaLevel(device);
 

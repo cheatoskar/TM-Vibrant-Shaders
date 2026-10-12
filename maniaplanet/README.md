@@ -1,6 +1,6 @@
 # TM Vibrant Shaders for ManiaPlanet (TrackMania 2)
 
-**Status: preview (1.4.1-preview), tested in the game on Stadium.** The interface (HUD, menus,
+**Status: preview (1.4.0-preview), tested in the game on Stadium.** The interface (HUD, menus,
 chat) is left alone. The TMNF mod's effects, on what ManiaPlanet's deferred HDR renderer
 knows (its normals, material colours, sun shadow maps, motion vectors and HDR image):
 
