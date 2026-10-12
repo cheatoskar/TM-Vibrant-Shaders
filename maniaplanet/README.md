@@ -1,15 +1,27 @@
 # TM Vibrant Shaders for ManiaPlanet (TrackMania 2)
 
-**Status: work in progress.** The interface (HUD, menus, chat) is left alone. What it does:
-- **HDR stage:** in place of the engine's tone map, it reads the engine's HDR image. A curve that
-  keeps the game's mid-tones but not its bleached highlights, and an HDR bloom.
-- **Grading:** colour, contrast, local contrast, sharpening, vignette and LUT looks, on the
-  finished image.
+**Status: work in progress, tested offline on captures; not yet in the game.** The interface (HUD,
+menus, chat) is left alone. The TMNF mod's effects, on what ManiaPlanet's deferred HDR renderer
+knows (its normals, material colours, sun shadow maps, motion vectors and HDR image):
 
-ManiaPlanet 4 is a 64-bit Direct3D 11 game with a deferred HDR renderer. Real-time shadows,
-reflections, bloom and tone mapping are already the engine's own. So this build doesn't re-do
-lighting. It starts where the engine's image is finished. Later steps (HDR before the engine's tone
-map, depth-based effects) build on the captures this version can take.
+- **Light:** the engine's light is taken apart (sun, ambient, and the rest: light maps, lamps,
+  neon, reflections), so the effects work on each part. With every effect at zero the parts add up
+  to the game's image exactly. Ambient occlusion, contact shadows, bounce light (GI), neon light
+  on the surroundings, sun warmth and sky tint, haze, volumetric light through the engine's own
+  shadow maps.
+- **Sky:** the custom skies (clear, starry night, black hole, aurora, ring world), the game's sky
+  enhanced, volumetric clouds, light shafts, lens flare. Under a night sky over a day map the
+  engine's sun goes and "real night" brings its sky light down to moonlight; lamps and neon stay.
+- **Weather:** wet roads, puddles, screen-space reflections, snow cover, rain, snow, splashes,
+  lightning, drops on the lens, the weather sound.
+- **Cinema:** depth of field, motion blur (the engine's motion vectors), TAA, photo mode.
+- **Look:** the HDR stage in place of the engine's tone map (curves, bloom), grading, LUT looks.
+- **Auto quality** (the TMNF mod's, on the effects' GPU times) and the Performance page.
+
+What ManiaPlanet can't do (yet): the neon trail and the spray (they need the car's position),
+long-range shadows (the engine has its own shadow maps), TAA jitter, hi-res photos and zoom (they
+need the engine's projection), "only in replays" (replays aren't told from driving yet: with it on,
+depth of field and motion blur run in photo mode only), water surfaces, grass detail.
 
 ## Install
 
@@ -32,18 +44,17 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 |---|---|
 | F8 | Menu |
 | F7 | Effects off/on (compare with the game's own image) |
-| F12 | Capture one frame (for bug reports and development) |
+| F12 | Capture one frame (for bug reports and development); in photo mode: a photo (PNG) |
+| F6 | Photo mode: no interface, full quality, depth of field on a clicked point |
+| Middle click / Ctrl+middle click / Ctrl+wheel | Photo mode: focus here / no focus / aperture |
 
 The same keys as the TMNF mod.
 
 The F8 menu is the TMNF mod's own (src/menu.cpp, shared). It has the same presets, preset gallery,
 own presets with pictures, presets per map type (day, sunset and night, from the engine's light
-colour), the Studio and the settings. It shows only what ManiaPlanet can do so far:
-- **Colour:** exposure, contrast, saturation, vibrance, temperature, tint, lift/gamma/gain, split toning.
-- **Tone curve:** the game's, TMVS or ACES, and the TMVS curve's knee.
-- **Bloom & lens:** bloom, bloom radius, vignette, film grain, chromatic aberration.
-- **Image:** sharpening.
-- **.cube looks.**
+colour), the Studio and the settings. It shows only what ManiaPlanet can do (effects.cpp and
+the stages' `supports()`). The Studio's debug views show what the effects see: depth, normals, AO,
+shadows, the engine's light taken apart, light sources, light shafts, clouds, sky, focus, motion.
 
 Settings and your presets are in `Documents\ManiaPlanet\TMVS` (`settings.ini`, `presets\`), in
 the same format as in TMNF. ManiaPlanet's own options are in `maniaplanet.ini`, on the Settings
