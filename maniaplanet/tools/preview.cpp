@@ -208,7 +208,56 @@ int main(int argc, char** argv) {
         haveCamera = fread(camera.raw, 1, sizeof(camera.raw), f) == sizeof(camera.raw) && decodeCamera(camera);
         fclose(f);
     }
+    if (FILE* f = fopen((folder + "/scenep.bin").c_str(), "rb")) {
+        camera.hasSceneP = fread(camera.rawP, 1, sizeof(camera.rawP), f) == sizeof(camera.rawP);
+        fclose(f);
+        if (haveCamera && decodeSceneP(camera)) printf("  sun from the lighting constants\n");
+    }
     printf("  camera %s\n", haveCamera ? "found" : "missing");
+
+    // The sun shadow pass (volumetric light): constants, raster scale, comparison sampler.
+    EngineShadow shadow;
+    {
+        std::vector<char> cb;
+        if (FILE* f = fopen((folder + "/shadow_cb.bin").c_str(), "rb")) {
+            fseek(f, 0, SEEK_END);
+            cb.resize(static_cast<size_t>(ftell(f)));
+            fseek(f, 0, SEEK_SET);
+            if (cb.empty() || fread(cb.data(), 1, cb.size(), f) != cb.size()) cb.clear();
+            fclose(f);
+        }
+        D3D11_SAMPLER_DESC sd = {};
+        sd.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+        sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sd.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+        sd.MaxLOD = D3D11_FLOAT32_MAX;
+        bool haveRaster = false;
+        if (FILE* f = fopen((folder + "/shadow.txt").c_str(), "r")) {
+            int filter = 0, au = 0, av = 0, aw = 0, cmp = 0;
+            haveRaster = fscanf(f, "raster %f %f %f %f\nfilter %d\naddress %d %d %d\ncompare %d", &shadow.raster[0], &shadow.raster[1],
+                                &shadow.raster[2], &shadow.raster[3], &filter, &au, &av, &aw, &cmp) == 9;
+            if (haveRaster) {
+                sd.Filter = static_cast<D3D11_FILTER>(filter);
+                sd.AddressU = static_cast<D3D11_TEXTURE_ADDRESS_MODE>(au);
+                sd.AddressV = static_cast<D3D11_TEXTURE_ADDRESS_MODE>(av);
+                sd.AddressW = static_cast<D3D11_TEXTURE_ADDRESS_MODE>(aw);
+                sd.ComparisonFunc = static_cast<D3D11_COMPARISON_FUNC>(cmp);
+            }
+            fclose(f);
+        }
+        if (!cb.empty() && haveRaster) {
+            D3D11_BUFFER_DESC bd = {};
+            bd.ByteWidth = static_cast<UINT>(cb.size());
+            bd.Usage = D3D11_USAGE_DEFAULT;
+            bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            D3D11_SUBRESOURCE_DATA init = {cb.data(), 0, 0};
+            device->CreateBuffer(&bd, &init, &shadow.constants);
+            device->CreateSamplerState(&sd, &shadow.sampler);
+            shadow.constantsSize = bd.ByteWidth;
+            shadow.valid = shadow.constants && shadow.sampler && tex[kTexShadowMap0] && tex[kTexShadowMap1];
+        }
+        printf("  sun shadow pass %s\n", shadow.valid ? "found (volumetric light)" : "missing");
+    }
 
     Look look;
     look.settings = &config.settings;
@@ -253,6 +302,7 @@ int main(int argc, char** argv) {
             device->CreateShaderResourceView(t, &sv, &in[i]);
         }
         EngineView engine{tex, haveCamera ? &camera : nullptr};
+        engine.shadow = shadow.valid ? &shadow : nullptr;
         engine.time = time;
         if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look, engine)) {
             printf("the HDR stage failed\n");

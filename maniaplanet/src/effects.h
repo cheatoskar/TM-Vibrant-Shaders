@@ -66,6 +66,7 @@ enum Pass : int {
     kFinal,
     kTAA,
     kSharpen,
+    kVolumetric,
     kPassCount
 };
 const char* passName(int pass);
@@ -106,6 +107,7 @@ struct SceneFrame {
     ID3D11Buffer* engineTone = nullptr;           // its tone-map constants (exposure uv)
     ID3D11ShaderResourceView* const* engine = nullptr; // kTexCount views of its textures (null = missing)
     const Camera* camera = nullptr;
+    const EngineShadow* shadow = nullptr;         // the engine's sun shadow pass (volumetric light)
     double time = 0.0;                            // seconds
     bool photo = false;                           // photo mode: effects reach farther
     bool driving = true;                          // not a replay (cinematic effects only in replays)
@@ -179,6 +181,7 @@ private:
     ID3D11PixelShader* m_spillDown = nullptr;
     ID3D11PixelShader* m_spillBlur = nullptr;
     ID3D11PixelShader* m_lighting = nullptr;
+    ID3D11PixelShader* m_volumetric = nullptr;
     ID3D11Buffer* m_frameCb = nullptr;
     ID3D11Buffer* m_passCb = nullptr;
     ID3D11SamplerState* m_samplers[4] = {};
@@ -195,6 +198,7 @@ private:
     Target m_giHistory[2]; // quarter: accumulated (rgb, view z)
     int m_giIndex = 0;
     Target m_spill[2];     // quarter: neon light (rgb, view z)
+    Target m_volume[2];    // half: volumetric light (lit fraction, lit path / range), ping-pong for the blur
     Target m_hdr[2];       // full: the result (exposed HDR), ping-pong for the passes after the composite
     int m_currentHdr = 0;
     ID3D11ShaderResourceView* m_result = nullptr;

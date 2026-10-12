@@ -335,6 +335,44 @@ void writeCamera(const Camera& c) {
         fwrite(c.raw, 1, sizeof(c.raw), f);
         fclose(f);
     }
+    // The lighting pass's constants (sun direction, ambient, fog).
+    if (c.hasSceneP && (f = _wfopen((g_folder + L"/scenep.bin").c_str(), L"wb")) != nullptr) {
+        fwrite(c.rawP, 1, sizeof(c.rawP), f);
+        fclose(f);
+    }
+}
+
+// The sun shadow pass (volumetric light): its constants (read back from our GPU copy), its raster
+// scale and its comparison sampler, for tools/preview.cpp.
+void writeShadow(ID3D11Device* device, ID3D11DeviceContext* ctx, const EngineShadow& s) {
+    if (!s.constants) return;
+    hooks::Inside inside;
+    D3D11_BUFFER_DESC d;
+    s.constants->GetDesc(&d);
+    d.Usage = D3D11_USAGE_STAGING;
+    d.BindFlags = 0;
+    d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    d.MiscFlags = 0;
+    ID3D11Buffer* staging = nullptr;
+    if (FAILED(device->CreateBuffer(&d, nullptr, &staging))) return;
+    ctx->CopyResource(staging, s.constants);
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &m))) {
+        if (FILE* f = _wfopen((g_folder + L"/shadow_cb.bin").c_str(), L"wb")) {
+            fwrite(m.pData, 1, d.ByteWidth, f);
+            fclose(f);
+        }
+        ctx->Unmap(staging, 0);
+    }
+    staging->Release();
+    if (FILE* f = _wfopen((g_folder + L"/shadow.txt").c_str(), L"w")) {
+        D3D11_SAMPLER_DESC sd = {};
+        if (s.sampler) s.sampler->GetDesc(&sd);
+        fprintf(f, "raster %.9g %.9g %.9g %.9g\nfilter %d\naddress %d %d %d\ncompare %d\n", s.raster[0], s.raster[1], s.raster[2],
+                s.raster[3], static_cast<int>(sd.Filter), static_cast<int>(sd.AddressU), static_cast<int>(sd.AddressV),
+                static_cast<int>(sd.AddressW), static_cast<int>(sd.ComparisonFunc));
+        fclose(f);
+    }
 }
 
 void onGraded(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Texture2D* input, DXGI_FORMAT viewFormat,
@@ -350,6 +388,7 @@ void onGraded(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Texture2D* i
         save(device, ctx, engine.tex[i], name);
     }
     if (engine.camera) writeCamera(*engine.camera);
+    if (engine.shadow) writeShadow(device, ctx, *engine.shadow);
     if (g_trace) fprintf(g_trace, "      ^ the mod graded here (input.dds = before, engine_*.dds)\n");
 }
 

@@ -119,6 +119,9 @@ Texture2D t_motion : register(t13);
 Texture2D t_hdr : register(t14);
 Texture2D t_exposure : register(t15);
 
+// Volumetric light (half res: lit fraction, lit path / range), read by the composite; u_Pass1.x = present.
+Texture2D g_volume : register(t16);
+
 SamplerState g_linear : register(s0);
 SamplerState g_point : register(s1);
 SamplerState g_linearWrap : register(s2);

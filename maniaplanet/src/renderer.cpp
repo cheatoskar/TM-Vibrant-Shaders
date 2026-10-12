@@ -501,6 +501,7 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
         frame.engineTone = engineConstants;
         frame.engine = views;
         frame.camera = engine.camera;
+        frame.shadow = engine.shadow;
         frame.time = engine.time;
         frame.photo = engine.photo;
         if (m_effects.scene(ctx, frame, s)) {

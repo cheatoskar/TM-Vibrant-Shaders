@@ -400,6 +400,22 @@ float4 hazeColour()
     return h;
 }
 
+// In-scattered sun light from the volumetric pass (volumetric.hlsl): dark gaps where shadows cross
+// the haze, bright shafts in between. Returns (extra light, lit fraction for the regular haze).
+float4 volumetricLight(float2 uv, float3 rd, float daylight)
+{
+    float4 r = float4(0, 0, 0, 1);
+    if (u_Volume.x > 0.0 && u_Pass1.x > 0.5)
+    {
+        float2 v = g_volume.SampleLevel(g_linear, uv, 0).rg;
+        float mu = dot(rd, u_SunWorld.xyz);
+        float phase = henyeyGreenstein(mu, 0.6) * 0.6 + 0.05;
+        float haze = 1.0 - exp(-v.y * u_Volume.y * (u_Atmo.x * 0.0009 + 0.0015) * 3.0);
+        r = float4(u_SunColor.rgb * daylight * phase * haze * u_Volume.x, lerp(1.0, v.x, saturate(u_Volume.x)));
+    }
+    return r;
+}
+
 float4 PS_Lighting(VSOut i) : SV_Target
 {
     float2 uv = i.uv;
@@ -416,6 +432,7 @@ float4 PS_Lighting(VSOut i) : SV_Target
     {
         if (debug >= 1 && debug <= 4) return float4(0, 0, 0, 1);
         c = skyPixel(uv, rd, c, skyAvg, daylight, night);
+        if (u_SunView.w > 0.5) c += volumetricLight(uv, rd, daylight).rgb;
         return float4(weatherAir(uv, rd, SKY_Z, c, skyAvg, 0.0, float3(0, 1, 0)), 1);
     }
 
@@ -495,9 +512,11 @@ float4 PS_Lighting(VSOut i) : SV_Target
     fogAmount = saturate(1.0 - exp(-max(fogAmount, 0.0)));
     lit += skyLightOnScene(unlit, nWorld, rd, fogAmount);
     float3 fogColour = lerp(u_SkyColor.rgb * 0.7 * (0.3 + 0.7 * daylight), skyAvg.rgb, skyAvg.a * 0.75);
-    if (u_SunView.w > 0.5) fogColour += sunScatter(rd, u_Atmo.z * 0.6) * daylight;
+    float4 volume = volumetricLight(uv, rd, daylight);
+    if (u_SunView.w > 0.5) fogColour += sunScatter(rd, u_Atmo.z * 0.6) * daylight * volume.a;
     fogColour *= lerp(1.0, 0.2, night);
     float3 result = lerp(lit, fogColour, fogAmount) + glow * (1.0 - 0.6 * fogAmount);
+    if (u_SunView.w > 0.5) result += volume.rgb;
     result = weatherAir(uv, rd, dist, result, skyAvg, fogAmount, nWorld);
 
     if (debug == 1) return float4(pow(saturate(1.0 - dist / 500.0), 2.0).xxx, 1);

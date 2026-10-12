@@ -62,8 +62,25 @@ enum EngineTexture : int {
     kTexSpecular,     // TMapDeferredMSpecular: material specular
     kTexLightMask,    // TMapDeferredLightMask
     kTexMotion,       // TMapMotion (or the lighting pass's second target)
+    kTexShadowDepth,  // the sun shadow pass's linear depth (Tech3/DeferredShadowPssm_p t0, R32 float)
+    kTexShadowMap0,   // its two shadow maps (t1, t2: 4096 x 4096, 16 bit)
+    kTexShadowMap1,
     kTexCount
 };
+
+// The engine's sun shadow pass (Tech3/DeferredShadowPssm_p): it turns the shadow maps into the
+// light mask. Volumetric light marches the view rays through the same maps with its constants:
+//   z = c[0].w * depth + c[1].w,  p = (c[0].xyz + sx c[1].xyz + sy c[2].xyz) * z
+//   (sx, sy = pixel position times SceneP RasterPos_SxyTwz.xy), lit = lerp(map0(c[5..7] p),
+//   map1(c[8..10] p), c[3].x), both compared through its comparison sampler.
+struct EngineShadow {
+    bool valid = false;                    // seen this frame
+    ID3D11Buffer* constants = nullptr;     // a copy of its ShaderP (made on the GPU at its draw)
+    UINT constantsSize = 0;
+    ID3D11SamplerState* sampler = nullptr; // its comparison sampler (held)
+    float raster[4] = {};                  // SceneP RasterPos_SxyTwz_TexCoord
+};
+constexpr UINT kScenePRasterPos = 96;
 
 const char* engineTextureName(int index);
 

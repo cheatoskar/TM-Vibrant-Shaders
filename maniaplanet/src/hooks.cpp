@@ -217,6 +217,65 @@ void releaseTextures() {
     for (int i = 0; i < kTexCount; i++) setTexture(i, nullptr);
 }
 
+// The engine's sun shadow pass of this frame (volumetric light).
+EngineShadow g_shadow;
+
+void releaseShadow() {
+    if (g_shadow.constants) g_shadow.constants->Release();
+    if (g_shadow.sampler) g_shadow.sampler->Release();
+    g_shadow = EngineShadow{};
+}
+
+// The raster scale (SceneP RasterPos_SxyTwz) from a SceneP upload we copied (below).
+bool scenePRaster(ID3D11Buffer* buffer, float out[4]);
+
+// At Tech3/DeferredShadowPssm_p: its constants are copied on the GPU (nothing waits for them), its
+// linear depth and shadow maps and its comparison sampler are kept for the volumetric pass.
+void takeShadowPass(ID3D11DeviceContext* ctx) {
+    ID3D11Buffer* cb = nullptr;
+    ctx->PSGetConstantBuffers(0, 1, &cb);
+    if (!cb) return;
+    D3D11_BUFFER_DESC d;
+    cb->GetDesc(&d);
+    if (!g_shadow.constants || g_shadow.constantsSize != d.ByteWidth) {
+        if (g_shadow.constants) g_shadow.constants->Release();
+        g_shadow.constants = nullptr;
+        D3D11_BUFFER_DESC c = {};
+        c.ByteWidth = d.ByteWidth;
+        c.Usage = D3D11_USAGE_DEFAULT;
+        c.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        if (FAILED(g_device->CreateBuffer(&c, nullptr, &g_shadow.constants))) g_shadow.constants = nullptr;
+        g_shadow.constantsSize = d.ByteWidth;
+        TMVS_LOG("hooks: sun shadow pass found (constants %u bytes)", d.ByteWidth);
+    }
+    if (g_shadow.constants) ctx->CopyResource(g_shadow.constants, cb);
+    cb->Release();
+    ID3D11ShaderResourceView* srv[3] = {};
+    ctx->PSGetShaderResources(0, 3, srv);
+    for (int i = 0; i < 3; i++) {
+        ID3D11Resource* res = nullptr;
+        if (srv[i]) {
+            srv[i]->GetResource(&res);
+            srv[i]->Release();
+        }
+        setTexture(kTexShadowDepth + i, res);
+        if (res) res->Release();
+    }
+    ID3D11SamplerState* sampler = nullptr;
+    ctx->PSGetSamplers(0, 1, &sampler);
+    if (g_shadow.sampler) g_shadow.sampler->Release();
+    g_shadow.sampler = sampler; // keeps the reference PSGetSamplers gave
+    ID3D11Buffer* pcb = nullptr;
+    ctx->PSGetConstantBuffers(13, 1, &pcb);
+    if (pcb) {
+        if (!scenePRaster(pcb, g_shadow.raster) && g_camera.hasSceneP)
+            memcpy(g_shadow.raster, g_camera.rawP + kScenePRasterPos, sizeof(g_shadow.raster));
+        pcb->Release();
+    }
+    g_shadow.valid = g_shadow.constants && g_shadow.sampler && g_tex[kTexShadowMap0] && g_tex[kTexShadowMap1] &&
+                     (g_shadow.raster[0] != 0.0f || g_shadow.raster[1] != 0.0f);
+}
+
 // Copies of the engine's SceneV (vertex) and SceneP (pixel lighting) constant buffers, taken
 // while it uploads them (Map/Unmap or UpdateSubresource), so the camera and the sun can be read
 // without a GPU read-back.
@@ -260,6 +319,13 @@ SceneVCopy* sceneVCopy(ID3D11Resource* res, bool create) {
     g_sceneV[0] = SceneVCopy{};
     g_sceneV[0].buffer = res;
     return &g_sceneV[0];
+}
+
+bool scenePRaster(ID3D11Buffer* buffer, float out[4]) {
+    const SceneVCopy* p = sceneVCopy(buffer, false);
+    if (!p || !p->filled || p->size != kScenePSize) return false;
+    memcpy(out, p->data + kScenePRasterPos, sizeof(float) * 4);
+    return true;
 }
 
 // The main camera: the SceneV bound to the vertex shader of the lighting-read pass.
@@ -378,7 +444,8 @@ bool readsResource(ID3D11DeviceContext* ctx, ID3D11Resource* res) {
 
 void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed where) {
     if (!g_lookSettings.enabled || !g_rendererReady) return;
-    const EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
+    EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
+    view.shadow = g_shadow.valid ? &g_shadow : nullptr;
     if (!g_renderer.apply(ctx, target, view, g_look, options::current(), g_frame.toneMapped)) return;
     g_frame.placed = where;
     if (capture::active()) capture::onGraded(g_device, ctx, g_renderer.lastInput(), g_renderer.lastViewFormat(), view);
@@ -400,6 +467,7 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     ID3D11Buffer* constants = nullptr;
     ctx->PSGetConstantBuffers(0, 1, &constants);
     EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
+    view.shadow = g_shadow.valid ? &g_shadow : nullptr;
     view.time = nowSeconds();
     const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, g_look, view);
     for (auto* v : in)
@@ -441,6 +509,7 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
     const Role role = f.ps.role;
     if (f.phase == Phase::Scene && role == Role::Post && skipEngineBloom(ctx, f.ps.name)) return true;
+    if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/DeferredShadowPssm_p")) takeShadowPass(ctx);
 
     if (role == Role::ToneMap && f.rt && screenSized(f.rtW, f.rtH)) {
         if (capture::active() && !f.toneMapSeen) capture::onToneMap(g_device, ctx);
@@ -823,6 +892,7 @@ void onPresent(IDXGISwapChain* sc) {
 
     // Next frame. The bound targets stay as the game left them.
     g_cameraThisFrame = false;
+    g_shadow.valid = false;
     const ShaderInfo ps = f.ps;
     ID3D11RenderTargetView* rtv = f.rtv;
     ID3D11Resource *rt = f.rt, *ds = f.ds;
@@ -863,6 +933,7 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
         g_renderer.releaseTargets();
         overlay::releaseTargets();
         releaseTextures();
+        releaseShadow();
         g_isSceneV.clear();
         g_frame = Frame{};
         TMVS_LOG("hooks: ResizeBuffers %ux%u", w, h);

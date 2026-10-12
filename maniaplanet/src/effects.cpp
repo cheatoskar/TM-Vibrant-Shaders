@@ -12,6 +12,7 @@
 #include "shaders/PS_OcclusionShadow.h"
 #include "shaders/PS_SpillBlur.h"
 #include "shaders/PS_SpillDown.h"
+#include "shaders/PS_Volumetric.h"
 #include "shaders/VS_Full.h"
 #include <algorithm>
 #include <cmath>
@@ -34,7 +35,8 @@ const char* const kPassNames[kPassCount] = {
     "DownsampleND", "OcclusionShadow", "BilateralBlur", "GI",       "GITemporal", "SkyClear",   "SkyStars", "SkyBlackHole",
     "SkyAurora",    "SkyRing",         "AuroraHalf",    "SkyAverage", "Clouds",   "Reflect",    "SpillDown", "SpillBlur",
     "Lighting",     "RainDrop",        "RainSplash",    "Spray",    "SnowFlake",  "Trail",      "Focus",    "DofBlur",
-    "Cinematic",    "RayMask",         "RayBlur",       "BloomDown", "BloomUp",   "Final",      "TAA",      "Sharpen"};
+    "Cinematic",    "RayMask",         "RayBlur",       "BloomDown", "BloomUp",   "Final",      "TAA",      "Sharpen",
+    "Volumetric"};
 
 // The settings ManiaPlanet can do so far (the menu shows only these). The look (hdr.hlsl), then
 // the scene effects (scene.hlsl), then the stages as they come.
@@ -45,7 +47,8 @@ const char* const kSupported[] = {
     // scene
     "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "NeonLight", "GlobalIllumination", "SunLight", "AmbientTint",
     "SunColor", "GameSunColor", "SkyColor", "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter",
-    "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth"};
+    "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
+    "VolumetricLight"};
 
 } // namespace
 
@@ -179,6 +182,7 @@ bool Effects::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillDown, sizeof(g_PS_SpillDown), nullptr, &m_spillDown));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillBlur, sizeof(g_PS_SpillBlur), nullptr, &m_spillBlur));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Lighting, sizeof(g_PS_Lighting), nullptr, &m_lighting));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Volumetric, sizeof(g_PS_Volumetric), nullptr, &m_volumetric));
 
     D3D11_BUFFER_DESC cb = {};
     cb.Usage = D3D11_USAGE_DEFAULT;
@@ -224,6 +228,7 @@ void Effects::releaseTargets() {
     for (auto& t : m_gi_) t.release();
     for (auto& t : m_giHistory) t.release();
     for (auto& t : m_spill) t.release();
+    for (auto& t : m_volume) t.release();
     for (auto& t : m_hdr) t.release();
     m_result = nullptr;
     m_sky.releaseTargets();
@@ -248,6 +253,7 @@ void Effects::release() {
     safeRelease(m_spillDown);
     safeRelease(m_spillBlur);
     safeRelease(m_lighting);
+    safeRelease(m_volumetric);
     safeRelease(m_frameCb);
     safeRelease(m_passCb);
     for (auto& s : m_samplers) safeRelease(s);
@@ -261,7 +267,8 @@ bool Effects::wanted(const tmshaders::Settings& s) {
     return s.aoStrength > 0.0f || s.shadowStrength > 0.0f || s.globalIllumination > 0.0f || s.neonLight > 0.0f || s.sunLight > 0.0f ||
            s.ambientTint > 0.0f || s.fogDensity > 0.0f || s.skyMode > 0 || s.skyEnhance > 0.0f || s.debugView != 0 ||
            s.volumetricClouds > 0.0f || s.godRays > 0.0f || s.lensFlare > 0.0f || s.wetness > 0.0f || s.rain > 0.0f || s.snow > 0.0f ||
-           s.puddles > 0.0f || s.reflections > 0.0f || s.lightning > 0.0f || s.depthOfField > 0.0f || s.motionBlur > 0.0f || s.taa;
+           s.puddles > 0.0f || s.reflections > 0.0f || s.lightning > 0.0f || s.depthOfField > 0.0f || s.motionBlur > 0.0f || s.taa ||
+           s.volumetricLight > 0.0f;
 }
 
 bool Effects::supports(const char* key) {
@@ -281,6 +288,7 @@ bool Effects::ensureTargets(UINT w, UINT h) {
     for (auto& t : m_gi_) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R11G11B10_FLOAT);
     for (auto& t : m_giHistory) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT);
     for (auto& t : m_spill) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    for (auto& t : m_volume) ok &= t.create(m_device, hw, hh, DXGI_FORMAT_R16G16B16A16_FLOAT);
     for (auto& t : m_hdr) ok &= t.create(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT);
     if (!ok) {
         releaseTargets();
@@ -697,6 +705,32 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
         spill = m_spill[0].srv;
     }
 
+    // Volumetric light: the view rays through the engine's own shadow maps. Only with the engine's
+    // sun as the light (a night sky or the black hole moves it; its shadow maps don't follow).
+    ID3D11ShaderResourceView* volume = nullptr;
+    const bool sunIsTheLight = !((s.skyMode >= 2 && s.skyMode != 5) || ((s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f));
+    if (s.volumetricLight > 0.0f && sunIsTheLight && frame.shadow && frame.shadow->valid && frame.shadow->constants &&
+        frame.shadow->sampler && frame.engine[kTexShadowDepth] && frame.engine[kTexShadowMap0] && frame.engine[kTexShadowMap1] &&
+        m_c[6][3] > 0.5f) {
+        static const float kSteps[] = {12.0f, 16.0f, 24.0f};
+        ID3D11Buffer* shadowCb = frame.shadow->constants;
+        ctx->PSSetConstantBuffers(4, 1, &shadowCb);
+        ID3D11SamplerState* cmp = frame.shadow->sampler;
+        ctx->PSSetSamplers(4, 1, &cmp);
+        const float p0[4] = {kSteps[std::clamp(s.quality, 0, 2)], static_cast<float>(m_frame % 64), 0, 0};
+        const float p1[4] = {frame.shadow->raster[0], frame.shadow->raster[1], 0, 0};
+        ID3D11ShaderResourceView* vin[3] = {frame.engine[kTexShadowDepth], frame.engine[kTexShadowMap0], frame.engine[kTexShadowMap1]};
+        run(ctx, kVolumetric, m_volumetric, m_volume[0], vin, 3, p0, p1);
+        ID3D11Buffer* noCb = nullptr;
+        ctx->PSSetConstantBuffers(4, 1, &noCb);
+        ID3D11ShaderResourceView* h[2] = {m_volume[0].srv, m_ndHalf_.srv};
+        const float dirH[4] = {hx, 0, 0, 0}, dirV[4] = {0, hy, 0, 0};
+        run(ctx, kVolumetric, m_blur, m_volume[1], h, 2, dirH);
+        ID3D11ShaderResourceView* v[2] = {m_volume[1].srv, m_ndHalf_.srv};
+        run(ctx, kVolumetric, m_blur, m_volume[0], v, 2, dirV);
+        volume = m_volume[0].srv;
+    }
+
     // The sky (custom skies, its average, clouds) and the reflections the composite reads.
     const SkyStage::Output sky = m_sky.run(ctx, *this, frame, s);
     bindFrame(ctx);
@@ -712,7 +746,11 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     ID3D11ShaderResourceView* in[8] = {occ, m_ndHalf_.srv, gi, sky.sky, sky.average, sky.clouds, spill, reflections};
     const float p0[4] = {sky.sky ? 1.0f : 0.0f, sky.average ? 1.0f : 0.0f, sky.clouds ? 1.0f : 0.0f, reflections ? 1.0f : 0.0f};
     m_currentHdr = 0;
-    run(ctx, kLighting, m_lighting, m_hdr[0], in, 8, p0);
+    ctx->PSSetShaderResources(16, 1, &volume);
+    const float p1[4] = {volume ? 1.0f : 0.0f, 0, 0, 0};
+    run(ctx, kLighting, m_lighting, m_hdr[0], in, 8, p0, p1);
+    ID3D11ShaderResourceView* noVolume = nullptr;
+    ctx->PSSetShaderResources(16, 1, &noVolume);
 
     // On the HDR image: weather (particles, lens drops), cinema (depth of field, motion blur,
     // TAA), then the sun's light shafts and lens flare.

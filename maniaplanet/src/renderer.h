@@ -18,7 +18,7 @@ struct StateBackup {
     void restore(ID3D11DeviceContext* ctx);
 
 private:
-    static constexpr UINT kSrvs = 16, kCbs = 4, kSamplers = 4; // as many as the mod's passes use
+    static constexpr UINT kSrvs = 17, kCbs = 5, kSamplers = 5; // as many as the mod's passes use
     UINT scissorCount = 0, viewportCount = 0;
     D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
     D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
@@ -59,6 +59,7 @@ private:
 struct EngineView {
     ID3D11Resource* const* tex = nullptr; // kTexCount entries
     const Camera* camera = nullptr;       // null: not found this frame
+    const EngineShadow* shadow = nullptr; // the sun shadow pass (null: not seen this frame)
     double time = 0.0;                    // seconds (animated effects)
     bool photo = false;
 };
@@ -154,7 +155,7 @@ private:
     };
     static constexpr int kViewsPerTexture = 4;
     TexView m_tex[kTexCount][kViewsPerTexture] = {};
-    int m_texCurrent[kTexCount] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    int m_texCurrent[kTexCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     int m_texNext[kTexCount] = {};
     int m_texLogged[kTexCount] = {};
 
