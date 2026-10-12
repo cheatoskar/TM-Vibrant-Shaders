@@ -163,6 +163,10 @@ public:
     void swap() { m_currentHdr = 1 - m_currentHdr; }
     // The engine's depth as the passes read it (t8), for stages that bind their own state.
     ID3D11ShaderResourceView* const* engineViews() const { return m_engineViews; }
+    // TMNF's colours (its skies, sun, haze) -> display-linear units here (u_Misc.z), worked out by
+    // the sky stage from the engine's tone-map constants: in effect from the next frame's constants.
+    void setTmnfScale(float scale) { m_tmnfScale = scale; }
+    float tmnfScale() const { return m_tmnfScale; }
 
 private:
     bool ensureTargets(UINT w, UINT h);
@@ -211,6 +215,10 @@ private:
     bool m_temporalValid = false;
     unsigned m_frame = 0;
     double m_lastTime = 0.0;
+    // About what the engine's usual tone map gives (a sunset capture: 1.82) until it is read back.
+    float m_tmnfScale = 1.8f;
+    int m_boltSlot = -1000000; // lightning strike the bolt direction belongs to
+    float m_boltAzimuth = 0.0f;
 };
 
 } // namespace tmvs_mp

@@ -1,8 +1,9 @@
 #pragma once
 // Sky stage: the TMNF mod's custom skies (clear sky, starry night, black hole, aurora, ring world),
-// the sky average (the haze's colour), volumetric clouds, and after the composite the light shafts
-// and the lens flare. Shaders: shaders/sky.hlsl (passes), shaders/sky.hlsli (what PS_Lighting
-// calls for sky pixels and the sky's light on the scene).
+// the game's sky enhanced (gradient, sun glow), volumetric clouds, lightning in the sky, the sky
+// average (the haze's colour), and after the composite the light shafts and the lens flare.
+// Shaders: shaders/sky.hlsl (passes), shaders/sky.hlsli (what PS_Lighting calls for sky pixels and
+// the sky's light on the scene).
 #include <d3d11.h>
 
 namespace tmshaders {
@@ -24,7 +25,7 @@ public:
 
     // What the composite reads (null: not drawn this frame).
     struct Output {
-        ID3D11ShaderResourceView* sky = nullptr;     // full res: custom sky (rgb display-linear HDR, a = 1)
+        ID3D11ShaderResourceView* sky = nullptr;     // full res: the finished sky (rgb display-linear HDR)
         ID3D11ShaderResourceView* average = nullptr; // 1x1: sky colour near the horizon (rgb), confidence (a)
         ID3D11ShaderResourceView* clouds = nullptr;  // half res: in-scattered light (rgb), transmittance (a)
     };
@@ -33,6 +34,11 @@ public:
     // After the composite, weather and cinema: light shafts and lens flare (fx.current() -> fx.next(),
     // then fx.swap()).
     void post(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s);
+
+private:
+    // Shaders, targets and state live in effects_sky.cpp (it needs effects.h, which includes this).
+    struct Impl;
+    Impl* m_impl = nullptr;
 };
 
 } // namespace tmvs_mp

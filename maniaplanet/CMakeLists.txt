@@ -101,6 +101,7 @@ add_library(tmvs_mp_core STATIC
   ${TMVS_ROOT}/src/image.cpp
   ${TMVS_ROOT}/src/update.cpp
   ${TMVS_ROOT}/src/weather.cpp
+  ${TMVS_ROOT}/src/noise.cpp
   ${MP_SHADER_HEADERS}
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
