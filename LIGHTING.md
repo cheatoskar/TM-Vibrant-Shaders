@@ -147,3 +147,30 @@ Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Hori
   glowed x HighlightBoost (car p95 210 vs. the game's 191; 135 without the boost). With
   `CleanHighlights` the car material (stencil) is no lamp. In game only (no stencil in the
   previewer). PS_Lighting is at 3897 of 3900 slots.
+
+### Owner test 2 of GameHdr (2026-10-12): ramp fine, lamps darker
+
+- Why the lamps got darker: in the game's float image a lamp is about as bright as floodlit
+  concrete (floodlight heads 1.0..1.25 on A01, a floodlit surface up to ~1.5). The game never
+  drew lamps brighter than what they light. Any one tone curve treats both alike: the longer
+  shoulder that gave the ramp its texture back pulled every lamp the guess missed to grey (the
+  night floor holds big lamp clusters only at `NightSurfaces`, ~204). No global curve can fix
+  both; per pixel the image cannot tell them apart either. The engine can: it knows the material.
+- Now with GameHdr: pixels of the light class (`TSelfI` materials, the cars' lights; stencil)
+  glow in full from 0.4 to 0.8 of the game's white, whatever the guess says (c45.zw).
+  Untested in game: it helps only the lamps that really are `TSelfI` (in the 2026-10-10 batch
+  many were not).
+- **F12 now records which material drew each pixel** (`capture_NNN.mat`, with the material
+  masks on): the frame after F12 tags every depth-writing draw with its material's own id
+  (1..255) instead of its class, the pipeline reads the ids back (one pass per stencil bit)
+  and builds the class mask from a palette, so the frame looks as usual. The file lists each
+  material's shader file, class, draws and whether it writes depth or adds light (glows have
+  no pixels: they write no depth). `python tools/materials.py capture_NNN.mat [--map ids.png]`
+  shows how much of the image each material covers and how bright the game drew it there
+  (8-bit and float). The previewer reads the `.mat` next to a capture: material masks (car
+  test, lamps, debug view 8) are testable offline from now on (`--nomat`: without).
+- Next: an A13 capture with `.hdr16` and `.mat` tells which materials the arch lamps, the
+  floodlights and the neon borders are. Those that aren't `TSelfI` go into the light class
+  by name (`engine::classify`): lamps known, not guessed, and the guess can step back.
+- The car with the car test (now visible offline on capture 044 with a synthetic `.mat`): no
+  pink-white glow, texture on the body, but darker than the game (car p95 194 vs. 255).

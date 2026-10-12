@@ -80,6 +80,17 @@ struct SceneState {
 } g_scene;
 
 bool g_captureRequested = false;
+// F12 with the material masks on: the next main camera tags every depth-writing draw with
+// its material's own id (1..255) instead of its class, and that frame is captured with the
+// ids (capture_NNN.mat): which material drew each pixel, by name.
+bool g_idFrame = false;
+struct IdMaterial {
+    const void* shader;
+    int draws;
+    bool depthWrite; // tagged in the stencil (else: drawn without depth writes, no pixels)
+    bool additive;   // one-one blending (glows, headlight pools)
+};
+std::vector<IdMaterial> g_idMaterials; // id = index + 1
 int g_capturesWritten = 0;
 Pipeline g_pipeline;
 AutoQuality g_autoQuality;
@@ -422,7 +433,41 @@ void writeHdrCapture(IDirect3DDevice9* device, const std::wstring& path) {
     fclose(f);
 }
 
-void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs) {
+// The material ids next to the capture: "TMM1", width, height, count, then per id (1..count)
+// class (engine::Material), flags (1 depth writes, 2 one-one blending), draws, the length
+// and UTF-8 bytes of its shader file; then one id byte per pixel, rows top-down (0: none).
+void writeMaterialCapture(IDirect3DDevice9* device, const std::wstring& path) {
+    std::vector<uint8_t> ids;
+    if (!g_pipeline.readMaterialIds(device, ids) || ids.size() != static_cast<size_t>(g_frameWidth) * g_frameHeight) {
+        TMVS_LOG("capture: material ids not read");
+        return;
+    }
+    FILE* f = _wfopen(path.c_str(), L"wb");
+    if (!f) return;
+    const uint32_t header[4] = {0x314D4D54u, g_frameWidth, g_frameHeight, static_cast<uint32_t>(g_idMaterials.size())}; // "TMM1"
+    fwrite(header, sizeof(header), 1, f);
+    int lights = 0;
+    for (const IdMaterial& m : g_idMaterials) {
+        wchar_t file[512] = {};
+        char utf8[1024] = {};
+        if (!engine::materialFile(m.shader, file, 512)) swprintf(file, 512, m.shader ? L"(unnamed %p)" : L"(none)", m.shader);
+        const int bytes = WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), nullptr, nullptr);
+        const uint8_t kind[2] = {static_cast<uint8_t>(engine::materialClass(m.shader)),
+                                 static_cast<uint8_t>((m.depthWrite ? 1 : 0) | (m.additive ? 2 : 0))};
+        const uint32_t draws = static_cast<uint32_t>(m.draws);
+        const uint16_t length = static_cast<uint16_t>(bytes > 0 ? bytes - 1 : 0);
+        fwrite(kind, sizeof(kind), 1, f);
+        fwrite(&draws, sizeof(draws), 1, f);
+        fwrite(&length, sizeof(length), 1, f);
+        fwrite(utf8, 1, length, f);
+        if (kind[0] == static_cast<uint8_t>(engine::Material::Light)) lights++;
+    }
+    fwrite(ids.data(), 1, ids.size(), f);
+    fclose(f);
+    TMVS_LOG("capture: material ids of %d materials (%d lights)", static_cast<int>(g_idMaterials.size()), lights);
+}
+
+void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs, bool materialIds) {
     FrameCapture cap;
     cap.width = inputs.width;
     cap.height = inputs.height;
@@ -452,6 +497,12 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs) {
         std::wstring hdr = log::dataDir() + name;
         hdr.replace(hdr.size() - 6, 6, L".hdr16");
         writeHdrCapture(device, hdr);
+    }
+    // Which material drew each pixel (capture_NNN.mat).
+    if (materialIds) {
+        std::wstring mat = log::dataDir() + name;
+        mat.replace(mat.size() - 6, 6, L".mat");
+        writeMaterialCapture(device, mat);
     }
     g_screenshotRequested = true;
 }
@@ -670,10 +721,19 @@ void processScene(IDirect3DDevice9* device) {
     g_frameWidth = width;
     g_frameHeight = height;
 
-    if (g_captureRequested) {
-        g_captureRequested = false;
-        writeCapture(device, inputs);
+    // F12: with the material masks on, the capture is the next frame whose draws carried their
+    // material ids (the mask is built from them); not of a camera into part of the screen.
+    const bool idFrame = g_idFrame && inputs.materials && !part;
+    unsigned char idClasses[256] = {};
+    if (idFrame) {
+        for (size_t i = 0; i < g_idMaterials.size(); i++) idClasses[i + 1] = static_cast<unsigned char>(engine::materialClass(g_idMaterials[i].shader));
+        inputs.materialClasses = idClasses;
     }
+    if (g_idFrame && !idFrame) inputs.materials = false; // ids in the stencil, but no capture of them
+    g_idFrame = false;
+    const bool capture = g_captureRequested && (idFrame || !inputs.materials || part);
+    if (capture) g_captureRequested = false;
+    if (capture && !settings.enabled) writeCapture(device, inputs, false);
     if (settings.enabled) {
         // Auto quality renders a reduced copy; your settings stay untouched.
         Settings effective = settings;
@@ -692,6 +752,7 @@ void processScene(IDirect3DDevice9* device) {
         LARGE_INTEGER renderStart, renderEnd;
         QueryPerformanceCounter(&renderStart);
         g_pipeline.render(device, inputs, effective, shaded);
+        if (capture) writeCapture(device, inputs, idFrame);
         // A preset was just saved: this frame (without HUD and menu) becomes its picture, never
         // with the compare split.
         std::string picture;
@@ -782,6 +843,8 @@ void onCameraBegin(void* camera) {
         engine::setMainCamera(camera);
         // Material masks: nothing left from the last frame where nothing is drawn (the sky).
         if (materialsWanted()) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
+        g_idFrame = g_captureRequested && materialsWanted();
+        if (g_idFrame) g_idMaterials.clear();
         beginHdr(g_device, rt);
     } else if (rt) {
         // A screen-sized camera that isn't shaded: say why (a player's shaders stayed off in
@@ -853,6 +916,22 @@ void tagStencil(IDirect3DDevice9* device, DWORD value, DWORD mask) {
     g_stencilTagged = true;
 }
 
+// F12's frame: the id of a material (1..254; 255 = the 255th and every one after it).
+DWORD materialId(const void* shader, bool depthWrite, bool additive) {
+    for (size_t i = 0; i < g_idMaterials.size(); i++) {
+        IdMaterial& m = g_idMaterials[i];
+        if (m.shader == shader) {
+            m.draws++;
+            m.depthWrite = m.depthWrite || depthWrite;
+            m.additive = m.additive || additive;
+            return static_cast<DWORD>(i + 1);
+        }
+    }
+    if (g_idMaterials.size() >= 255) return 255;
+    g_idMaterials.push_back({shader, 1, depthWrite, additive});
+    return static_cast<DWORD>(g_idMaterials.size());
+}
+
 // Every draw call (all four kinds: a draw without its own tag must not write the tag of the
 // draw before it, the stencil state stays set).
 void onDraw(IDirect3DDevice9* device) {
@@ -877,6 +956,15 @@ void onDraw(IDirect3DDevice9* device) {
         untagStencil(device);
         return;
     }
+    DWORD blend = FALSE, dest = D3DBLEND_ZERO;
+    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+    device->GetRenderState(D3DRS_DESTBLEND, &dest);
+    if (g_idFrame) {
+        const DWORD id = materialId(engine::currentShader(), zwrite != FALSE, blend && dest == D3DBLEND_ONE);
+        if (zwrite) tagStencil(device, id, 0xFF);
+        else untagStencil(device);
+        return;
+    }
     if (zwrite) {
         // Its class, in the low bits; clears the "added light" bit of what it covers.
         tagStencil(device, static_cast<DWORD>(engine::currentMaterial()), 0xFF);
@@ -884,9 +972,6 @@ void onDraw(IDirect3DDevice9* device) {
     }
     // Light the game adds on top of a surface (headlight pools, glows: one-one blending,
     // no depth writes) only sets bit 3 and keeps the class of the surface below.
-    DWORD blend = FALSE, dest = D3DBLEND_ZERO;
-    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
-    device->GetRenderState(D3DRS_DESTBLEND, &dest);
     if (blend && dest == D3DBLEND_ONE) tagStencil(device, Pipeline::kAddedLightBit, Pipeline::kAddedLightBit);
     else untagStencil(device);
 }

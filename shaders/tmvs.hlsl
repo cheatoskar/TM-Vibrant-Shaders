@@ -57,7 +57,7 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
-float4 u_Clean     : register(c45); // x: clean highlights (night maps: floodlit white isn't tamed as sun glare); y: s0 of the lighting pass is the game's float image (GameHdr)
+float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -2211,15 +2211,19 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Clean highlights: a car is no lamp. At night its bright body (white, facing up) passed for
     // one and glowed x HighlightBoost: a washed-out, pink-white car. Its lights have the game's
     // own glow sprites.
-    emissive *= saturate((0.75 - mat.g * u_Clean.x) * 8.0); // car (g 1) 0; glass (.5), grass, off: 1
+    // GameHdr: what the engine draws as a light (self-illuminated materials, the cars' lights)
+    // glows whatever the guess says. In the game's float image a lamp is no brighter than
+    // floodlit concrete (both about 1.0..1.5): the longer shoulder turned missed lamps grey.
+    float peakC = max(c.r, max(c.g, c.b));
+    emissive = max(emissive * saturate(6.0 - mat.g * u_Clean.x), // car (g 1) 0; glass (.5), grass, off: 1
+                   mat.r * saturate(peakC * u_Clean.z + u_Clean.w)); // its bright parts (0.4..0.8); no GameHdr: 0
     float3 glow = min(c, 1.0) * u_Rays.w * emissive;
     // White lights and screens glow less than coloured ones, or they bleach to flat white.
-    float peakC = max(c.r, max(c.g, c.b));
-    glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3)));
+    float sat = (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3);
+    glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, sat));
 
     // The game bakes a bright sun glare into the asphalt; tame it so the road doesn't
     // wash out to white (it's a reflection, it gets its sun highlight further down).
-    float sat = (max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3);
     // Below the tonemapper's knee the asphalt keeps its texture contrast.
     float glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, luma(c)) * (1.0 - smoothstep(0.25, 0.5, sat));
     // Clean highlights: only where the game baked a sun. Night maps (and day maps lit at
