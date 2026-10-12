@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
     static const char* const kSceneKeys[] = {"AOStrength", "ShadowStrength", "GlobalIllumination", "NeonLight", "SunLight", "AmbientTint",
                                              "FogDensity", "SkyEnhance", "GodRays", "LensFlare", "VolumetricClouds", "SkyMode",
                                              "Wetness", "Rain", "Snow", "Puddles", "Reflections", "Lightning", "DepthOfField",
-                                             "MotionBlur", "TAA"};
+                                             "MotionBlur", "TAA", "VolumetricLight"};
     for (const char* key : kSceneKeys) set(key, "0");
     hdrClear = 0.18f;
     for (int i = 0; i < 3; i++) frame(true, centre, hud);
