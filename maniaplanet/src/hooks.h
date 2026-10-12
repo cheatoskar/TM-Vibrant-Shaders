@@ -4,6 +4,7 @@
 #include <cstdint>
 
 namespace tmvs_mp {
+class Effects;
 namespace hooks {
 
 // Set while the mod itself draws: our own context calls go through the patched vtables too and
@@ -30,6 +31,9 @@ struct Stats {
     uint32_t drawsLastFrame = 0;
     bool toneMapSeen = false;      // last frame
     bool toneMapped = false;       // the mod's HDR stage ran in place of the engine's tone map
+    bool effectsRan = false;       // the scene effects ran in it (last frame)
+    bool sunFromLighting = false;  // the sun comes from the lighting pass's constants (else the shadow matrix)
+    float sun[3] = {};             // towards the sun (world)
     Placed placed = Placed::None;  // last frame
     const char* hudShader = nullptr; // the draw the effect went in front of (last frame)
     bool depthFound = false;
@@ -40,6 +44,8 @@ struct Stats {
     uint32_t width = 0, height = 0;
 };
 const Stats& stats();
+// The scene effects (their GPU times for the Performance page); null before the renderer is ready.
+Effects* effects();
 
 } // namespace hooks
 } // namespace tmvs_mp

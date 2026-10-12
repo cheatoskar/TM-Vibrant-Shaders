@@ -183,6 +183,18 @@ tmshaders::Mood g_seenMood = tmshaders::Mood::Unknown;
 int g_moodFrames = 0;
 void prepareLook();
 
+// Seconds since the mod started (animated effects).
+double nowSeconds() {
+    static LARGE_INTEGER frequency = {}, start = {};
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (!frequency.QuadPart) {
+        QueryPerformanceFrequency(&frequency);
+        start = now;
+    }
+    return static_cast<double>(now.QuadPart - start.QuadPart) / static_cast<double>(frequency.QuadPart);
+}
+
 // The engine's textures of this frame (owned references, kept until replaced) and its camera.
 ID3D11Resource* g_tex[kTexCount] = {};
 Camera g_camera;
@@ -203,31 +215,34 @@ void releaseTextures() {
     for (int i = 0; i < kTexCount; i++) setTexture(i, nullptr);
 }
 
-// Copies of the engine's SceneV constant buffers, taken while it uploads them (Map/Unmap or
-// UpdateSubresource), so the camera can be read without a GPU read-back.
+// Copies of the engine's SceneV (vertex) and SceneP (pixel lighting) constant buffers, taken
+// while it uploads them (Map/Unmap or UpdateSubresource), so the camera and the sun can be read
+// without a GPU read-back.
 struct SceneVCopy {
     ID3D11Resource* buffer = nullptr; // identity only
     void* mapped = nullptr;
+    UINT size = 0;
     unsigned char data[kSceneVSize] = {};
     bool filled = false;
 };
-SceneVCopy g_sceneV[8];
-std::unordered_map<ID3D11Resource*, bool> g_isSceneV;
+SceneVCopy g_sceneV[16];
+std::unordered_map<ID3D11Resource*, UINT> g_isSceneV;
 
-bool isSceneV(ID3D11Resource* res) {
+// The size of the engine's per-camera constant buffer this is (SceneV 704, SceneP 672), else 0.
+UINT sceneBufferSize(ID3D11Resource* res) {
     auto it = g_isSceneV.find(res);
     if (it != g_isSceneV.end()) return it->second;
     D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
     res->GetType(&dim);
-    bool yes = false;
+    UINT size = 0;
     if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
         D3D11_BUFFER_DESC d;
         static_cast<ID3D11Buffer*>(res)->GetDesc(&d);
-        yes = d.ByteWidth == kSceneVSize && (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER);
+        if ((d.ByteWidth == kSceneVSize || d.ByteWidth == kScenePSize) && (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER)) size = d.ByteWidth;
     }
     if (g_isSceneV.size() > 4096) g_isSceneV.clear();
-    g_isSceneV[res] = yes;
-    return yes;
+    g_isSceneV[res] = size;
+    return size;
 }
 
 SceneVCopy* sceneVCopy(ID3D11Resource* res, bool create) {
@@ -251,7 +266,7 @@ void takeCamera(ID3D11DeviceContext* ctx) {
     ctx->VSGetConstantBuffers(13, 1, &cb);
     if (!cb) return;
     const SceneVCopy* copy = sceneVCopy(cb, false);
-    if (!copy || !copy->filled) {
+    if (!copy || !copy->filled || copy->size != kSceneVSize) {
         // Not an upload we saw: log what the engine binds instead (once), to learn its scheme.
         static int logged = 0;
         if (logged++ < 3) {
@@ -268,6 +283,22 @@ void takeCamera(ID3D11DeviceContext* ctx) {
     const bool was = g_camera.valid;
     decodeCamera(g_camera);
     g_cameraThisFrame = g_camera.valid;
+    // The lighting pass's own constants (pixel slot 13): the sun exactly as the engine lights with it.
+    ID3D11Buffer* pcb = nullptr;
+    ctx->PSGetConstantBuffers(13, 1, &pcb);
+    if (pcb) {
+        const SceneVCopy* p = sceneVCopy(pcb, false);
+        if (p && p->filled && p->size == kScenePSize) {
+            memcpy(g_camera.rawP, p->data, kScenePSize);
+            g_camera.hasSceneP = true;
+            const bool had = g_camera.sunFromSceneP;
+            if (decodeSceneP(g_camera) && !had)
+                TMVS_LOG("hooks: sun from the lighting constants (towards the sun %.3f %.3f %.3f, colour %.2f %.2f %.2f)",
+                         g_camera.sunDirection[0], g_camera.sunDirection[1], g_camera.sunDirection[2], g_camera.sunColour[0],
+                         g_camera.sunColour[1], g_camera.sunColour[2]);
+        }
+        pcb->Release();
+    }
     static int logged = 0;
     if (g_camera.valid != was && logged++ < 5) {
         TMVS_LOG("hooks: camera %s (eye %.1f %.1f %.1f, matrix %s)", g_camera.valid ? "found" : "lost", g_camera.eye[0],
@@ -366,11 +397,39 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     ctx->PSGetShaderResources(0, 2, in);
     ID3D11Buffer* constants = nullptr;
     ctx->PSGetConstantBuffers(0, 1, &constants);
-    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, g_look);
+    EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
+    view.time = nowSeconds();
+    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, g_look, view);
     for (auto* v : in)
         if (v) v->Release();
     if (constants) constants->Release();
     return done;
+}
+
+// The engine's bloom is added onto its HDR image by FxBloom_Final (blended: one + one). With the
+// mod's bloom on and "Turn off the game's FX" (DisableGameFX), that draw is skipped, so nothing
+// glows twice. Only when it really adds (checked on its blend state): anything else stays.
+bool skipEngineBloom(ID3D11DeviceContext* ctx, const char* name) {
+    if (!name || strcmp(name, "Effects/FxBloom_Final") != 0) return false;
+    const tmshaders::Settings& s = g_lookSettings;
+    if (!s.enabled || !s.disableGameFx || s.bloom <= 0.001f || !options::current().hdrStage) return false;
+    ID3D11BlendState* blend = nullptr;
+    FLOAT factor[4];
+    UINT mask = 0;
+    ctx->OMGetBlendState(&blend, factor, &mask);
+    bool additive = false;
+    if (blend) {
+        D3D11_BLEND_DESC d;
+        blend->GetDesc(&d);
+        const auto& rt = d.RenderTarget[0];
+        additive = rt.BlendEnable && rt.BlendOp == D3D11_BLEND_OP_ADD && rt.DestBlend == D3D11_BLEND_ONE;
+        blend->Release();
+    }
+    static int logged = 0;
+    if (logged++ < 1)
+        TMVS_LOG("hooks: the engine's bloom (FxBloom_Final) %s", additive ? "adds onto the HDR image: skipped while the mod's bloom is on"
+                                                                         : "is not additive: left alone");
+    return additive;
 }
 
 // Before a draw of the game on the main context. True: skip the game's draw.
@@ -379,6 +438,7 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     f.draws++;
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
     const Role role = f.ps.role;
+    if (f.phase == Phase::Scene && role == Role::Post && skipEngineBloom(ctx, f.ps.name)) return true;
 
     if (role == Role::ToneMap && f.rt && screenSized(f.rtW, f.rtH)) {
         if (capture::active() && !f.toneMapSeen) capture::onToneMap(g_device, ctx);
@@ -556,9 +616,12 @@ void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11
 HRESULT STDMETHODCALLTYPE mapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub, D3D11_MAP type, UINT flags,
                                     D3D11_MAPPED_SUBRESOURCE* out) {
     const HRESULT hr = g_map.get<MapFn>(ctx)(ctx, res, sub, type, flags, out);
-    if (SUCCEEDED(hr) && out && isMain(ctx) && sub == 0 && (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE) &&
-        isSceneV(res)) {
-        sceneVCopy(res, true)->mapped = out->pData;
+    if (SUCCEEDED(hr) && out && isMain(ctx) && sub == 0 && (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE)) {
+        if (const UINT size = sceneBufferSize(res)) {
+            SceneVCopy* copy = sceneVCopy(res, true);
+            copy->mapped = out->pData;
+            copy->size = size;
+        }
     }
     return hr;
 }
@@ -567,7 +630,7 @@ void STDMETHODCALLTYPE unmapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res
     if (isMain(ctx) && sub == 0) {
         SceneVCopy* copy = sceneVCopy(res, false);
         if (copy && copy->mapped) {
-            memcpy(copy->data, copy->mapped, kSceneVSize);
+            memcpy(copy->data, copy->mapped, copy->size);
             copy->mapped = nullptr;
             copy->filled = true;
         }
@@ -577,10 +640,13 @@ void STDMETHODCALLTYPE unmapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res
 
 void STDMETHODCALLTYPE updateSubresourceDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub, const D3D11_BOX* box,
                                                const void* data, UINT rowPitch, UINT depthPitch) {
-    if (isMain(ctx) && sub == 0 && !box && data && isSceneV(res)) {
-        SceneVCopy* copy = sceneVCopy(res, true);
-        memcpy(copy->data, data, kSceneVSize);
-        copy->filled = true;
+    if (isMain(ctx) && sub == 0 && !box && data) {
+        if (const UINT size = sceneBufferSize(res)) {
+            SceneVCopy* copy = sceneVCopy(res, true);
+            memcpy(copy->data, data, size);
+            copy->size = size;
+            copy->filled = true;
+        }
     }
     g_updateSubresource.get<UpdateSubresourceFn>(ctx)(ctx, res, sub, box, data, rowPitch, depthPitch);
 }
@@ -719,6 +785,9 @@ void onPresent(IDXGISwapChain* sc) {
     g_stats.placed = f.placed;
     g_stats.hudShader = f.hudShader;
     g_stats.toneMapped = f.toneMapped;
+    g_stats.effectsRan = f.toneMapped && g_renderer.effectsRan();
+    g_stats.sunFromLighting = g_camera.sunFromSceneP;
+    memcpy(g_stats.sun, g_camera.sunDirection, sizeof(g_stats.sun));
     g_stats.drawsLastFrame = f.draws;
     g_stats.commandLists = f.commandLists;
     g_stats.depthFound = g_renderer.hasDepthView();
@@ -851,6 +920,10 @@ bool inside() {
 
 const Stats& stats() {
     return g_stats;
+}
+
+Effects* effects() {
+    return g_rendererReady ? &g_renderer.effects() : nullptr;
 }
 
 void onDevice(ID3D11Device* device) {

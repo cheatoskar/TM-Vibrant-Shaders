@@ -101,7 +101,48 @@ bool decodeCamera(Camera& c) {
     memcpy(c.viewProj, c.transposed ? vpT : vp, sizeof(c.viewProj));
     const float scale = std::fabs(c.eye[0]) + std::fabs(c.eye[1]) + std::fabs(c.eye[2]) + 1.0f;
     c.valid = std::fmin(wRows, wCols) < 1e-3f * scale && invert(c.viewProj, c.invViewProj);
+
+    // Camera projection, stored like WorldPrCamera.
+    float p[16];
+    memcpy(p, c.raw + kSceneVCameraProjection, sizeof(p));
+    for (int r = 0; r < 4; r++)
+        for (int k = 0; k < 4; k++) c.projection[r * 4 + k] = c.transposed ? p[k * 4 + r] : p[r * 4 + k];
+    memcpy(c.ambient, c.raw + kSceneVLightAmbientLinear, sizeof(c.ambient));
+
+    // The sun from the shadow map's matrix (row 2 runs along the light): the lighting constants
+    // (SceneP) replace it when they were seen. The sign: the sun is the end the light comes from;
+    // a capture at sunset (sun colour orange) had row 2 pointing 13 degrees up.
+    if (!c.sunFromSceneP) {
+        float s[16];
+        memcpy(s, c.raw + kSceneVShadowLDir, sizeof(s));
+        float d[3] = {s[8], s[9], s[10]};
+        if (c.transposed) {
+            d[0] = s[2];
+            d[1] = s[6];
+            d[2] = s[10];
+        }
+        const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        c.sunDirectionKnown = std::isfinite(len) && len > 1e-12f;
+        if (c.sunDirectionKnown)
+            for (int i = 0; i < 3; i++) c.sunDirection[i] = d[i] / len;
+    }
     return c.valid;
+}
+
+bool decodeSceneP(Camera& c) {
+    if (!c.hasSceneP) return false;
+    float l[4];
+    memcpy(l, c.rawP + kScenePLightDirInWorld0, sizeof(l));
+    const float len = std::sqrt(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]);
+    if (!std::isfinite(len) || len < 1e-6f) return false;
+    // The shader lights with N.(-L): L runs from the sun into the scene.
+    for (int i = 0; i < 3; i++) c.sunDirection[i] = -l[i] / len;
+    c.sunDirectionKnown = true;
+    c.sunFromSceneP = true;
+    memcpy(c.ambient, c.rawP + kScenePLightAmbientLinear, sizeof(c.ambient));
+    memcpy(c.sunColour, c.rawP + kScenePLightDirRgbLinear0, sizeof(c.sunColour));
+    memcpy(c.fog, c.rawP + kScenePFog, sizeof(c.fog));
+    return true;
 }
 
 } // namespace tmvs_mp

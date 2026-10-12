@@ -113,6 +113,7 @@ extern "C" void WINAPI TmvsMpStats(int* out) {
     out[7] = static_cast<int>(s.textures);
     for (int i = 0; i < 3; i++) out[8 + i] = static_cast<int>(s.eye[i] * 100.0f + (s.eye[i] < 0 ? -0.5f : 0.5f));
     out[11] = s.toneMapped ? 1 : 0;
+    out[12] = s.effectsRan ? 1 : 0;
 }
 
 // For tools/harness.cpp: change a setting by its settings.ini key while running.

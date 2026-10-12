@@ -242,12 +242,7 @@ void hotkeys() {
 
 // What the ManiaPlanet build can do so far; the menu shows only these.
 bool supports(const tmshaders::Field& f) {
-    static const char* const kKeys[] = {"Exposure",  "Contrast", "ToneKnee", "ToneCurve",   "Saturation",          "Vibrance",
-                                        "Temperature", "Tint",   "Lift",     "Gamma",       "Gain",                "SplitToning",
-                                        "Bloom",     "BloomRadius", "Vignette", "FilmGrain", "ChromaticAberration", "Sharpen"};
-    for (const char* key : kKeys)
-        if (!strcmp(f.key, key)) return true;
-    return false;
+    return Effects::supports(f.key);
 }
 
 const char* placedText(hooks::Placed p) {
@@ -356,12 +351,27 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     io.MouseDrawCursor = config.showOverlay && io.WantCaptureMouse;
     ImGui::NewFrame();
     if (config.showOverlay) {
+        // The effects' GPU times for the Performance page (as TMNF's pipeline reports them).
+        struct Timings : tmshaders::menu::PassTimings {
+            int count() const override { return kPassCount; }
+            const char* name(int pass) const override { return passName(pass); }
+            float time(int pass) const override {
+                const Effects* fx = hooks::effects();
+                return fx ? fx->profiler().time(pass) : 0.0f;
+            }
+            float total() const override {
+                const Effects* fx = hooks::effects();
+                return fx ? fx->profiler().total() : 0.0f;
+            }
+        };
+        static Timings timings;
         static tmshaders::menu::Host host = [] {
             tmshaders::menu::Host h;
             h.picture = [](const std::string& preset) {
                 return reinterpret_cast<ImTextureID>(thumbnails::get(g_device, preset));
             };
             h.supports = supports;
+            h.timings = &timings;
             h.gamePanelTitle = "ManiaPlanet";
             h.gamePanel = gamePanel;
             return h;

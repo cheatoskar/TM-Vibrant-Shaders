@@ -1,4 +1,5 @@
 #pragma once
+#include "effects.h"
 #include "engine_frame.h"
 #include "options.h"
 #include <d3d11.h>
@@ -17,7 +18,7 @@ struct StateBackup {
     void restore(ID3D11DeviceContext* ctx);
 
 private:
-    static constexpr UINT kSrvs = 8, kCbs = 4; // as many as the mod's passes use
+    static constexpr UINT kSrvs = 16, kCbs = 4, kSamplers = 4; // as many as the mod's passes use
     UINT scissorCount = 0, viewportCount = 0;
     D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
     D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
@@ -28,8 +29,10 @@ private:
     UINT stencilRef = 0;
     ID3D11DepthStencilState* dss = nullptr;
     ID3D11ShaderResourceView* psSrv[kSrvs] = {};
-    ID3D11SamplerState* psSamplers[2] = {};
+    ID3D11SamplerState* psSamplers[kSamplers] = {};
     ID3D11Buffer* psCb[kCbs] = {};
+    ID3D11Buffer* vsCb[kCbs] = {};
+    ID3D11ShaderResourceView* vsSrv[kSrvs] = {};
     ID3D11PixelShader* ps = nullptr;
     ID3D11VertexShader* vs = nullptr;
     ID3D11GeometryShader* gs = nullptr;
@@ -56,6 +59,8 @@ private:
 struct EngineView {
     ID3D11Resource* const* tex = nullptr; // kTexCount entries
     const Camera* camera = nullptr;       // null: not found this frame
+    double time = 0.0;                    // seconds (animated effects)
+    bool photo = false;
 };
 
 // The look of this frame: the shared TMNF settings plus what goes with them.
@@ -76,10 +81,14 @@ public:
     void releaseTargets();
 
     // The HDR stage in place of the engine's tone map: reads the HDR image and exposure the engine
-    // bound for its own draw and its tone-map constants, writes the picture into its target
-    // (exposure, bloom, grade, curve, vignette, look, grain). False: the engine's draw runs.
+    // bound for its own draw and its tone-map constants, runs the scene effects on them (effects.cpp)
+    // and writes the picture into its target (exposure, bloom, grade, curve, vignette, look,
+    // grain). False: the engine's draw runs.
     bool toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, ID3D11ShaderResourceView* hdr,
-                 ID3D11ShaderResourceView* exposure, ID3D11Buffer* engineConstants, const Look& look);
+                 ID3D11ShaderResourceView* exposure, ID3D11Buffer* engineConstants, const Look& look, const EngineView& engine);
+    // The scene effects ran in the last toneMap().
+    bool effectsRan() const { return m_effectsRan; }
+    Effects& effects() { return m_effects; }
 
     // The pass on the finished image of `target`, in place: chromatic aberration and sharpening,
     // the whole look when the HDR stage didn't run (hdrDone false), or a check view.
@@ -148,6 +157,10 @@ private:
     int m_texCurrent[kTexCount] = {-1, -1, -1, -1, -1, -1, -1, -1};
     int m_texNext[kTexCount] = {};
     int m_texLogged[kTexCount] = {};
+
+    Effects m_effects;
+    bool m_effectsReady = false;
+    bool m_effectsRan = false;
 
     std::string m_lutName;
     std::string m_lutError;

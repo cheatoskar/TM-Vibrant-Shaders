@@ -4,10 +4,11 @@
 //   b2 = its tone-map constants (bound by the engine for its own draw: we read them on the GPU).
 // Per frame: PS_BloomDown x N (first level exposes and thresholds) -> PS_BloomUp x N-1 -> PS_ToneMap
 // (the TMNF mod's PS_Final: exposure, bloom, grade, curve, vignette, look, grain).
+// entries: PS_BloomDown:ps_4_0 PS_BloomUp:ps_4_0 PS_ToneMap:ps_4_0
 
 cbuffer ToneParams : register(b0)
 {
-    float4 g_tone0; // has bloom, 0, 0, 0
+    float4 g_tone0; // has bloom, input already exposed (1: the scene effects' image), 0, 0
 };
 
 cbuffer PassParams : register(b1)
@@ -26,6 +27,7 @@ cbuffer EngineTone : register(b2)
 Texture2D g_src : register(t0);
 Texture2D g_exposure : register(t1);
 Texture2D g_bloom : register(t2);
+Texture2D g_game : register(t3); // the engine's own HDR image (compare split), when t0 is the effects'.
 SamplerState g_linear : register(s0);
 SamplerState g_point : register(s1);
 
@@ -40,6 +42,12 @@ struct VSOut
 float engineExposure()
 {
     return g_exposure.SampleLevel(g_point, g_eUV.xy, 0).z;
+}
+
+// The scene effects hand over their image with the engine's exposure applied.
+float inputExposure()
+{
+    return g_tone0.y > 0.5 ? 1.0 : engineExposure();
 }
 
 // ---- bloom (ported from the TMNF mod: Karis average against fireflies, soft threshold) ----
@@ -67,7 +75,7 @@ float4 PS_BloomDown(VSOut i) : SV_Target
     float3 result;
     if (g_texel.z > 0.5)
     {
-        float exposure = engineExposure() * exp2(g_l0.x);
+        float exposure = inputExposure() * exp2(g_l0.x);
         result = (karis(d, e, ii, j) * 0.5 + karis(a, b, f, g) * 0.125 + karis(b, c, g, h) * 0.125 +
                   karis(f, g, k, l) * 0.125 + karis(g, h, l, m) * 0.125) * exposure;
         // Soft threshold: mostly the bright part, a little of everything.
@@ -158,9 +166,13 @@ float matchScale(int mode)
 float4 PS_ToneMap(VSOut i) : SV_Target
 {
     float4 hdr = g_src.SampleLevel(g_point, i.uv, 0);
-    float3 x = min(hdr.rgb, 50000.0) * engineExposure();
+    float3 x = min(hdr.rgb, 50000.0) * inputExposure();
     // Compare (split): the game's own image on the left.
-    if (i.uv.x < g_l6.z) return float4(engineCurve(x), hdr.a);
+    if (i.uv.x < g_l6.z)
+    {
+        float3 game = g_tone0.y > 0.5 ? min(g_game.SampleLevel(g_point, i.uv, 0).rgb, 50000.0) * engineExposure() : x;
+        return float4(engineCurve(game), hdr.a);
+    }
     x *= exp2(g_l0.x);
     // Bloom adds light where it is bright (TMNF mixed it in, which on real HDR only darkened).
     if (g_tone0.x > 0.5) x += g_bloom.SampleLevel(g_linear, i.uv, 0).rgb * g_lSky.w * 1.6;

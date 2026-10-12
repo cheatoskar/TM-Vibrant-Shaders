@@ -414,7 +414,7 @@ int main(int argc, char** argv) {
         swapChain->Present(0, 0);
     };
 
-    int s[12] = {};
+    int s[13] = {};
     unsigned char centre[4] = {}, hud[4] = {};
     if (grade) {
         for (int i = 0; i < 3; i++) frame(false, centre, hud);
@@ -450,6 +450,12 @@ int main(int argc, char** argv) {
     set("Exposure", "0");
     set("HdrStage", "1");
     set("ToneCurve", "1");
+    // The curve alone: no scene effects (they relight the grey).
+    static const char* const kSceneKeys[] = {"AOStrength", "ShadowStrength", "GlobalIllumination", "NeonLight", "SunLight", "AmbientTint",
+                                             "FogDensity", "SkyEnhance", "GodRays", "LensFlare", "VolumetricClouds", "SkyMode",
+                                             "Wetness", "Rain", "Snow", "Puddles", "Reflections", "Lightning", "DepthOfField",
+                                             "MotionBlur", "TAA"};
+    for (const char* key : kSceneKeys) set(key, "0");
     hdrClear = 0.18f;
     for (int i = 0; i < 3; i++) frame(true, centre, hud);
     stats(s);
@@ -461,6 +467,18 @@ int main(int argc, char** argv) {
     check(s[11] == 1, "the TMVS curve replaces the engine's tone map");
     check(std::abs(static_cast<int>(centre[0]) - expected) <= 2, "mid grey matches the engine's curve");
     check(hud[0] == 255 && hud[1] == 0 && hud[2] == 0, "the interface is still untouched");
+    check(s[12] == 0, "with every scene effect at 0 the scene effects don't run");
+    // The scene effects on the engine's G-buffer (AO, contact shadows, haze).
+    set("AOStrength", "1");
+    set("ShadowStrength", "0.9");
+    set("FogDensity", "0.5");
+    for (int i = 0; i < 3; i++) frame(true, centre, hud);
+    stats(s);
+    printf("  scene effects: centre %u, hud %u %u %u\n", centre[0], hud[0], hud[1], hud[2]);
+    check(s[12] == 1 && s[11] == 1, "the scene effects run in the HDR stage");
+    check(centre[0] > 0 && centre[0] < 255, "the scene effects give a picture");
+    check(hud[0] == 255 && hud[1] == 0 && hud[2] == 0, "the interface stays untouched with the scene effects");
+    for (const char* key : kSceneKeys) set(key, "0");
     set("Bloom", "0.3");
     for (int i = 0; i < 2; i++) frame(true, centre, hud);
     stats(s);

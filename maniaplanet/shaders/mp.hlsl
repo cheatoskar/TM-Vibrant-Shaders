@@ -2,6 +2,7 @@
 // (shader model 4). After the HDR stage (hdr.hlsl) it adds chromatic aberration and sharpening;
 // when the HDR stage didn't run this frame, it applies the whole look here. It also draws the
 // check views of what the mod reads from the engine.
+// entries: VS_Full:vs_4_0 PS_Grade:ps_4_0
 
 cbuffer GradeParams : register(b0)
 {

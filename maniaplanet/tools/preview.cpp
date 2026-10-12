@@ -125,6 +125,7 @@ int main(int argc, char** argv) {
     tmshaders::log::setFileName(L"tmvs-mp-preview.log"); // never truncate the game's log
     const std::string folder = argv[1];
     bool hdrStage = false;
+    double time = 10.0;
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
     // The look: a built-in or your preset (default Vibrant), then --set values on top.
@@ -149,6 +150,8 @@ int main(int argc, char** argv) {
             }
         }
         else if (opt == "--tonecb") toneCbPath = value;
+        else if (opt == "--time") time = atof(value.c_str());
+        else if (opt == "--debug") config.settings.debugView = atoi(value.c_str());
         else if (opt == "--view") opts.view = static_cast<View>(atoi(value.c_str()));
         else if (opt == "--set") {
             const size_t eq = value.find('=');
@@ -249,12 +252,14 @@ int main(int argc, char** argv) {
             sv.Texture2D.MipLevels = 1;
             device->CreateShaderResourceView(t, &sv, &in[i]);
         }
-        if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look)) {
+        EngineView engine{tex, haveCamera ? &camera : nullptr};
+        engine.time = time;
+        if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look, engine)) {
             printf("the HDR stage failed\n");
             return 1;
         }
-        printf("  HDR stage: preset %s, curve %d, bloom %.2f\n", config.preset.c_str(), config.settings.toneCurve,
-               config.settings.bloom);
+        printf("  HDR stage: preset %s, curve %d, bloom %.2f, scene effects %s\n", config.preset.c_str(),
+               config.settings.toneCurve, config.settings.bloom, renderer.effectsRan() ? "ran" : "off");
     }
     const EngineView view{tex, haveCamera ? &camera : nullptr};
     if (!renderer.apply(ctx, rtv, view, look, opts, hdrStage)) {

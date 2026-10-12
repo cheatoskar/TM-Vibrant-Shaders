@@ -22,7 +22,7 @@ template <typename T> void safeRelease(T*& p) {
 
 // hdr.hlsl ToneParams (b0)
 struct ToneConstants {
-    float tone0[4]; // has bloom
+    float tone0[4]; // has bloom, input already exposed
 };
 
 // mp.hlsl GradeParams (b0)
@@ -92,8 +92,10 @@ void StateBackup::save(ID3D11DeviceContext* ctx) {
     ctx->OMGetBlendState(&blend, blendFactor, &sampleMask);
     ctx->OMGetDepthStencilState(&dss, &stencilRef);
     ctx->PSGetShaderResources(0, kSrvs, psSrv);
-    ctx->PSGetSamplers(0, 2, psSamplers);
+    ctx->PSGetSamplers(0, kSamplers, psSamplers);
     ctx->PSGetConstantBuffers(0, kCbs, psCb);
+    ctx->VSGetConstantBuffers(0, kCbs, vsCb);
+    ctx->VSGetShaderResources(0, kSrvs, vsSrv);
     psInstCount = vsInstCount = gsInstCount = hsInstCount = dsInstCount = 256;
     ctx->PSGetShader(&ps, psInst, &psInstCount);
     ctx->VSGetShader(&vs, vsInst, &vsInstCount);
@@ -121,10 +123,14 @@ void StateBackup::restore(ID3D11DeviceContext* ctx) {
     safeRelease(dsv);
     ctx->PSSetShaderResources(0, kSrvs, psSrv);
     for (auto& s : psSrv) safeRelease(s);
-    ctx->PSSetSamplers(0, 2, psSamplers);
+    ctx->PSSetSamplers(0, kSamplers, psSamplers);
     for (auto& s : psSamplers) safeRelease(s);
     ctx->PSSetConstantBuffers(0, kCbs, psCb);
     for (auto& b : psCb) safeRelease(b);
+    ctx->VSSetConstantBuffers(0, kCbs, vsCb);
+    for (auto& b : vsCb) safeRelease(b);
+    ctx->VSSetShaderResources(0, kSrvs, vsSrv);
+    for (auto& s : vsSrv) safeRelease(s);
     ctx->PSSetShader(ps, psInst, psInstCount);
     safeRelease(ps);
     for (UINT i = 0; i < psInstCount; i++) safeRelease(psInst[i]);
@@ -191,6 +197,9 @@ bool Renderer::init(ID3D11Device* device) {
     bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     ok &= SUCCEEDED(device->CreateBlendState(&bd, &m_blend));
     if (!ok) TMVS_LOG("renderer: creating shaders or states failed");
+    // Shader model 5 effects: feature level 11 (else the look and the tone map only).
+    if (device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_0) m_effectsReady = m_effects.init(device);
+    else TMVS_LOG("renderer: feature level 0x%x, the scene effects need 11.0", device->GetFeatureLevel());
     tmshaders::lut::writeBuiltInLooks();
     return ok;
 }
@@ -207,6 +216,7 @@ void Renderer::releaseTargets() {
         }
     }
     m_bloomBaseW = m_bloomBaseH = 0;
+    m_effects.releaseTargets();
     for (int i = 0; i < kTexCount; i++) {
         for (auto& v : m_tex[i]) {
             safeRelease(v.srv);
@@ -218,6 +228,8 @@ void Renderer::releaseTargets() {
 
 void Renderer::release() {
     releaseTargets();
+    m_effects.release();
+    m_effectsReady = false;
     safeRelease(m_lutSrv);
     m_lutName.clear();
     safeRelease(m_vs);
@@ -462,7 +474,8 @@ void Renderer::pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11Rende
 }
 
 bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, ID3D11ShaderResourceView* hdr,
-                       ID3D11ShaderResourceView* exposure, ID3D11Buffer* engineConstants, const Look& look) {
+                       ID3D11ShaderResourceView* exposure, ID3D11Buffer* engineConstants, const Look& look, const EngineView& engine) {
+    m_effectsRan = false;
     if (!m_toneMap || !target || !hdr || !exposure || !engineConstants || !look.settings) return false;
     UINT w = 0, h = 0, hw = 0, hh = 0;
     sizeOfView(target, w, h);
@@ -472,15 +485,39 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
     hooks::Inside inside;
     StateBackup backup;
     backup.save(ctx);
+    const tmshaders::Settings& s = *look.settings;
+    Profiler& profiler = m_effects.profiler();
+    profiler.collect(ctx);
+    profiler.begin(ctx);
+
+    // The scene effects first, on the engine's HDR image: their result is what gets tone mapped.
+    ID3D11ShaderResourceView* game = hdr;
+    if (m_effectsReady && engine.camera) {
+        ID3D11ShaderResourceView* views[kTexCount] = {};
+        for (int i = 0; i < kTexCount; i++) views[i] = textureView(i, engine.tex ? engine.tex[i] : nullptr);
+        SceneFrame frame;
+        frame.hdr = hdr;
+        frame.exposure = exposure;
+        frame.engineTone = engineConstants;
+        frame.engine = views;
+        frame.camera = engine.camera;
+        frame.time = engine.time;
+        frame.photo = engine.photo;
+        if (m_effects.scene(ctx, frame, s)) {
+            hdr = m_effects.result();
+            m_effectsRan = true;
+        }
+    }
+
     setCommonState(ctx);
     ID3D11Buffer* cbs[3] = {m_toneCb, m_passCb, engineConstants};
     ctx->PSSetConstantBuffers(0, 3, cbs);
     uploadLook(ctx, look);
 
-    const tmshaders::Settings& s = *look.settings;
     const bool bloom = s.bloom > 0.001f && ensureBloom(hw, hh);
     ToneConstants tc = {};
     tc.tone0[0] = bloom ? 1.0f : 0.0f;
+    tc.tone0[1] = m_effectsRan ? 1.0f : 0.0f;
     ctx->UpdateSubresource(m_toneCb, 0, nullptr, &tc, 0, 0);
 
     ID3D11ShaderResourceView* bloomResult = nullptr;
@@ -502,12 +539,15 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
                  1.0f / m_bloomH[lower], 0.0f, radius);
         }
         bloomResult = m_bloomSrv[1][0];
+        profiler.mark(ctx, kBloomUp);
     }
-    ID3D11ShaderResourceView* srvs[3] = {hdr, exposure, bloomResult};
-    pass(ctx, m_toneMap, target, w, h, srvs, 3, 1.0f / hw, 1.0f / hh);
+    ID3D11ShaderResourceView* srvs[4] = {hdr, exposure, bloomResult, game};
+    pass(ctx, m_toneMap, target, w, h, srvs, 4, 1.0f / hw, 1.0f / hh);
+    profiler.mark(ctx, kFinal);
+    profiler.end(ctx);
 
-    ID3D11ShaderResourceView* none[8] = {};
-    ctx->PSSetShaderResources(0, 8, none);
+    ID3D11ShaderResourceView* none[16] = {};
+    ctx->PSSetShaderResources(0, 16, none);
     backup.restore(ctx);
     return true;
 }

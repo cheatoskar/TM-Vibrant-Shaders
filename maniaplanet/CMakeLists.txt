@@ -43,11 +43,25 @@ file(GLOB MP_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits
 list(SORT MP_SDK_BINS ORDER DESCENDING)
 list(TRANSFORM MP_SDK_BINS APPEND "/x64")
 find_program(MP_FXC fxc HINTS "$ENV{WindowsSdkVerBinPath}x64" ${MP_SDK_BINS} REQUIRED)
-# file:entry:profile
-set(MP_ENTRIES
-  mp:VS_Full:vs_4_0 mp:PS_Grade:ps_4_0
-  hdr:PS_BloomDown:ps_4_0 hdr:PS_BloomUp:ps_4_0 hdr:PS_ToneMap:ps_4_0
-  ui:PS_UiComposite:ps_4_0)
+# Every shader file lists its entry points in a comment line of its own:
+#   // entries: PS_Name:ps_5_0 VS_Name:vs_5_0 ...
+# Each becomes shaders/<entry>.h (g_<entry>) in the build folder. A new pass only needs its line.
+file(GLOB MP_SHADER_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.hlsl")
+set(MP_ENTRIES)
+foreach(source ${MP_SHADER_SOURCES})
+  get_filename_component(name "${source}" NAME_WE)
+  file(STRINGS "${source}" lines REGEX "^// entries:")
+  foreach(line ${lines})
+    string(REGEX REPLACE "^// entries:[ ]*" "" line "${line}")
+    string(REGEX REPLACE "[ ]+" ";" items "${line}")
+    foreach(item ${items})
+      list(APPEND MP_ENTRIES "${name}:${item}")
+    endforeach()
+  endforeach()
+  # Configure again when a shader file changes (its entries may have).
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}")
+endforeach()
+file(GLOB MP_SHADER_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.hlsli")
 set(MP_SHADER_HEADERS)
 foreach(item ${MP_ENTRIES})
   string(REPLACE ":" ";" parts "${item}")
@@ -59,7 +73,7 @@ foreach(item ${MP_ENTRIES})
   add_custom_command(
     OUTPUT "${out}"
     COMMAND "${MP_FXC}" /nologo /O3 /T ${profile} /E ${entry} /Vn g_${entry} /Fh "${out}" "${source}"
-    DEPENDS "${source}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/look.hlsli"
+    DEPENDS "${source}" ${MP_SHADER_INCLUDES}
     COMMENT "fxc ${entry}"
     VERBATIM)
   list(APPEND MP_SHADER_HEADERS "${out}")
@@ -71,6 +85,10 @@ add_library(tmvs_mp_core STATIC
   src/engine_frame.cpp
   src/shaderdb.cpp
   src/renderer.cpp
+  src/effects.cpp
+  src/effects_sky.cpp
+  src/effects_weather.cpp
+  src/effects_cinema.cpp
   src/overlay.cpp
   src/options.cpp
   src/thumbnails11.cpp
@@ -82,6 +100,7 @@ add_library(tmvs_mp_core STATIC
   ${TMVS_ROOT}/src/menu.cpp
   ${TMVS_ROOT}/src/image.cpp
   ${TMVS_ROOT}/src/update.cpp
+  ${TMVS_ROOT}/src/weather.cpp
   ${MP_SHADER_HEADERS}
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp

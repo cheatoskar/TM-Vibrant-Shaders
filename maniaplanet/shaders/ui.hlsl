@@ -3,6 +3,7 @@
 // were encoded a second time: the whole menu came out pale and too bright. So ImGui draws into its
 // own UNORM layer (its blending onto transparent black leaves it premultiplied), and this pass lays
 // that layer over a copy of the frame in display values, as a UNORM back buffer would have it.
+// entries: PS_UiComposite:ps_4_0
 
 Texture2D g_frame : register(t0); // the frame, through an sRGB view (reads linear)
 Texture2D g_ui : register(t1);    // the menu layer: display values, premultiplied alpha
