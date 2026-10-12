@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1-preview (2026-10-12)
+
+- **TrackMania 2 (ManiaPlanet 4):** the mod as a 64-bit `d3d11.dll` for ManiaPlanet's Direct3D 11 renderer, with the same menu, presets and settings ([maniaplanet/README.md](maniaplanet/README.md)). Skies with real night, AO, contact shadows, GI and neon light from the engine's normals, haze, light shafts and volumetric light through the engine's shadow maps, weather with sound, depth of field, motion blur and TAA with the engine's motion vectors, photo mode with the compare split, the neon trail from the car's position in the engine, Author's Shaders (read from the map, set in the editor). `F5` switches the effects (`F7` is ManiaPlanet's friends list). Installed with `Install.cmd` from `TM-Vibrant-Shaders-ManiaPlanet.zip`.
+- Neon trail: each point takes the line's direction from its neighbours (the pieces share their corners: no gaps at the joints, no fan of tyre lines around a car that stands or shakes after a crash); nothing is kept closer than 30 cm to the last point; it fades out right in front of the camera; with the game's car position 60 points a second or one a metre (the ring holds twice as many).
+- Snowstorm: the wind is a recording ([Howling winter storm ambient sounds](https://freesound.org/people/DBlover/sounds/505999/) by DBlover, CC0) instead of synthesised noise.
+
 ## 1.4.0-preview (2026-10-11)
 
 - Neon trail: it follows the car's real position from the game instead of looking for the car in the middle of the screen. No more flicker at speed, no line beside the car in curves or after a crash, and it keeps going while the car is off screen.

@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.21)
 # Separate project from the TMNF plugin (that one is 32-bit D3D9):
 #   cmake -S maniaplanet -B build-mp -A x64
 #   cmake --build build-mp --config Release
-project(tmvs_maniaplanet VERSION 0.1.0 LANGUAGES CXX RC ASM_MASM)
+project(tmvs_maniaplanet VERSION 1.4.1 LANGUAGES CXX RC ASM_MASM)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "Build the ManiaPlanet proxy for ManiaPlanet.exe (64-bit): configure with -A x64.")
@@ -39,8 +39,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minimp3)
 
-# The shared menu shows a version (About page).
-set(TM_SHADERS_VERSION "${PROJECT_VERSION} (ManiaPlanet)")
+# One version for both games (the CI sets it from the tag: -DTM_SHADERS_VERSION=1.4.1-preview). The
+# shared menu shows it and the update check compares it with the newest release.
+if(NOT DEFINED TM_SHADERS_VERSION)
+  set(TM_SHADERS_VERSION "${PROJECT_VERSION}")
+endif()
+message(STATUS "TM Vibrant Shaders for ManiaPlanet version: ${TM_SHADERS_VERSION}")
 configure_file("${TMVS_ROOT}/src/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/tm_shaders_version.h" @ONLY)
 
 # Effect shaders, compiled at build time (shader model 4 so feature level 10 cards work too).
@@ -127,7 +131,7 @@ target_include_directories(tmvs_mp_core PUBLIC src "${TMVS_ROOT}/src" "${CMAKE_C
   ${imgui_SOURCE_DIR}/backends)
 target_include_directories(tmvs_mp_core PRIVATE ${stb_SOURCE_DIR} ${minimp3_SOURCE_DIR})
 target_compile_definitions(tmvs_mp_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
-  TMVS_MP_VERSION="${PROJECT_VERSION}")
+  TMVS_MP_VERSION="${TM_SHADERS_VERSION}")
 target_compile_options(tmvs_mp_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
 # Never d3d11.lib here: the DLL *is* d3d11.dll and would import itself.
 target_link_libraries(tmvs_mp_core PUBLIC dxgi dxguid shell32 user32 winhttp winmm)

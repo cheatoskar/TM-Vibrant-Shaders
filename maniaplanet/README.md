@@ -1,7 +1,7 @@
 # TM Vibrant Shaders for ManiaPlanet (TrackMania 2)
 
-**Status: work in progress, tested offline on captures; not yet in the game.** The interface (HUD,
-menus, chat) is left alone. The TMNF mod's effects, on what ManiaPlanet's deferred HDR renderer
+**Status: preview (1.4.1-preview), tested in the game on Stadium.** The interface (HUD, menus,
+chat) is left alone. The TMNF mod's effects, on what ManiaPlanet's deferred HDR renderer
 knows (its normals, material colours, sun shadow maps, motion vectors and HDR image):
 
 - **Light:** the engine's light is taken apart (sun, ambient, and the rest: light maps, lamps,
@@ -20,6 +20,9 @@ knows (its normals, material colours, sun shadow maps, motion vectors and HDR im
 - **Look:** the HDR stage in place of the engine's tone map (curves, bloom), grading, LUT looks.
 - **Auto quality** (the TMNF mod's, on the effects' GPU times) and the Performance page.
 
+- **Author's Shaders:** a look stored in the map's comments is applied when the map loads; in the
+  editor *Set as Author's Shader* writes it into the map (save the map to keep it).
+
 What ManiaPlanet can't do (yet): the spray behind the car, long-range shadows (the engine has its own shadow maps), TAA jitter, hi-res photos and zoom (they
 need the engine's projection), "only in replays" (replays aren't told from driving yet: with it on,
 depth of field and motion blur run in photo mode only), water surfaces, grass detail.
@@ -27,14 +30,14 @@ depth of field and motion blur run in photo mode only), water surfaces, grass de
 ## Install
 
 1. Close ManiaPlanet.
-2. Run `install.ps1` from this folder:
-   `powershell -ExecutionPolicy Bypass -File install.ps1`
-   It copies `d3d11.dll` next to `ManiaPlanet.exe`, which needs administrator rights under
-   `C:\Program Files (x86)`. If `d3d11.dll` already exists and is not this mod (ReShade, another
-   mod), the script stops.
+2. Double-click `Install.cmd` (or run `powershell -ExecutionPolicy Bypass -File install.ps1`).
+   It finds ManiaPlanet under Program Files or in the Steam libraries (else pass `-GameDir`) and
+   copies `d3d11.dll` next to `ManiaPlanet.exe`; under `C:\Program Files (x86)` Windows asks for
+   administrator rights. If `d3d11.dll` already exists and is not this mod (ReShade, another mod),
+   the script stops.
 3. Start ManiaPlanet **64-bit**. A message at the top says the mod is running.
 
-Uninstall: `install.ps1 -Uninstall`, or delete `d3d11.dll` from the game folder.
+Uninstall: `Uninstall.cmd` (`install.ps1 -Uninstall`), or delete `d3d11.dll` from the game folder.
 
 **If the game doesn't start:** delete `d3d11.dll` from the game folder. The mod is 64-bit only. If
 the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
@@ -77,7 +80,9 @@ The log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in `Documents\Man
 
 ## Online, Openplanet
 
-- The mod only changes the picture. It reads nothing from the game's logic and changes nothing in it.
+- The mod changes the picture. From the game it reads the camera, the sun and the car's position
+  (from the constants the engine draws with) and the map's comments (for Author's Shaders). It
+  writes only the comments of the map open in the editor, when you click *Set as Author's Shader*.
 - Whether servers or competitions allow a `d3d11.dll` mod is not confirmed. Check the rules of where you play.
 - Openplanet can run at the same time (it loads as its own DLL). If something breaks with
   Openplanet, test once without it and report it with a capture.
