@@ -1318,7 +1318,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "GameSkyClouds", "Keep the game's sunset clouds (and the sea mirroring them) under night skies");
                           return l;
                       }});
-    panels.push_back({"Photo mode", 8.0f, [&config] {
+    panels.push_back({"Photo mode", g_host->splitOn ? 11.0f : 8.0f, [&config] {
                           switchRow("With the free camera (cam 7)", &config.photoAuto,
                                     "Photo mode comes on by itself with the free camera: no HUD, full quality, effects that reach far.\nF6 turns it on or off anywhere.");
                           switchRow("Hide the HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
@@ -1332,8 +1332,23 @@ bool drawSettings(Config& config, Settings& s) {
                           snprintf(aperture, sizeof(aperture), "f/%.1f", (g_host->fNumber ? g_host->fNumber(config.photoDof) : 0.0f));
                           if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("Like a camera lens: wide open (f/1.4) blurs most around the clicked focus point, f/16 keeps all sharp (Ctrl+wheel in the game).");
+                          if (g_host->splitOn) {
+                              bool& split = *g_host->splitOn;
+                              if (switchRow("Compare split", &split,
+                                            "One side of a line shows the game's image without the mod's effects, the other the mod's (Shift+F6).\n"
+                                            "In photos too, not in hi-res ones. The game's own changes stay on both sides (its bloom off, real night).")) {
+                                  if (split && g_host->photoOn) g_host->photoOn();
+                              }
+                              ImGui::BeginDisabled(!split);
+                              ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                              ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");
+                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where the line sits, from the left (Ctrl+Shift+wheel in the game).");
+                              ImGui::Checkbox("Game's image on the right", g_host->splitSwapped);
+                              ImGui::EndDisabled();
+                          }
                           ImGui::TextDisabled("F12 photo  |  Shift+F12 hi-res  |  middle click: focus");
                           ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  F6: on/off");
+                          if (g_host->splitOn) ImGui::TextDisabled("Shift+F6: compare split  |  Ctrl+Shift+wheel: move its line");
                           return false;
                       }});
     panels.push_back({"Files", 3.0f, [&config] {

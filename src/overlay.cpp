@@ -56,6 +56,10 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
             config.markDirty();
             return 0;
         }
+        if (wparam == VK_F6 && GetKeyState(VK_SHIFT) < 0) {
+            photo::toggleSplit();
+            return 0;
+        }
         if (wparam == VK_F6) {
             photo::toggle();
             return 0;
@@ -185,6 +189,12 @@ void draw(IDirect3DDevice9* device) {
         host.mapComments = [](std::string& comments) { return engine::currentMapComments(comments); };
         host.setMapComments = [](const std::string& comments) { return engine::setCurrentMapComments(comments); };
         host.fNumber = [](float dof) { return photo::fNumber(dof); };
+        host.splitOn = &photo::splitOn();
+        host.splitPosition = &photo::splitPosition();
+        host.splitSwapped = &photo::splitSwapped();
+        host.photoOn = [] {
+            if (!photo::active()) photo::toggle();
+        };
         host.supports = [](const Field& f) { return strcmp(f.key, "ToneCurve") != 0; }; // ManiaPlanet only
         menu::draw(host);
     }
@@ -197,6 +207,23 @@ void draw(IDirect3DDevice9* device) {
                          ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
         ImGui::TextUnformatted(photoHint);
         ImGui::End();
+    }
+    if (photo::splitShown()) {
+        // Which side is which, next to the line near the bottom (drawn at Present: not in photos).
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        const ImVec2 size = ImGui::GetIO().DisplaySize;
+        const float x = photo::splitPosition() * size.x, y = size.y - 48.0f * menu::scale(), pad = 10.0f * menu::scale();
+        const char* left = photo::splitSwapped() ? "TMVS" : "Game";
+        const char* right = photo::splitSwapped() ? "Game" : "TMVS";
+        const ImVec2 lw = ImGui::CalcTextSize(left);
+        const auto label = [&](float at, const char* text) {
+            const ImVec2 s = ImGui::CalcTextSize(text);
+            draw->AddRectFilled(ImVec2(at - 4.0f * menu::scale(), y - 2.0f * menu::scale()), ImVec2(at + s.x + 4.0f * menu::scale(), y + s.y + 2.0f * menu::scale()),
+                                IM_COL32(0, 0, 0, 140), 3.0f * menu::scale());
+            draw->AddText(ImVec2(at, y), IM_COL32(235, 235, 235, 255), text);
+        };
+        label(x - pad - lw.x, left);
+        label(x + pad, right);
     }
     ImGui::EndFrame();
     if (SUCCEEDED(device->BeginScene())) {

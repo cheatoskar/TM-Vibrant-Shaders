@@ -19,6 +19,9 @@ bool g_wasFreeCam = false;
 bool g_active = false;
 float g_focus[2] = {-1.0f, -1.0f};
 float g_zoom = 1.0f;        // Shift+wheel, 1..8
+bool g_split = false;       // Shift+F6: the game's image on one side of a line
+float g_splitAt = 0.5f;     // the line, 0..1 from the left
+bool g_splitSwap = false;   // the game's image on the right
 
 enum class Job { None, Single, Tiles };
 Job g_job = Job::None;
@@ -48,7 +51,8 @@ std::string hint() {
     char text[200];
     const Config& config = Config::get();
     const float factor = static_cast<float>(config.photoTiles) * 0.84f;
-    snprintf(text, sizeof(text), "Photo mode   F12 photo   Shift+F12 %.1fx photo   middle click: focus   Ctrl+wheel: aperture   Shift+wheel: zoom   F6: off",
+    snprintf(text, sizeof(text),
+             "Photo mode   F12 photo   Shift+F12 %.1fx photo   middle click: focus   Ctrl+wheel: aperture   Shift+wheel: zoom   Shift+F6: compare   F6: off",
              factor);
     return text;
 }
@@ -208,6 +212,14 @@ bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         setStatus("Focus set", 2);
         return true;
     }
+    // Ctrl+Shift+wheel: the compare line, 2 % of the screen per step (before the Ctrl and Shift
+    // wheels below, which would take it).
+    if (msg == WM_MOUSEWHEEL && g_split && (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL) && (GET_KEYSTATE_WPARAM(wparam) & MK_SHIFT)) {
+        const float steps = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
+        const float at = g_splitAt + steps * 0.02f;
+        g_splitAt = at < 0.0f ? 0.0f : (at > 1.0f ? 1.0f : at);
+        return true;
+    }
     if (msg == WM_MOUSEWHEEL && (GET_KEYSTATE_WPARAM(wparam) & MK_CONTROL)) {
         Config& config = Config::get();
         const float steps = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
@@ -340,6 +352,50 @@ void afterRender(IDirect3DDevice9* device, IDirect3DSurface9* frame) {
     g_rgb.clear();
 }
 
+void toggleSplit() {
+    g_split = !g_split;
+    if (g_split && !g_active) g_manual = 1; // comparing is a photo mode thing: it comes on too
+    TMVS_LOG("photo: compare split %s", g_split ? "on" : "off");
+    setStatus(g_split ? "Compare: the game's image | the mod's   Ctrl+Shift+wheel: move the line" : "Compare off", 3);
+}
+
+bool splitShown() {
+    return g_split && g_active && g_job != Job::Tiles;
+}
+
+bool& splitOn() {
+    return g_split;
+}
+
+float& splitPosition() {
+    return g_splitAt;
+}
+
+bool& splitSwapped() {
+    return g_splitSwap;
+}
+
+void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3DSurface9* shaded) {
+    if (!splitShown() || !original || !shaded) return;
+    D3DSURFACE_DESC out{}, in{};
+    shaded->GetDesc(&out);
+    original->GetDesc(&in);
+    if (out.Width != in.Width || out.Height != in.Height) return;
+    const LONG w = static_cast<LONG>(out.Width), h = static_cast<LONG>(out.Height);
+    const float at = g_splitAt < 0.0f ? 0.0f : (g_splitAt > 1.0f ? 1.0f : g_splitAt);
+    const LONG x = static_cast<LONG>(lroundf(at * static_cast<float>(w)));
+    const RECT game = g_splitSwap ? RECT{x, 0, w, h} : RECT{0, 0, x, h};
+    if (game.right > game.left) device->StretchRect(original, &game, shaded, &game, D3DTEXF_NONE);
+    // The line: light with dark edges, so it shows on sky and snow as on asphalt. 2 px at 1080p.
+    const LONG t = h >= 1080 ? h / 540 : 1;
+    const auto fill = [&](LONG left, LONG right, D3DCOLOR colour) {
+        const RECT r{left < 0 ? 0 : left, 0, right > w ? w : right, h};
+        if (r.right > r.left) device->ColorFill(shaded, &r, colour);
+    };
+    fill(x - 2 * t, x + 2 * t, D3DCOLOR_XRGB(16, 16, 16));
+    fill(x - t, x + t, D3DCOLOR_XRGB(235, 235, 235));
+}
+
 void notify(const char* text, DWORD seconds) {
     setStatus(text, seconds);
 }
@@ -357,7 +413,8 @@ const char* status() {
         char aperture[32] = "Depth of field off";
         if (dof > 0.0f) snprintf(aperture, sizeof(aperture), "f/%.1f", fNumber(dof));
         char line[96];
-        snprintf(line, sizeof(line), "%s   Zoom %.1fx   Focus %s", aperture, g_zoom, g_focus[0] >= 0.0f ? "point" : "auto");
+        snprintf(line, sizeof(line), "%s   Zoom %.1fx   Focus %s%s", aperture, g_zoom, g_focus[0] >= 0.0f ? "point" : "auto",
+                 g_split ? "   Compare" : "");
         std::string text = line;
         if (!g_status.empty()) text += "\n" + g_status;
         strncpy_s(g_statusCopy, text.c_str(), _TRUNCATE);

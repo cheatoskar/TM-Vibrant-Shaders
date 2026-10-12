@@ -4,6 +4,8 @@ Real-time lighting, weather and skies for TrackMania Nations Forever and United 
 
 **A preview of 1.4.0.** It brings a new menu, a photo mode, real nights under night skies and a switch for the map's MediaTracker clips. The work on the game's own rendering (materials, lights) follows in 1.4.0. Please report what looks wrong (`F12` there, then an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues) with the screenshot and the capture).
 
+![The new F8 menu: every preset as a card with a picture](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.4.0-preview/docs/images/menu.jpg)
+
 ![Horizon: the black hole lights the stadium through the haze](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.4.0-preview/docs/images/black-hole-loop.jpg)
 
 ### Download and install
@@ -27,9 +29,10 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 **Photo mode** (`F6`, on by itself with the free camera)
 - No HUD, full quality, shadows and reflections reach three times as far.
 - `F12` saves a photo without the HUD, `Shift+F12` a larger one from tiles. Middle click sets the focus, `Ctrl`+wheel the depth of field, `Shift`+wheel zooms.
+- **Compare split** (`Shift+F6`): one side of a line shows the game without the mod, the other with it, also in photos. `Ctrl`+`Shift`+wheel moves the line.
 
 **Night**
-- **Real night under night skies** (experimental, off by default, on the *Settings* page): with a night sky or the black hole over a day or sunset map, the game lights the map at midnight itself. No more baked sunlight under the stars. Switching it in the menu relights the map at once. The map, its replays and validation stay as they are.
+- **Real night under night skies** (on by default, switch on the *Settings* page): with a night sky or the black hole over a day or sunset map, the game lights the map at midnight itself. No more baked sunlight under the stars. Switching it in the menu relights the map at once. The map, its replays and validation stay as they are.
 - Under a night sky the game's sunset clouds, the sunset ring around TMUF Island and the sunset in the sea are gone (*Keep the game's clouds under night skies* brings them back for photos).
 - *Floodlit surfaces at night*: floodlit stands and lit roads no longer burn out to flat white; lamps and neon stay bright.
 - The sun's halo and lens flare fade out under night skies.
@@ -59,7 +62,7 @@ In the game: `F8` opens the menu, `F7` switches the shaders on and off. For the 
 
 - United Forever Island at night: headlights on very bright blocks burn out to white (the game draws them that way).
 - Floodlit stadiums at night keep part of the game's burned-out white (*Floodlit surfaces at night* sets how much).
-- Once, on Stadium A01, the game played a loud noise when the map loaded (with *Real night under night skies* on; it didn't come back in later tests, the cause is unknown). The setting stays off by default. If it happens to you, please send `tmvs.log` and `tmvs.prev.log` from `Documents\TrackMania\TMVS`.
+- Once, on Stadium A01, the game played a loud noise when the map loaded (with *Real night under night skies* on; it didn't come back in later tests, the cause is unknown). If it happens to you, switch the setting off and send `tmvs.log` and `tmvs.prev.log` from `Documents\TrackMania\TMVS`.
 - If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
 Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md).

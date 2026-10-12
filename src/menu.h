@@ -35,6 +35,12 @@ struct Host {
     std::function<bool(const std::string&)> setMapComments;
     // Photo mode: the f-number of an aperture setting.
     std::function<float(float)> fNumber;
+    // Photo mode's compare split (null: none): on/off, line position, game's image on the right,
+    // and turning photo mode on when the split is switched on.
+    bool* splitOn = nullptr;
+    float* splitPosition = nullptr;
+    bool* splitSwapped = nullptr;
+    std::function<void()> photoOn;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
     // The game's own options, a panel first on the Settings page (null: none).
