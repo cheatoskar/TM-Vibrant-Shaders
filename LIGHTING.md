@@ -131,3 +131,19 @@ Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Hori
   on the `.hdr16` captures, the 8-bit guesses (emissive, night floor) off for HDR input; the
   game's shaders cut it -> rewrite their source at compile time (drop the final saturate or
   scale the output); neither -> the clean 8-bit path stays and flat white is a hard limit.
+
+### Owner test 1 of GameHdr (2026-10-12, A01 at midnight, capture 044)
+
+- Float target works (blending supported, nothing broken). 1.1 % of the image above 1.0,
+  brightest 3.0: car body (5 % of its pixels), neon borders, floodlights. The car's rear wing
+  has a gradient in the float image where the 8-bit one is flat.
+- The game's shaders (dumped): blocks are `Diffuse * (2 * Lightmap) * Clouds * 2 + specular`,
+  no saturate on the output (`ps_2_a`, `Common.PHlsl.txt`); only `LightAD_Dir1` caps the
+  directional light at 1. So what clips is the 8-bit target, not the shaders.
+- Now the lighting pass takes the float image on s0 (the lamp guess and the glow clamp it to
+  1), and the tone curve's shoulder is longer with HDR input (width 3.0 instead of 1.7):
+  linear 1 / 2 / 3 -> sRGB about 211 / 235 / 245 instead of 220 / 242 / 252.
+- The washed-out car at night was the lamp guess: its bright body passed for a lamp and
+  glowed x HighlightBoost (car p95 210 vs. the game's 191; 135 without the boost). With
+  `CleanHighlights` the car material (stencil) is no lamp. In game only (no stencil in the
+  previewer). PS_Lighting is at 3897 of 3900 slots.

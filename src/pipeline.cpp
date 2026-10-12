@@ -1848,7 +1848,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const float gameSkyOut = skyReplacesSun(s) && !s.gameSkyClouds ? 1.0f : 0.0f;
     const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, gameSkyOut, s.toneKnee};
     device->SetPixelShaderConstantF(44, materialConstants, 1);
-    const float cleanConstants[4] = {s.cleanHighlights ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    const float cleanConstants[4] = {s.cleanHighlights ? 1.0f : 0.0f, in.hdr ? 1.0f : 0.0f, 0.0f, 0.0f};
     device->SetPixelShaderConstantF(45, cleanConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
@@ -2057,6 +2057,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
     bind(device, 13, materials ? m_materials.texture : nullptr, false);
+    if (in.hdr) bind(device, 0, in.hdr, false); // GameHdr: light above 1.0 (the guesses in there clamp it)
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);

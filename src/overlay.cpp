@@ -1442,7 +1442,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "SkipMapClips", "No MediaTracker clips of the map while driving (Shift+F7)");
                           l |= drawKey(s, "GameNight", "Real night under night skies: the game lights day maps at midnight");
                           l |= drawKey(s, "GameSkyClouds", "Keep the game's sunset clouds (and the sea mirroring them) under night skies");
-                          l |= drawKey(s, "GameHdr", "Game HDR test: the game draws into a float target, F12 also saves it (look unchanged)");
+                          l |= drawKey(s, "GameHdr", "Game HDR: the game draws into a float target, bright light keeps its texture (F12 also saves it)");
                           l |= drawKey(s, "CleanHighlights", "Clean highlights: floodlit white at night stays even (off = as in 1.4.0)");
                           return l;
                       }});

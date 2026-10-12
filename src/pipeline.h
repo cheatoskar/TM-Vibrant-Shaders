@@ -13,6 +13,9 @@ class Pipeline {
 public:
     struct Inputs {
         IDirect3DTexture9* color = nullptr; // scene colour (sRGB, 8 bit)
+        // The game's image from its float target (GameHdr): light above 1.0 kept. Null = only
+        // the 8-bit one. The guesses (lamps, glow, spill) stay on `color`.
+        IDirect3DTexture9* hdr = nullptr;
         IDirect3DTexture9* depth = nullptr; // raw hardware depth in .r (INTZ or R32F)
         UINT width = 0;
         UINT height = 0;

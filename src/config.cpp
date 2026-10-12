@@ -120,7 +120,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("SkipMapClips", "No MediaTracker clips of the map while driving (Shift+F7)", "Image", Bool, skipMapClips, 0.0f, 1.0f),
         TMVS_FIELD("GameNight", "Real night under night skies", "Image", Bool, gameNight, 0.0f, 1.0f),
         TMVS_FIELD("GameSkyClouds", "Keep the game's clouds under night skies", "Image", Bool, gameSkyClouds, 0.0f, 1.0f),
-        TMVS_FIELD("GameHdr", "Game HDR test (float target, for captures)", "Image", Bool, gameHdr, 0.0f, 1.0f),
+        TMVS_FIELD("GameHdr", "Game HDR (float target: texture in bright light)", "Image", Bool, gameHdr, 0.0f, 1.0f),
         TMVS_FIELD("CleanHighlights", "Clean highlights (no frost on floodlit white)", "Image", Bool, cleanHighlights, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),

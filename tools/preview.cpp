@@ -12,6 +12,8 @@
 //     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
 //                             view, 0.1 s apart (neon trail test)
 //     --bench                 GPU time per pass
+//     --nohdr                 ignore capture_NNN.hdr16 next to the capture (the game's float
+//                             image, GameHdr): render from the 8-bit image only
 //     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
 //                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
 //   An output ending in .jpg is a preset picture for the menu (384x216, the middle 16:9).
@@ -145,6 +147,7 @@ struct LoadedCapture {
     FrameCapture cap;
     IDirect3DTexture9* color = nullptr;
     IDirect3DTexture9* depth = nullptr;
+    IDirect3DTexture9* hdr = nullptr; // capture_NNN.hdr16 next to it (GameHdr)
 };
 
 // Batch file: one job per line, "out.bmp [cap=file.tmcap] [preset=Name] [Key=Value ...]".
@@ -253,6 +256,7 @@ int main(int argc, char** argv) {
     const char* lutFile = nullptr;
     float lutMix = 1.0f;
     bool photoMode = false;              // the photo mode's look (3x reach, full-res blur)
+    bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
@@ -274,6 +278,8 @@ int main(int argc, char** argv) {
         } else if (!strcmp(argv[i], "--blocks") && i + 1 < argc) {
             waterHeight = static_cast<float>(atof(argv[++i]));
             waterKind = 2.0f;
+        } else if (!strcmp(argv[i], "--nohdr")) {
+            useHdr = false;
         } else if (!strcmp(argv[i], "--photo")) {
             photoMode = true;
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
@@ -358,6 +364,23 @@ int main(int argc, char** argv) {
         }
         c->color = upload(device, c->cap.width, c->cap.height, D3DFMT_A8R8G8B8, c->cap.color);
         c->depth = upload(device, c->cap.width, c->cap.height, D3DFMT_R32F, c->cap.depth);
+        // The game's float image (GameHdr), written next to the capture by F12.
+        std::string hdrPath = path;
+        if (useHdr && hdrPath.size() > 6 && hdrPath.compare(hdrPath.size() - 6, 6, ".tmcap") == 0) {
+            hdrPath.replace(hdrPath.size() - 6, 6, ".hdr16");
+            if (FILE* f = fopen(hdrPath.c_str(), "rb")) {
+                uint32_t header[3] = {};
+                std::vector<uint16_t> half(static_cast<size_t>(c->cap.width) * c->cap.height * 4);
+                if (fread(header, sizeof(header), 1, f) == 1 && header[0] == 0x31484D54u && header[1] == c->cap.width &&
+                    header[2] == c->cap.height && fread(half.data(), sizeof(uint16_t), half.size(), f) == half.size()) {
+                    std::vector<uint64_t> texels(half.size() / 4);
+                    memcpy(texels.data(), half.data(), half.size() * sizeof(uint16_t));
+                    c->hdr = upload(device, c->cap.width, c->cap.height, D3DFMT_A16B16G16R16F, texels);
+                    printf("%s: with the game's HDR (%s)\n", path.c_str(), hdrPath.c_str());
+                }
+                fclose(f);
+            }
+        }
         captures.push_back(c);
         return c;
     };
@@ -378,6 +401,7 @@ int main(int argc, char** argv) {
         in.focusPoint[0] = focus[0];
         in.focusPoint[1] = focus[1];
         in.color = loaded->color;
+        in.hdr = loaded->hdr;
         in.depth = loaded->depth;
         in.width = cap.width;
         in.height = cap.height;
@@ -462,6 +486,7 @@ int main(int argc, char** argv) {
     for (LoadedCapture* c : captures) {
         if (c->color) c->color->Release();
         if (c->depth) c->depth->Release();
+        if (c->hdr) c->hdr->Release();
         delete c;
     }
     device->Release();

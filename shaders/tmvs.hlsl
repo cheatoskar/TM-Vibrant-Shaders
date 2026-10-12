@@ -57,7 +57,7 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
-float4 u_Clean     : register(c45); // x: clean highlights (night maps: floodlit white isn't tamed as sun glare); y: the scene colour is the game's HDR (float target)
+float4 u_Clean     : register(c45); // x: clean highlights (night maps: floodlit white isn't tamed as sun glare); y: s0 of the lighting pass is the game's float image (GameHdr)
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -2130,8 +2130,10 @@ float removeGameSun(float3 c, float3 nWorld, float3 rd, float sat, float night) 
 }
 
 float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
-    float3 srgb = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
-    float3 c = toLinear(srgb);
+    // s0: with GameHdr the game's float image: the colour keeps the light its 8-bit target cut
+    // (a floodlit ramp, the car body: texture instead of flat white). The lamp guess and the
+    // glow work on the 0..1 range they were tuned on.
+    float3 c = toLinear(tex2Dlod(s0, float4(uv, 0, 0)).rgb);
     float3 albedo = c;
     float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
     float3 rdView = normalize(viewPosition(uv, 1.0));
@@ -2200,13 +2202,17 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float flatness = smoothstep(0.8, 0.97, nWorld.y);
 
     // Expand the LDR image back toward HDR: light sources glow.
-    float emissive = emissiveAmount(uv, c, nWorld, rd, dist, nd.w);
+    float emissive = emissiveAmount(uv, min(c, 1.0), nWorld, rd, dist, nd.w);
     // The game's materials (in game; the previewer has none): r lamp, g car / glass / grass,
     // b water, a light the game added on top. Added light (headlight pools, glows over a
     // surface) keeps the game's brightness but is no light source of its own: it was boosted
     // to flat white. Lamps keep their guess.
     float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
-    float3 glow = c * u_Rays.w * emissive;
+    // Clean highlights: a car is no lamp. At night its bright body (white, facing up) passed for
+    // one and glowed x HighlightBoost: a washed-out, pink-white car. Its lights have the game's
+    // own glow sprites.
+    emissive *= saturate((0.75 - mat.g * u_Clean.x) * 8.0); // car (g 1) 0; glass (.5), grass, off: 1
+    float3 glow = min(c, 1.0) * u_Rays.w * emissive;
     // White lights and screens glow less than coloured ones, or they bleach to flat white.
     float peakC = max(c.r, max(c.g, c.b));
     glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3)));
@@ -2724,7 +2730,10 @@ float3 shoulderCurve(float3 x) {
     // exponential shoulder that only reaches white for real light sources.
     const float knee = u_Mat.w > 0.0 ? clamp(u_Mat.w, 0.2, 0.95) : 0.5;
     float3 over = max(x - knee, 0.0);
-    float3 shoulder = knee + (1.0 - knee) * (1.0 - exp(-over / ((1.0 - knee) * 1.7)));
+    // GameHdr: light above the game's white is real, not guessed. A longer shoulder spreads it
+    // (1..3 linear) over visible steps instead of pressing it all just under white.
+    const float width = u_Clean.y > 0.5 ? 3.0 : 1.7;
+    float3 shoulder = knee + (1.0 - knee) * (1.0 - exp(-over / ((1.0 - knee) * width)));
     return x < knee ? x : shoulder;
 }
 float3 tonemap(float3 x) {

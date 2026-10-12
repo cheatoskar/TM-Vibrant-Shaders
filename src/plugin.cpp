@@ -95,8 +95,8 @@ gfx::Target g_partDepth;
 gfx::Target g_partOut;
 // GameHdr: the main camera draws into a float target instead of the game's 8-bit one, so the
 // light the game computes above 1.0 isn't cut (captures for working out the tone curve). At
-// the camera's end it is resolved into the game's target, cut to 0..1: the pipeline and the
-// look stay exactly as without it.
+// the camera's end it is resolved into the game's target, cut to 0..1 (the 8-bit copy the
+// guesses, the HUD and the photo split use); the lighting pass takes the float image itself.
 gfx::Target g_hdrScene;
 IDirect3DSurface9* g_hdrGame = nullptr;     // the game's target while the float one stands in (AddRef'd)
 IDirect3DSurface9* g_hdrLastGame = nullptr; // the same after the camera (not held): handed back if the game binds the float one
@@ -600,6 +600,7 @@ void processScene(IDirect3DDevice9* device) {
 
     Pipeline::Inputs inputs;
     inputs.color = g_sceneCopy.texture;
+    if (g_hdrValid && !part && g_hdrScene.width == width && g_hdrScene.height == height) inputs.hdr = g_hdrScene.texture;
     inputs.depth = sceneDepth;
     inputs.width = width;
     inputs.height = height;
