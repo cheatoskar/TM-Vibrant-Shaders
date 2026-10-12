@@ -250,7 +250,23 @@ float3 emissiveOf(float3 rest, float3 albedo, float e, float3 nWorld, float3 rd)
     float peak = max(light.r, max(light.g, light.b));
     float sat = (peak - min(light.r, min(light.g, light.b))) / max(peak, 1e-4);
     float mirror = u_Engine2.x > 0.5 ? smoothstep(0.55, 0.9, dot(reflect(rd, nWorld), u_SunOut.yzw)) : 0.0;
-    return light * (1.0 - mirror * (1.0 - smoothstep(0.55, 0.85, sat)));
+    light *= 1.0 - mirror * (1.0 - smoothstep(0.55, 0.85, sat));
+    // Reflections of the sky (car paint, glass) are as bright as neon but pale: neon is pure colour
+    // (capture: neon rest saturation 0.8-1.0, the car's sky reflection 0.4). White lamps count in part.
+    light *= lerp(0.3, 1.0, smoothstep(0.45, 0.8, sat));
+    // On coloured paint the sky's reflection leaves the opposite colour behind (red paint: its red
+    // goes to the lit part, cyan stays): light against the material's own colour is a reflection.
+    float3 chromaA = albedo - luma(albedo);
+    float3 chromaL = light - luma(light);
+    float albedoSat = saturate(length(chromaA) / max(luma(albedo), 0.02) * 0.8);
+    float against = saturate(-dot(chromaA, chromaL) * rsqrt(max(dot(chromaA, chromaA) * dot(chromaL, chromaL), 1e-10)));
+    light *= 1.0 - against * albedoSat;
+    // Light of the sun's own colour (the sunset's orange on rails and glass) is its reflection.
+    float3 sunC = u_EngineSun.rgb - luma(u_EngineSun.rgb);
+    float sunSat = saturate(length(sunC) / max(luma(u_EngineSun.rgb), 1e-3));
+    float likeSun = dot(sunC, chromaL) * rsqrt(max(dot(sunC, sunC) * dot(chromaL, chromaL), 1e-10));
+    if (u_Engine2.x > 0.5) light *= 1.0 - smoothstep(0.75, 0.95, likeSun) * sunSat * 0.9;
+    return light;
 }
 
 // ---------------------------------------------------------------------------------
