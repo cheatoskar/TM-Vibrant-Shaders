@@ -8,6 +8,7 @@ filters them at runtime.
 | File | Recording |
 |---|---|
 | rain.mp3 | [Heavy_Rain_Loop.wav](https://freesound.org/people/Rubaoliva/sounds/624645/) by Rubaoliva |
+| wind.mp3 | [Howling winter storm ambient sounds](https://freesound.org/people/DBlover/sounds/505999/) by DBlover (40 s to 90 s of the preview) |
 | thunder_close1.mp3 | [Closeup Thunder Strike 01](https://freesound.org/people/loganzsound/sounds/840628/) by loganzsound |
 | thunder_close2.mp3 | [big thunder clap](https://freesound.org/people/seth-m/sounds/458015/) by seth-m |
 | thunder_close3.mp3 | [Thunderclap](https://freesound.org/people/Fission9/sounds/534023/) by Fission9 |

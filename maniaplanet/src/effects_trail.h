@@ -28,6 +28,7 @@ public:
 private:
     static constexpr UINT kPoints = 16384; // 4.5 min at 60 points a second, ~3 min at full speed
     void clear();
+    static constexpr float kMinStep = 0.3f; // m: closer points are no line (the car shaking in place)
     ID3D11VertexShader* m_vs = nullptr;
     ID3D11PixelShader* m_ps = nullptr;
     ID3D11Texture2D* m_pointsTex = nullptr;

@@ -132,14 +132,15 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         float* p = &m_points[m_head * 4];
         memcpy(p, car->position, sizeof(float) * 3);
         p[3] = m_break ? -stamp : stamp;
-        live = true;
         float moved = 0.0f;
         if (m_keptValid) {
             const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
             moved = sqrtf(dx * dx + dy * dy + dz * dz);
         }
-        // Standing still keeps nothing (the ring would fill with the same spot).
-        if ((m_clock >= 1.0f / 60.0f && moved >= 0.05f) || moved >= 1.0f || !m_keptValid) {
+        // Less than 30 cm from the last point (standing, shaking after a crash) is no line: those
+        // points pointed every way and fanned the tyre lines out around the car.
+        live = moved >= kMinStep || !m_keptValid;
+        if ((m_clock >= 1.0f / 60.0f && moved >= kMinStep) || moved >= 1.0f || !m_keptValid) {
             m_clock = moved >= 1.0f ? 0.0f : fmodf(m_clock, 1.0f / 60.0f);
             memcpy(m_kept, car->position, sizeof(m_kept));
             m_keptValid = true;

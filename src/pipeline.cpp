@@ -1293,6 +1293,19 @@ float3 smoothPoint(float i, float4 centre) {
     return sum / weight;
 }
 
+// The direction of the line at point j: from its neighbours on the same line (smoothed). The
+// pieces on both sides of a point then share its corners (no gaps or overlaps at the joints), and
+// a car shaking in place doesn't swing the tyre lines around.
+float3 trailTangent(float j, float4 pj, float3 sj) {
+    float first = c_Trail.y - c_Trail.x, last = c_Trail.y - 1.0;
+    float4 pm = trailPoint(j - 1.0), pp = trailPoint(j + 1.0);
+    bool hasPrev = pj.w > 0.0 && j - 1.0 >= first && pm.w != 0.0 && distance(pm.xyz, pj.xyz) < 25.0;
+    bool hasNext = j + 1.0 <= last && pp.w > 0.0 && distance(pp.xyz, pj.xyz) < 25.0;
+    float3 m = hasPrev ? smoothPoint(j - 1.0, pm) : sj;
+    float3 n = hasNext ? smoothPoint(j + 1.0, pp) : sj;
+    return n - m;
+}
+
 VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     VSOut o;
     o.pos = float4(0, 0, -2, 1);
@@ -1304,12 +1317,15 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     // No car found at one end, or b starts a new line (respawn).
     if (a.w == 0.0 || b.w <= 0.0) return o;
     if (distance(a.xyz, b.xyz) > 25.0) return o; // teleported (or a wrong find: 25 m in 1/30 s is 2700 km/h)
-    a.xyz = smoothPoint(first + k, a);
-    b.xyz = smoothPoint(first + k + 1.0, b);
-    float3 d = b.xyz - a.xyz;
+    if (distance(a.xyz, b.xyz) < 1e-3) return o;
+    // This corner's point, smoothed, and the line's direction there.
+    float j = first + k + corner.y;
+    float4 pj = corner.y > 0.5 ? b : a;
+    float3 s = smoothPoint(j, pj);
+    float3 d = trailTangent(j, pj, s);
     float len = length(d);
     if (len < 1e-3) return o;
-    float age = c_Trail.z - lerp(abs(a.w), b.w, corner.y);
+    float age = c_Trail.z - (corner.y > 0.5 ? b.w : abs(a.w));
     float fade = c_Trail.w > 0.0 ? saturate(1.0 - age / c_Trail.w) : 1.0;
     if (fade <= 0.0) return o;
     // It comes out behind the car: under and in it the line would flicker through the body
@@ -1318,14 +1334,16 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     // a fade per vertex would stretch over the whole first piece. Only the fresh part: an
     // older line the car drives back over stays.
     float3 car = trailPoint(c_Trail.y - 1.0).xyz;
-    float fromCar = lerp(distance(lerp(a.xyz, b.xyz, corner.y), car), 100.0, saturate((age - 0.6) / 0.3));
+    float fromCar = lerp(distance(s, car), 100.0, saturate((age - 0.6) / 0.3));
     float3 dir = d / len;
     float3 right = cross(float3(0, 1, 0), dir);
     float rl = length(right);
     right = rl > 0.1 ? right / rl : float3(1, 0, 0);
-    float3 p = lerp(a.xyz, b.xyz, corner.y) + right * c_Trail2.x;
+    float3 p = s + right * c_Trail2.x;
     float3 v = toView(p);
     if (v.z < 0.3) return o;
+    // Right in front of the lens (a camera on the ground after a crash) it would fill the screen.
+    fade *= smoothstep(0.5, 2.5, v.z);
     float3 dv = toView(p + dir) - v;
     float3 side = cross(dv, v);
     float sl = length(side);
@@ -1457,16 +1475,22 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         m_quad.draw(device, kTrailWidth, kTrailHeight);
         profileMark(kTrailPoint);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
-        // Kept 30 times a second, and every 2 m when the engine gives the position: at Island
-        // speeds 30 a second are 5-7 m apart, the line went angular in curves and its live
-        // end jumped that far every 33 ms.
+        // With the engine's position: kept 60 times a second while the car moves, and every
+        // metre (at Island speeds 30 a second were 5-7 m apart, the line went angular in curves).
+        // Less than 30 cm from the last point (standing, shaking after a crash) is no line: those
+        // points pointed every way and fanned the tyre lines out around the car. The car found
+        // in the depth buffer: 30 a second, as before.
         float moved = 0.0f;
-        if (in.carKnown && m_trailKeptValid) {
+        const bool measured = in.carKnown && m_trailKeptValid;
+        if (measured) {
             const float dx = in.carPosition[0] - m_trailKept[0], dy = in.carPosition[1] - m_trailKept[1], dz = in.carPosition[2] - m_trailKept[2];
             moved = sqrtf(dx * dx + dy * dy + dz * dz);
+            if (moved < kTrailMinStep) live = false;
         }
-        if (m_trailClock >= 1.0f / 30.0f || moved >= 2.0f) {
-            m_trailClock = moved >= 2.0f ? 0.0f : fmodf(m_trailClock, 1.0f / 30.0f);
+        const bool keep = measured ? (m_trailClock >= 1.0f / 60.0f && moved >= kTrailMinStep) || moved >= 1.0f
+                                   : m_trailClock >= 1.0f / 30.0f;
+        if (keep) {
+            m_trailClock = moved >= 1.0f ? 0.0f : fmodf(m_trailClock, measured ? 1.0f / 60.0f : 1.0f / 30.0f);
             memcpy(m_trailKept, in.carPosition, sizeof(m_trailKept));
             m_trailKeptValid = in.carKnown;
             m_trailBreak = false;

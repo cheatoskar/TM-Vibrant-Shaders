@@ -27,8 +27,7 @@ constexpr float kPi = 3.14159265f;
 
 // Recordings in sounds/ (CC0, see sounds/CREDITS.md), embedded as RCDATA (sounds/sounds.rc).
 constexpr int kRainClip = 1;
-// The snow storm's wind as a recording (ManiaPlanet's build, maniaplanet/sounds/wind.rc); without
-// it the wind is synthesised.
+// The snow storm's wind (a recording; should it fail to load, the wind is synthesised).
 constexpr int kWindClip = 2;
 constexpr int kThunderClips[3][4] = {
     {11, 12, 13, 14}, // close: a crack, then the roll
@@ -177,7 +176,6 @@ public:
             m_rain.samples.resize((n - blend) * 2);
         }
         TMVS_LOG("audio: rain recording loaded (%.1f s loop)", static_cast<float>(m_rain.frames()) / kRate);
-#ifdef TMVS_WIND_RECORDING
         if (!m_windClip.frames() && loadClip(kWindClip, 0.11f, m_windClip)) {
             // Seamless like the rain, over 2 s (the gusts howl, a short blend would be heard).
             const size_t windBlend = kRate * 2, wn = m_windClip.frames();
@@ -195,7 +193,6 @@ public:
             }
             TMVS_LOG("audio: wind recording loaded (%.1f s loop)", static_cast<float>(m_windClip.frames()) / kRate);
         }
-#endif
         return true;
     }
 
@@ -234,7 +231,7 @@ public:
         TMVS_LOG("audio: thunder (distance %.2f, sound %d, decoded in %u ms)", distance, kThunderClips[group][pick], GetTickCount() - start);
     }
 
-    // Wind of a snow storm, synthesised: noise through a band pass that rises and falls with
+    // Wind of a snow storm: the recording, else synthesised: noise through a band pass that rises and falls with
     // the gusts (the howl), over a low rumble. Each ear gets its own noise (wide, not mono).
     void wind(float* out, float amount) {
         m_windLevel += (amount - m_windLevel) * 0.00003f; // ~1 s glide

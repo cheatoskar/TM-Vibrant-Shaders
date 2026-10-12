@@ -66,6 +66,20 @@ float3 smoothPoint(float i, float4 centre)
     return sum / weight;
 }
 
+// The direction of the line at point j: from its neighbours on the same line (smoothed). The
+// pieces on both sides of a point then share its corners (no gaps or overlaps at the joints), and
+// a car shaking in place doesn't swing the tyre lines around.
+float3 trailTangent(float j, float4 pj, float3 sj)
+{
+    float first = g_trail.y - g_trail.x, last = g_trail.y - 1.0;
+    float4 pm = trailPoint(j - 1.0), pp = trailPoint(j + 1.0);
+    bool hasPrev = pj.w > 0.0 && j - 1.0 >= first && pm.w != 0.0 && distance(pm.xyz, pj.xyz) < 25.0;
+    bool hasNext = j + 1.0 <= last && pp.w > 0.0 && distance(pp.xyz, pj.xyz) < 25.0;
+    float3 m = hasPrev ? smoothPoint(j - 1.0, pm) : sj;
+    float3 n = hasNext ? smoothPoint(j + 1.0, pp) : sj;
+    return n - m;
+}
+
 float3 toView(float3 w)
 {
     float3 d = w - cameraWorld();
@@ -91,24 +105,29 @@ TrailOut VS_Trail(uint id : SV_VertexID)
     float4 a = trailPoint(first + k), b = trailPoint(first + k + 1.0);
     if (a.w == 0.0 || b.w <= 0.0) return o;          // no car at one end, or b starts a new line
     if (distance(a.xyz, b.xyz) > 25.0) return o;     // teleported
-    a.xyz = smoothPoint(first + k, a);
-    b.xyz = smoothPoint(first + k + 1.0, b);
-    float3 d = b.xyz - a.xyz;
+    if (distance(a.xyz, b.xyz) < 1e-3) return o;
+    // This corner's point, smoothed, and the line's direction there.
+    float j = first + k + corner.y;
+    float4 pj = corner.y > 0.5 ? b : a;
+    float3 s = smoothPoint(j, pj);
+    float3 d = trailTangent(j, pj, s);
     float len = length(d);
     if (len < 1e-3) return o;
-    float age = g_trail.z - lerp(abs(a.w), b.w, corner.y);
+    float age = g_trail.z - (corner.y > 0.5 ? b.w : abs(a.w));
     float fade = g_trail.w > 0.0 ? saturate(1.0 - age / g_trail.w) : 1.0;
     if (fade <= 0.0) return o;
     // It comes out behind the car (through the body it would flicker); only the fresh part.
     float3 car = trailPoint(g_trail.y - 1.0).xyz;
-    float fromCar = lerp(distance(lerp(a.xyz, b.xyz, corner.y), car), 100.0, saturate((age - 0.6) / 0.3));
+    float fromCar = lerp(distance(s, car), 100.0, saturate((age - 0.6) / 0.3));
     float3 dir = d / len;
     float3 right = cross(float3(0, 1, 0), dir);
     float rl = length(right);
     right = rl > 0.1 ? right / rl : float3(1, 0, 0);
-    float3 p = lerp(a.xyz, b.xyz, corner.y) + right * g_trail2.x;
+    float3 p = s + right * g_trail2.x;
     float3 v = toView(p);
     if (v.z < 0.3) return o;
+    // Right in front of the lens (a camera on the ground after a crash) it would fill the screen.
+    fade *= smoothstep(0.5, 2.5, v.z);
     float3 dv = toView(p + dir) - v;
     float3 side = cross(dv, v);
     float sl = length(side);
