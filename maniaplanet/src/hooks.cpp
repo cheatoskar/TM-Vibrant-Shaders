@@ -16,6 +16,7 @@
 #include "options.h"
 #include "config.h"
 #include "thumbnails11.h"
+#include "photo11.h"
 #include "shaderdb.h"
 #include <windows.h>
 #include <dxgi1_2.h>
@@ -456,6 +457,8 @@ void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed whe
         thumbnails::savePicture(g_device, ctx, resourceOf(target), config.presetPicture(picture));
         config.pictureTaken();
     }
+    // Photo mode's F12: the finished frame, before the interface.
+    photo::afterRender(g_device, ctx, resourceOf(target));
 }
 
 // Runs the mod's HDR stage in place of the engine's tone-map draw (same inputs, same target).
@@ -469,6 +472,8 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
     view.time = nowSeconds();
+    view.photo = photo::active();
+    photo::focusPoint(view.focus);
     const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, g_look, view);
     for (auto* v : in)
         if (v) v->Release();
@@ -500,6 +505,17 @@ bool skipEngineBloom(ID3D11DeviceContext* ctx, const char* name) {
         TMVS_LOG("hooks: the engine's bloom (FxBloom_Final) %s", additive ? "adds onto the HDR image: skipped while the mod's bloom is on"
                                                                          : "is not additive: left alone");
     return additive;
+}
+
+// Photo mode hides the interface: the game's draws onto the finished image (or the back buffer)
+// after the interface started are skipped. Not a draw that reads the finished image (a copy of it
+// onto the back buffer would leave the screen stale), and nothing drawn into other targets (text
+// and icon atlases are drawn once and kept: skipping them would spoil the interface afterwards).
+bool hideInterfaceDraw(ID3D11DeviceContext* ctx) {
+    const Frame& f = g_frame;
+    if (!photo::hideInterface() || !f.rt) return false;
+    if (f.rt != f.postImage && f.rt != g_backBuffer) return false;
+    return !readsResource(ctx, f.postImage);
 }
 
 // Before a draw of the game on the main context. True: skip the game's draw.
@@ -554,6 +570,7 @@ bool onDraw(ID3D11DeviceContext* ctx) {
         }
         return false;
     }
+    if (f.phase == Phase::Done) return hideInterfaceDraw(ctx);
     if (f.phase != Phase::Post) return false;
     if (role == Role::Post || role == Role::ToneMap) {
         if (f.rt && screenSized(f.rtW, f.rtH)) {
@@ -581,7 +598,7 @@ bool onDraw(ID3D11DeviceContext* ctx) {
         f.injected = true;
         inject(ctx, f.postRtv, Placed::BeforeHud);
     }
-    return false;
+    return hideInterfaceDraw(ctx);
 }
 
 // ---- device ----
@@ -816,7 +833,9 @@ void prepareLook() {
     tmshaders::Config& config = tmshaders::Config::get();
     g_lookSettings = config.settings;
     if (config.showOverlay && config.hoverPreview) config.previewSettings(g_lookSettings);
-    g_autoQuality.apply(g_lookSettings);
+    // Photo mode is full quality: auto quality pauses (as in TMNF).
+    if (!photo::active()) g_autoQuality.apply(g_lookSettings);
+    photo::adjust(g_lookSettings);
     g_look.settings = &g_lookSettings;
     g_look.lut = config.lutFile;
     g_look.lutAmount = config.lutAmount;

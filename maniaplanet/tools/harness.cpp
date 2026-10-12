@@ -502,6 +502,38 @@ int main(int argc, char** argv) {
     set("ShowMenu", "0");
     hdrClear = 0.0f;
 
+    // Photo mode (F6): the interface draws on the finished image are skipped, the effects still
+    // go in before where it starts.
+    set("PhotoMode", "1");
+    for (int i = 0; i < 3; i++) frame(true, centre, hud);
+    stats(s);
+    printf("  photo mode: centre %u, hud %u %u %u\n", centre[0], hud[0], hud[1], hud[2]);
+    check(s[0] == 1, "in photo mode the effects still go in before the interface");
+    check(!(hud[0] == 255 && hud[1] == 0 && hud[2] == 0) && hud[0] == centre[0], "photo mode hides the interface");
+    {
+        // F12: photo_NNN.png in the data folder (written on a thread).
+        const std::string pattern = std::string(data) + "\\photo_*.png";
+        auto count = [&] {
+            int n = 0;
+            WIN32_FIND_DATAA fd;
+            HANDLE find = FindFirstFileA(pattern.c_str(), &fd);
+            if (find != INVALID_HANDLE_VALUE) {
+                do n++;
+                while (FindNextFileA(find, &fd));
+                FindClose(find);
+            }
+            return n;
+        };
+        const int before = count();
+        set("PhotoShot", "1");
+        for (int i = 0; i < 2; i++) frame(true, centre, hud);
+        for (int i = 0; i < 50 && count() == before; i++) Sleep(100);
+        check(count() == before + 1, "F12 in photo mode saves a photo");
+    }
+    set("PhotoMode", "0");
+    for (int i = 0; i < 2; i++) frame(true, centre, hud);
+    check(hud[0] == 255 && hud[1] == 0 && hud[2] == 0, "the interface is back after photo mode");
+
     requestCapture();
     for (int i = 0; i < 3; i++) frame(true, centre, hud);
     WIN32_FIND_DATAA fd;

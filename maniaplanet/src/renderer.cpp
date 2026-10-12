@@ -504,6 +504,8 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
         frame.shadow = engine.shadow;
         frame.time = engine.time;
         frame.photo = engine.photo;
+        frame.focus[0] = engine.focus[0];
+        frame.focus[1] = engine.focus[1];
         if (m_effects.scene(ctx, frame, s)) {
             hdr = m_effects.result();
             m_effectsRan = true;

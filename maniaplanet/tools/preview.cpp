@@ -4,6 +4,10 @@
 //   mp_preview <capture folder> <out.bmp> [--preset Name] [--view N] [--set Key=Value ...]
 //              [--hdr] [--tonecb file]
 //
+// --frames N runs the HDR stage N times 1/60 s apart (TAA, motion blur and auto focus need a
+// previous frame; the camera stays, the engine's motion vectors are the captured ones), --photo
+// runs it in photo mode, --focus u,v sets the photo mode's focus point.
+//
 // --hdr runs the HDR stage first (the mod's tone map and bloom on engine_hdr.dds with
 // engine_exposure.dds), with the engine's tone-map constants from tonemap_cb.bin in the capture
 // (captures from before 0.2 lack it: pass one with --tonecb).
@@ -126,6 +130,9 @@ int main(int argc, char** argv) {
     const std::string folder = argv[1];
     bool hdrStage = false;
     double time = 10.0;
+    int frames = 1;       // --frames: the HDR stage this many times, 1/60 s apart (TAA, motion blur, auto focus)
+    bool photo = false;   // --photo: photo mode (full quality, full-res depth of field)
+    float focus[2] = {-1.0f, -1.0f}; // --focus u,v: the photo mode's focus point
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
     // The look: a built-in or your preset (default Vibrant), then --set values on top.
@@ -136,6 +143,10 @@ int main(int argc, char** argv) {
         const std::string opt = argv[i];
         if (opt == "--hdr") {
             hdrStage = true;
+            continue;
+        }
+        if (opt == "--photo") {
+            photo = true;
             continue;
         }
         if (i + 1 >= argc) {
@@ -151,6 +162,13 @@ int main(int argc, char** argv) {
         }
         else if (opt == "--tonecb") toneCbPath = value;
         else if (opt == "--time") time = atof(value.c_str());
+        else if (opt == "--frames") frames = std::max(1, atoi(value.c_str()));
+        else if (opt == "--focus") {
+            if (sscanf(value.c_str(), "%f,%f", &focus[0], &focus[1]) != 2) {
+                printf("--focus wants u,v\n");
+                return 2;
+            }
+        }
         else if (opt == "--debug") config.settings.debugView = atoi(value.c_str());
         else if (opt == "--view") opts.view = static_cast<View>(atoi(value.c_str()));
         else if (opt == "--set") {
@@ -303,10 +321,15 @@ int main(int argc, char** argv) {
         }
         EngineView engine{tex, haveCamera ? &camera : nullptr};
         engine.shadow = shadow.valid ? &shadow : nullptr;
-        engine.time = time;
-        if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look, engine)) {
-            printf("the HDR stage failed\n");
-            return 1;
+        engine.photo = photo;
+        engine.focus[0] = focus[0];
+        engine.focus[1] = focus[1];
+        for (int f = 0; f < frames; f++) {
+            engine.time = time + (f - frames + 1) / 60.0;
+            if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look, engine)) {
+                printf("the HDR stage failed\n");
+                return 1;
+            }
         }
         printf("  HDR stage: preset %s, curve %d, bloom %.2f, scene effects %s\n", config.preset.c_str(),
                config.settings.toneCurve, config.settings.bloom, renderer.effectsRan() ? "ran" : "off");
