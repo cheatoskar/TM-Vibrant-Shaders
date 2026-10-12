@@ -206,6 +206,17 @@ double nowSeconds() {
 ID3D11Resource* g_tex[kTexCount] = {};
 Camera g_camera;
 bool g_cameraThisFrame = false;
+// The runtime rewrites the draw slots now and then in the middle of a frame (log: "patched again");
+// until they are patched again the scene's draws go past the mod. A frame that missed the
+// lighting pass would lose its camera and with it every scene effect: one bright, undarkened
+// frame. The last camera and shadow pass are good for a few frames.
+int g_cameraMissed = 100;
+bool g_shadowSeen = false;
+int g_shadowMissed = 100;
+
+bool cameraUsable() {
+    return g_cameraThisFrame || (g_camera.valid && g_cameraMissed < 4);
+}
 
 void setTexture(int index, ID3D11Resource* res) {
     if (res == g_tex[index]) return;
@@ -279,6 +290,7 @@ void takeShadowPass(ID3D11DeviceContext* ctx) {
     }
     g_shadow.valid = g_shadow.constants && g_shadow.sampler && g_tex[kTexShadowMap0] && g_tex[kTexShadowMap1] &&
                      (g_shadow.raster[0] != 0.0f || g_shadow.raster[1] != 0.0f);
+    g_shadowSeen = g_shadow.valid;
 }
 
 // Copies of the engine's SceneV (vertex) and SceneP (pixel lighting) constant buffers, taken
@@ -308,9 +320,17 @@ UINT sceneBufferSize(ID3D11Resource* res) {
             (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER))
             size = d.ByteWidth;
     }
-    if (g_isSceneV.size() > 4096) g_isSceneV.clear();
+    if (g_isSceneV.size() > 4096) {
+        // Forgotten, the car's buffers would be found again at its next draw.
+        g_isSceneV.clear();
+    }
     g_isSceneV[res] = size;
     return size;
+}
+
+// A buffer the car's draw binds: its uploads are copied too.
+void markCarBuffer(ID3D11Resource* res, UINT size) {
+    g_isSceneV[res] = size;
 }
 
 SceneVCopy* sceneVCopy(ID3D11Resource* res, bool create) {
@@ -344,6 +364,27 @@ bool g_carLastValid = false;
 float g_carCandidates[8][12] = {};
 int g_carCount = 0;
 
+// A 3x4 matrix (rows) that places an object near the camera: its 3x3 a rotation (unit, orthogonal
+// rows), its origin within 60 m.
+bool placesNearCamera(const float* m) {
+    float rows[3][3];
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++) rows[r][c] = m[r * 4 + c];
+    for (int r = 0; r < 3; r++) {
+        const float len = rows[r][0] * rows[r][0] + rows[r][1] * rows[r][1] + rows[r][2] * rows[r][2];
+        if (!(std::fabs(len - 1.0f) < 0.05f)) return false;
+        const int s = (r + 1) % 3;
+        const float dot = rows[r][0] * rows[s][0] + rows[r][1] * rows[s][1] + rows[r][2] * rows[s][2];
+        if (!(std::fabs(dot) < 0.05f)) return false;
+    }
+    const float d = m[3] * m[3] + m[7] * m[7] + m[11] * m[11];
+    return d > 0.25f && d < 60.0f * 60.0f;
+}
+
+// Where in the car's constants VisualToCamera is: at 112 in the buffers seen so far, else the first
+// matrix that places the car near the camera (logged once).
+int g_carMatrixAt = kObjectVVisualToCamera;
+
 void takeCar(ID3D11DeviceContext* ctx) {
     if (g_carCount >= 8) return;
     ID3D11Buffer* cbs[8] = {};
@@ -352,11 +393,33 @@ void takeCar(ID3D11DeviceContext* ctx) {
     for (ID3D11Buffer* cb : cbs) {
         if (!cb || found) continue;
         const SceneVCopy* copy = sceneVCopy(cb, false);
-        if (copy && copy->filled && copy->size == kObjectVCarSize) found = copy;
+        if (copy && copy->filled && copy->size >= kObjectVVisualToCamera + 48 && copy->size != kSceneVSize && copy->size != kScenePSize)
+            found = copy;
+    }
+    // Not copied yet: its buffer is the car's (any size up to the copy's), its uploads are copied
+    // from now on.
+    if (!found && cbs[0]) {
+        D3D11_BUFFER_DESC d;
+        cbs[0]->GetDesc(&d);
+        if (d.ByteWidth >= kObjectVVisualToCamera + 48 && d.ByteWidth <= kObjectVCarSize && d.ByteWidth != kSceneVSize &&
+            d.ByteWidth != kScenePSize && !sceneVCopy(cbs[0], false)) {
+            markCarBuffer(cbs[0], d.ByteWidth);
+            static int logged = 0;
+            if (logged++ < 4) TMVS_LOG("hooks: the car's vertex constants are %u bytes: copied from now on", d.ByteWidth);
+        }
+    }
+    if (found && !placesNearCamera(reinterpret_cast<const float*>(found->data + g_carMatrixAt))) {
+        int at = -1;
+        for (UINT o = 0; o + 48 <= found->size && at < 0; o += 16)
+            if (placesNearCamera(reinterpret_cast<const float*>(found->data + o))) at = static_cast<int>(o);
+        static int logged = 0;
+        if (at >= 0 && at != g_carMatrixAt && logged++ < 4) TMVS_LOG("hooks: the car's placement is at byte %d of its constants", at);
+        if (at >= 0) g_carMatrixAt = at;
+        else found = nullptr;
     }
     if (found) {
-        memcpy(g_carCandidates[g_carCount++], found->data + kObjectVVisualToCamera, sizeof(float) * 12);
-    } else {
+        memcpy(g_carCandidates[g_carCount++], found->data + g_carMatrixAt, sizeof(float) * 12);
+    } else if (!cbs[0] || sceneVCopy(cbs[0], false)) {
         // Not an upload we saw: what is bound instead (a few times), to learn the engine's scheme.
         static int logged = 0;
         if (logged++ < 3) {
@@ -379,7 +442,7 @@ void takeCar(ID3D11DeviceContext* ctx) {
 
 void resolveCar() {
     g_car.valid = false;
-    if (!g_cameraThisFrame || !g_carCount) return;
+    if (!cameraUsable() || !g_carCount) return;
     const float* w = g_camera.worldToCamera; // camera space -> world: its rows are the camera's axes
     auto toWorld = [&](float x, float y, float z, float out[3]) {
         for (int i = 0; i < 3; i++) out[i] = x * w[i] + y * w[4 + i] + z * w[8 + i];
@@ -526,7 +589,7 @@ bool readsResource(ID3D11DeviceContext* ctx, ID3D11Resource* res) {
 
 void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed where) {
     if (!g_lookSettings.enabled || !g_rendererReady) return;
-    EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
+    EngineView view{g_tex, cameraUsable() ? &g_camera : nullptr};
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
     if (!g_renderer.apply(ctx, target, view, g_look, options::current(), g_frame.toneMapped)) return;
     g_frame.placed = where;
@@ -550,7 +613,7 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     ctx->PSGetShaderResources(0, 2, in);
     ID3D11Buffer* constants = nullptr;
     ctx->PSGetConstantBuffers(0, 1, &constants);
-    EngineView view{g_tex, g_cameraThisFrame ? &g_camera : nullptr};
+    EngineView view{g_tex, cameraUsable() ? &g_camera : nullptr};
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
     resolveCar();
     view.car = g_car.valid ? &g_car : nullptr;
@@ -995,8 +1058,9 @@ bool onPresent(IDXGISwapChain* sc) {
         // one stays on screen a frame longer). Never twice in a row.
         drop = !g_frame.toneMapped && lastToneMapped && dropsInARow == 0 && g_lookSettings.enabled;
         if (logged++ < 40)
-            TMVS_LOG("hooks: %d device/context slots patched again at Present (%s; frames with draws past the mod: %d%s)", patched,
-                     g_patchedNames, lost, drop ? ", not shown" : "");
+            TMVS_LOG("hooks: %d device/context slots patched again at Present (%s; frames with draws past the mod: %d%s; camera %s, shadow %s)",
+                     patched, g_patchedNames, lost, drop ? ", not shown" : "",
+                     g_cameraThisFrame ? "seen" : (cameraUsable() ? "from before" : "none"), g_shadowSeen ? "seen" : "from before");
     }
     dropsInARow = drop ? dropsInARow + 1 : 0;
     lastToneMapped = g_frame.toneMapped;
@@ -1052,8 +1116,11 @@ bool onPresent(IDXGISwapChain* sc) {
     prepareLook();
 
     // Next frame. The bound targets stay as the game left them.
+    g_cameraMissed = g_cameraThisFrame ? 0 : g_cameraMissed + 1;
     g_cameraThisFrame = false;
-    g_shadow.valid = false;
+    g_shadowMissed = g_shadowSeen ? 0 : g_shadowMissed + 1;
+    if (g_shadowMissed >= 4) g_shadow.valid = false;
+    g_shadowSeen = false;
     // The car: what this frame found is the one to continue next frame.
     g_carLastValid = g_car.valid;
     if (g_car.valid) memcpy(g_carLast, g_car.position, sizeof(g_carLast));
