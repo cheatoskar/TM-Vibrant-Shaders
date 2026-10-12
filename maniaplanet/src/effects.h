@@ -109,6 +109,7 @@ struct SceneFrame {
     double time = 0.0;                            // seconds
     bool photo = false;                           // photo mode: effects reach farther
     bool driving = true;                          // not a replay (cinematic effects only in replays)
+    float focus[2] = {-1.0f, -1.0f};              // photo mode: the focus point clicked (uv), -1 = auto focus
 };
 
 class Effects {

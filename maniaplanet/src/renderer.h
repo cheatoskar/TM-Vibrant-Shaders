@@ -61,6 +61,7 @@ struct EngineView {
     const Camera* camera = nullptr;       // null: not found this frame
     double time = 0.0;                    // seconds (animated effects)
     bool photo = false;
+    float focus[2] = {-1.0f, -1.0f};      // photo mode: the focus point clicked (uv), -1 = auto focus
 };
 
 // The look of this frame: the shared TMNF settings plus what goes with them.

@@ -23,6 +23,12 @@ public:
     // After the composite and the weather: depth of field, motion blur, TAA
     // (each fx.current() -> fx.next(), then fx.swap()).
     void run(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s);
+
+private:
+    // Shaders and targets (effects_cinema.cpp: effects.h includes this header, so the targets
+    // can't be members here).
+    struct State;
+    State* m_state = nullptr;
 };
 
 } // namespace tmvs_mp
