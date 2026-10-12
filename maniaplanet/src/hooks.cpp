@@ -20,6 +20,7 @@
 #include "shaderdb.h"
 #include <windows.h>
 #include <dxgi1_2.h>
+#include <d3d11_4.h>
 #include <mutex>
 #include <shared_mutex>
 #include <algorithm>
@@ -46,6 +47,8 @@ enum ContextSlot {
 };
 enum SwapSlot { kPresent = 8, kResizeBuffers = 13, kPresent1 = 22 };
 enum FactorySlot { kCreateSwapChain = 10, kCreateSwapChainForHwnd = 15 };
+// ID3D10Multithread / ID3D11Multithread: IUnknown, Enter, Leave, SetMultithreadProtected.
+enum MultithreadSlot { kSetMultithreadProtected = 5 };
 
 thread_local int t_inside = 0;
 
@@ -137,6 +140,7 @@ Hook g_present1;
 Hook g_resizeBuffers;
 Hook g_createSwapChain;
 Hook g_createSwapChainForHwnd;
+Hook g_setMultithreadProtected;
 
 // Pixel shader -> what it is. Written by the game's loading threads, read on the render thread.
 std::shared_mutex g_shaderLock;
@@ -787,6 +791,39 @@ int installDeviceHooks(ID3D11Device* device) {
     return patched;
 }
 
+// The runtime rewrites the device's and the context's vtables whenever the game switches
+// multithread protection, which it does every few seconds while it streams. Until the next
+// Present the draws then went past the mod: one frame with the engine's own look (a bright
+// flash every 15-30 s). Patched again right after the switch, nothing is lost.
+using SetMultithreadProtectedFn = BOOL(STDMETHODCALLTYPE*)(IUnknown*, BOOL);
+BOOL STDMETHODCALLTYPE setMultithreadProtectedDetour(IUnknown* self, BOOL on) {
+    const BOOL was = g_setMultithreadProtected.get<SetMultithreadProtectedFn>(self)(self, on);
+    if (g_device) {
+        const int patched = installDeviceHooks(g_device);
+        static int logged = 0;
+        if (logged++ < 8) TMVS_LOG("hooks: the game switched multithread protection %s, %d slots patched again at once", on ? "on" : "off", patched);
+    }
+    return was;
+}
+
+void hookMultithread(ID3D11Device* device) {
+    ID3D10Multithread* mt10 = nullptr;
+    if (SUCCEEDED(device->QueryInterface(__uuidof(ID3D10Multithread), reinterpret_cast<void**>(&mt10)))) {
+        g_setMultithreadProtected.install(mt10, kSetMultithreadProtected, reinterpret_cast<void*>(&setMultithreadProtectedDetour));
+        mt10->Release();
+    }
+    ID3D11DeviceContext* ctx = nullptr;
+    device->GetImmediateContext(&ctx);
+    if (ctx) {
+        ID3D11Multithread* mt11 = nullptr;
+        if (SUCCEEDED(ctx->QueryInterface(__uuidof(ID3D11Multithread), reinterpret_cast<void**>(&mt11)))) {
+            g_setMultithreadProtected.install(mt11, kSetMultithreadProtected, reinterpret_cast<void*>(&setMultithreadProtectedDetour));
+            mt11->Release();
+        }
+        ctx->Release();
+    }
+}
+
 void releaseBackBuffer() {
     if (g_backBufferRtv) g_backBufferRtv->Release();
     g_backBufferRtv = nullptr;
@@ -856,7 +893,9 @@ void onPresent(IDXGISwapChain* sc) {
     if (sc != g_swapChain || !g_ctx) return;
     if (const int patched = installDeviceHooks(g_device)) {
         static int logged = 0;
-        if (logged++ < 10) TMVS_LOG("hooks: %d device/context slots patched again (the runtime rewrote its vtables)", patched);
+        static int lost = 0;
+        lost++;
+        if (logged++ < 40) TMVS_LOG("hooks: %d device/context slots patched again at Present (the runtime rewrote its vtables; frames with draws past the mod: %d)", patched, lost);
     }
     ensureBackBuffer(sc);
 
@@ -1028,6 +1067,7 @@ const char* autoQualityReduced() {
 void onDevice(ID3D11Device* device) {
     if (!device) return;
     installDeviceHooks(device);
+    hookMultithread(device);
     hookFactory(device);
     TMVS_LOG("hooks: device %p hooked (feature level 0x%x)", static_cast<void*>(device), device->GetFeatureLevel());
 }

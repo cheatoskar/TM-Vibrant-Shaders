@@ -454,8 +454,14 @@ float4 PS_Lighting(VSOut i) : SV_Target
         ambPart = 0;
         engineShadow = 1;
     }
-    sunPart = min(sunPart, c);
-    ambPart = min(ambPart, c - sunPart);
+    // The engine multiplies sun and ambient together by factors these estimates don't know (the
+    // clouds' shadows, the light map): where the estimate exceeds the image, both parts come down
+    // by the same factor. (Cutting the sun first left less ambient in sunlight than in the shade:
+    // with the sun gone at night, shadows came out brighter than the ground around them.)
+    float3 total = sunPart + ambPart;
+    float3 fit = total > c ? c / max(total, 1e-6) : 1.0;
+    sunPart *= fit;
+    ambPart *= fit;
     float3 rest = c - sunPart - ambPart;
     float3 emissive = emissiveOf(rest, albedo, e, nWorld, rd);
     float3 restLight = rest - emissive; // light maps, local lights, reflections
