@@ -57,6 +57,7 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
+float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off)
 float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
 
 sampler2D s0 : register(s0);
@@ -73,6 +74,7 @@ sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
 sampler3D s12 : register(s12); // colour look-up table (final pass)
 sampler2D s13 : register(s13); // the game's materials: r lamp, g car 1 / glass .5 / grass .25, b water, a light added on top
+sampler2D s14 : register(s14); // the light the game's additive draws added, float (lighting pass, EngineLights)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -1950,7 +1952,7 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             float3 hit = toLinear(tex2Dlod(s0, float4(quv, 0, 0)).rgb);
             // Light sources stay bright in the reflection.
             float peak = max(hit.r, max(hit.g, hit.b));
-            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak);
+            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak) * u_Engine.z;
             return float4(hit, confidence);
         }
         tPrev = t;
@@ -2129,11 +2131,24 @@ float removeGameSun(float3 c, float3 nWorld, float3 rd, float sat, float night) 
     return k * cap * flatten;
 }
 
-float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+// engine (PS_LightingEngine, EngineLights): the light sources are what the game drew as light
+// (lamp materials, its additive glows), nothing is guessed from the image. Its own entry point:
+// without the guess it has room, and PS_Lighting stays exactly as it was.
+float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     // s0: with GameHdr the game's float image: the colour keeps the light its 8-bit target cut
     // (a floodlit ramp, the car body: texture instead of flat white). The lamp guess and the
     // glow work on the 0..1 range they were tuned on.
-    float3 c = toLinear(tex2Dlod(s0, float4(uv, 0, 0)).rgb);
+    float3 cGame = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float3 c = toLinear(cGame);
+    // EngineLights: what the game's additive draws added (glows, the lamps' halos) is light, not
+    // surface: taken out here (no AO, haze or night darkening on it) and added back as light below.
+    // The game adds in its own (display) values: the surface is what's left there.
+    float3 added = 0;
+    if (engine && u_Engine.x > 0.5) {
+        float3 surface = toLinear(max(cGame - tex2Dlod(s14, float4(uv, 0, 0)).rgb, 0.0));
+        added = max(c - surface, 0.0);
+        c = surface;
+    }
     float3 albedo = c;
     float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
     float3 rdView = normalize(viewPosition(uv, 1.0));
@@ -2202,7 +2217,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float flatness = smoothstep(0.8, 0.97, nWorld.y);
 
     // Expand the LDR image back toward HDR: light sources glow.
-    float emissive = emissiveAmount(uv, min(c, 1.0), nWorld, rd, dist, nd.w);
+    float emissive = engine ? 0.0 : emissiveAmount(uv, min(c, 1.0), nWorld, rd, dist, nd.w);
     // The game's materials (in game; the previewer has none): r lamp, g car / glass / grass,
     // b water, a light the game added on top. Added light (headlight pools, glows over a
     // surface) keeps the game's brightness but is no light source of its own: it was boosted
@@ -2446,6 +2461,8 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         c += bhColor * pow(saturate(dot(rd, bh.xyz)), 6.0) * saturate(fogAmount * 2.0 + 0.05) * 0.4;
     }
     c += glow * (1.0 - 0.6 * saturate(fogAmount)); // lights shine through the haze
+    // The game's glows, brighter by the highlight boost (light source intensity).
+    if (engine) c += added * (1.0 + u_Rays.w * u_Engine.y) * (1.0 - 0.6 * saturate(fogAmount));
     // Light the game added on top (headlight pools) is no darker than the game drew it: the
     // night darkening turned the pools grey and flat. Only the part the game added (above
     // the night-darkened surface), a little below its brightness so it keeps a falloff.
@@ -2456,6 +2473,9 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (u_Snow.x > 0.0) c = lerp(c, snowHaze(skyAvg.rgb), veil * 0.7);
     return float4(c, 1);
 }
+
+float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, false); }
+float4 PS_LightingEngine(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, true); }
 
 // ---------------------------------------------------------------------------------
 // Neon light spill: coloured light sources light up the surfaces around them.

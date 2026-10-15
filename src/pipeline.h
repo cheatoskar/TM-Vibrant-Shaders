@@ -16,6 +16,9 @@ public:
         // The game's image from its float target (GameHdr): light above 1.0 kept. Null = only
         // the 8-bit one. The guesses (lamps, glow, spill) stay on `color`.
         IDirect3DTexture9* hdr = nullptr;
+        // The light the game's additive draws added (glows, halos; float, already inside `hdr`).
+        // With EngineLights it is the light source instead of the guess. Null = none.
+        IDirect3DTexture9* added = nullptr;
         IDirect3DTexture9* depth = nullptr; // raw hardware depth in .r (INTZ or R32F)
         UINT width = 0;
         UINT height = 0;
@@ -200,6 +203,7 @@ private:
         kCopyDepth,
         kWaterLevel,
         kResolve,
+        kLightingEngine,
         kPassCount
     };
 

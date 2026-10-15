@@ -150,6 +150,7 @@ struct LoadedCapture {
     IDirect3DTexture9* color = nullptr;
     IDirect3DTexture9* depth = nullptr;
     IDirect3DTexture9* hdr = nullptr; // capture_NNN.hdr16 next to it (GameHdr)
+    IDirect3DTexture9* added = nullptr; // capture_NNN.add16: the light the game's additive draws added
     IDirect3DTexture9* materials = nullptr; // the class mask from capture_NNN.mat next to it
 };
 
@@ -370,23 +371,29 @@ int main(int argc, char** argv) {
         }
         c->color = upload(device, c->cap.width, c->cap.height, D3DFMT_A8R8G8B8, c->cap.color);
         c->depth = upload(device, c->cap.width, c->cap.height, D3DFMT_R32F, c->cap.depth);
-        // The game's float image (GameHdr), written next to the capture by F12.
-        std::string hdrPath = path;
-        if (useHdr && hdrPath.size() > 6 && hdrPath.compare(hdrPath.size() - 6, 6, ".tmcap") == 0) {
-            hdrPath.replace(hdrPath.size() - 6, 6, ".hdr16");
-            if (FILE* f = fopen(hdrPath.c_str(), "rb")) {
-                uint32_t header[3] = {};
-                std::vector<uint16_t> half(static_cast<size_t>(c->cap.width) * c->cap.height * 4);
-                if (fread(header, sizeof(header), 1, f) == 1 && header[0] == 0x31484D54u && header[1] == c->cap.width &&
-                    header[2] == c->cap.height && fread(half.data(), sizeof(uint16_t), half.size(), f) == half.size()) {
-                    std::vector<uint64_t> texels(half.size() / 4);
-                    memcpy(texels.data(), half.data(), half.size() * sizeof(uint16_t));
-                    c->hdr = upload(device, c->cap.width, c->cap.height, D3DFMT_A16B16G16R16F, texels);
-                    printf("%s: with the game's HDR (%s)\n", path.c_str(), hdrPath.c_str());
-                }
-                fclose(f);
+        // The game's float image (GameHdr) and the light its additive draws added, written next to
+        // the capture by F12 (capture_NNN.hdr16, .add16: "TMH1", width, height, RGBA half floats).
+        auto readHalf = [&](const char* extension, const char* what) -> IDirect3DTexture9* {
+            std::string halfPath = path;
+            if (!useHdr || halfPath.size() <= 6 || halfPath.compare(halfPath.size() - 6, 6, ".tmcap") != 0) return nullptr;
+            halfPath.replace(halfPath.size() - 6, 6, extension);
+            FILE* f = fopen(halfPath.c_str(), "rb");
+            if (!f) return nullptr;
+            IDirect3DTexture9* texture = nullptr;
+            uint32_t header[3] = {};
+            std::vector<uint16_t> half(static_cast<size_t>(c->cap.width) * c->cap.height * 4);
+            if (fread(header, sizeof(header), 1, f) == 1 && header[0] == 0x31484D54u && header[1] == c->cap.width &&
+                header[2] == c->cap.height && fread(half.data(), sizeof(uint16_t), half.size(), f) == half.size()) {
+                std::vector<uint64_t> texels(half.size() / 4);
+                memcpy(texels.data(), half.data(), half.size() * sizeof(uint16_t));
+                texture = upload(device, c->cap.width, c->cap.height, D3DFMT_A16B16G16R16F, texels);
+                printf("%s: with the game's %s (%s)\n", path.c_str(), what, halfPath.c_str());
             }
-        }
+            fclose(f);
+            return texture;
+        };
+        c->hdr = readHalf(".hdr16", "HDR");
+        c->added = readHalf(".add16", "added light");
         // The game's materials (capture_NNN.mat, F12 with the material masks on): the class mask
         // the game would have built (r light, g car 1 / glass .5 / grass .25, b water).
         std::string matPath = path;
@@ -440,6 +447,7 @@ int main(int argc, char** argv) {
         in.focusPoint[1] = focus[1];
         in.color = loaded->color;
         in.hdr = loaded->hdr;
+        in.added = loaded->added;
         in.materialMask = loaded->materials;
         in.materials = loaded->materials != nullptr;
         in.depth = loaded->depth;
@@ -527,6 +535,7 @@ int main(int argc, char** argv) {
         if (c->color) c->color->Release();
         if (c->depth) c->depth->Release();
         if (c->hdr) c->hdr->Release();
+        if (c->added) c->added->Release();
         if (c->materials) c->materials->Release();
         delete c;
     }

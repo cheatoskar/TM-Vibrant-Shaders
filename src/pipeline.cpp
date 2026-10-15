@@ -20,7 +20,7 @@ const char* const kEntryPoints[] = {
     "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail", "PS_SnowFlake",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
-    "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",
+    "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -1969,6 +1969,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // zw: lamps by their material glow from 0.4 to 0.8 of the game's white, only with GameHdr.
     const float cleanConstants[4] = {s.cleanHighlights ? 8.0f : 0.0f, in.hdr ? 1.0f : 0.0f, in.hdr ? 2.5f : 0.0f, -1.0f};
     device->SetPixelShaderConstantF(45, cleanConstants, 1);
+    // c46 (EngineLights): x s14 holds the added light; y its extra strength per HighlightBoost;
+    // z the reflections' boost of bright hits (1: as before; 0: the light sources are known).
+    const bool engineLights = s.engineLights && in.hdr;
+    const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, 0.0f};
+    device->SetPixelShaderConstantF(46, engineConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
@@ -2229,7 +2234,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
     bind(device, 13, materials ? m_materialTexture : nullptr, false);
     if (in.hdr) bind(device, 0, in.hdr, false); // GameHdr: light above 1.0 (the guesses in there clamp it)
-    runPass(device, kLighting, m_hdr);
+    // EngineLights: light sources from the game, not guessed (s14 = what its additive draws added).
+    if (engineLights && in.added) bind(device, 14, in.added, false);
+    runPass(device, engineLights ? kLightingEngine : kLighting, m_hdr);
+    device->SetTexture(14, nullptr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
     device->SetTexture(8, nullptr);
@@ -2385,7 +2393,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const float n = static_cast<float>(m_lutSize > 0 ? m_lutSize : 2);
     // Night maps: light sources never end up darker than the game drew them (the grade and
     // the tone curve pulled lamps and the surfaces they light to grey). s8 = the game's image.
-    const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night && s.debugView == 0;
+    // Not with EngineLights: the lamps glow as the game drew them, nothing needs putting back.
+    const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night && s.debugView == 0 && !engineLights;
     if (mapNight) bind(device, 8, in.color, false);
     bind(device, 13, materials ? m_materialTexture : nullptr, false);
     // Where the depth of field blurs, the lamps aren't put back sharp: s9 = its focus distance.

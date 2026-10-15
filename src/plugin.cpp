@@ -758,7 +758,10 @@ void processScene(IDirect3DDevice9* device) {
 
     Pipeline::Inputs inputs;
     inputs.color = g_sceneCopy.texture;
-    if (g_hdrValid && !part && g_hdrScene.width == width && g_hdrScene.height == height) inputs.hdr = g_hdrScene.texture;
+    if (g_hdrValid && !part && g_hdrScene.width == width && g_hdrScene.height == height) {
+        inputs.hdr = g_hdrScene.texture;
+        if (g_hdrAddedValid) inputs.added = g_hdrAdded.texture;
+    }
     inputs.depth = sceneDepth;
     inputs.width = width;
     inputs.height = height;
