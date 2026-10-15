@@ -18,6 +18,8 @@ struct DeviceCallbacks {
     // May substitute the surface the game binds as render target (GameHdr: the float scene).
     IDirect3DSurface9* (*setRenderTarget)(DWORD index, IDirect3DSurface9* surface) = nullptr;
     void (*draw)(IDirect3DDevice9* device) = nullptr;
+    // After the game's draw (GameHdr: an additive draw's own target is unbound again).
+    void (*drawDone)(IDirect3DDevice9* device) = nullptr;
     void (*setTransform)(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* matrix) = nullptr;
     void (*setLight)(DWORD index, const D3DLIGHT9* light) = nullptr;
 };

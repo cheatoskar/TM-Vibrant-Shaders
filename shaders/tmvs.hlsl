@@ -3136,9 +3136,11 @@ float4 PS_CopyDepth(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // The game's image drawn into a float target (GameHdr), cut to 0..1 as the game's own 8-bit
-// target would have: s0 = float scene, u_Pass0 = area (xy offset, zw size, in uv).
+// target would have: s0 = float scene, u_Pass0 = area (xy offset, zw size, in uv). u_Pass1.x 1:
+// as it is (the added light, blended one-one into the float scene).
 float4 PS_Resolve(float2 uv : TEXCOORD0) : COLOR0 {
-    return float4(saturate(tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0)).rgb), 1);
+    float3 c = tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0)).rgb;
+    return float4(u_Pass1.x > 0.5 ? c : saturate(c), 1);
 }
 
 // ---------------------------------------------------------------------------------

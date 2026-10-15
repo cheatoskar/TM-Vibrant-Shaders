@@ -2539,6 +2539,14 @@ bool Pipeline::copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth,
 }
 
 bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area) {
+    return copyScene(device, scene, target, area, false);
+}
+
+bool Pipeline::addScene(IDirect3DDevice9* device, IDirect3DTexture9* added, IDirect3DSurface9* target, const RECT& area) {
+    return copyScene(device, added, target, area, true);
+}
+
+bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add) {
     if (!m_ready) return false;
     D3DSURFACE_DESC desc{};
     target->GetDesc(&desc);
@@ -2546,9 +2554,19 @@ bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, 
     device->SetRenderTarget(0, target); // resets the scissor rect: set it after
     device->SetScissorRect(&area);
     device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
-    bind(device, 0, scene, false);
+    if (add) {
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        device->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+        device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    }
+    bind(device, 0, source, false);
     passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
+    const float mode[4] = {add ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f}; // c33.x: 1 = as it is (added), 0 = cut to 0..1
+    device->SetPixelShaderConstantF(33, mode, 1);
     runPass(device, kResolve, target, desc.Width, desc.Height);
+    if (add) device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
     device->SetTexture(0, nullptr);
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);

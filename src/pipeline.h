@@ -125,6 +125,9 @@ public:
     // target, same size), cut to 0..1 as that 8-bit target would have it. Only inside `area`
     // (the camera's viewport): the rest of the game's target keeps what it had.
     bool resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area);
+    // Adds `added` (the light the game's additive draws put into a target of their own) into
+    // the float scene `target`, inside `area`, as it is.
+    bool addScene(IDirect3DDevice9* device, IDirect3DTexture9* added, IDirect3DSurface9* target, const RECT& area);
     // Reads a float colour target (A16B16G16R16F) back as raw half floats, RGBA, rows top-down.
     bool readHalfColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint16_t>& out);
     // The material id of every pixel (one byte, rows top-down), after a frame rendered with
@@ -237,6 +240,8 @@ private:
     void profileEnd();
     bool profileResolve(ProfileFrame& frame, bool wait);
     void releaseProfile();
+    // resolveScene (cut to 0..1) and addScene (added as it is, one-one blending).
+    bool copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add);
 
     bool m_ready = false;
     std::wstring m_shaderDir;

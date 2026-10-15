@@ -113,6 +113,16 @@ IDirect3DSurface9* g_hdrGame = nullptr;     // the game's target while the float
 IDirect3DSurface9* g_hdrLastGame = nullptr; // the same after the camera (not held): handed back if the game binds the float one
 bool g_hdrValid = false;                    // g_hdrScene holds this main camera's image
 int g_hdrSupported = -1;                    // float render target with blending: -1 not checked yet
+// The light the game adds on top: its one-one blended draws (TAdd glows over whole blocks, the
+// lamps' halos, headlight pools) go into a float target of their own during the camera, and it
+// is added back into g_hdrScene at the end (addition doesn't care about order: the image stays
+// the same). What remains is pixel-exact: where a glow's quad adds nothing, it is 0 (the stencil
+// bit marked the whole quad). The lighting pass can take light sources from it instead of
+// guessing them in the image.
+gfx::Target g_hdrAdded;
+bool g_hdrAddedActive = false; // cleared at this camera's start, takes the additive draws
+bool g_hdrAddedBound = false;  // the render target during the current (additive) draw
+bool g_hdrAddedValid = false;  // holds the last main camera's added light
 
 float seconds() {
     LARGE_INTEGER now;
@@ -352,6 +362,9 @@ bool hdrSupported(IDirect3DDevice9* device) {
 // At the main camera's start: the float target stands in for the game's.
 void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_hdrValid = false;
+    g_hdrAddedValid = false;
+    g_hdrAddedActive = false;
+    g_hdrAddedBound = false;
     const Settings& s = Config::get().settings;
     if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
     D3DSURFACE_DESC desc{};
@@ -368,7 +381,21 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     RECT scissor{};
     device->GetViewport(&viewport);
     device->GetScissorRect(&scissor);
-    if (FAILED(device->SetRenderTarget(0, g_hdrScene.surface))) return;
+    // The added light starts at 0 (the whole target: no scissor test for the Clear).
+    if (g_hdrAdded.create(device, desc.Width, desc.Height, D3DFMT_A16B16G16R16F) && SUCCEEDED(device->SetRenderTarget(0, g_hdrAdded.surface))) {
+        DWORD scissorTest = FALSE;
+        device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+        g_hdrAddedActive = SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0));
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissorTest);
+    }
+    if (FAILED(device->SetRenderTarget(0, g_hdrScene.surface))) {
+        device->SetRenderTarget(0, rt);
+        device->SetViewport(&viewport);
+        device->SetScissorRect(&scissor);
+        g_hdrAddedActive = false;
+        return;
+    }
     device->SetViewport(&viewport);
     device->SetScissorRect(&scissor);
     rt->AddRef();
@@ -388,6 +415,10 @@ void endHdr(IDirect3DDevice9* device) {
     const RECT area = {static_cast<LONG>(viewport.X), static_cast<LONG>(viewport.Y), static_cast<LONG>(viewport.X + viewport.Width),
                        static_cast<LONG>(viewport.Y + viewport.Height)};
     g_pipeline.beginStateSave(device);
+    // The added light back into the scene (the image is the game's again), then the scene
+    // into the game's target.
+    g_hdrAddedValid = g_hdrAddedActive && g_pipeline.addScene(device, g_hdrAdded.texture, g_hdrScene.surface, area);
+    g_hdrAddedActive = false;
     g_hdrValid = g_pipeline.resolveScene(device, g_hdrScene.texture, g_hdrGame, area);
     g_pipeline.endStateSave(device);
     device->SetRenderTarget(0, g_hdrGame);
@@ -421,16 +452,84 @@ IDirect3DSurface9* onSetRenderTarget(DWORD index, IDirect3DSurface9* surface) {
 
 // The float image next to the capture: "TMH1", width, height, then RGBA half floats, rows
 // top-down (the previewer's --hdr).
+void writeHalfFile(const std::wstring& path, UINT width, UINT height, const std::vector<uint16_t>& half) {
+    FILE* f = _wfopen(path.c_str(), L"wb");
+    if (!f) return;
+    const uint32_t header[3] = {0x31484D54u, width, height}; // "TMH1"
+    fwrite(header, sizeof(header), 1, f);
+    fwrite(half.data(), sizeof(uint16_t), half.size(), f);
+    fclose(f);
+}
+
 void writeHdrCapture(IDirect3DDevice9* device, const std::wstring& path) {
     std::vector<uint16_t> half;
     logHdrStats(device, "capture", &half);
     if (half.empty()) return;
-    FILE* f = _wfopen(path.c_str(), L"wb");
-    if (!f) return;
-    const uint32_t header[3] = {0x31484D54u, g_hdrScene.width, g_hdrScene.height}; // "TMH1"
-    fwrite(header, sizeof(header), 1, f);
-    fwrite(half.data(), sizeof(uint16_t), half.size(), f);
-    fclose(f);
+    writeHalfFile(path, g_hdrScene.width, g_hdrScene.height, half);
+}
+
+// The light the game added on top, in the same format (capture_NNN.add16).
+void writeAddedCapture(IDirect3DDevice9* device, const std::wstring& path) {
+    std::vector<uint16_t> half;
+    if (!g_pipeline.readHalfColor(device, g_hdrAdded.surface, half)) {
+        TMVS_LOG("hdr: added light not read");
+        return;
+    }
+    const size_t count = half.size() / 4;
+    size_t lit = 0, strong = 0;
+    float brightest = 0.0f;
+    for (size_t i = 0; i < count; i++) {
+        const float m = std::max(halfToFloat(half[i * 4]), std::max(halfToFloat(half[i * 4 + 1]), halfToFloat(half[i * 4 + 2])));
+        lit += m > 1.0f / 255.0f;
+        strong += m > 0.25f;
+        brightest = std::max(brightest, m);
+    }
+    const double n = count ? static_cast<double>(count) / 100.0 : 1.0;
+    TMVS_LOG("hdr (capture): added light on %.2f%% of the image, above 0.25 on %.2f%%, brightest %.2f", lit / n, strong / n, brightest);
+    writeHalfFile(path, g_hdrAdded.width, g_hdrAdded.height, half);
+}
+
+// One-one blending with the colour added (glows, halos, headlight pools) and no depth writes.
+bool addsLight(IDirect3DDevice9* device) {
+    DWORD blend = FALSE, dest = D3DBLEND_ZERO, op = D3DBLENDOP_ADD, zwrite = TRUE;
+    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+    if (!blend) return false;
+    device->GetRenderState(D3DRS_DESTBLEND, &dest);
+    device->GetRenderState(D3DRS_BLENDOP, &op);
+    device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+    return dest == D3DBLEND_ONE && op == D3DBLENDOP_ADD && !zwrite;
+}
+
+// GameHdr: an additive draw of the main camera goes into g_hdrAdded, for that draw only (it is
+// bound again before the game's next call, so the game never finds it: a copy of the scene for
+// the water's refraction takes the float scene). SetRenderTarget resets the viewport and the
+// scissor rect: the game's stay.
+D3DVIEWPORT9 g_addedViewport{};
+RECT g_addedScissor{};
+
+void onDrawAdded(IDirect3DDevice9* device) {
+    if (!g_hdrAddedActive || !g_hdrGame || !g_scene.inMainCamera || !addsLight(device)) return;
+    hook::InternalScope internal;
+    IDirect3DSurface9* rt = nullptr;
+    device->GetRenderTarget(0, &rt);
+    const bool onScene = rt == g_hdrScene.surface;
+    if (rt) rt->Release();
+    if (!onScene) return;
+    device->GetViewport(&g_addedViewport);
+    device->GetScissorRect(&g_addedScissor);
+    if (FAILED(device->SetRenderTarget(0, g_hdrAdded.surface))) return;
+    device->SetViewport(&g_addedViewport);
+    device->SetScissorRect(&g_addedScissor);
+    g_hdrAddedBound = true;
+}
+
+void onDrawDone(IDirect3DDevice9* device) {
+    if (!g_hdrAddedBound) return;
+    hook::InternalScope internal;
+    device->SetRenderTarget(0, g_hdrScene.surface);
+    device->SetViewport(&g_addedViewport);
+    device->SetScissorRect(&g_addedScissor);
+    g_hdrAddedBound = false;
 }
 
 // The material ids next to the capture: "TMM1", width, height, count, then per id (1..count)
@@ -497,6 +596,12 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs, bool
         std::wstring hdr = log::dataDir() + name;
         hdr.replace(hdr.size() - 6, 6, L".hdr16");
         writeHdrCapture(device, hdr);
+    }
+    // ... and the light the game added on top (capture_NNN.add16).
+    if (g_hdrAddedValid && g_hdrAdded.width == inputs.width && g_hdrAdded.height == inputs.height) {
+        std::wstring added = log::dataDir() + name;
+        added.replace(added.size() - 6, 6, L".add16");
+        writeAddedCapture(device, added);
     }
     // Which material drew each pixel (capture_NNN.mat).
     if (materialIds) {
@@ -935,6 +1040,7 @@ DWORD materialId(const void* shader, bool depthWrite, bool additive) {
 // Every draw call (all four kinds: a draw without its own tag must not write the tag of the
 // draw before it, the stencil state stays set).
 void onDraw(IDirect3DDevice9* device) {
+    onDrawAdded(device);
     if (!g_scene.inMainCamera || !materialsWanted()) {
         untagStencil(device);
         return;
@@ -1037,6 +1143,8 @@ void onPreReset() {
     g_hdrLastGame = nullptr;
     g_hdrValid = false;
     g_hdrScene.destroy();
+    g_hdrAddedActive = g_hdrAddedBound = g_hdrAddedValid = false;
+    g_hdrAdded.destroy();
     depth::onPreReset();
     overlay::preReset();
 }
@@ -1291,6 +1399,7 @@ void bootOnce() {
     deviceCallbacks.setTransform = onSetTransform;
     deviceCallbacks.setLight = onSetLight;
     deviceCallbacks.draw = onDraw;
+    deviceCallbacks.drawDone = onDrawDone;
     g_deviceCallbacks = deviceCallbacks;
     // Never block the caller (possibly the game's main thread) on retries.
     if (!hook::install(deviceCallbacks)) {
