@@ -20,7 +20,7 @@ const char* const kEntryPoints[] = {
     "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail", "PS_SnowFlake",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
-    "PS_CopyDepth",   "PS_WaterLevel",
+    "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -141,6 +141,7 @@ void Pipeline::release() {
     for (auto& shader : m_shaders) gfx::release(shader);
     gfx::release(m_stateBlock);
     gfx::release(m_solidPS);
+    gfx::release(m_paletteLookupPS);
     gfx::release(m_splatVS);
     gfx::release(m_splatDecl);
     gfx::release(m_dropVS);
@@ -278,6 +279,7 @@ void Pipeline::destroyTargets() {
     m_ldr.destroy();
     m_ldr2.destroy();
     m_materials.destroy();
+    m_materialIds.destroy();
     for (auto& t : m_waterLevel) t.destroy();
     gfx::release(m_waterRead);
     m_waterPending = -1;
@@ -924,9 +926,11 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     // every pixel (written while the game drew, see the plugin). Bound as the depth-stencil
     // again for a stencil test per class (no texture of ours may be bound meanwhile). Not in
     // the previewer: its depth is a plain R32F texture.
+    if (in.materials && in.materialMask) return true; // the previewer: from capture_NNN.mat
     D3DSURFACE_DESC desc{};
     if (!in.materials || FAILED(in.depth->GetLevelDesc(0, &desc)) || desc.Format != static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z')))
         return false;
+    if (in.materialClasses) return buildMaterialIds(device, in);
     if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
     if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
     if (!m_solidPS) return false;
@@ -962,6 +966,94 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
     device->SetDepthStencilSurface(nullptr);
     ds->Release();
+    return true;
+}
+
+// F12's frame: the stencil holds material ids (1..255). One pass per stencil bit adds that
+// bit to m_materialIds (r = id / 255), then a palette (256 x 1, the class colour of each id)
+// turns the ids into the usual class mask. No added-light bit in this frame.
+bool Pipeline::buildMaterialIds(IDirect3DDevice9* device, const Inputs& in) {
+    if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
+    if (!m_materialIds.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
+    if (!m_paletteLookupPS)
+        m_paletteLookupPS = gfx::compilePixelShader(device,
+                                                    "sampler2D ids : register(s0); sampler2D palette : register(s1);\n"
+                                                    "float4 main(float2 uv : TEXCOORD0) : COLOR0 {\n"
+                                                    "    float id = floor(tex2D(ids, uv).r * 255.0 + 0.5);\n"
+                                                    "    return tex2D(palette, float2((id + 0.5) / 256.0, 0.5));\n"
+                                                    "}\n",
+                                                    "main", "MaterialPalette");
+    if (!m_solidPS || !m_paletteLookupPS) return false;
+    // Filled in system memory and uploaded (no managed pool on D3D9Ex).
+    IDirect3DTexture9* staging = nullptr;
+    IDirect3DTexture9* palette = nullptr;
+    if (FAILED(device->CreateTexture(256, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &staging, nullptr))) return false;
+    D3DLOCKED_RECT locked{};
+    if (SUCCEEDED(staging->LockRect(0, &locked, nullptr, 0))) {
+        uint32_t* texels = static_cast<uint32_t*>(locked.pBits);
+        for (int id = 0; id < 256; id++) {
+            const int c = in.materialClasses[id];
+            const uint32_t r = c == 1 ? 255u : 0u, g = c == 2 ? 255u : (c == 3 ? 128u : (c == 4 ? 64u : 0u)), b = c == 5 ? 255u : 0u;
+            texels[id] = (r << 16) | (g << 8) | b;
+        }
+        staging->UnlockRect(0);
+    }
+    const bool uploaded = SUCCEEDED(device->CreateTexture(256, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &palette, nullptr)) &&
+                          SUCCEEDED(device->UpdateTexture(staging, palette));
+    staging->Release();
+    if (!uploaded) {
+        gfx::release(palette);
+        return false;
+    }
+    for (int i = 0; i < 16; i++) device->SetTexture(i, nullptr);
+    IDirect3DSurface9* ds = nullptr;
+    if (FAILED(in.depth->GetSurfaceLevel(0, &ds)) || !ds) {
+        palette->Release();
+        return false;
+    }
+    device->SetRenderTarget(0, m_materialIds.surface);
+    device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    device->SetDepthStencilSurface(ds);
+    device->SetPixelShader(m_solidPS);
+    device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
+    device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
+    device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_EQUAL);
+    device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    for (int bit = 0; bit < 8; bit++) {
+        const float color[4] = {static_cast<float>(1 << bit) / 255.0f, 0.0f, 0.0f, 0.0f};
+        device->SetPixelShaderConstantF(32, color, 1);
+        device->SetRenderState(D3DRS_STENCILMASK, 1u << bit);
+        device->SetRenderState(D3DRS_STENCILREF, 1u << bit);
+        m_quad.draw(device, in.width, in.height);
+    }
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_STENCILMASK, 0xFF);
+    device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    device->SetDepthStencilSurface(nullptr);
+    ds->Release();
+    device->SetRenderTarget(0, m_materials.surface);
+    device->SetPixelShader(m_paletteLookupPS);
+    bind(device, 0, m_materialIds.texture, false);
+    bind(device, 1, palette, false);
+    m_quad.draw(device, in.width, in.height);
+    device->SetTexture(0, nullptr);
+    device->SetTexture(1, nullptr);
+    palette->Release();
+    return true;
+}
+
+bool Pipeline::readMaterialIds(IDirect3DDevice9* device, std::vector<uint8_t>& out) {
+    std::vector<uint32_t> texels;
+    if (!m_materialIds.surface || !readColor(device, m_materialIds.surface, texels)) return false;
+    out.resize(texels.size());
+    for (size_t i = 0; i < texels.size(); i++) out[i] = static_cast<uint8_t>((texels[i] >> 16) & 0xFF);
     return true;
 }
 
@@ -1868,10 +1960,15 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // The game's materials (lamps, cars, glass, grass) for the lighting and the final pass.
     const bool materials = buildMaterialMask(device, in);
     m_materialsOn = materials;
+    m_materialTexture = in.materialMask ? in.materialMask : m_materials.texture;
     // z: a night sky replaces the game's, its sunset clouds and their mirror image in the sea go.
     const float gameSkyOut = skyReplacesSun(s) && !s.gameSkyClouds ? 1.0f : 0.0f;
     const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, gameSkyOut, s.toneKnee};
     device->SetPixelShaderConstantF(44, materialConstants, 1);
+    // x 8: the scale of the car test in the lighting pass (saves an instruction there, it is at the limit).
+    // zw: lamps by their material glow from 0.4 to 0.8 of the game's white, only with GameHdr.
+    const float cleanConstants[4] = {s.cleanHighlights ? 8.0f : 0.0f, in.hdr ? 1.0f : 0.0f, in.hdr ? 2.5f : 0.0f, -1.0f};
+    device->SetPixelShaderConstantF(45, cleanConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
@@ -2101,14 +2198,14 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 0, in.color, true);
         bind(device, 1, m_nd.texture, false);
         bind(device, 2, m_ndHalf.texture, false);
-        bind(device, 13, materials ? m_materials.texture : nullptr, false);
+        bind(device, 13, materials ? m_materialTexture : nullptr, false);
         runPass(device, kReflect, m_reflect);
     }
     const bool spill = s.neonLight > 0.0f;
     if (spill) {
         bind(device, 0, in.color, true);
         bind(device, 1, m_nd.texture, false);
-        bind(device, 13, materials ? m_materials.texture : nullptr, false);
+        bind(device, 13, materials ? m_materialTexture : nullptr, false);
         runPass(device, kSpillDown, m_spill[0]);
         bind(device, 0, m_spill[0].texture, true);
         passConstants(device, 1.0f / m_spill[0].width, 0.0f);
@@ -2130,7 +2227,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 9, m_spill[0].texture, true);
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
-    bind(device, 13, materials ? m_materials.texture : nullptr, false);
+    bind(device, 13, materials ? m_materialTexture : nullptr, false);
+    if (in.hdr) bind(device, 0, in.hdr, false); // GameHdr: light above 1.0 (the guesses in there clamp it)
     runPass(device, kLighting, m_hdr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
@@ -2289,7 +2387,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // the tone curve pulled lamps and the surfaces they light to grey). s8 = the game's image.
     const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night && s.debugView == 0;
     if (mapNight) bind(device, 8, in.color, false);
-    bind(device, 13, materials ? m_materials.texture : nullptr, false);
+    bind(device, 13, materials ? m_materialTexture : nullptr, false);
     // Where the depth of field blurs, the lamps aren't put back sharp: s9 = its focus distance.
     if (dofFocus) bind(device, 9, dofFocus, false);
     const float finalMaterials[4] = {materials ? 1.0f : 0.0f, dofFocus ? 1.0f : 0.0f, gameSkyOut, s.toneKnee};
@@ -2393,7 +2491,7 @@ void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
         const int i = m_waterIndex ^= 1;
         if (m_waterLevel[i].create(device, 1, 1, D3DFMT_A32B32G32R32F)) {
             bind(device, 0, m_nd.texture, false);
-            bind(device, 1, m_materials.texture, false);
+            bind(device, 1, m_materialTexture, false);
             runPass(device, kWaterLevel, m_waterLevel[i]);
             m_waterPending = i;
             m_waterDrawn = m_frame;
@@ -2438,6 +2536,46 @@ bool Pipeline::copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth,
     device->SetTexture(0, nullptr);
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
     return true;
+}
+
+bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area) {
+    if (!m_ready) return false;
+    D3DSURFACE_DESC desc{};
+    target->GetDesc(&desc);
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target); // resets the scissor rect: set it after
+    device->SetScissorRect(&area);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    bind(device, 0, scene, false);
+    passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
+    runPass(device, kResolve, target, desc.Width, desc.Height);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+bool Pipeline::readHalfColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint16_t>& out) {
+    D3DSURFACE_DESC desc{};
+    surface->GetDesc(&desc);
+    if (desc.Format != D3DFMT_A16B16G16R16F) return false;
+    IDirect3DSurface9* system = nullptr;
+    if (FAILED(device->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &system, nullptr)))
+        return false;
+    bool ok = SUCCEEDED(device->GetRenderTargetData(surface, system));
+    D3DLOCKED_RECT locked{};
+    if (ok && SUCCEEDED(system->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+        out.resize(static_cast<size_t>(desc.Width) * desc.Height * 4);
+        for (UINT y = 0; y < desc.Height; y++) {
+            memcpy(&out[static_cast<size_t>(y) * desc.Width * 4], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(locked.Pitch) * y,
+                   desc.Width * 8);
+        }
+        system->UnlockRect();
+    } else {
+        ok = false;
+    }
+    system->Release();
+    return ok;
 }
 
 bool Pipeline::readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std::vector<float>& out) {

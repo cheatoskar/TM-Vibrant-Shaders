@@ -5,6 +5,7 @@
 #include "depth.h"
 #include "engine.h"
 #include "framecap.h"
+#include "gameshaders.h"
 #include "gfx.h"
 #include "hook.h"
 #include "log.h"
@@ -20,6 +21,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -77,6 +80,17 @@ struct SceneState {
 } g_scene;
 
 bool g_captureRequested = false;
+// F12 with the material masks on: the next main camera tags every depth-writing draw with
+// its material's own id (1..255) instead of its class, and that frame is captured with the
+// ids (capture_NNN.mat): which material drew each pixel, by name.
+bool g_idFrame = false;
+struct IdMaterial {
+    const void* shader;
+    int draws;
+    bool depthWrite; // tagged in the stencil (else: drawn without depth writes, no pixels)
+    bool additive;   // one-one blending (glows, headlight pools)
+};
+std::vector<IdMaterial> g_idMaterials; // id = index + 1
 int g_capturesWritten = 0;
 Pipeline g_pipeline;
 AutoQuality g_autoQuality;
@@ -90,6 +104,15 @@ gfx::Target g_sceneCopy;
 // panels): its depth and the shaded image, the size of that part.
 gfx::Target g_partDepth;
 gfx::Target g_partOut;
+// GameHdr: the main camera draws into a float target instead of the game's 8-bit one, so the
+// light the game computes above 1.0 isn't cut (captures for working out the tone curve). At
+// the camera's end it is resolved into the game's target, cut to 0..1 (the 8-bit copy the
+// guesses, the HUD and the photo split use); the lighting pass takes the float image itself.
+gfx::Target g_hdrScene;
+IDirect3DSurface9* g_hdrGame = nullptr;     // the game's target while the float one stands in (AddRef'd)
+IDirect3DSurface9* g_hdrLastGame = nullptr; // the same after the camera (not held): handed back if the game binds the float one
+bool g_hdrValid = false;                    // g_hdrScene holds this main camera's image
+int g_hdrSupported = -1;                    // float render target with blending: -1 not checked yet
 
 float seconds() {
     LARGE_INTEGER now;
@@ -259,7 +282,192 @@ float updateLut() {
     return loaded.empty() ? 0.0f : config.lutAmount;
 }
 
-void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs) {
+float halfToFloat(uint16_t h) {
+    const unsigned sign = (h >> 15) & 1, exponent = (h >> 10) & 31, mantissa = h & 1023;
+    float value;
+    if (exponent == 0) value = ldexpf(static_cast<float>(mantissa), -24);
+    else if (exponent == 31) value = 65504.0f; // inf / nan: as bright as it gets
+    else value = ldexpf(static_cast<float>(mantissa | 1024), static_cast<int>(exponent) - 25);
+    return sign ? -value : value;
+}
+
+// How much of the game's image lies above 1.0, i.e. what its own 8-bit target cut away.
+// `keep` receives the half floats (RGBA, rows top-down) when given.
+void logHdrStats(IDirect3DDevice9* device, const char* when, std::vector<uint16_t>* keep) {
+    std::vector<uint16_t> half;
+    if (!g_pipeline.readHalfColor(device, g_hdrScene.surface, half)) {
+        TMVS_LOG("hdr: readback failed");
+        return;
+    }
+    const size_t count = half.size() / 4;
+    size_t above1 = 0, above125 = 0, above2 = 0, negative = 0;
+    float brightest = 0.0f;
+    std::vector<size_t> bins(129, 0); // brightest channel in steps of 1/16 up to 8
+    for (size_t i = 0; i < count; i++) {
+        const float r = halfToFloat(half[i * 4]), g = halfToFloat(half[i * 4 + 1]), b = halfToFloat(half[i * 4 + 2]);
+        const float m = std::max(r, std::max(g, b));
+        above1 += m > 1.0f + 1.0f / 255.0f;
+        above125 += m > 1.25f;
+        above2 += m > 2.0f;
+        negative += std::min(r, std::min(g, b)) < 0.0f;
+        brightest = std::max(brightest, m);
+        bins[static_cast<size_t>(std::min(std::max(m, 0.0f), 8.0f) * 16.0f)]++;
+    }
+    size_t seen = 0, p999 = 0;
+    for (size_t i = 0; i < bins.size(); i++) {
+        seen += bins[i];
+        if (seen >= count - count / 1000) {
+            p999 = i;
+            break;
+        }
+    }
+    const double n = count ? static_cast<double>(count) / 100.0 : 1.0;
+    TMVS_LOG("hdr (%s): %.2f%% of the image above 1.0, %.2f%% above 1.25, %.2f%% above 2.0; brightest %.2f, 99.9%% at most %.2f; %.2f%% negative",
+             when, above1 / n, above125 / n, above2 / n, brightest, (p999 + 1) / 16.0, negative / n);
+    if (keep) keep->swap(half);
+}
+
+// Float targets with blending: the game blends glows and particles into the scene.
+bool hdrSupported(IDirect3DDevice9* device) {
+    if (g_hdrSupported < 0) {
+        g_hdrSupported = 0;
+        IDirect3D9* d3d = nullptr;
+        D3DDEVICE_CREATION_PARAMETERS params{};
+        D3DDISPLAYMODE mode{};
+        if (SUCCEEDED(device->GetDirect3D(&d3d)) && d3d) {
+            if (SUCCEEDED(device->GetCreationParameters(&params)) && SUCCEEDED(device->GetDisplayMode(0, &mode))) {
+                g_hdrSupported = SUCCEEDED(d3d->CheckDeviceFormat(params.AdapterOrdinal, params.DeviceType, mode.Format,
+                                                                  D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING,
+                                                                  D3DRTYPE_TEXTURE, D3DFMT_A16B16G16R16F))
+                                     ? 1
+                                     : 0;
+            }
+            d3d->Release();
+        }
+        TMVS_LOG("hdr: float render target with blending %s", g_hdrSupported ? "supported" : "not supported (GameHdr stays off)");
+    }
+    return g_hdrSupported == 1;
+}
+
+// At the main camera's start: the float target stands in for the game's.
+void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
+    g_hdrValid = false;
+    const Settings& s = Config::get().settings;
+    if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
+    D3DSURFACE_DESC desc{};
+    rt->GetDesc(&desc);
+    if (!g_hdrScene.create(device, desc.Width, desc.Height, D3DFMT_A16B16G16R16F)) return;
+    static bool s_logged = false;
+    if (!s_logged) {
+        s_logged = true;
+        TMVS_LOG("hdr: the main camera draws into a float target (%ux%u)", desc.Width, desc.Height);
+    }
+    hook::InternalScope internal;
+    // SetRenderTarget resets the viewport and the scissor rect: the game's stay.
+    D3DVIEWPORT9 viewport{};
+    RECT scissor{};
+    device->GetViewport(&viewport);
+    device->GetScissorRect(&scissor);
+    if (FAILED(device->SetRenderTarget(0, g_hdrScene.surface))) return;
+    device->SetViewport(&viewport);
+    device->SetScissorRect(&scissor);
+    rt->AddRef();
+    g_hdrGame = rt;
+    g_hdrLastGame = rt;
+}
+
+// At the main camera's end, before the pipeline: the image goes into the game's target
+// (cut to 0..1, as the game would have drawn it), which is bound again.
+void endHdr(IDirect3DDevice9* device) {
+    if (!g_hdrGame) return;
+    hook::InternalScope internal;
+    D3DVIEWPORT9 viewport{};
+    RECT scissor{};
+    device->GetViewport(&viewport);
+    device->GetScissorRect(&scissor);
+    const RECT area = {static_cast<LONG>(viewport.X), static_cast<LONG>(viewport.Y), static_cast<LONG>(viewport.X + viewport.Width),
+                       static_cast<LONG>(viewport.Y + viewport.Height)};
+    g_pipeline.beginStateSave(device);
+    g_hdrValid = g_pipeline.resolveScene(device, g_hdrScene.texture, g_hdrGame, area);
+    g_pipeline.endStateSave(device);
+    device->SetRenderTarget(0, g_hdrGame);
+    device->SetViewport(&viewport);
+    device->SetScissorRect(&scissor);
+    g_hdrGame->Release();
+    g_hdrGame = nullptr;
+    // Once per map, a few seconds into the driving: how much light the float target kept.
+    static int s_map = -1;
+    static DWORD s_since = 0;
+    if (g_hdrValid && g_scene.projection[14] > -1.0f && engine::mapLoads() != s_map) {
+        if (!s_since) {
+            s_since = GetTickCount();
+        } else if (GetTickCount() - s_since > 8000) {
+            s_map = engine::mapLoads();
+            s_since = 0;
+            logHdrStats(device, "map", nullptr);
+        }
+    }
+}
+
+IDirect3DSurface9* onSetRenderTarget(DWORD index, IDirect3DSurface9* surface) {
+    if (index != 0 || !surface) return surface;
+    // The game binds its target again during the camera: the float one stays.
+    if (g_hdrGame && surface == g_hdrGame) return g_hdrScene.surface;
+    // It asked for the target during the camera (GetRenderTarget gave it the float one) and
+    // binds that later, for the HUD: its own target.
+    if (!g_hdrGame && surface == g_hdrScene.surface && g_hdrLastGame) return g_hdrLastGame;
+    return surface;
+}
+
+// The float image next to the capture: "TMH1", width, height, then RGBA half floats, rows
+// top-down (the previewer's --hdr).
+void writeHdrCapture(IDirect3DDevice9* device, const std::wstring& path) {
+    std::vector<uint16_t> half;
+    logHdrStats(device, "capture", &half);
+    if (half.empty()) return;
+    FILE* f = _wfopen(path.c_str(), L"wb");
+    if (!f) return;
+    const uint32_t header[3] = {0x31484D54u, g_hdrScene.width, g_hdrScene.height}; // "TMH1"
+    fwrite(header, sizeof(header), 1, f);
+    fwrite(half.data(), sizeof(uint16_t), half.size(), f);
+    fclose(f);
+}
+
+// The material ids next to the capture: "TMM1", width, height, count, then per id (1..count)
+// class (engine::Material), flags (1 depth writes, 2 one-one blending), draws, the length
+// and UTF-8 bytes of its shader file; then one id byte per pixel, rows top-down (0: none).
+void writeMaterialCapture(IDirect3DDevice9* device, const std::wstring& path) {
+    std::vector<uint8_t> ids;
+    if (!g_pipeline.readMaterialIds(device, ids) || ids.size() != static_cast<size_t>(g_frameWidth) * g_frameHeight) {
+        TMVS_LOG("capture: material ids not read");
+        return;
+    }
+    FILE* f = _wfopen(path.c_str(), L"wb");
+    if (!f) return;
+    const uint32_t header[4] = {0x314D4D54u, g_frameWidth, g_frameHeight, static_cast<uint32_t>(g_idMaterials.size())}; // "TMM1"
+    fwrite(header, sizeof(header), 1, f);
+    int lights = 0;
+    for (const IdMaterial& m : g_idMaterials) {
+        wchar_t file[512] = {};
+        char utf8[1024] = {};
+        if (!engine::materialFile(m.shader, file, 512)) swprintf(file, 512, m.shader ? L"(unnamed %p)" : L"(none)", m.shader);
+        const int bytes = WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), nullptr, nullptr);
+        const uint8_t kind[2] = {static_cast<uint8_t>(engine::materialClass(m.shader)),
+                                 static_cast<uint8_t>((m.depthWrite ? 1 : 0) | (m.additive ? 2 : 0))};
+        const uint32_t draws = static_cast<uint32_t>(m.draws);
+        const uint16_t length = static_cast<uint16_t>(bytes > 0 ? bytes - 1 : 0);
+        fwrite(kind, sizeof(kind), 1, f);
+        fwrite(&draws, sizeof(draws), 1, f);
+        fwrite(&length, sizeof(length), 1, f);
+        fwrite(utf8, 1, length, f);
+        if (kind[0] == static_cast<uint8_t>(engine::Material::Light)) lights++;
+    }
+    fwrite(ids.data(), 1, ids.size(), f);
+    fclose(f);
+    TMVS_LOG("capture: material ids of %d materials (%d lights)", static_cast<int>(g_idMaterials.size()), lights);
+}
+
+void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs, bool materialIds) {
     FrameCapture cap;
     cap.width = inputs.width;
     cap.height = inputs.height;
@@ -284,6 +492,18 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs) {
     g_capturesWritten++;
     cap.save(log::dataDir() + name);
     TMVS_LOG("capture: wrote %ls", name + 1);
+    // GameHdr: the image before the game's target cut it, next to it (capture_NNN.hdr16).
+    if (g_hdrValid && g_hdrScene.width == inputs.width && g_hdrScene.height == inputs.height) {
+        std::wstring hdr = log::dataDir() + name;
+        hdr.replace(hdr.size() - 6, 6, L".hdr16");
+        writeHdrCapture(device, hdr);
+    }
+    // Which material drew each pixel (capture_NNN.mat).
+    if (materialIds) {
+        std::wstring mat = log::dataDir() + name;
+        mat.replace(mat.size() - 6, 6, L".mat");
+        writeMaterialCapture(device, mat);
+    }
     g_screenshotRequested = true;
 }
 
@@ -433,6 +653,7 @@ void processScene(IDirect3DDevice9* device) {
 
     Pipeline::Inputs inputs;
     inputs.color = g_sceneCopy.texture;
+    if (g_hdrValid && !part && g_hdrScene.width == width && g_hdrScene.height == height) inputs.hdr = g_hdrScene.texture;
     inputs.depth = sceneDepth;
     inputs.width = width;
     inputs.height = height;
@@ -502,10 +723,19 @@ void processScene(IDirect3DDevice9* device) {
     g_frameWidth = width;
     g_frameHeight = height;
 
-    if (g_captureRequested) {
-        g_captureRequested = false;
-        writeCapture(device, inputs);
+    // F12: with the material masks on, the capture is the next frame whose draws carried their
+    // material ids (the mask is built from them); not of a camera into part of the screen.
+    const bool idFrame = g_idFrame && inputs.materials && !part;
+    unsigned char idClasses[256] = {};
+    if (idFrame) {
+        for (size_t i = 0; i < g_idMaterials.size(); i++) idClasses[i + 1] = static_cast<unsigned char>(engine::materialClass(g_idMaterials[i].shader));
+        inputs.materialClasses = idClasses;
     }
+    if (g_idFrame && !idFrame) inputs.materials = false; // ids in the stencil, but no capture of them
+    g_idFrame = false;
+    const bool capture = g_captureRequested && (idFrame || !inputs.materials || part);
+    if (capture) g_captureRequested = false;
+    if (capture && !settings.enabled && !inputs.photo) writeCapture(device, inputs, false);
     if (settings.enabled || inputs.photo) {
         // Auto quality renders a reduced copy; your settings stay untouched.
         Settings effective = settings;
@@ -524,6 +754,7 @@ void processScene(IDirect3DDevice9* device) {
         LARGE_INTEGER renderStart, renderEnd;
         QueryPerformanceCounter(&renderStart);
         g_pipeline.render(device, inputs, effective, shaded);
+        if (capture) writeCapture(device, inputs, idFrame);
         // A preset was just saved: this frame (without HUD and menu) becomes its picture, never
         // with the compare split.
         std::string picture;
@@ -612,6 +843,9 @@ void onCameraBegin(void* camera) {
         engine::setMainCamera(camera);
         // Material masks: nothing left from the last frame where nothing is drawn (the sky).
         if (materialsWanted()) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
+        g_idFrame = g_captureRequested && materialsWanted();
+        if (g_idFrame) g_idMaterials.clear();
+        beginHdr(g_device, rt);
     } else if (rt) {
         // A screen-sized camera that isn't shaded: say why (a player's shaders stayed off in
         // races while they worked in the editor, and the log showed nothing). Each kind once.
@@ -682,6 +916,22 @@ void tagStencil(IDirect3DDevice9* device, DWORD value, DWORD mask) {
     g_stencilTagged = true;
 }
 
+// F12's frame: the id of a material (1..254; 255 = the 255th and every one after it).
+DWORD materialId(const void* shader, bool depthWrite, bool additive) {
+    for (size_t i = 0; i < g_idMaterials.size(); i++) {
+        IdMaterial& m = g_idMaterials[i];
+        if (m.shader == shader) {
+            m.draws++;
+            m.depthWrite = m.depthWrite || depthWrite;
+            m.additive = m.additive || additive;
+            return static_cast<DWORD>(i + 1);
+        }
+    }
+    if (g_idMaterials.size() >= 255) return 255;
+    g_idMaterials.push_back({shader, 1, depthWrite, additive});
+    return static_cast<DWORD>(g_idMaterials.size());
+}
+
 // Every draw call (all four kinds: a draw without its own tag must not write the tag of the
 // draw before it, the stencil state stays set).
 void onDraw(IDirect3DDevice9* device) {
@@ -706,6 +956,15 @@ void onDraw(IDirect3DDevice9* device) {
         untagStencil(device);
         return;
     }
+    DWORD blend = FALSE, dest = D3DBLEND_ZERO;
+    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+    device->GetRenderState(D3DRS_DESTBLEND, &dest);
+    if (g_idFrame) {
+        const DWORD id = materialId(engine::currentShader(), zwrite != FALSE, blend && dest == D3DBLEND_ONE);
+        if (zwrite) tagStencil(device, id, 0xFF);
+        else untagStencil(device);
+        return;
+    }
     if (zwrite) {
         // Its class, in the low bits; clears the "added light" bit of what it covers.
         tagStencil(device, static_cast<DWORD>(engine::currentMaterial()), 0xFF);
@@ -713,9 +972,6 @@ void onDraw(IDirect3DDevice9* device) {
     }
     // Light the game adds on top of a surface (headlight pools, glows: one-one blending,
     // no depth writes) only sets bit 3 and keeps the class of the surface below.
-    DWORD blend = FALSE, dest = D3DBLEND_ZERO;
-    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
-    device->GetRenderState(D3DRS_DESTBLEND, &dest);
     if (blend && dest == D3DBLEND_ONE) tagStencil(device, Pipeline::kAddedLightBit, Pipeline::kAddedLightBit);
     else untagStencil(device);
 }
@@ -729,7 +985,10 @@ void onCameraEnd(void* camera, const engine::CameraInfo&) {
             traceMatrix("scene proj", g_scene.projection);
         }
     }
-    if (g_scene.inMainCamera && g_device) processScene(g_device);
+    if (g_scene.inMainCamera && g_device) {
+        endHdr(g_device);
+        processScene(g_device);
+    }
     g_scene.inMainCamera = false;
 }
 
@@ -773,6 +1032,11 @@ void onPreReset() {
     g_sceneCopy.destroy();
     g_partDepth.destroy();
     g_partOut.destroy();
+    if (g_hdrGame) g_hdrGame->Release();
+    g_hdrGame = nullptr;
+    g_hdrLastGame = nullptr;
+    g_hdrValid = false;
+    g_hdrScene.destroy();
     depth::onPreReset();
     overlay::preReset();
 }
@@ -1003,6 +1267,7 @@ void bootOnce() {
     loadDevOptions();
     Config::get().load();
     lut::writeBuiltInLooks();
+    gameshaders::install();
 
     engine::Callbacks engineCallbacks;
     engineCallbacks.frameBegin = onFrameBegin;
@@ -1021,6 +1286,7 @@ void bootOnce() {
     deviceCallbacks.preReset = onPreReset;
     deviceCallbacks.postReset = onPostReset;
     deviceCallbacks.setDepthStencil = onSetDepthStencil;
+    deviceCallbacks.setRenderTarget = onSetRenderTarget;
     deviceCallbacks.createDepthStencil = onCreateDepthStencil;
     deviceCallbacks.setTransform = onSetTransform;
     deviceCallbacks.setLight = onSetLight;

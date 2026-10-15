@@ -83,3 +83,94 @@ Most of these ideas are still right; they failed together and untested. Bring th
 - "Only small light sources keep the game's white" (a ring of 8 samples in PS_Final) made the
   night lamps clearly dimmer for the owner: reverted. Floodlit stands stay burned out on
   Stadium night maps (the game's own image is 25 % clipped there).
+
+## Findings 2026-10-12 (owner: "everything clips"; screens 004, 011, photo 3)
+
+Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Horizon.
+
+- **The game's own image is already clipped where it looks overexposed.** Pixels >= 250 in
+  the *game's* image: 7.2 % (004), 11.6 % (011): start ramp, banners, car body. No post
+  step can bring back what the 8-bit target cut. Hence the float target (`GameHdr`, below).
+- **The frost on floodlit white was the mod's.** The same game white (255) came out
+  anywhere between 160 and 255 (game 250 -> 224 on average, game 255 -> 209: not even
+  monotonic). Three per-pixel switches acted on the same clipped white:
+  1. the sun-glare taming (`c *= lerp(1, 0.6, glare)` in PS_Lighting), active on night maps
+     too, gated by `1 - emissive`;
+  2. the lamp guess (`emissiveAmount`), which on night maps calls any white facing up a lamp;
+  3. the night lamp floor's ring test (PS_Final): the border of a large floodlit surface has
+     few bright samples around it too and keeps full white (a frayed white band).
+  With all three off the ramp is even (255 -> 205..231), but lamps drop from 252 to 211.
+- **Fixed now (`CleanHighlights`, on by default):** no sun-glare taming on night maps (no sun
+  there). Ramp spread (std of game-255 pixels) 18.8 -> 15.1, lamps unchanged (252.5), day
+  captures pixel-identical, night captures 002-009 change (floodlit concrete closer to the game).
+- **Tried and dropped:** an "edge of a large surface" test (one side of an opposite pair
+  bright, the other dark) in `emissiveAmount` (no gain) and in the floor's ring (frost 18.8 ->
+  10.0, but the lamp clusters of the start arch are larger than the ring: lamps 252 -> 237,
+  beige and blotchy). In 8 bit a lamp and a floodlit wall are both 255: any pixel test for it
+  is a guess. The real fix is light above 1.0 from the game.
+- **Black crush** (day map under a night sky, 041): black pixels 0.4 % -> 2.7 %, 1st percentile
+  6 -> 0 (night darkening x0.16, contrast 1.18 in log space, vignette; the tone curve has no toe).
+- **Grain on the car at night** is the static `ign()` noise of AO, shadows and the reflection
+  blur without TAA (the owner has TAA off): noise measure 2.38, 1.85 with TAA, 2.30 without GI.
+  GI is not the cause.
+
+## The game's HDR (GameHdr, 2026-10-12)
+
+- The main camera draws straight into the back buffer (trace: 590 draws, 52 fixed function,
+  no StretchRect or target switch in between), and `TmForever.exe` compiles its shaders at run
+  time (`d3dx9_30.dll`: `D3DXCompileShader`, `D3DXAssembleShader`; ps_2_0 / ps_3_0).
+- `GameHdr` (off by default, diagnostic): at the main camera's begin a float target
+  (A16B16G16R16F) stands in for the game's; at its end it is resolved into the game's target,
+  cut to 0..1 (`PS_Resolve`), so the pipeline and the look are unchanged. The log says once
+  per map how much of the image lies above 1.0; F12 writes it next to the capture as
+  `capture_NNN.hdr16` ("TMH1", width, height, RGBA half floats, rows top-down).
+- `gameshaders`: when the folder `TMVS\gameshaders` exists, every shader the game compiles is
+  written there with its defines, includes and disassembly. Answers whether the game's output
+  is cut to 1.0 (`saturate`, `_sat` on `oC0`) and how the lightmap is scaled.
+- Next, depending on the result: light above 1.0 arrives -> tone curve and lamps tuned offline
+  on the `.hdr16` captures, the 8-bit guesses (emissive, night floor) off for HDR input; the
+  game's shaders cut it -> rewrite their source at compile time (drop the final saturate or
+  scale the output); neither -> the clean 8-bit path stays and flat white is a hard limit.
+
+### Owner test 1 of GameHdr (2026-10-12, A01 at midnight, capture 044)
+
+- Float target works (blending supported, nothing broken). 1.1 % of the image above 1.0,
+  brightest 3.0: car body (5 % of its pixels), neon borders, floodlights. The car's rear wing
+  has a gradient in the float image where the 8-bit one is flat.
+- The game's shaders (dumped): blocks are `Diffuse * (2 * Lightmap) * Clouds * 2 + specular`,
+  no saturate on the output (`ps_2_a`, `Common.PHlsl.txt`); only `LightAD_Dir1` caps the
+  directional light at 1. So what clips is the 8-bit target, not the shaders.
+- Now the lighting pass takes the float image on s0 (the lamp guess and the glow clamp it to
+  1), and the tone curve's shoulder is longer with HDR input (width 3.0 instead of 1.7):
+  linear 1 / 2 / 3 -> sRGB about 211 / 235 / 245 instead of 220 / 242 / 252.
+- The washed-out car at night was the lamp guess: its bright body passed for a lamp and
+  glowed x HighlightBoost (car p95 210 vs. the game's 191; 135 without the boost). With
+  `CleanHighlights` the car material (stencil) is no lamp. In game only (no stencil in the
+  previewer). PS_Lighting is at 3897 of 3900 slots.
+
+### Owner test 2 of GameHdr (2026-10-12): ramp fine, lamps darker
+
+- Why the lamps got darker: in the game's float image a lamp is about as bright as floodlit
+  concrete (floodlight heads 1.0..1.25 on A01, a floodlit surface up to ~1.5). The game never
+  drew lamps brighter than what they light. Any one tone curve treats both alike: the longer
+  shoulder that gave the ramp its texture back pulled every lamp the guess missed to grey (the
+  night floor holds big lamp clusters only at `NightSurfaces`, ~204). No global curve can fix
+  both; per pixel the image cannot tell them apart either. The engine can: it knows the material.
+- Now with GameHdr: pixels of the light class (`TSelfI` materials, the cars' lights; stencil)
+  glow in full from 0.4 to 0.8 of the game's white, whatever the guess says (c45.zw).
+  Untested in game: it helps only the lamps that really are `TSelfI` (in the 2026-10-10 batch
+  many were not).
+- **F12 now records which material drew each pixel** (`capture_NNN.mat`, with the material
+  masks on): the frame after F12 tags every depth-writing draw with its material's own id
+  (1..255) instead of its class, the pipeline reads the ids back (one pass per stencil bit)
+  and builds the class mask from a palette, so the frame looks as usual. The file lists each
+  material's shader file, class, draws and whether it writes depth or adds light (glows have
+  no pixels: they write no depth). `python tools/materials.py capture_NNN.mat [--map ids.png]`
+  shows how much of the image each material covers and how bright the game drew it there
+  (8-bit and float). The previewer reads the `.mat` next to a capture: material masks (car
+  test, lamps, debug view 8) are testable offline from now on (`--nomat`: without).
+- Next: an A13 capture with `.hdr16` and `.mat` tells which materials the arch lamps, the
+  floodlights and the neon borders are. Those that aren't `TSelfI` go into the light class
+  by name (`engine::classify`): lamps known, not guessed, and the guess can step back.
+- The car with the car test (now visible offline on capture 044 with a synthetic `.mat`): no
+  pink-white glow, texture on the body, but darker than the game (car p95 194 vs. 255).

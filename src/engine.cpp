@@ -1108,6 +1108,14 @@ Material currentMaterial() {
     return materialOf(g_currentShader);
 }
 
+Material materialClass(const void* shader) {
+    return materialOf(shader);
+}
+
+bool materialFile(const void* shader, wchar_t* out, size_t size) {
+    return shader && nodFilePath(shader, out, size);
+}
+
 void fullViewDistance(bool full) {
     g_fullViewDistance = full;
 }

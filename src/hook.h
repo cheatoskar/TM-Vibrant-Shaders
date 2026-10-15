@@ -15,13 +15,18 @@ struct DeviceCallbacks {
                                IDirect3DSurface9** out, HRESULT* hr) = nullptr;
     // May substitute the surface the game binds as depth-stencil.
     IDirect3DSurface9* (*setDepthStencil)(IDirect3DSurface9* surface) = nullptr;
-    void (*setRenderTarget)(DWORD index, IDirect3DSurface9* surface) = nullptr;
+    // May substitute the surface the game binds as render target (GameHdr: the float scene).
+    IDirect3DSurface9* (*setRenderTarget)(DWORD index, IDirect3DSurface9* surface) = nullptr;
     void (*draw)(IDirect3DDevice9* device) = nullptr;
     void (*setTransform)(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* matrix) = nullptr;
     void (*setLight)(DWORD index, const D3DLIGHT9* light) = nullptr;
 };
 
 bool install(const DeviceCallbacks& callbacks);
+
+// Replaces an import of the game's exe (by DLL and function name). Returns false if the exe
+// doesn't import it.
+bool patchGameImport(const char* dll, const char* function, void* replacement, void** originalOut);
 void remove();
 
 // Free address space and video memory, to the log (failed resource creations are

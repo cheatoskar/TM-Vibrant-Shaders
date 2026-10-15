@@ -301,7 +301,7 @@ HRESULT APIENTRY stretchRectDetour(IDirect3DDevice9* device, IDirect3DSurface9* 
 
 HRESULT APIENTRY setRenderTargetDetour(IDirect3DDevice9* device, DWORD index, IDirect3DSurface9* surface) {
     if (tracingGame()) tracer::event("SetRenderTarget %lu %s", index, tracer::describe(surface));
-    if (g_internal == 0 && g_callbacks.setRenderTarget) g_callbacks.setRenderTarget(index, surface);
+    if (g_internal == 0 && g_callbacks.setRenderTarget) surface = g_callbacks.setRenderTarget(index, surface);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*)>(kSetRenderTarget)(device, index, surface);
 }
 
@@ -601,6 +601,10 @@ IDirect3DDevice9* makeProbeDevice(IDirect3D9* d3d, HWND window) {
 }
 
 } // namespace
+
+bool patchGameImport(const char* dll, const char* function, void* replacement, void** originalOut) {
+    return patchImport(dll, function, replacement, originalOut);
+}
 
 bool install(const DeviceCallbacks& callbacks) {
     g_callbacks = callbacks;

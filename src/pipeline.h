@@ -13,6 +13,9 @@ class Pipeline {
 public:
     struct Inputs {
         IDirect3DTexture9* color = nullptr; // scene colour (sRGB, 8 bit)
+        // The game's image from its float target (GameHdr): light above 1.0 kept. Null = only
+        // the 8-bit one. The guesses (lamps, glow, spill) stay on `color`.
+        IDirect3DTexture9* hdr = nullptr;
         IDirect3DTexture9* depth = nullptr; // raw hardware depth in .r (INTZ or R32F)
         UINT width = 0;
         UINT height = 0;
@@ -54,6 +57,13 @@ public:
         // The stencil of the depth texture holds the game's material classes (the plugin
         // tagged the game's draws): lamps, cars, glass, grass are known, not guessed.
         bool materials = false;
+        // F12's frame: the stencil holds each material's own id (1..255) instead of its class,
+        // materialClasses[id] is that class (engine::Material). The mask is built from it and
+        // readMaterialIds gives the ids (capture_NNN.mat).
+        const unsigned char* materialClasses = nullptr;
+        // The previewer: the mask itself (from capture_NNN.mat; r light, g car 1 / glass .5 /
+        // grass .25, b water), instead of the stencil. Needs `materials`.
+        IDirect3DTexture9* materialMask = nullptr;
     };
 
     // A 3D colour look-up table (A8R8G8B8, x = red, y = green, z = blue; size 0 = none).
@@ -111,6 +121,15 @@ public:
     // Copies part of the scene depth (area in pixels) into `out` (R32F, the area's size): the
     // pipeline then runs on a camera that draws into part of the screen (MediaTracker editor).
     bool copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth, const RECT& area, gfx::Target& out);
+    // The game's image from its float target (GameHdr) into `target` (the game's own render
+    // target, same size), cut to 0..1 as that 8-bit target would have it. Only inside `area`
+    // (the camera's viewport): the rest of the game's target keeps what it had.
+    bool resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area);
+    // Reads a float colour target (A16B16G16R16F) back as raw half floats, RGBA, rows top-down.
+    bool readHalfColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint16_t>& out);
+    // The material id of every pixel (one byte, rows top-down), after a frame rendered with
+    // Inputs::materialClasses.
+    bool readMaterialIds(IDirect3DDevice9* device, std::vector<uint8_t>& out);
 
     // Resets temporal state (exposure, TAA, motion blur, long-shadow height map).
     void resetHistory() {
@@ -177,6 +196,7 @@ private:
         kCopy,
         kCopyDepth,
         kWaterLevel,
+        kResolve,
         kPassCount
     };
 
@@ -225,6 +245,7 @@ private:
     IDirect3DPixelShader9* m_shaders[kPassCount] = {};
     IDirect3DStateBlock9* m_stateBlock = nullptr;
     IDirect3DPixelShader9* m_solidPS = nullptr; // one colour (c32): the "Materials" debug view
+    IDirect3DPixelShader9* m_paletteLookupPS = nullptr; // material id -> its class's colour
 
     UINT m_width = 0;
     UINT m_height = 0;
@@ -260,7 +281,10 @@ private:
     bool m_waterMaterialSeen = false;     // this map's water was seen as the game's water material
     bool m_materialsOn = false;           // the material mask exists this frame
     void measureSeaLevel(IDirect3DDevice9* device);
+    bool buildMaterialIds(IDirect3DDevice9* device, const Inputs& in);
     gfx::Target m_materials;    // full: the game's material classes (r light, g car, b glass, a grass)
+    gfx::Target m_materialIds;  // full: F12's material ids (r = id / 255)
+    IDirect3DTexture9* m_materialTexture = nullptr; // this frame's mask: m_materials or Inputs::materialMask
     gfx::Target m_ldr;          // full LDR
     gfx::Target m_ldr2;         // full LDR
     gfx::Target m_depthCopy;    // capture helper (R32F)

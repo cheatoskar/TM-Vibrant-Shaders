@@ -101,6 +101,10 @@ bool relightNight(bool night);
 // What the material being drawn is (from its shader file), Other between draws.
 enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5 };
 Material currentMaterial();
+// The class and shader file of a material (currentShader; false: no name). For F12's
+// material ids (capture_NNN.mat).
+Material materialClass(const void* shader);
+bool materialFile(const void* shader, wchar_t* out, size_t size);
 // Development: log each material once with its file (tmvs.log "shader ...").
 void shaderCensus(bool on);
 
