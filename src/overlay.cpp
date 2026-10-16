@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+extern "C" IMAGE_DOS_HEADER __ImageBase; // this DLL's base = its HMODULE
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 namespace tmshaders {
@@ -41,6 +42,49 @@ Status g_status;
 // frame: it takes the mouse over it, also with the menu closed.
 bool g_splitBar = false;
 
+// Sharing the mouse with the other mod that hooks this window (100% TMX + Bingo). The property's
+// value is the HMODULE of the mod that wants the mouse right now; whoever finds it taken by a mod
+// that is still loaded leaves mouse messages alone.
+const wchar_t* const kMouseOwner = L"TMMods.MouseOwner";
+HANDLE selfHandle() {
+    return reinterpret_cast<HANDLE>(&__ImageBase);
+}
+bool foreignOwnsMouse(HWND hwnd) {
+    HANDLE owner = GetPropW(hwnd, kMouseOwner);
+    if (!owner || owner == selfHandle()) return false;
+    // Still loaded? A mod that went away with the property set must not leave us deaf.
+    HMODULE module = nullptr;
+    return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(owner), &module) != 0;
+}
+// Every frame: take the property when we want the mouse and it is free, give it back when we don't.
+void publishMouseOwner(bool want) {
+    if (!g_hwnd) return;
+    HANDLE owner = GetPropW(g_hwnd, kMouseOwner);
+    if (want && !owner) SetPropW(g_hwnd, kMouseOwner, selfHandle());
+    else if (!want && owner == selfHandle()) RemovePropW(g_hwnd, kMouseOwner);
+}
+
+// Which button a mouse message is about (0 left, 1 right, 2 middle, 3/4 X1/X2), -1 for others;
+// up = it is the release.
+int mouseButton(UINT msg, WPARAM wparam, bool& up) {
+    up = false;
+    switch (msg) {
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: return 0;
+    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: return 1;
+    case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: return 2;
+    case WM_XBUTTONDOWN: case WM_XBUTTONDBLCLK: return GET_XBUTTON_WPARAM(wparam) == XBUTTON2 ? 4 : 3;
+    case WM_LBUTTONUP: up = true; return 0;
+    case WM_RBUTTONUP: up = true; return 1;
+    case WM_MBUTTONUP: up = true; return 2;
+    case WM_XBUTTONUP: up = true; return GET_XBUTTON_WPARAM(wparam) == XBUTTON2 ? 4 : 3;
+    }
+    return -1;
+}
+// A press we swallowed: its release is swallowed too, and only then (a release the game never
+// saw the press of is harmless, a press it saw whose release is eaten is a stuck button).
+bool g_swallowedButton[5] = {};
+
 // The mouse for the split's bar with the menu closed: moves always (hover), presses only over it
 // (or while ImGui holds one: its release), so the game keeps every other click and its mouse
 // capture (the backend takes and releases the capture with each press).
@@ -54,8 +98,20 @@ bool splitBarMouse(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 }
 
 
-LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+// Our part of a message: true = we take it, the game must not see it.
+bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     Config& config = Config::get();
+    bool releaseUp = false;
+    const int button = mouseButton(msg, wparam, releaseUp);
+    // The other mod has the mouse: its menu is under the pointer. Not ours, not photo mode's.
+    // (A release of a press ImGui already took is still shown to it, so nothing sticks.)
+    if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST && foreignOwnsMouse(hwnd)) {
+        if (ImGui::GetCurrentContext()) {
+            if (msg == WM_MOUSEMOVE) ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+            else if (releaseUp && ImGui::GetIO().MouseDown[button]) ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam);
+        }
+        return false;
+    }
     if (keys::capturing() && !config.showOverlay) keys::cancelCapture(); // the menu was closed meanwhile
     // The menu's "Change" button waits for the next key: nothing else sees it (not the hotkeys,
     // not the menu, not the game's window procedure). Esc cancels; the game's Esc is held back
@@ -63,7 +119,7 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
     if (keys::capturing() && (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP || msg == WM_CHAR ||
                               msg == WM_SYSCHAR || msg == WM_DEADCHAR)) {
         if (wparam == VK_ESCAPE && (msg == WM_KEYDOWN || msg == WM_KEYUP)) engine::swallowEscape();
-        if (keys::feed(msg, wparam, lparam)) return 0;
+        if (keys::feed(msg, wparam, lparam)) return true;
     }
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lparam & (1 << 30))) {
         // The hotkeys that need no per-frame look (Capture, Reload and Trace are polled in plugin.cpp).
@@ -72,17 +128,17 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
         switch (keys::resolve(static_cast<unsigned>(wparam), typing)) {
         case keys::Action::Menu:
             config.showOverlay = !config.showOverlay;
-            return 0;
+            return true;
         case keys::Action::Effects:
             config.settings.enabled = !config.settings.enabled;
             config.markDirty();
-            return 0;
+            return true;
         case keys::Action::PhotoSplit:
             photo::toggleSplit();
-            return 0;
+            return true;
         case keys::Action::Photo:
             photo::toggle();
-            return 0;
+            return true;
         default:
             break;
         }
@@ -91,10 +147,10 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
             if (config.showOverlay) config.showOverlay = false;
             else photo::toggle();
             engine::swallowEscape();
-            return 0;
+            return true;
         }
     }
-    if ((msg == WM_KEYDOWN || msg == WM_KEYUP) && wparam == VK_ESCAPE && GetAsyncKeyState(VK_ESCAPE) < 0 && engine::escapeSwallowed()) return 0;
+    if ((msg == WM_KEYDOWN || msg == WM_KEYUP) && wparam == VK_ESCAPE && GetAsyncKeyState(VK_ESCAPE) < 0 && engine::escapeSwallowed()) return true;
     if (config.showOverlay) {
         // The game reads its keys itself and never turns key presses into characters, so the
         // menu's text fields stayed empty: while one has the focus, make the WM_CHAR here
@@ -115,14 +171,31 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
                 TMVS_LOG("menu: mouse wheel %d over %s", static_cast<int>(GET_WHEEL_DELTA_WPARAM(wparam)), hovered ? hovered->Name : "nothing");
             }
         }
-        if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) return 1;
+        if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) return true;
         // Only swallow the mouse over the menu itself, so the game's own menus stay clickable.
-        if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST && ImGui::GetIO().WantCaptureMouse) return 1;
-        if ((msg == WM_KEYDOWN || msg == WM_CHAR) && ImGui::GetIO().WantCaptureKeyboard) return 1;
+        if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST && ImGui::GetIO().WantCaptureMouse) return true;
+        if ((msg == WM_KEYDOWN || msg == WM_CHAR) && ImGui::GetIO().WantCaptureKeyboard) return true;
     }
-    if (!config.showOverlay && splitBarMouse(hwnd, msg, wparam, lparam)) return 0;
+    if (!config.showOverlay && splitBarMouse(hwnd, msg, wparam, lparam)) return true;
     // Photo mode: focus click and depth of field on the wheel (the game doesn't see them).
-    if (photo::handleMessage(hwnd, msg, wparam, lparam)) return 0;
+    if (photo::handleMessage(hwnd, msg, wparam, lparam)) return true;
+    return false;
+}
+
+LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    bool up = false;
+    const int button = mouseButton(msg, wparam, up);
+    bool taken = ours(hwnd, msg, wparam, lparam);
+    if (button >= 0) {
+        // A release goes where its press went: swallowed only if the press was.
+        if (up) {
+            taken = g_swallowedButton[button];
+            g_swallowedButton[button] = false;
+        } else {
+            g_swallowedButton[button] = taken;
+        }
+    }
+    if (taken) return 0;
     return CallWindowProcW(g_originalWndProc, hwnd, msg, wparam, lparam);
 }
 
@@ -148,11 +221,16 @@ void init(IDirect3DDevice9* device) {
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX9_Init(device);
     g_originalWndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(hookedWndProc)));
+    keys::setGameWindow(g_hwnd); // hotkeys only react while the game is in front
     g_initialized = true;
 }
 
 } // namespace
 
+
+void shutdown() {
+    if (g_hwnd) publishMouseOwner(false); // never leave the other mod deaf
+}
 
 void preReset() {
     if (g_initialized) ImGui_ImplDX9_InvalidateDeviceObjects();
@@ -221,6 +299,7 @@ void draw(IDirect3DDevice9* device) {
         Config::get().previewPreset.clear();
         if (!*photoHint) {
             g_splitBar = false;
+            publishMouseOwner(false);
             return;
         }
     }
@@ -228,7 +307,8 @@ void draw(IDirect3DDevice9* device) {
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
     // Draw ImGui's cursor over the menu or the split's bar (the game hides the OS cursor), the game's elsewhere.
-    ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse;
+    // Only while we own the mouse: with both mods' menus open only one pointer is drawn.
+    ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
     if (menu) {
         // The pipeline's GPU timings for the Performance page.
@@ -281,6 +361,8 @@ void draw(IDirect3DDevice9* device) {
     g_splitBar = photo::splitShown() && *photoHint;
     if (g_splitBar) drawSplitBar();
     ImGui::EndFrame();
+    // Does one of our windows want the mouse (hovered or held)? Then the other mod stays out of it.
+    publishMouseOwner((menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse);
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
         ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());

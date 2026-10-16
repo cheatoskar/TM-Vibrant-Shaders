@@ -68,6 +68,11 @@ bool edge(Action a);
 // A key some action uses (the ManiaPlanet window procedure lets those through to the game).
 bool used(unsigned vk);
 bool shiftHeld();
+// The game's window. Once set, every polled hotkey (edge, shiftHeld) and the held modifiers only
+// count while that window (or a window it owns) is in front, so an F key pressed in a browser or
+// in the other mod's window does nothing here. Null = no check (the test program).
+void setGameWindow(HWND window);
+bool gameHasFocus();
 
 // Capturing the next key press for an action (the menu's "Change" button).
 void beginCapture(Action a);

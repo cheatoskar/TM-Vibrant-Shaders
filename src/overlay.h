@@ -17,6 +17,8 @@ struct Status {
     const AutoQuality* autoQuality = nullptr;
 };
 
+// Gives back the shared mouse property (TMMods.MouseOwner) if it is ours.
+void shutdown();
 void preReset();
 void postReset();
 void setStatus(const Status& status);

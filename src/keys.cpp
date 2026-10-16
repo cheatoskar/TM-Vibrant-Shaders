@@ -1,4 +1,6 @@
 #include "keys.h"
+#include "log.h"
+#include <cwchar>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -24,7 +26,7 @@ const Info kInfo[kCount] = {
     {"Photo", "Photo mode", {VK_F6, 0}, true},
     {"PhotoSplit", "Photo mode: compare split", {VK_F6, kShift}, true},
     {"Capture", "Frame capture / photo", {VK_F12, 0}, true},
-    {"Reload", "Reload shaders", {VK_F9, 0}, kTmnf},
+    {"Reload", "Reload shaders", {VK_F9, kCtrl}, kTmnf},
     {"Trace", "Trace", {VK_F11, 0}, kTmnf},
 };
 
@@ -110,6 +112,9 @@ bool g_changed = false;
 std::string g_note;
 bool g_capturing = false;
 Action g_target = Action::Count;
+HWND g_gameWindow = nullptr;
+// [Keys] KeysVersion: 1 (or none) = written before Reload moved to Ctrl+F9, 2 = now.
+constexpr int kKeysVersion = 2;
 
 void ensure() {
     if (g_init) return;
@@ -119,6 +124,7 @@ void ensure() {
 
 unsigned modsHeld() {
     unsigned m = 0;
+    if (!gameHasFocus()) return m;
     if (GetAsyncKeyState(VK_SHIFT) < 0) m |= kShift;
     if (GetAsyncKeyState(VK_CONTROL) < 0) m |= kCtrl;
     if (GetAsyncKeyState(VK_MENU) < 0) m |= kAlt;
@@ -137,7 +143,10 @@ Action resolveWith(unsigned vk, unsigned held, bool typing) {
     for (int i = 0; i < kCount; i++) {
         if (!kInfo[i].available) continue;
         const Binding& b = g_binding[i];
-        if (b.vk != vk || (b.mods & ~held) != 0) continue;
+        // Exact modifiers: Ctrl+F9 is not F9 and F9 is not Ctrl+F9. The one exception is Shift on
+        // the frame capture (Shift+F12 is its hi-res photo).
+        const unsigned spare = static_cast<Action>(i) == Action::Capture ? kShift : 0;
+        if (b.vk != vk || (b.mods & ~held) != 0 || (held & ~b.mods & ~spare) != 0) continue;
         if (bits(b.mods) > bestBits) {
             best = static_cast<Action>(i);
             bestBits = bits(b.mods);
@@ -276,12 +285,21 @@ bool edge(Action a) {
         was[i] = false;
         return false;
     }
+    // The modifiers first, then the key: Ctrl let go between the two reads cannot turn a Ctrl+F9
+    // into a bare F9 (the other way round it simply doesn't fire).
+    const unsigned held = modsHeld();
     const SHORT state = GetAsyncKeyState(static_cast<int>(vk));
+    if (!gameHasFocus()) {
+        // Another program has the keyboard: the press is not ours, and holding it while coming
+        // back must not fire either.
+        was[i] = (state & 0x8000) != 0;
+        return false;
+    }
     const bool down = (state & 0x8000) != 0;
     // A tap between two frames still counts (the low bit says it went down since the last look).
     const bool fire = (down && !was[i]) || (state & 1) != 0;
     was[i] = down;
-    return fire && !g_capturing && resolve(vk) == a;
+    return fire && !g_capturing && resolveWith(vk, held, false) == a;
 }
 
 bool used(unsigned vk) {
@@ -292,7 +310,17 @@ bool used(unsigned vk) {
 }
 
 bool shiftHeld() {
-    return GetAsyncKeyState(VK_SHIFT) < 0;
+    return gameHasFocus() && GetAsyncKeyState(VK_SHIFT) < 0;
+}
+
+void setGameWindow(HWND window) {
+    g_gameWindow = window;
+}
+
+bool gameHasFocus() {
+    if (!g_gameWindow) return true;
+    const HWND front = GetForegroundWindow();
+    return front && (front == g_gameWindow || GetAncestor(front, GA_ROOTOWNER) == g_gameWindow);
 }
 
 void beginCapture(Action a) {
@@ -357,6 +385,17 @@ void load(const wchar_t* ini) {
         Binding b;
         if (parse(narrow, b)) g_binding[i] = b;
     }
+    // Reload used to be F9, which the 100% TMX mod's menu uses too. Every key is always written
+    // on save, so an F9 here is either the old default or a deliberate choice that can't be
+    // told apart: move it once, and stamp the version so a later F9 chosen on purpose stays.
+    if (GetPrivateProfileIntW(L"Keys", L"KeysVersion", 1, ini) < 2) {
+        const int r = static_cast<int>(Action::Reload);
+        if (kInfo[r].available && g_binding[r] == Binding{VK_F9, 0}) {
+            g_binding[r] = kInfo[r].def;
+            g_changed = true; // written back with the new version
+            TMVS_LOG("keys: Reload moved from F9 to %s (F9 opens the 100%% TMX menu)", name(g_binding[r]).c_str());
+        }
+    }
     // Two actions on one key (edited by hand): the first keeps it, the later ones go back to
     // their default (or off if that is taken too).
     for (int i = 0; i < kCount; i++) {
@@ -379,6 +418,9 @@ void save(const wchar_t* ini) {
         for (size_t c = 0; c < text.size() && c < 63; c++) value[c] = static_cast<wchar_t>(text[c]);
         WritePrivateProfileStringW(L"Keys", key, value, ini);
     }
+    wchar_t version[16] = {};
+    swprintf(version, 16, L"%d", kKeysVersion);
+    WritePrivateProfileStringW(L"Keys", L"KeysVersion", version, ini);
 }
 
 } // namespace keys

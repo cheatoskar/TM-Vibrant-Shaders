@@ -57,7 +57,8 @@ int main() {
     CHECK(get(Action::Effects) == Binding{VK_F5, 0});
 #else
     CHECK(get(Action::Effects) == Binding{VK_F7, 0});
-    CHECK(get(Action::Reload) == Binding{VK_F9, 0});
+    CHECK(get(Action::Reload) == Binding{VK_F9, kCtrl});
+    CHECK(name(get(Action::Reload)) == "Ctrl+F9");
     CHECK(get(Action::Trace) == Binding{VK_F11, 0});
 #endif
 
@@ -91,6 +92,39 @@ int main() {
     CHECK(get(Action::Photo) == Binding{VK_F12, 0});
     CHECK(get(Action::Capture) == Binding{VK_F12, 0} || get(Action::Capture) == Binding{});
     CHECK(get(Action::Photo) != get(Action::Capture));
+    DeleteFileW(ini);
+
+#ifndef TMVS_MANIAPLANET
+    // Migration: a [Keys] section from before (no KeysVersion) with Reload=F9 moves to Ctrl+F9, once.
+    WritePrivateProfileStringW(L"Keys", L"Reload", L"F9", ini);
+    WritePrivateProfileStringW(L"Keys", L"Menu", L"F8", ini);
+    load(ini);
+    CHECK(get(Action::Reload) == Binding{VK_F9, kCtrl});
+    CHECK(takeChanged()); // so it gets written back
+    save(ini);
+    wchar_t text[32] = {};
+    GetPrivateProfileStringW(L"Keys", L"Reload", L"", text, 32, ini);
+    CHECK(wcscmp(text, L"Ctrl+F9") == 0);
+    CHECK(GetPrivateProfileIntW(L"Keys", L"KeysVersion", 0, ini) == 2);
+    // Written by this version: a deliberate bare F9 stays.
+    WritePrivateProfileStringW(L"Keys", L"Reload", L"F9", ini);
+    load(ini);
+    CHECK(get(Action::Reload) == Binding{VK_F9, 0});
+    // Old file with another Reload key: untouched. No [Keys] at all: the default.
+    DeleteFileW(ini);
+    WritePrivateProfileStringW(L"Keys", L"Reload", L"F10", ini);
+    load(ini);
+    CHECK(get(Action::Reload) == Binding{VK_F10, 0});
+    DeleteFileW(ini);
+    load(ini);
+    CHECK(get(Action::Reload) == Binding{VK_F9, kCtrl});
+    // Hotkeys only react while the game window is in front: with a window that isn't, nothing fires.
+    setGameWindow(CreateWindowW(L"STATIC", L"x", 0, 0, 0, 1, 1, nullptr, nullptr, nullptr, nullptr));
+    CHECK(!gameHasFocus());
+    CHECK(!edge(Action::Reload));
+    setGameWindow(nullptr);
+    CHECK(gameHasFocus());
+#endif
     DeleteFileW(ini);
 
     printf(g_failed ? "%d FAILED\n" : "all passed\n", g_failed);
