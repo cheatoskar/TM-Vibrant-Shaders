@@ -624,6 +624,15 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[44][1] = s.gameNight ? 1.0f : 0.0f;
     c[44][2] = nightSky ? 1.0f : 0.0f;
     c[44][3] = s.toneKnee;
+    // The engine's cloud factor at its darkest (it lights with 2 x a factor between its clouds' min
+    // and max): how much of the estimated sun can go under a night sky (scene.hlsl).
+    if (cam.hasSceneP) {
+        float cmin[4];
+        memcpy(cmin, cam.rawP + kScenePCloudsMin, sizeof(cmin));
+        const bool ok = std::isfinite(cmin[0]) && std::isfinite(cmin[1]) && std::isfinite(cmin[2]) && cmin[0] > 0.0f && cmin[1] > 0.0f && cmin[2] > 0.0f;
+        for (int i = 0; i < 3; i++) c[42][i] = ok ? fminf(cmin[i], 1.0f) : 0.0f;
+        c[42][3] = ok ? 1.0f : 0.0f;
+    }
     for (int i = 0; i < 3; i++) c[45][i] = cam.sunColour[i];
     c[45][3] = cam.sunDirectionKnown ? 1.0f : 0.0f;
     for (int i = 0; i < 3; i++) c[46][i] = cam.fog[i];

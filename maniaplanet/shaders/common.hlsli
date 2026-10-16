@@ -62,7 +62,7 @@ cbuffer Frame : register(b0)
     float4 u_Snow;      // c39: snowfall, snow cover, wind direction (world x, z)
     float4 u_BlackHole; // c40: black hole direction (world, turns with the sky), size (0 = none)
     float4 u_Sky3;      // c41: aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
-    float4 u_Lut;       // c42: (unused here: the look runs in hdr.hlsl)
+    float4 u_EngineClouds; // c42: the engine's cloud factor at its darkest (SceneP CloudsX2minRGB), 1 = known
     float4 u_SunOut;    // c43: how much of the engine's sun comes out (night skies), engine sun direction (world)
     float4 u_Mat;       // c44: 0, real night (GameNight), a night sky replaces the game's, tone knee
     float4 u_EngineSun; // c45: the engine's sun colour (rgb, linear, as it lights with it), 1 = known
