@@ -60,6 +60,7 @@ struct Dump {
     std::vector<std::pair<std::string, std::string>> includes;
     uint64_t bytecode = 0;
     bool hasBytecode = false;
+    bool patchedInGame = false; // "// gbuffer patched: ...": the hash is the patched shader's
 };
 
 std::string readFile(const std::string& path) {
@@ -85,6 +86,10 @@ bool readDump(const std::string& path, Dump& d) {
     if (text.compare(pos, 12, "// bytecode ") == 0) {
         d.bytecode = strtoull(text.c_str() + pos + 12, nullptr, 16);
         d.hasBytecode = true;
+        pos = text.find('\n', pos) + 1;
+    }
+    if (text.compare(pos, 11, "// gbuffer ") == 0) {
+        d.patchedInGame = text.compare(pos, 19, "// gbuffer patched:") == 0;
         pos = text.find('\n', pos) + 1;
     }
     while (text.compare(pos, 11, "// #define ") == 0) {
@@ -632,14 +637,16 @@ int main(int argc, char** argv) {
             continue;
         }
         CHECK(off.outcome.kind == gbufpatch::Outcome::Untouched, "%s: off: nothing patched", file.c_str());
+        plainMs += off.ms;
+        const Compiled on = compileDump(d, true);
         if (d.hasBytecode) {
+            // Dumped with GameGBuffer on in game: the hash is of what the game got, the patched shader.
+            const Compiled& mine = d.patchedInGame ? on : off;
             withHash++;
-            const bool identical = bytecodeHash(off.code.data(), off.code.size()) == d.bytecode;
+            const bool identical = bytecodeHash(mine.code.data(), mine.code.size()) == d.bytecode;
             same += identical;
             if (!identical) CHECK(false, "%s: recompiled bytecode differs from the game's (dump hash)", file.c_str());
         }
-        plainMs += off.ms;
-        const Compiled on = compileDump(d, true);
         patchMs += on.ms;
         const gbufpatch::Patch p = gbufpatch::patchSource(d.source.data(), d.source.size(), d.profile.c_str());
         const char* kind = on.outcome.kind == gbufpatch::Outcome::Patched ? "PATCHED" : on.outcome.kind == gbufpatch::Outcome::Failed ? "FAILED" : "skipped";
@@ -649,6 +656,9 @@ int main(int argc, char** argv) {
                   "%s: patched writes COLOR1, the game's doesn't", file.c_str());
             CHECK(gbufpatch::sameConstants(off.code.data(), off.code.size(), on.code.data(), on.code.size(), nullptr), "%s: constants in place",
                   file.c_str());
+            // CreatePixelShader gets no size: the patched shader is found again by its tokens.
+            CHECK(gbufpatch::bytecodeSize(reinterpret_cast<const DWORD*>(on.code.data())) == on.code.size(),
+                  "%s: the size walked from the tokens is the compiler's (%zu)", file.c_str(), on.code.size());
             printf("      %-28s %s %-7s %s; slots %d -> %d, instructions %d -> %d\n", file.c_str(), d.profile.c_str(), kind, on.outcome.detail.c_str(),
                    slots(off.code), slots(on.code), gbufpatch::instructionCount(off.code.data(), off.code.size()),
                    gbufpatch::instructionCount(on.code.data(), on.code.size()));
