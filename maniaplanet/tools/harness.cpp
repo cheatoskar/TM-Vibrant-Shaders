@@ -131,7 +131,7 @@ void viewport(ID3D11DeviceContext* ctx, float x, float y, float w, float h) {
 int main(int argc, char** argv) {
     if (argc < 6) {
         printf("usage: mp_harness <d3d11.dll> <tonemap.dxbc> <ui.dxbc> <scene.dxbc> <defread.dxbc> "
-               "[--srgb | --grade in.bmp out.bmp preset | --decomp decomp.dxbc]\n");
+               "[--srgb | --grade in.bmp out.bmp preset | --decomp decomp.dxbc] [--shadow pssm.dxbc]\n");
         return 2;
     }
     const bool srgb = argc > 6 && strcmp(argv[6], "--srgb") == 0;
@@ -140,6 +140,11 @@ int main(int argc, char** argv) {
     // --decomp: Tech3/DeferredDeCompFaceNormal_p, for the check that the light mask follows the
     // engine's new targets after a map change (that pass reads the G-buffer before the light mask).
     const char* decompPath = argc > 7 && strcmp(argv[6], "--decomp") == 0 ? argv[7] : nullptr;
+    // --shadow: Tech3/DeferredShadowPssm_p with 5 splits (constants 576 bytes, like in a race), for
+    // the soft shadow checks (SoftShadows: the mod's shader draws the engine's sun shadow pass).
+    const char* shadowPath = nullptr;
+    for (int i = 6; i + 1 < argc; i++)
+        if (strcmp(argv[i], "--shadow") == 0) shadowPath = argv[i + 1];
     std::vector<unsigned char> picture;
     UINT W = 640, H = 360;
     if (grade && !readBmp(argv[7], picture, W, H)) {
@@ -292,6 +297,154 @@ int main(int argc, char** argv) {
     }
     bool withDecomp = false; // the frames draw DeferredDeCompFaceNormal_p before the light-read pass
 
+    // The engine's sun shadow pass (--shadow) into a light mask of its own: a plane facing the light
+    // 10 m from the camera, and in every split the left half of it under a caster 20 m nearer the
+    // light (the map mirrors x: the shadow falls on the right half of the screen).
+    const UINT SW = 128, SH = 64, tile = 64;
+    ID3D11PixelShader* shadowPs = nullptr;
+    ID3D11Texture2D* shadowMask = nullptr;
+    ID3D11Texture2D* shadowStaging = nullptr;
+    ID3D11RenderTargetView* shadowMaskRtv = nullptr;
+    ID3D11ShaderResourceView* shadowSrv[5] = {}; // depth, static maps, split atlas, face normal
+    ID3D11Buffer* shadowCb[2] = {};               // ShaderP (b0), SceneP (b13)
+    ID3D11SamplerState* shadowSampler = nullptr;
+    ID3D11Buffer* gameCb5 = nullptr;              // the game's own at slot 5 (where the mod binds its)
+    ID3D11SamplerState* gameSampler5 = nullptr;
+    std::vector<unsigned char> shadowPixels(SW * SH * 4);
+    bool shadowRestored = false; // after the draw: the engine's shader and the game's slot 5 again
+    if (shadowPath) {
+        const std::vector<char> code = readFile(shadowPath);
+        if (code.empty() || FAILED(device->CreatePixelShader(code.data(), code.size(), nullptr, &shadowPs))) {
+            printf("cannot create engine shader %s\n", shadowPath);
+            return 2;
+        }
+        set("SoftShadows", "0");
+        auto texture = [&](UINT w, UINT h, DXGI_FORMAT format, DXGI_FORMAT view, const void* texels, UINT pitch,
+                           ID3D11ShaderResourceView** srv) {
+            D3D11_TEXTURE2D_DESC d = {};
+            d.Width = w;
+            d.Height = h;
+            d.MipLevels = d.ArraySize = 1;
+            d.Format = format;
+            d.SampleDesc.Count = 1;
+            d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            D3D11_SUBRESOURCE_DATA init = {texels, pitch, 0};
+            ID3D11Texture2D* t = nullptr;
+            device->CreateTexture2D(&d, &init, &t);
+            D3D11_SHADER_RESOURCE_VIEW_DESC v = {};
+            v.Format = view;
+            v.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            v.Texture2D.MipLevels = 1;
+            device->CreateShaderResourceView(t, &v, srv);
+            t->Release();
+        };
+        const std::vector<float> linearDepth(SW * SH, 0.1f); // of the 100 m far plane below: 10 m
+        texture(SW, SH, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_FLOAT, linearDepth.data(), SW * 4, &shadowSrv[0]);
+        const uint16_t empty[16] = {}; // static maps: nothing in them
+        texture(4, 4, DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R16_UNORM, empty, 8, &shadowSrv[1]);
+        texture(4, 4, DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R16_UNORM, empty, 8, &shadowSrv[2]);
+        // Five 64-texel tiles of 20 x 20 m; larger = nearer the light, the plane at 0.5 drawn a step
+        // further away (like the engine's depth bias), the caster at 0.7.
+        std::vector<uint16_t> atlas(5 * tile * tile);
+        for (UINT y = 0; y < tile; y++)
+            for (UINT x = 0; x < 5 * tile; x++) atlas[y * 5 * tile + x] = x % tile < tile / 2 ? 45874 : 32766;
+        texture(5 * tile, tile, DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R16_UNORM, atlas.data(), 5 * tile * 2, &shadowSrv[3]);
+        const std::vector<uint32_t> facing(SW * SH, 0xFF808000u); // BGRA: the normal (0, 0, -1), to the camera
+        texture(SW, SH, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM, facing.data(), SW * 4, &shadowSrv[4]);
+        // ShaderP: the camera ray from the pixel (c0..c2, far 100 m), the static maps (c5..c10), the
+        // splits (c11 on, all alike: x and y across, z along the light from the camera) and their
+        // rectangles in the atlas.
+        float c[36][4] = {{1, 0.5f, 1, 100}, {-2, 0, 0, 0}, {0, -1, 0, 0}, {0, 0.0078125f, 3, 1.0f / SW}};
+        for (int m = 0; m < 2; m++) {
+            const float rows[3][4] = {{0.01f, 0, 0, 0.5f}, {0, 0.05f, 0, 0.5f}, {0, 0, -0.01f, 0.6f}};
+            memcpy(c[5 + 3 * m], rows, sizeof(rows));
+        }
+        for (int i = 0; i < 5; i++) {
+            const float rows[3][4] = {{0.01f, 0, 0, 0.1f + 0.2f * i}, {0, 0.05f, 0, 0.5f}, {0, 0, -0.01f, 0.6f}};
+            memcpy(c[11 + 3 * i], rows, sizeof(rows));
+            const float halfU = 0.5f / (5 * tile), halfV = 0.5f / tile;
+            const float mins[4] = {0.2f * i + halfU, halfV, 0, 0}, maxs[4] = {0.2f * (i + 1) - halfU, 1 - halfV, 1, 0};
+            memcpy(c[26 + i], mins, sizeof(mins));
+            memcpy(c[31 + i], maxs, sizeof(maxs));
+        }
+        float sceneP[168] = {};
+        sceneP[24] = 1.0f / SW; // SceneP[6].xy: pixel to 0..1
+        sceneP[25] = 1.0f / SH;
+        const void* contents[2] = {c, sceneP};
+        const UINT sizes[2] = {sizeof(c), sizeof(sceneP)};
+        for (int i = 0; i < 2; i++) {
+            D3D11_BUFFER_DESC b = {};
+            b.ByteWidth = sizes[i];
+            b.Usage = D3D11_USAGE_DEFAULT;
+            b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            D3D11_SUBRESOURCE_DATA init = {contents[i], 0, 0};
+            device->CreateBuffer(&b, &init, &shadowCb[i]);
+        }
+        const float marker[4] = {1, 2, 3, 4};
+        D3D11_BUFFER_DESC b = {};
+        b.ByteWidth = sizeof(marker);
+        b.Usage = D3D11_USAGE_DEFAULT;
+        b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_SUBRESOURCE_DATA init = {marker, 0, 0};
+        device->CreateBuffer(&b, &init, &gameCb5);
+        // The engine's samplers: comparison, linear, border, greater-equal (lit where the map is not nearer).
+        D3D11_SAMPLER_DESC smp = {};
+        smp.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR;
+        smp.AddressU = smp.AddressV = smp.AddressW = D3D11_TEXTURE_ADDRESS_BORDER;
+        smp.ComparisonFunc = D3D11_COMPARISON_GREATER_EQUAL;
+        smp.MaxLOD = D3D11_FLOAT32_MAX;
+        device->CreateSamplerState(&smp, &shadowSampler);
+        smp.Filter = D3D11_FILTER_ANISOTROPIC;
+        smp.MaxAnisotropy = 4;
+        smp.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        device->CreateSamplerState(&smp, &gameSampler5);
+        D3D11_TEXTURE2D_DESC md = {};
+        md.Width = SW;
+        md.Height = SH;
+        md.MipLevels = md.ArraySize = 1;
+        md.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        md.SampleDesc.Count = 1;
+        md.BindFlags = D3D11_BIND_RENDER_TARGET;
+        device->CreateTexture2D(&md, nullptr, &shadowMask);
+        device->CreateRenderTargetView(shadowMask, nullptr, &shadowMaskRtv);
+        md.BindFlags = 0;
+        md.Usage = D3D11_USAGE_STAGING;
+        md.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        device->CreateTexture2D(&md, nullptr, &shadowStaging);
+    }
+    auto drawShadow = [&] {
+        ctx->OMSetRenderTargets(1, &shadowMaskRtv, nullptr);
+        ctx->PSSetShader(shadowPs, nullptr, 0);
+        ctx->PSSetShaderResources(0, 5, shadowSrv);
+        ctx->PSSetConstantBuffers(0, 1, &shadowCb[0]);
+        ctx->PSSetConstantBuffers(13, 1, &shadowCb[1]);
+        ctx->PSSetConstantBuffers(5, 1, &gameCb5);
+        ID3D11SamplerState* samplers[2] = {shadowSampler, shadowSampler};
+        ctx->PSSetSamplers(0, 2, samplers);
+        ctx->PSSetSamplers(5, 1, &gameSampler5);
+        viewport(ctx, 0, 0, static_cast<float>(SW), static_cast<float>(SH));
+        ctx->Draw(3, 0);
+        ID3D11PixelShader* ps = nullptr;
+        ID3D11Buffer* cb5 = nullptr;
+        ID3D11SamplerState* s5 = nullptr;
+        ctx->PSGetShader(&ps, nullptr, nullptr);
+        ctx->PSGetConstantBuffers(5, 1, &cb5);
+        ctx->PSGetSamplers(5, 1, &s5);
+        shadowRestored = ps == shadowPs && cb5 == gameCb5 && s5 == gameSampler5;
+        if (ps) ps->Release();
+        if (cb5) cb5->Release();
+        if (s5) s5->Release();
+        ID3D11ShaderResourceView* none[5] = {};
+        ctx->PSSetShaderResources(0, 5, none);
+        viewport(ctx, 0, 0, 1, 1);
+        ctx->CopyResource(shadowStaging, shadowMask);
+        D3D11_MAPPED_SUBRESOURCE m;
+        if (SUCCEEDED(ctx->Map(shadowStaging, 0, D3D11_MAP_READ, 0, &m))) {
+            for (UINT y = 0; y < SH; y++) memcpy(&shadowPixels[y * SW * 4], static_cast<unsigned char*>(m.pData) + y * m.RowPitch, SW * 4);
+            ctx->Unmap(shadowStaging, 0);
+        }
+    };
+
     // The engine's G-buffer and light buffers (contents don't matter) and its motion target.
     td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -375,6 +528,7 @@ int main(int argc, char** argv) {
         ctx->PSSetShader(scene, nullptr, 0);
         viewport(ctx, 0, 0, 1, 1);
         ctx->Draw(3, 0);
+        if (shadowPs) drawShadow();
         // Light-read pass: camera at vertex slot 13, the buffers at the shader's own slots
         // (Block_DefReadP1: light mask t1, diffuse t2, specular t3, normals t4), motion as target 1.
         D3D11_MAPPED_SUBRESOURCE mapped;
@@ -447,7 +601,7 @@ int main(int argc, char** argv) {
     stats(s);
     printf("  stats: placed %d, tone map %d, shaders %d/%d, depth %d, draws %d, camera %d, textures 0x%x; centre %u %u %u, "
            "hud %u %u %u\n", s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], centre[0], centre[1], centre[2], hud[0], hud[1], hud[2]);
-    check(s[2] == (decomp ? 5 : 4), "the engine shaders are recognised (and only those)");
+    check(s[2] == (decomp ? 5 : 4) + (shadowPs ? 1 : 0), "the engine shaders are recognised (and only those)");
     check(s[6] == 1, "the engine camera is read from its SceneV upload");
     check(s[8] == 1000 && s[9] == 2000 && s[10] == 3000, "the camera's eye is (10, 20, 30)");
     const int wanted = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7);
@@ -575,6 +729,38 @@ int main(int argc, char** argv) {
               exists("output.dds") && exists("hdr_t0.dds"),
           "a capture writes trace, HDR input, input, depth and output");
     printf("  capture: %s\n", folder.c_str());
+
+    // Soft shadows (--shadow). Off: the engine's shader draws its sun shadow pass. On: the mod's,
+    // a penumbra around the caster's edge and the same light and shadow away from it. Off again:
+    // the engine's light mask to the bit. After the draw the game's shader and slot 5 are back.
+    if (shadowPs) {
+        auto maskRed = [&](const std::vector<unsigned char>& mask, UINT x, UINT y) { return static_cast<int>(mask[(y * SW + x) * 4 + 2]); };
+        const std::vector<unsigned char> engineMask = shadowPixels;
+        const bool engineRestored = shadowRestored;
+        check(maskRed(engineMask, 8, SH / 2) > 250 && maskRed(engineMask, SW - 8, SH / 2) < 5,
+              "the engine's sun shadow pass draws its light mask (lit, then the caster's shadow)");
+        check(set("SoftShadows", "3") == 1, "SoftShadows is a setting");
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        const std::vector<unsigned char> softMask = shadowPixels;
+        const bool softRestored = shadowRestored;
+        int edge = 0, away = 0;
+        for (UINT y = 0; y < SH; y++) {
+            for (UINT x = 0; x < SW; x++) {
+                const int d = std::abs(maskRed(softMask, x, y) - maskRed(engineMask, x, y));
+                if (x >= SW / 2 - 8 && x < SW / 2 + 8) edge = d > edge ? d : edge;
+                else if (x < SW / 2 - 24 || x >= SW / 2 + 24) away = d > away ? d : away;
+            }
+        }
+        printf("  soft shadows: at the shadow's edge up to %d apart from the engine's, away from it %d\n", edge, away);
+        check(edge > 20 && away <= 1, "SoftShadows 3: the mod's shader draws a penumbra at the edge, the same light and shadow elsewhere");
+        check(engineRestored && softRestored, "after the shadow draw the engine's shader and the game's b5/s5 are bound again");
+        const std::vector<char> logText = readFile((std::string(data) + "\\tmvs-mp.log").c_str());
+        check(std::string(logText.begin(), logText.end()).find("soft shadows: the mod's PCSS shader draws") != std::string::npos,
+              "the log says that the mod's shader draws the sun shadow pass");
+        set("SoftShadows", "0");
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        check(shadowPixels == engineMask && shadowRestored, "SoftShadows back at 0: the engine's light mask to the bit");
+    }
 
     // A map change: the engine makes new targets, its light mask among them; the face-normal pass
     // comes first in the frame and doesn't read the light mask. The mod must follow the new one
