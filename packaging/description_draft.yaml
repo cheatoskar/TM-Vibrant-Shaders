@@ -1,5 +1,0 @@
-# Draft for description.yaml (not live). Replace the description line when 1.4.0 ships.
-# Pick one icon (a = black hole, b = neon road, c = VS monogram) and enable the line below
-# once the PNGs are on GitHub main.
-# icon_link: 'https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/main/packaging/icons/icon_X.png'
-description: 'Real-time lighting and weather for TrackMania Nations/United Forever and TrackMania 2: lights from the game''s own lamps, real night with the moon under a black hole sky, long mesh shadows, neon borders and trail, rain, clouds, clean water, MP4 video export, rebindable hotkeys. F8 menu.'
