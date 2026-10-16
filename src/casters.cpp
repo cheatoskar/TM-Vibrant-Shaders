@@ -22,6 +22,13 @@ constexpr size_t kMaxCasters = 30000;   // a Stadium map keeps a few thousand
 constexpr size_t kMaxPending = 60000;
 constexpr UINT kDrawBudget = 1000;      // meshes drawn into the maps per frame (measured: ~0.3 ms of CPU)
 constexpr UINT kCheckBudget = 40000;    // meshes looked at per frame (the near map's selection)
+// The main camera's draws checked per frame, about (each ~0.7 us of CPU): with more, every n-th
+// draw is checked, the next frame the ones after them. A big Stadium map draws 8000 meshes a
+// frame and checking them all took 10 ms of CPU every frame (60 FPS where the GPU had time for
+// more). Spread out, every draw is still checked every few frames (at most every 16th): a mesh is
+// kept a fraction of a second later than it would have been, long before its shadow is near.
+constexpr unsigned kChecksPerFrame = 700;
+constexpr unsigned kMaxStride = 16;
 constexpr DWORD kStaticAfterMs = 500;   // seen again this much later at the same place: static
 constexpr float kNearHalf = 160.0f;     // the near map: +-160 m around the camera (horizontally),
 constexpr float kNearBelow = 50.0f;     // this far below it
@@ -77,18 +84,32 @@ struct LightMap {
 struct Stats {
     unsigned frames = 0, draws = 0, noCamera = 0, otherProjection = 0, noDecl = 0, stream = 0, pool = 0, pending = 0, known = 0;
     unsigned promoted = 0, duplicates = 0, unbounded = 0, mapDraws = 0, nearBuilds = 0;
+    unsigned checked = 0, paused = 0; // draws checked (the others wait for a later frame); draws while paused
     double recordMs = 0.0, updateMs = 0.0;
 };
 
 std::vector<Caster> g_casters;
-std::unordered_set<uint64_t> g_known;                         // exact keys of kept meshes (the quick way)
-std::unordered_map<uint64_t, std::vector<Pending>> g_pending; // buffers, draw call and 16 m cell -> places waiting
+// The keys are hashes already (mixKey): the standard library's hash would hash them again,
+// byte by byte (FNV, 64-bit multiplies a 32-bit build does in three steps).
+struct KeyHash {
+    size_t operator()(uint64_t key) const { return static_cast<size_t>(key ^ (key >> 32)); }
+};
+std::unordered_set<uint64_t, KeyHash> g_known;                         // exact keys of kept meshes (the quick way)
+std::unordered_map<uint64_t, std::vector<Pending>, KeyHash> g_pending; // buffers, draw call and 16 m cell -> places waiting
 size_t g_pendingCount = 0;
-std::unordered_map<uint64_t, std::vector<uint32_t>> g_byMesh; // buffers, draw call and 16 m cell -> the kept meshes there
+std::unordered_map<uint64_t, std::vector<uint32_t>, KeyHash> g_byMesh; // buffers, draw call and 16 m cell -> the kept meshes there
 std::unordered_map<const void*, int> g_vsRegister;            // the game's vertex shader -> GbxVisualPrCamera's register, -1 none
 std::unordered_map<const void*, DeclInfo> g_decls;            // the game's declaration -> ours
+// The last shader and declaration looked up: the game draws by material, most draws repeat them.
+const void* g_lastVS = nullptr;
+int g_lastRegister = -1;
+const void* g_lastDecl = nullptr;
+DeclInfo g_lastDeclInfo;
 std::map<std::pair<WORD, BYTE>, IDirect3DVertexDeclaration9*> g_ownDecls; // (offset, type) -> position-only declaration
 Stats g_stats;
+unsigned g_frameDraws = 0;           // draws handed over this frame
+unsigned g_stride = 1, g_phase = 0;  // this frame checks the draws whose index + phase is a multiple of stride
+bool g_paused = false;               // no pipeline wants the maps: nothing is checked
 DWORD g_lastSweep = 0;
 DWORD g_lastLog = 0;
 bool g_firstLog = false;
@@ -126,10 +147,25 @@ const char* kCasterPS = R"(
 float4 main() : COLOR0 { return 0; }
 )";
 
-uint64_t fnv(uint64_t h, const void* data, size_t bytes) {
+// The keys' hash, four bytes at a step (every draw of the main camera goes through it: byte by
+// byte it was half of the recording's CPU time). `bytes` a multiple of 4.
+uint64_t mixKey(uint64_t h, const void* data, size_t bytes) {
     const unsigned char* p = static_cast<const unsigned char*>(data);
-    for (size_t i = 0; i < bytes; i++) h = (h ^ p[i]) * 1099511628211ull;
+    for (size_t i = 0; i + 4 <= bytes; i += 4) {
+        uint32_t word;
+        memcpy(&word, p + i, 4);
+        h = (h ^ word) * 0x9E3779B97F4A7C15ull;
+        h ^= h >> 29;
+    }
     return h;
+}
+
+// floor(x) as an integer (the CRT's floor is a call in a 32-bit build; the same result for
+// every |x| < 2^63).
+long long floorToInt(double x) {
+    long long q = static_cast<long long>(x);
+    if (static_cast<double>(q) > x) q--;
+    return q;
 }
 
 double milliseconds(const LARGE_INTEGER& a, const LARGE_INTEGER& b) {
@@ -145,8 +181,13 @@ double milliseconds(const LARGE_INTEGER& a, const LARGE_INTEGER& b) {
 // (shaders the game compiled from HLSL keep it). -1: the shader has none (assembled ones,
 // the sky, 2D). c0 in every material shader seen so far (62 of 74 dumped vertex shaders).
 int cameraRegister(IDirect3DVertexShader9* vs) {
+    if (vs == g_lastVS) return g_lastRegister;
     auto it = g_vsRegister.find(vs);
-    if (it != g_vsRegister.end()) return it->second;
+    if (it != g_vsRegister.end()) {
+        g_lastVS = vs;
+        g_lastRegister = it->second;
+        return it->second;
+    }
     int result = -1;
     UINT size = 0;
     if (SUCCEEDED(vs->GetFunction(nullptr, &size)) && size >= 8 && size < (1u << 20)) {
@@ -183,12 +224,19 @@ int cameraRegister(IDirect3DVertexShader9* vs) {
         }
     }
     g_vsRegister[vs] = result;
+    g_lastVS = vs;
+    g_lastRegister = result;
     return result;
 }
 
 DeclInfo declInfo(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
+    if (decl == g_lastDecl) return g_lastDeclInfo;
     auto it = g_decls.find(decl);
-    if (it != g_decls.end()) return it->second;
+    if (it != g_decls.end()) {
+        g_lastDecl = decl;
+        g_lastDeclInfo = it->second;
+        return it->second;
+    }
     DeclInfo info;
     D3DVERTEXELEMENT9 elements[MAXD3DDECLLENGTH + 1];
     UINT count = MAXD3DDECLLENGTH + 1;
@@ -214,6 +262,8 @@ DeclInfo declInfo(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
         }
     }
     g_decls[decl] = info;
+    g_lastDecl = decl;
+    g_lastDeclInfo = info;
     return info;
 }
 
@@ -386,6 +436,7 @@ void forgetMeshes() {
     g_byMesh.clear();
     g_vsRegister.clear();
     g_decls.clear();
+    g_lastVS = g_lastDecl = nullptr;
     g_invValid = false;
     for (int j = 0; j < 3; j++) {
         g_boundsLo[j] = 1e30f;
@@ -402,13 +453,13 @@ void forgetMeshes() {
 void logStats(const char* when) {
     const Stats& s = g_stats;
     const double f = s.frames ? static_cast<double>(s.frames) : 1.0;
-    TMVS_LOG("casters (%s): %u meshes kept (%u new, %u copies merged, %u without readable bounds); per frame %.0f opaque draws "
-             "(%.0f known, %.0f waiting, %.0f other shader, %.0f other projection, %.0f no float position, %.0f instanced, %.0f not managed), "
-             "CPU %.3f ms recording + %.3f ms drawing, %.0f meshes drawn into the maps; near map drawn %u times, whole-track map %u "
-             "times; %u frames",
-             when, static_cast<unsigned>(g_casters.size()), s.promoted, s.duplicates, s.unbounded, s.draws / f, s.known / f, s.pending / f,
-             s.noCamera / f, s.otherProjection / f, s.noDecl / f, s.stream / f, s.pool / f, s.recordMs / f, s.updateMs / f,
-             s.mapDraws / f, s.nearBuilds, g_farBuilds, s.frames);
+    TMVS_LOG("casters (%s): %u meshes kept (%u new, %u copies merged, %u without readable bounds); per frame %.0f opaque draws, "
+             "%.0f checked (%.0f known, %.0f waiting, %.0f other shader, %.0f other projection, %.0f no float position, %.0f instanced, "
+             "%.0f not managed), %.0f while paused; CPU %.3f ms recording + %.3f ms drawing, %.0f meshes drawn into the maps; near map "
+             "drawn %u times, whole-track map %u times; %u frames",
+             when, static_cast<unsigned>(g_casters.size()), s.promoted, s.duplicates, s.unbounded, s.draws / f, s.checked / f, s.known / f,
+             s.pending / f, s.noCamera / f, s.otherProjection / f, s.noDecl / f, s.stream / f, s.pool / f, s.paused / f, s.recordMs / f,
+             s.updateMs / f, s.mapDraws / f, s.nearBuilds, g_farBuilds, s.frames);
     g_stats = Stats();
 }
 
@@ -596,6 +647,14 @@ void mapInfo(const LightMap& m, MapInfo& out) {
 
 void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
                 const float view[16], const float projection[16]) {
+    g_stats.draws++;
+    const unsigned drawIndex = g_frameDraws++;
+    if (g_paused) {
+        g_stats.paused++;
+        return;
+    }
+    if ((drawIndex + g_phase) % g_stride != 0) return; // a later frame's turn
+    g_stats.checked++;
     LARGE_INTEGER t0;
     QueryPerformanceCounter(&t0);
     struct Timer {
@@ -606,7 +665,6 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
             g_stats.recordMs += milliseconds(from, to);
         }
     } timer{t0};
-    g_stats.draws++;
     if (g_full || count == 0) return;
     IDirect3DVertexShader9* vs = nullptr;
     device->GetVertexShader(&vs);
@@ -655,10 +713,9 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
     }
     IDirect3DIndexBuffer9* ib = nullptr;
     device->GetIndices(&ib);
-    if (!ib || !managedStatic(vb) || !managedStatic(ib)) {
+    if (!ib) {
         g_stats.pool++;
         gfx::release(vb);
-        gfx::release(ib);
         return;
     }
     // The key: the mesh and its place (rounded to 2 cm and 1/2000; the recovery is exact to
@@ -666,17 +723,25 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
     uint64_t mesh = 14695981039346656037ull;
     const void* ids[2] = {vb, ib};
     const UINT draw[8] = {offset, stride, static_cast<UINT>(type), static_cast<UINT>(base), minIndex, vertices, start, count};
-    mesh = fnv(mesh, ids, sizeof(ids));
-    mesh = fnv(mesh, draw, sizeof(draw));
+    mesh = mixKey(mesh, ids, sizeof(ids));
+    mesh = mixKey(mesh, draw, sizeof(draw));
     uint64_t h = mesh;
     for (int r = 0; r < 4; r++) {
         for (int col = 0; col < 3; col++) {
-            const long long q = static_cast<long long>(floor(w[r][col] * (r == 3 ? 50.0 : 2000.0) + 0.5));
-            h = fnv(h, &q, sizeof(q));
+            const long long q = floorToInt(w[r][col] * (r == 3 ? 50.0 : 2000.0) + 0.5);
+            h = mixKey(h, &q, sizeof(q));
         }
     }
+    // Known: its buffers are held since it was kept, so they are the managed ones it had then
+    // (no need to ask the buffers for their pool on every draw).
     if (g_known.count(h)) {
         g_stats.known++;
+        gfx::release(vb);
+        gfx::release(ib);
+        return;
+    }
+    if (!managedStatic(vb) || !managedStatic(ib)) {
+        g_stats.pool++;
         gfx::release(vb);
         gfx::release(ib);
         return;
@@ -691,10 +756,10 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
     };
     // Places are looked up by mesh and 16 m cell (the cell and its neighbours): a block mesh
     // the track uses hundreds of times isn't compared with every copy.
-    const long long cellX = static_cast<long long>(floor(w[3][0] / 16.0)), cellZ = static_cast<long long>(floor(w[3][2] / 16.0));
+    const long long cellX = floorToInt(w[3][0] / 16.0), cellZ = floorToInt(w[3][2] / 16.0);
     auto bucket = [&](long long x, long long z) {
         const long long xz[2] = {x, z};
-        return fnv(mesh, xz, sizeof(xz));
+        return mixKey(mesh, xz, sizeof(xz));
     };
     // Kept already, under another rounding: its key leads there too from now on (bounded: with
     // the jitter missing the keys would change every frame).
@@ -975,6 +1040,17 @@ void reset(const char* why, bool log) {
     g_lastLog = GetTickCount();
     g_farBuilds = 0;
     g_stats = Stats();
+}
+
+void frameDone() {
+    g_stride = (g_frameDraws + kChecksPerFrame - 1) / kChecksPerFrame;
+    g_stride = g_stride < 1 ? 1 : (g_stride > kMaxStride ? kMaxStride : g_stride);
+    g_phase = (g_phase + 1) % g_stride;
+    g_frameDraws = 0;
+}
+
+void pauseRecording(bool paused) {
+    g_paused = paused;
 }
 
 unsigned keptMeshes() {

@@ -136,6 +136,13 @@ public:
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.
     bool init(IDirect3DDevice9* device, const std::wstring& shaderDir);
     bool ready() const { return m_ready; }
+    // Whether a frame since the last call wanted the CasterShadows maps (long shadows or the
+    // volumetric light, with a sun): while none does, the plugin pauses their recording.
+    bool consumeCastersWanted() {
+        const bool wanted = m_castersWanted;
+        m_castersWanted = false;
+        return wanted;
+    }
     void release();
     bool reloadShaders(IDirect3DDevice9* device);
     const std::string& lastError() const { return m_lastError; }
@@ -353,6 +360,7 @@ private:
     bool m_taaValid = false;
     bool m_temporalValid = false; // this frame continues the previous one (no camera cut)
     bool m_sunKnown = false;
+    bool m_castersWanted = false; // see consumeCastersWanted
 
     // Previous frame's camera (reprojection for TAA and motion blur).
     float m_prevView[16] = {};

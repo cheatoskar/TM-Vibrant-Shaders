@@ -2266,6 +2266,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Rain splashes land on it too.
     const bool wantLong = s.longShadows > 0.0f && s.shadowStrength > 0.0f && m_sunKnown;
     const bool wantVolume = s.volumetricLight > 0.0f && m_sunKnown;
+    if (wantLong || wantVolume) m_castersWanted = true;
     if (m_heightReset) {
         m_heightReset = false;
         m_heightValid = false;

@@ -36,6 +36,13 @@ struct Maps {
 void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
                 const float view[16], const float projection[16]);
 
+// Once a frame (Present): the next frame's share of the draws to check (recordDraw spreads its
+// work over frames on maps with many draws).
+void frameDone();
+// While no pipeline uses the maps (long shadows and volumetric light off, no sun), the draws
+// aren't checked at all: what is kept stays, recording goes on where it was when they're used again.
+void pauseRecording(bool paused);
+
 // Draws what is new into the maps (inside the pipeline's state save). sunWorld: towards the
 // light; camera: world position. False while neither map is complete (the height map's
 // shadows stay).

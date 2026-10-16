@@ -1705,6 +1705,13 @@ void castersTick() {
     }
     if (g_castersOn && !on) casters::reset("CasterShadows off");
     g_castersOn = on;
+    // The draws are checked only while a pipeline uses the maps (or did in the last 3 s: auto
+    // quality turns the effects off for moments, a preset glides in).
+    static DWORD s_wantedAt = 0;
+    const bool wanted = g_pipeline.consumeCastersWanted() | g_pipelineB.consumeCastersWanted();
+    if (wanted) s_wantedAt = GetTickCount();
+    casters::pauseRecording(!wanted && GetTickCount() - s_wantedAt > 3000);
+    casters::frameDone();
 }
 
 void onCameraEnd(void* camera, const engine::CameraInfo&) {
