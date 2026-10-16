@@ -2068,6 +2068,7 @@ void boot() {
 }
 
 void shutdown() {
+    overlay::shutdown();
     audio::shutdown();
     hook::remove();
 }
