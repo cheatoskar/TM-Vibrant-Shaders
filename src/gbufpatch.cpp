@@ -170,6 +170,34 @@ std::string debugNormal(const std::vector<Token>& t) {
     return std::string();
 }
 
+// GameLight: the light the shader multiplies the surface's colour with, by its editor debug view
+// "MDbg_LightDiffuse(X)": LDiffus on blocks ((Ambient + PreLightGen) * Occlusion + Lighting),
+// Light on the ground (at night its baked PreLightGen), LHdr / LAmbient+LDiffus on the car. The
+// tokens of X (names, members, + - * and numbers only: no calls); empty if there is none or it is a
+// constant. Whether X exists in the active #ifdef branch the compiler decides.
+std::string debugLight(const std::vector<Token>& t) {
+    for (size_t i = 0; i + 1 < t.size(); i++) {
+        if (t[i].text != "MDbg_LightDiffuse" || t[i + 1].text != "(") continue;
+        std::string expr;
+        bool named = false;
+        int depth = 1;
+        for (size_t j = i + 2; j < t.size(); j++) {
+            const std::string& s = t[j].text;
+            if (s == "(") depth++;
+            if (s == ")" && --depth == 0) return named ? expr : std::string();
+            if (isIdent(t[j])) {
+                if (is(t, j + 1, "(")) return std::string(); // a call: not a plain value
+                if (j == 0 || t[j - 1].text != ".") named = true;
+            } else if (!(s == "+" || s == "-" || s == "*" || s == "." || s == "(" || s == ")" || std::isdigit(static_cast<unsigned char>(s[0])))) {
+                return std::string();
+            }
+            expr += s;
+        }
+        return std::string();
+    }
+    return std::string();
+}
+
 bool declaredIn(const std::vector<Token>& t, size_t from, size_t to, const std::string& name) {
     for (size_t i = from; i + 1 < to; i++) {
         if (isVector3(t[i].text) && t[i + 1].text == name) return true;
@@ -278,8 +306,13 @@ void release(ID3DBlob*& blob) {
 
 } // namespace
 
-Patch patchSource(const char* source, size_t length, const char* profile) {
+Patch patchSource(const char* source, size_t length, const char* profile, Mode mode, bool dropLight) {
     Patch p;
+    const bool light = mode == Mode::Light;
+    if (mode == Mode::Off) {
+        p.reason = "not patched";
+        return p;
+    }
     if (!pixelProfile(profile)) {
         p.reason = "not a pixel shader of model 2 or 3";
         return p;
@@ -307,7 +340,7 @@ Patch patchSource(const char* source, size_t length, const char* profile) {
             p.reason = "writes " + f.semantic + " already";
             return p;
         }
-        if (f.name == "TmvsGbuf") {
+        if (f.name == "TmvsGbuf" || f.name == "TmvsLight") {
             p.reason = "patched already";
             return p;
         }
@@ -374,12 +407,16 @@ Patch patchSource(const char* source, size_t length, const char* profile) {
         return p;
     }
     // Eye to the surface (or back), world orientation: the vertex shaders build these from
-    // GbxEyeInVisual. Not PosInWorld (absolute) nor PosToEyeV.
-    const char* const kEyeFields[] = {"EyeToPos", "EyeToPosInW", "PosToEyeInW", "PosInW"};
+    // GbxEyeInVisual. Not PosInWorld (absolute). PosToEyeV (GbxEyeInVisual - Position, the
+    // object's own space) only for GameLight, whose ground shaders have no other: its length is the
+    // distance where the object isn't scaled (the ground), and the pipeline drops what doesn't
+    // match the depth anyway. The normal patch stays as it was (the game's dumped bytecode).
+    const char* const kEyeFields[] = {"EyeToPos", "EyeToPosInW", "PosToEyeInW", "PosInW", "PosToEyeV"};
+    const size_t eyeFields = light ? 5 : 4;
     std::string eye;
-    for (const char* name : kEyeFields) {
+    for (size_t k = 0; k < eyeFields; k++) {
         for (const Field& f : inFields) {
-            if (eye.empty() && f.name == name && isVector3(f.type) && memberUsedIn(t, bodyOpen, bodyClose, input, f.name)) {
+            if (eye.empty() && f.name == kEyeFields[k] && isVector3(f.type) && memberUsedIn(t, bodyOpen, bodyClose, input, f.name)) {
                 eye = f.name;
                 p.eyeSemantic = f.semantic;
             }
@@ -401,8 +438,10 @@ Patch patchSource(const char* source, size_t length, const char* profile) {
             }
         }
     }
-    if (normal.empty()) {
-        p.reason = "no world normal";
+    // GameLight: the shader's light (the ground shaders have one, but no normal of their own).
+    const std::string lightExpr = light && !dropLight ? debugLight(t) : std::string();
+    if (normal.empty() && lightExpr.empty()) {
+        p.reason = light ? "no world normal, no light" : "no world normal";
         return p;
     }
     if (eye.empty()) {
@@ -413,17 +452,23 @@ Patch patchSource(const char* source, size_t length, const char* profile) {
     // Each `return Output;` becomes `{ Output.TmvsGbuf = ...; return Output; }` (a block: safe
     // after an `if` too), the field goes last into PS_OUTPUT. From the end, so earlier
     // positions stay valid.
-    const std::string assign = output + ".TmvsGbuf = float4(normalize((float3)(" + normalExpr + ")), length((float3)" + input + "." + eye + ")); ";
+    const std::string distance = "length((float3)" + input + "." + eye + ")";
+    std::string assign = output + ".TmvsGbuf = float4(" + (normal.empty() ? std::string("0, 0, 0") : "normalize((float3)(" + normalExpr + "))") + ", " +
+                         distance + "); ";
+    if (light) assign += output + ".TmvsLight = " + (lightExpr.empty() ? std::string("0") : "float4((float3)(" + lightExpr + "), " + distance + ")") + "; ";
     std::string out = s;
     for (size_t r = returns.size(); r-- > 0;) {
         const size_t at = t[returns[r]].begin, after = t[returns[r] + 2].end;
         out.insert(after, " }");
         out.insert(at, "{ " + assign);
     }
-    out.insert(t[outClose].begin, "\tfloat4 TmvsGbuf : COLOR1;\n");
+    out.insert(t[outClose].begin, light ? "\tfloat4 TmvsGbuf : COLOR1;\n\tfloat4 TmvsLight : COLOR2;\n" : "\tfloat4 TmvsGbuf : COLOR1;\n");
     p.patched = true;
     p.source.swap(out);
-    p.reason = "normal " + normal + ", eye " + eye;
+    p.light = lightExpr;
+    p.normal = !normal.empty();
+    p.reason = (normal.empty() ? std::string("no normal") : "normal " + normal) + ", eye " + eye;
+    if (light) p.reason += lightExpr.empty() ? ", no light" : ", light " + lightExpr;
     return p;
 }
 
@@ -489,12 +534,12 @@ int instructionCount(const void* code, size_t bytes) {
     return count;
 }
 
-HRESULT compile(CompileFn fn, bool patch, const char* source, UINT length, const Macro* defines, Include* include, const char* function,
+HRESULT compile(CompileFn fn, Mode mode, const char* source, UINT length, const Macro* defines, Include* include, const char* function,
                 const char* profile, DWORD flags, ID3DBlob** shader, ID3DBlob** errors, void** constants, Outcome* outcome) {
     if (outcome) *outcome = Outcome();
     // The game's own compile, as it asked for it: what it gets unless the patch is sure.
     const HRESULT hr = fn(source, length, defines, include, function, profile, flags, shader, errors, constants);
-    if (!patch || !pixelProfile(profile)) return hr;
+    if (mode == Mode::Off || !pixelProfile(profile)) return hr;
     if (FAILED(hr) || !source || !shader || !*shader) {
         if (outcome) {
             outcome->kind = Outcome::Skipped;
@@ -502,7 +547,8 @@ HRESULT compile(CompileFn fn, bool patch, const char* source, UINT length, const
         }
         return hr;
     }
-    const Patch p = patchSource(source, length ? length : static_cast<UINT>(strlen(source)), profile);
+    const size_t sourceLength = length ? length : strlen(source);
+    Patch p = patchSource(source, sourceLength, profile, mode);
     if (!p.patched) {
         if (outcome) {
             outcome->kind = Outcome::Skipped;
@@ -513,18 +559,41 @@ HRESULT compile(CompileFn fn, bool patch, const char* source, UINT length, const
     ID3DBlob* code = nullptr;
     ID3DBlob* messages = nullptr;
     void* table = nullptr;
-    const HRESULT phr = fn(p.source.c_str(), static_cast<UINT>(p.source.size()), defines, include, function, profile, flags, &code, &messages,
-                           constants ? &table : nullptr);
+    HRESULT phr = E_FAIL;
     std::string why;
-    if (FAILED(phr) || !code) {
-        why = "compile: " + firstLine(messages);
-    } else if (!writesColorOutput(code->GetBufferPointer(), code->GetBufferSize(), 1)) {
-        why = "the result writes no COLOR1";
-    } else {
-        std::string moved;
-        if (!sameConstants((*shader)->GetBufferPointer(), (*shader)->GetBufferSize(), code->GetBufferPointer(), code->GetBufferSize(), &moved)) {
-            why = "constants: " + moved;
+    // Mode::Light: when the shader's light doesn't make it (it lives in an #ifdef branch that
+    // isn't active, or the shader runs out of room), the same patch with 0 for the light: the
+    // normal as GameGBuffer had it, and COLOR2 still written, so both targets keep coming from
+    // the same draw.
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (attempt == 1) {
+            if (mode != Mode::Light || p.light.empty()) break;
+            const Patch fallback = patchSource(source, sourceLength, profile, mode, true);
+            if (!fallback.patched) break;
+            release(code);
+            release(messages);
+            if (table) static_cast<IUnknown*>(table)->Release();
+            table = nullptr;
+            const std::string first = why;
+            p = fallback;
+            p.reason += " (the light: " + first + ")";
+            why.clear();
         }
+        phr = fn(p.source.c_str(), static_cast<UINT>(p.source.size()), defines, include, function, profile, flags, &code, &messages,
+                 constants ? &table : nullptr);
+        if (FAILED(phr) || !code) {
+            why = "compile: " + firstLine(messages);
+        } else if (!writesColorOutput(code->GetBufferPointer(), code->GetBufferSize(), 1)) {
+            why = "the result writes no COLOR1";
+        } else if (mode == Mode::Light && !writesColorOutput(code->GetBufferPointer(), code->GetBufferSize(), 2)) {
+            why = "the result writes no COLOR2";
+        } else {
+            std::string moved;
+            if (!sameConstants((*shader)->GetBufferPointer(), (*shader)->GetBufferSize(), code->GetBufferPointer(), code->GetBufferSize(), &moved)) {
+                why = "constants: " + moved;
+            }
+        }
+        if (why.empty()) break;
     }
     if (!why.empty()) {
         release(code);
@@ -551,6 +620,7 @@ HRESULT compile(CompileFn fn, bool patch, const char* source, UINT length, const
     if (outcome) {
         outcome->kind = Outcome::Patched;
         outcome->detail = p.reason;
+        outcome->light = !p.light.empty();
     }
     return phr;
 }

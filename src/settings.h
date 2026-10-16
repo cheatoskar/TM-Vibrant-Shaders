@@ -36,6 +36,7 @@ struct Settings {
     bool shadeMenuBars = true;     // replay menu: the rows under its bars show the shaded image (mirrored) instead of leftovers of earlier frames
     bool cleanWater = true;        // the game's water mirrors only what it can see, unblurred (no blotches of the ramps over it); off = as before
     bool gameGBuffer = false;      // the game's material shaders also write their normal (gbufpatch.cpp): AO, shadows, reflections and light on the real normal (needs GameHdr; patched from the start)
+    bool gameLight = false;        // ... and the light they lit each surface with (COLOR2): under a night sky the darkening and tint step back where the game's lamps light a surface, by that light, not by the image (needs GameHdr and EngineLights; patched from the start)
     // Neon light trail behind the car, kept for the whole run (0 = off).
     float neonTrail = 0.0f;
     float trailColor[3] = {0.1f, 0.65f, 1.0f};
