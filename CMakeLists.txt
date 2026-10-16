@@ -61,7 +61,8 @@ set(TMVS_ENTRIES
   PS_SkyClear PS_SkyStars PS_SkyBlackHole PS_SkyAurora PS_SkyRing PS_AuroraHalf PS_SkyAverage PS_Shelter PS_Clouds PS_Reflect PS_SpillDown PS_SpillBlur PS_Lighting PS_RainDrop PS_RainSplash PS_Spray PS_TrailPoint PS_Trail PS_SnowFlake
   PS_Focus PS_DofBlur PS_Cinematic
   PS_RayMask PS_RayBlur PS_BloomDown PS_BloomUp PS_Luminance PS_Adapt PS_Final PS_FXAA PS_TAA PS_Sharpen PS_Copy
-  PS_CopyDepth PS_WaterLevel PS_Resolve PS_LightingEngine PS_SpillDownEngine PS_LightGridInit PS_LightGridSweep PS_PrepareGBuffer)
+  PS_CopyDepth PS_WaterLevel PS_Resolve PS_LightingEngine PS_SpillDownEngine PS_LightGridInit PS_LightGridSweep PS_PrepareGBuffer
+  PS_LampSource PS_LampDown PS_LampUp)
 
 file(GLOB TMVS_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
 list(SORT TMVS_SDK_BINS ORDER DESCENDING)

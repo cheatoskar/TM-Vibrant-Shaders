@@ -21,7 +21,7 @@ const char* const kEntryPoints[] = {
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
-    "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer",
+    "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer", "PS_LampSource", "PS_LampDown", "PS_LampUp",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -275,6 +275,9 @@ void Pipeline::destroyTargets() {
     for (auto& t : m_rays) t.destroy();
     for (auto& t : m_bloomDown) t.destroy();
     for (auto& t : m_bloomUp) t.destroy();
+    m_lampSource.destroy();
+    for (auto& t : m_lampDown) t.destroy();
+    for (auto& t : m_lampUp) t.destroy();
     m_luminance.destroy();
     for (auto& t : m_adapted) t.destroy();
     m_ldr.destroy();
@@ -2158,7 +2161,20 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // of the ramps over the pools) and takes no dry-track blur. Only where the engine tells the
     // water's height (or it was measured): the colour guess also takes blue kerbs for water.
     const bool waterKnown = in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown);
-    const float waterConstants[4] = {s.cleanWater && waterKnown ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    // c51 (EngineLights, the lamps: what the game's additive draws added). Floodlights: their own
+    // strength, apart from the neon borders (BorderGlow) and HighlightBoost (1 = as before). y: the
+    // part taken out of their core, 1 - Floodlights x (1 - LampGlare): LampGlare's part is spread
+    // around them in the final pass (0 = as before; below 0 the core gets brighter). z (LampSkyHalos):
+    // the part added over the sky as well, at night only (by day the game's sun glow is an added
+    // light too). w: Floodlights for the light they spill onto their surroundings (NeonLight).
+    const bool lampMask = engineLights && in.added;
+    const bool lampLight = lampMask && (s.lampGlare > 0.0f || s.lampHaze > 0.0f);
+    const float floodlights = lampMask ? fmaxf(s.floodlights, 0.0f) : 1.0f;
+    const float lampGlareTaken = lampLight ? fminf(fmaxf(s.lampGlare, 0.0f), 1.0f) : 0.0f;
+    const float lampCore = floodlights * (1.0f - lampGlareTaken);
+    const bool lampNight = skyReplacesSun(s) || (in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night);
+    const float lampSky = s.lampSkyHalos && lampMask && lampNight ? lampCore : 0.0f;
+    const float waterConstants[4] = {s.cleanWater && waterKnown ? 1.0f : 0.0f, 1.0f - lampCore, lampSky, floodlights};
     device->SetPixelShaderConstantF(51, waterConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
@@ -2604,6 +2620,63 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         runPass(device, kBloomUp, m_bloomUp[i]);
     }
 
+    // 7b. Lamp glare (LampGlare, LampHaze): only the lamps' light (what the game's additive draws
+    // added) at a quarter of the resolution, then a pyramid from an eighth down to 1/128, summed
+    // back up with weights per level that shape its tail. Normalised: the haze glow carries as much
+    // light as the haze took from the lamps (LampHaze 1), the glare a part of what the lighting
+    // pass took from their core (LampGlare).
+    float lampScale[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    bool lampReady = false;
+    if (lampLight) {
+        UINT lw = (in.width + 3) / 4, lh = (in.height + 3) / 4;
+        lampReady = m_lampSource.create(device, lw, lh, D3DFMT_A16B16G16R16F);
+        for (int i = 0; i < kLampLevels && lampReady; i++) {
+            lw = lw > 3 ? (lw + 1) / 2 : 2;
+            lh = lh > 3 ? (lh + 1) / 2 : 2;
+            lampReady = m_lampDown[i].create(device, lw, lh, D3DFMT_A16B16G16R16F) &&
+                        (i == kLampLevels - 1 || m_lampUp[i].create(device, lw, lh, D3DFMT_A16B16G16R16F));
+        }
+    }
+    if (lampReady) {
+        bind(device, 0, in.hdr, true);
+        bind(device, 1, m_nd.texture, false);
+        bind(device, 14, in.added, true);
+        runPass(device, kLampSource, m_lampSource);
+        device->SetTexture(14, nullptr);
+        const gfx::Target* above = &m_lampSource;
+        for (int i = 0; i < kLampLevels; i++) {
+            bind(device, 0, above->texture, true);
+            passConstants(device, 1.0f / above->width, 1.0f / above->height);
+            runPass(device, kLampDown, m_lampDown[i]);
+            above = &m_lampDown[i];
+        }
+        // Weight of each wider level against the one above it. Above 1 the wide levels carry more:
+        // a long soft tail that reaches the arch and the air around a floodlight (0.7, most of it
+        // close to the lamp, only filled the gaps between the bulbs again: the same flat slab). The
+        // haze's light lies wide, scattered in the air between the camera and the lamp.
+        const float glareStep = 1.2f, hazeStep = 1.0f;
+        float glareNorm = 0.0f, hazeNorm = 0.0f, glareLevel = 1.0f, hazeLevel = 1.0f;
+        for (int i = 0; i < kLampLevels; i++) {
+            glareNorm += glareLevel;
+            hazeNorm += hazeLevel;
+            glareLevel *= glareStep;
+            hazeLevel *= hazeStep;
+        }
+        for (int i = kLampLevels - 2; i >= 0; i--) {
+            const gfx::Target& lower = (i == kLampLevels - 2) ? m_lampDown[kLampLevels - 1] : m_lampUp[i + 1];
+            bind(device, 0, lower.texture, true);
+            bind(device, 1, m_lampDown[i].texture, true);
+            passConstants(device, 1.0f / lower.width, 1.0f / lower.height, glareStep, hazeStep);
+            runPass(device, kLampUp, m_lampUp[i]);
+        }
+        // Of the light taken from the core, 40% comes back as glare. All of it was too much: the
+        // lamps carry as much light as the rest of the night scene (A01's start: 0.05 a pixel), and
+        // spread out it washed the scene grey. The rest was clipped to white in the core anyway.
+        // The source holds the lamps' light at Floodlights 1.
+        lampScale[0] = floodlights * lampGlareTaken * 0.4f / glareNorm;
+        lampScale[1] = floodlights * fmaxf(s.lampHaze, 0.0f) / hazeNorm;
+    }
+
     // 8. Exposure (extra cameras reuse the adapted value).
     if (temporal && !in.freeze) {
         bind(device, 0, m_bloomDown[3].texture, true);
@@ -2674,6 +2747,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
     passConstants(device, 1.0f / norm, 0.0f, s.nightSurfaces);
+    // c33 (final pass): the lamp glare's and the lamp haze's strength (0: off, s10 not read).
+    device->SetPixelShaderConstantF(33, lampScale, 1);
+    if (lampReady) bind(device, 10, m_lampUp[0].texture, true);
     // Disabled post passes are skipped entirely, not just passed through.
     const bool fxaa = s.fxaa && post;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
@@ -2687,6 +2763,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         runPass(device, kFinal, m_ldr);
         current = m_ldr.texture;
     }
+    if (lampReady) device->SetTexture(10, nullptr); // the next frame draws into it
     if (fxaa) {
         bind(device, 0, current, true);
         passConstants(device, 1.0f / in.width, 1.0f / in.height);

@@ -59,6 +59,7 @@ float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, o
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
 float4 u_Water2    : register(c51); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
+                                    // y (EngineLights): the part of the added light taken from the lamp's core, 1 - Floodlights x (1 - LampGlare) (0 = as before, below 0 brighter); z: the part added over the sky (LampSkyHalos: Floodlights x (1 - LampGlare); 0 = dropped, as before); w: Floodlights for the light they spill (1 = as before)
 float4 u_LightGrid : register(c52); // LongShadowQuality 1: horizontal light direction (world x, z), the light grid's corner along it and across it (m)
 float4 u_LightGrid2 : register(c53); // 1 / light grid size (m), horizontal length of the light direction, margin growth per m of ray, range (m; 0 = s2 is the height map)
 float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
@@ -2393,6 +2394,9 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
             c = lerp(c, snowHaze(skyAvg.rgb), saturate(u_Snow.x * 0.35) * (1.0 - saturate(rd.y * 1.5)));
             c = lerp(c, snowHaze(skyAvg.rgb), veil * 0.7);
         }
+        // LampSkyHalos: a lamp's halo reaches past what the lamp sits on, over the sky; the sky
+        // above replaced it and cut the halo at the silhouette (a hard edge along the arch).
+        [branch] if (engine && u_Water2.z > 0.0) c += added * (1.0 + u_Rays.w * u_Engine.y) * u_Water2.z;
         return float4(c, 1);
     }
 
@@ -2679,6 +2683,10 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     c += glow * (1.0 - 0.6 * saturate(fogAmount)); // lights shine through the haze
     // The game's glows, brighter by the highlight boost (light source intensity).
     if (engine) c += added * (1.0 + u_Rays.w * u_Engine.y) * (1.0 - 0.6 * saturate(fogAmount));
+    // Floodlights (their own strength) and LampGlare (this part of them is spread around the lamp
+    // in the final pass instead): taken off or added on. A branch: without it the line above came
+    // out a bit different, 1 in 255 on a few pixels.
+    [branch] if (engine && u_Water2.y != 0.0) c -= added * (1.0 + u_Rays.w * u_Engine.y) * (1.0 - 0.6 * saturate(fogAmount)) * u_Water2.y;
     // Light the game added on top (headlight pools) is no darker than the game drew it: the
     // night darkening turned the pools grey and flat. Only the part the game added (above
     // the night-darkened surface), a little below its brightness so it keeps a falloff.
@@ -2751,7 +2759,8 @@ float4 PS_SpillDownEngine(float2 uv : TEXCOORD0) : COLOR0 {
             float lamp = mat.r * saturate(peak * u_Clean.z + u_Clean.w);
             float neon = neonStrip(c, length(viewPosition(suv, nd.w)), mat) * u_Engine.w;
             // On the 0..1 range the guess had: the float image's 2..3 would burn the road white.
-            float3 light = max(min(added, 1.0), min(c, 1.0) * max(lamp, neon)) * (nd.w < SKY_Z ? 1.0 : 0.0);
+            // Floodlights (u_Water2.w): the lamps light their surroundings by their own strength.
+            float3 light = max(min(added * u_Water2.w, 1.0), min(c, 1.0) * max(lamp, neon)) * (nd.w < SKY_Z ? 1.0 : 0.0);
             // White lamps light less than coloured ones, as they glow less: the stadium's rows of
             // floodlights washed the roof around them out to a white haze.
             float lp = max(light.r, max(light.g, light.b));
@@ -2973,6 +2982,70 @@ float4 PS_BloomUp(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // ---------------------------------------------------------------------------------
+// Lamp glare (LampGlare, LampHaze; EngineLights): the lamps' own light, spread wide and soft.
+// The bloom spreads everything bright (the neon borders too) and mostly close by; this takes
+// only the light the game's additive draws added (floodlight heads and their halos, start
+// lights, car lights), not the lamp material (screens, banners, lit walls) or the neon strips.
+// Quarter resolution, then a pyramid from an eighth down to 1/128.
+// ---------------------------------------------------------------------------------
+// The haze between the camera and a point `dist` away along rd (0..1): the lighting pass's
+// aerial perspective (written out there: it is at its instruction limit).
+float hazeAmount(float3 rd, float dist) {
+    float density = (u_Atmo.x * 0.0009 + u_Snow.x * 0.005) * u_Sky3.w;
+    float falloff = max(u_Atmo.y * 0.012, 1e-4);
+    float base = density * exp(-u_UpView.w * falloff);
+    float f = abs(rd.y) > 1e-4 ? base * (1.0 - exp(-dist * rd.y * falloff)) / (rd.y * falloff) : base * dist;
+    return saturate(1.0 - exp(-max(f, 0.0)));
+}
+
+// s0 = the game's float image (bilinear), s14 = its added light (bilinear), s1 = full normal/depth.
+// out.rgb = the lamps' light as the lighting pass adds it (x the highlight boost, less what the
+// haze takes on the way), out.a = what the haze took (luminance): it scatters around the lamp.
+float4 PS_LampSource(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 sum = 0;
+    // Four bilinear taps cover the 4x4 block: a bulb a few pixels wide isn't missed.
+    [unroll] for (int j = 0; j < 2; j++) {
+        [unroll] for (int i = 0; i < 2; i++) {
+            float2 suv = uv + (float2(i, j) * 2.0 - 1.0) * u_Screen.zw;
+            float3 cGame = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
+            sum += max(toLinear(cGame) - toLinear(max(cGame - tex2Dlod(s14, float4(suv, 0, 0)).rgb, 0.0)), 0.0);
+        }
+    }
+    float3 added = sum * 0.25 * (1.0 + u_Rays.w * u_Engine.y);
+    // The haze once for the block (the pass reads mostly bandwidth: three full-resolution
+    // targets). A halo over the sky: the lighting pass doesn't haze it either.
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float3 v = viewPosition(uv, 1.0);
+    float fog = z < SKY_Z ? hazeAmount(viewToWorldDir(normalize(v)), length(v) * z) : 0.0;
+    return float4(added * (1.0 - 0.6 * fog), luma(added) * 0.6 * fog);
+}
+
+// s0 = the level above, u_Pass0.xy = its texel: the bloom's 13-tap filter, on all four channels.
+float4 PS_LampDown(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 t = u_Pass0.xy;
+    float4 r = (tex2D(s0, uv + t * float2(-1, -1)) + tex2D(s0, uv + t * float2(1, -1)) + tex2D(s0, uv + t * float2(-1, 1)) +
+                tex2D(s0, uv + t * float2(1, 1))) * 0.125;
+    r += (tex2D(s0, uv + t * float2(-2, -2)) + tex2D(s0, uv + t * float2(2, -2)) + tex2D(s0, uv + t * float2(-2, 2)) +
+          tex2D(s0, uv + t * float2(2, 2))) * 0.03125;
+    r += (tex2D(s0, uv + t * float2(0, -2)) + tex2D(s0, uv + t * float2(-2, 0)) + tex2D(s0, uv + t * float2(2, 0)) +
+          tex2D(s0, uv + t * float2(0, 2))) * 0.0625;
+    return r + tex2D(s0, uv) * 0.125;
+}
+
+// s0 = the lower level (its sum so far), s1 = this level, u_Pass0.xy = lower texel, u_Pass0.z / w =
+// the lower level's weight for the glare (rgb) / the haze (a). A weight near 1 keeps much of the
+// light in the wide levels: a long, soft tail instead of a tight glow.
+float4 PS_LampUp(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 t = u_Pass0.xy;
+    float4 s = tex2D(s0, uv + t * float2(-1, -1)) + tex2D(s0, uv + t * float2(1, -1)) + tex2D(s0, uv + t * float2(-1, 1)) +
+               tex2D(s0, uv + t * float2(1, 1));
+    s += (tex2D(s0, uv + t * float2(0, -1)) + tex2D(s0, uv + t * float2(-1, 0)) + tex2D(s0, uv + t * float2(1, 0)) +
+          tex2D(s0, uv + t * float2(0, 1))) * 2.0;
+    s += tex2D(s0, uv) * 4.0;
+    return tex2D(s1, uv) + s / 16.0 * u_Pass0.zzzw;
+}
+
+// ---------------------------------------------------------------------------------
 // Auto exposure: average log luminance (1x1) and temporal adaptation.
 // ---------------------------------------------------------------------------------
 // s0 = small bloom level (HDR), out.r = average log2 luminance
@@ -3097,6 +3170,14 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 
     float3 bloom = tex2D(s1, uv).rgb;
     c = lerp(c, bloom, u_Bloom.x);
+    // Lamp glare (s10, an eighth of the resolution): some of the light the lighting pass took from
+    // the lamps' core (LampGlare, u_Pass1.x with the pyramid's weights), and the light the haze
+    // took from them, scattered around them in the air (LampHaze, u_Pass1.y), in their colour.
+    [branch] if (u_Pass1.x + u_Pass1.y > 0.0) {
+        float4 lamp = tex2D(s10, uv);
+        float3 tint = min((lamp.rgb + 1e-5) / (luma(lamp.rgb) + 1e-5), 3.0);
+        c += lamp.rgb * u_Pass1.x + tint * lamp.a * u_Pass1.y;
+    }
 
     // Light shafts.
     if (u_SunScreen.w > 0.0) {
