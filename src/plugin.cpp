@@ -107,6 +107,7 @@ Pipeline g_pipeline;
 AutoQuality g_autoQuality;
 bool g_shadedThisFrame = false;
 bool g_gameplayThisFrame = false; // a gameplay camera (not a menu background) was shaded
+bool g_gameplayLastFrame = false; // and in the frame before (at the next frame's start)
 float g_jitterUV[2] = {};         // TAA jitter of this frame (uv shift of the image)
 UINT g_frameWidth = 0, g_frameHeight = 0;
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
@@ -129,6 +130,12 @@ gfx::Target g_partOut;
 struct ClearedRows {
     IDirect3DSurface9* target = nullptr;
     unsigned frame = ~0u;
+    // What the log needs to tell a real clear from a wrong guess: the rows it covered (viewport,
+    // rects and scissor rect), its colour, the scissor test.
+    LONG top = 0, bottom = 0;
+    D3DCOLOR color = 0;
+    DWORD rects = 0;
+    bool scissor = false;
 };
 ClearedRows g_clearedTop, g_clearedBottom;
 // GameHdr: the main camera draws into a float target instead of the game's 8-bit one, so the
@@ -982,22 +989,41 @@ void smoothLook(Settings& s, float now) {
 // edges, fills those rows instead. Not where the game cleared them itself this frame (bars it
 // wants black), not for parts that leave columns free (the MediaTracker editor's panels).
 void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3DSURFACE_DESC& desc, const RECT& area, bool wanted) {
-    if (!wanted || area.left != 0 || area.right != static_cast<LONG>(desc.Width)) return;
-    const bool top = area.top > 0 && !(g_clearedTop.target == target && g_clearedTop.frame == g_frame);
-    const bool bottom = area.bottom < static_cast<LONG>(desc.Height) && !(g_clearedBottom.target == target && g_clearedBottom.frame == g_frame);
-    static unsigned s_logged = 0; // each outcome once: 0 left alone (cleared by the game), 1 filled, 2 failed
-    int state = 0;
+    // Every change of what happens to the rows goes into the log (a limited number of lines): the
+    // replay menu's bars came back with leftovers in a build where the log had only said it once.
+    static int s_last = -1, s_lines = 0;
+    auto note = [](int what) {
+        if (what == s_last || s_lines >= 40) return false;
+        s_last = what;
+        s_lines++;
+        return true;
+    };
+    if (!wanted) return;
+    if (area.left != 0 || area.right != static_cast<LONG>(desc.Width)) {
+        if (note(8)) TMVS_LOG("scene: the camera's part (%ld,%ld .. %ld,%ld) leaves columns free: rows outside it left alone", area.left, area.top, area.right, area.bottom);
+        return;
+    }
+    const bool clearedTop = g_clearedTop.target == target && g_clearedTop.frame == g_frame;
+    const bool clearedBottom = g_clearedBottom.target == target && g_clearedBottom.frame == g_frame;
+    const bool top = area.top > 0 && !clearedTop;
+    const bool bottom = area.bottom < static_cast<LONG>(desc.Height) && !clearedBottom;
+    int state = 0; // 0 left alone (cleared by the game), 1 filled, 2 failed
     if (top || bottom) state = g_pipeline.fillBars(device, g_partOut.texture, target, area, top, bottom) ? 1 : 2;
-    if (!(s_logged & (1u << state))) {
-        s_logged |= 1u << state;
-        if (state == 1) {
-            TMVS_LOG("scene: rows outside the camera's band (%ld above, %ld below) hold earlier frames: filled with the shaded band, mirrored",
-                     top ? area.top : 0L, bottom ? static_cast<LONG>(desc.Height) - area.bottom : 0L);
-        } else if (state == 2) {
-            TMVS_LOG("scene: filling the rows outside the camera's band failed: left as the game had them");
-        } else {
-            TMVS_LOG("scene: the game cleared the rows outside the camera's band itself: left alone");
-        }
+    if (!note(state * 4 + (top ? 1 : 0) + (bottom ? 2 : 0))) return;
+    if (state == 1) {
+        TMVS_LOG("scene: rows outside the camera's band (%ld above, %ld below; band %ldx%ld at %ld) hold earlier frames: filled with the shaded band, mirrored",
+                 top ? area.top : 0L, bottom ? static_cast<LONG>(desc.Height) - area.bottom : 0L, area.right - area.left, area.bottom - area.top, area.top);
+    } else if (state == 2) {
+        TMVS_LOG("scene: filling the rows outside the camera's band (%ld..%ld) failed: left as the game had them", area.top, area.bottom);
+    }
+    // Rows the game cleared itself this frame (left alone): which clear it was.
+    const ClearedRows* clears[2] = {clearedTop && area.top > 0 ? &g_clearedTop : nullptr,
+                                    clearedBottom && area.bottom < static_cast<LONG>(desc.Height) ? &g_clearedBottom : nullptr};
+    for (int i = 0; i < 2; i++) {
+        const ClearedRows* c = clears[i];
+        if (!c) continue;
+        TMVS_LOG("scene: the game cleared the rows %s the camera's band (%ld..%ld) itself this frame: rows %ld..%ld, colour %08lx, %lu rects, scissor test %s: left alone",
+                 i ? "below" : "above", area.top, area.bottom, c->top, c->bottom, c->color, c->rects, c->scissor ? "on" : "off");
     }
 }
 
@@ -1048,6 +1074,20 @@ void processScene(IDirect3DDevice9* device) {
     if (g_scene.haveLight && g_scene.projection[14] > -1.0f) {
         const float dayTime = engine::mapDayTime();
         Config::get().onMoodDetected(dayTime >= 0.0f ? moodOfDayTime(dayTime) : classifyMood(g_scene.lightColor));
+        // The game's light changing its kind during a map (the moon of a real night turning into
+        // a sun: reported in end-of-race replays), for the log.
+        static int s_lightMood = -1, s_lightMap = -1, s_lightLines = 0;
+        const int mood = static_cast<int>(classifyMood(g_scene.lightColor));
+        if (engine::mapLoads() != s_lightMap) {
+            s_lightMap = engine::mapLoads();
+            s_lightMood = mood;
+        } else if (mood != s_lightMood && s_lightLines < 20) {
+            s_lightLines++;
+            TMVS_LOG("engine: the game's light changed from mood %d to %d (colour %.2f %.2f %.2f, direction %.2f %.2f %.2f, cinematic %d, real night %d)",
+                     s_lightMood, mood, g_scene.lightColor[0], g_scene.lightColor[1], g_scene.lightColor[2], g_scene.lightDirection[0],
+                     g_scene.lightDirection[1], g_scene.lightDirection[2], engine::cinematicActive() ? 1 : 0, engine::mapLitAtNight() ? 1 : 0);
+            s_lightMood = mood;
+        }
     }
 
     hook::InternalScope internal;
@@ -1093,11 +1133,14 @@ void processScene(IDirect3DDevice9* device) {
                        static_cast<LONG>(viewport.Y + viewport.Height)};
     const UINT width = part ? viewport.Width : desc.Width, height = part ? viewport.Height : desc.Height;
     {
-        static bool s_loggedPart = false;
-        if (part && !s_loggedPart) {
-            s_loggedPart = true;
+        // Each time it starts (a limited number of lines): the replay menu after every race.
+        static bool s_wasPart = false;
+        static int s_partLines = 0;
+        if (part && !s_wasPart && s_partLines < 20) {
+            s_partLines++;
             TMVS_LOG("scene: the camera draws into part of the screen (%ux%u at %u,%u): shading that part", width, height, viewport.X, viewport.Y);
         }
+        s_wasPart = part;
     }
     if (!g_pipeline.ready() && (g_pipelineFailed || !g_pipeline.init(device, g_dev.shaderDir))) {
         g_pipelineFailed = true;
@@ -1188,7 +1231,8 @@ void processScene(IDirect3DDevice9* device) {
         }
     }
     {
-        // Neon trail: a restart or a new map starts it over, a respawn starts a new line.
+        // Neon trail: a new map starts it over, a restart starts a new run (the earlier ones stay
+        // as TrailKeepRuns says), a respawn starts a new line.
         static int s_resets = -1, s_respawns = -1;
         const int resets = engine::raceResets(), respawns = engine::respawns();
         static int s_maps = -1;
@@ -1196,14 +1240,16 @@ void processScene(IDirect3DDevice9* device) {
             s_maps = engine::mapLoads();
             g_pipeline.resetSeaLevel();
             g_pipelineB.resetSeaLevel(); // the compare split's preset side (its history is its own)
+            g_pipeline.resetTrail();
+            g_pipelineB.resetTrail();
         }
         if (resets != s_resets) {
-            if (s_resets >= 0) TMVS_LOG("engine: race reset (trail cleared)");
+            if (s_resets >= 0) TMVS_LOG("engine: race reset (trail: new run)");
             s_resets = resets;
-            g_pipeline.resetTrail();
+            g_pipeline.newTrailRun();
             g_pipeline.resetHeights();
             g_pipeline.resetCeilings();
-            g_pipelineB.resetTrail();
+            g_pipelineB.newTrailRun();
             g_pipelineB.resetHeights();
             g_pipelineB.resetCeilings();
         }
@@ -1426,6 +1472,9 @@ void onFrameBegin() {
         // A night sky (or the black hole) has no sun: the game's halo and flare go too.
         engine::hideSunFlare(s.enabled && Pipeline::skyReplacesSun(s));
         engine::hideGameSky(s.enabled && Pipeline::skyReplacesSun(s) && !s.gameSkyClouds);
+        // Real night stays midnight: when the weather's clock moved away (logged), it jumps back
+        // before this frame is drawn. Only in gameplay (the weather of a map left may be gone).
+        if (g_gameplayLastFrame && s.enabled) engine::keepNight(true);
     }
     updateVideoExport();
     updateJitter();
@@ -1733,7 +1782,7 @@ void onSetTransform(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* m) {
 
 // Notes which game clears of this frame reached the top or bottom row of their target (the
 // viewport, or the rects inside it). Only for fillBars: those rows are the game's own then.
-void onClear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags) {
+void onClear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color) {
     unbindGBuffer(device); // a Clear would wipe the normals too
     if (!(flags & D3DCLEAR_TARGET)) return;
     IDirect3DSurface9* target = nullptr;
@@ -1753,8 +1802,21 @@ void onClear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD 
         top = lo > top ? lo : top;
         bottom = hi < bottom ? hi : bottom;
     }
-    if (top <= 0) g_clearedTop = {target, g_frame};
-    if (bottom >= static_cast<LONG>(desc.Height)) g_clearedBottom = {target, g_frame};
+    // A D3D9 Clear keeps to the scissor rect while the scissor test is on: a clear with the whole
+    // screen as its viewport but the camera's band as its scissor rect leaves the rows above and
+    // below as they were (it counted as the game's own black bars, the leftovers stayed).
+    DWORD scissorTest = FALSE;
+    device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
+    if (scissorTest) {
+        RECT scissor{};
+        device->GetScissorRect(&scissor);
+        top = scissor.top > top ? scissor.top : top;
+        bottom = scissor.bottom < bottom ? scissor.bottom : bottom;
+    }
+    if (bottom <= top) return;
+    const ClearedRows cleared = {target, g_frame, top, bottom, color, count, scissorTest != FALSE};
+    if (top <= 0) g_clearedTop = cleared;
+    if (bottom >= static_cast<LONG>(desc.Height)) g_clearedBottom = cleared;
 }
 
 void onCreatePixelShader(IDirect3DPixelShader9* shader, const DWORD* code) {
@@ -1809,13 +1871,18 @@ void onPresent(IDirect3DDevice9* device) {
     const int cinematic = engine::cinematicActive() ? 1 : 0;
     if (cinematic != s_cinematic) {
         s_cinematic = cinematic;
-        TMVS_LOG("engine: cinematic %s (sources %u)", cinematic ? "on" : "off", engine::cinematicSources());
+        // The game's lens flares since the last switch (the sun came back in end-of-race replays).
+        unsigned other = 0, sun = 0, hidden = 0;
+        engine::flareCounts(other, sun, hidden);
+        TMVS_LOG("engine: cinematic %s (sources %u); lens flares since: %u of the sun (%u hidden), %u of other lights", cinematic ? "on" : "off",
+                 engine::cinematicSources(), sun, hidden, other);
     }
     relightOnSwitch(settings);
     castersTick();
     unbindGBuffer(device);
     gameshaders::tick();
     g_shadedThisFrame = false;
+    g_gameplayLastFrame = g_gameplayThisFrame;
     g_gameplayThisFrame = false;
 
     overlay::Status status;

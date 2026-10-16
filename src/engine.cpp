@@ -360,6 +360,14 @@ float g_mapDayTime = -1.0f;                   // the loaded map's own time of da
 bool g_nightForced = false;                   // the game lights it at midnight instead
 void* g_weather = nullptr;                    // this map's weather (the last to jump in time)
 float g_weatherTime = -1.0f;                  // the time of day the game asked it for last
+// Real night kept (keepNight): the weather's own clock (a CMotionTimerLoop at +0x1c: +0x14 mode,
+// +0x18 / +0x1c its two times in ms, +0x20 the length of a day in ms, +0x28 speed) as the forced
+// midnight left it, and the weather's vtable then (the object is checked before it is used again).
+constexpr size_t kWeatherTimer = 0x1c;
+float g_nightClock = -1.0f;
+const void* g_weatherVtable = nullptr;
+int g_nightLogged = 0;
+volatile LONG g_flares[3] = {}; // lens flares since the last read: other lights, the sun, the sun hidden
 using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
 ReadInputFn g_readInput = nullptr;
 volatile bool g_swallowEscape = false; // the menu or photo mode took this Esc press
@@ -734,7 +742,13 @@ bool isSunLight(const void* corpusLight) {
 // The sun's flare is reported as hidden: the engine fades it out as when the sun goes behind
 // something (no abrupt cut, and it comes back the same way).
 void __fastcall lensFlareDetour(void* self, void* edx, void* light, const void* position, float size, int testVisible, float extra) {
-    if (g_hideSunFlare && testVisible && isSunLight(light)) testVisible = 0;
+    // Counted for the log (the sun came back in end-of-race replays: is it its flare?).
+    const bool sun = isSunLight(light);
+    g_flares[sun ? 1 : 0]++;
+    if (g_hideSunFlare && testVisible && sun) {
+        testVisible = 0;
+        g_flares[2]++;
+    }
     g_lensFlare(self, edx, light, position, size, testVisible, extra);
 }
 
@@ -889,6 +903,37 @@ void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMo
     strncpy_s(g_environment, name, _TRUNCATE);
 }
 
+// The weather's clock as a fraction of the day: its two times (async, timed). False when the
+// weather isn't the one that jumped last (gone, or another object at its address).
+bool weatherClock(float& async, float& timed, int& mode, float& speed) {
+    __try {
+        const BYTE* weather = static_cast<const BYTE*>(g_weather);
+        if (!weather || !readable(weather, kWeatherTimer + 4) || *reinterpret_cast<const void* const*>(weather) != g_weatherVtable) return false;
+        const BYTE* timer = *reinterpret_cast<const BYTE* const*>(weather + kWeatherTimer);
+        if (!timer || !readable(timer, 0x2c)) return false;
+        const int period = *reinterpret_cast<const int*>(timer + 0x20);
+        if (period <= 0) return false;
+        async = static_cast<float>(*reinterpret_cast<const unsigned*>(timer + 0x18) % static_cast<unsigned>(period)) / static_cast<float>(period);
+        timed = static_cast<float>(*reinterpret_cast<const unsigned*>(timer + 0x1c) % static_cast<unsigned>(period)) / static_cast<float>(period);
+        mode = *reinterpret_cast<const int*>(timer + 0x14);
+        speed = *reinterpret_cast<const float*>(timer + 0x28);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void noteNightClock() {
+    __try {
+        g_weatherVtable = g_weather && readable(g_weather, 4) ? *reinterpret_cast<const void* const*>(g_weather) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_weatherVtable = nullptr;
+    }
+    float async = 0.0f, timed = 0.0f, speed = 0.0f;
+    int mode = 0;
+    g_nightClock = weatherClock(async, timed, mode, speed) ? timed : -1.0f;
+}
+
 void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
     g_weather = self;
     g_weatherTime = time;
@@ -898,6 +943,7 @@ void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
         TMVS_LOG("engine: weather %p jumps to time of day %.3f%s", self, time, g_nightForced ? " -> 0 (real night)" : "");
     }
     g_jumpTime(self, edx, wanted);
+    if (g_nightForced) noteNightClock();
 }
 
 void __fastcall raceTriggersDetour(void* self, void* edx, void* player, void* group) {
@@ -1280,7 +1326,43 @@ bool relightNight(bool night) {
         g_weather = nullptr;
         return false;
     }
+    if (night) noteNightClock();
+    else g_nightClock = -1.0f;
     return true;
+}
+
+bool keepNight(bool fix) {
+    if (!g_nightForced || !g_jumpTime || g_nightClock < 0.0f) return false;
+    float async = 0.0f, timed = 0.0f, speed = 0.0f;
+    int mode = 0;
+    if (!weatherClock(async, timed, mode, speed)) return false;
+    // Around the clock: 0.99 and 0.01 are 0.02 apart.
+    auto apart = [](float a, float b) {
+        const float d = fabsf(a - b);
+        return d < 0.5f ? d : 1.0f - d;
+    };
+    const float moved = apart(timed, g_nightClock) > apart(async, g_nightClock) ? apart(timed, g_nightClock) : apart(async, g_nightClock);
+    if (moved < 0.01f) return false; // a quarter of an hour of the game's day
+    if (g_nightLogged < 20) {
+        g_nightLogged++;
+        TMVS_LOG("engine: the weather's time of day moved away from the forced midnight (%.3f -> timed %.3f, async %.3f; clock mode %d, speed %.3f, "
+                 "cinematic %d)%s",
+                 g_nightClock, timed, async, mode, speed, cinematicActive() ? 1 : 0, fix ? ": back to midnight" : "");
+    }
+    if (!fix) return false;
+    __try {
+        g_jumpTime(g_weather, nullptr, 0.0f); // the detour forces midnight anyway and notes the clock
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_weather = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void flareCounts(unsigned& other, unsigned& sun, unsigned& hidden) {
+    other = static_cast<unsigned>(InterlockedExchange(&g_flares[0], 0));
+    sun = static_cast<unsigned>(InterlockedExchange(&g_flares[1], 0));
+    hidden = static_cast<unsigned>(InterlockedExchange(&g_flares[2], 0));
 }
 
 const CameraInfo& currentCamera() {
