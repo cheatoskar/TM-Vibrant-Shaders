@@ -333,8 +333,10 @@ float longShadowGrid(float3 pView, float3 nView) {
     float occlusion = 0.0;
     [unroll] for (int k = 0; k < 4; k++) {
         float2 c = tex2Dlod(s2, float4(uv.x, uv.y + (k - 1.5) * 0.5 * width, 0, 0)).rg;
-        // r < 5000: nothing seen towards the light (or a blend with nothing)
-        if (c.r > 5000.0) occlusion += saturate((c.r - level) / (0.3 + (t0 + c.g / u_LightGrid2.y) * 0.04));
+        // r < 5000: nothing seen towards the light (or a blend with nothing). The last fifth of the
+        // range fades: every cell counts now, a tall caster's shadow would end in a straight cut.
+        float tc = t0 + c.g / u_LightGrid2.y;
+        if (c.r > 5000.0) occlusion += saturate((c.r - level) / (0.3 + tc * 0.04)) * saturate((u_LightGrid2.w - tc) * 5.0 / u_LightGrid2.w);
     }
     return occlusion * 0.25;
 }
