@@ -26,8 +26,9 @@ public:
     void draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s);
 
     // The recording alone (also for the offline test): dt (s), the car's position (null: not seen
-    // this frame). True: the live end (slot head()) is drawn after the kept points.
-    bool record(float dt, const float* car);
+    // this frame) and its up (null: the world's). True: the live end (slot head()) is drawn after
+    // the kept points.
+    bool record(float dt, const float* car, const float* up = nullptr);
     void startRecording() {
         if (m_points.empty()) m_points.assign(kPoints * 4, 0.0f);
         clear();
@@ -51,7 +52,8 @@ private:
     ID3D11ShaderResourceView* m_pointsSrv = nullptr;
     ID3D11Buffer* m_cb = nullptr;
     ID3D11BlendState* m_add = nullptr;
-    std::vector<float> m_points; // kPoints x (xyz, stamp)
+    std::vector<float> m_points; // kPoints x (xyz, stamp), then kPoints x (the car's up, 1): the texture's 2 rows
+    int m_dirty = -2;            // the slot written since the last upload (-1 none, -2 all)
     UINT m_head = 0, m_count = 0;
     float m_clock = 0.0f, m_time = 0.0f;
     float m_kept[3] = {};

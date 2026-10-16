@@ -2,7 +2,8 @@
 // TMNF mod's (shaders/tmvs.hlsl PS_Trail, src/pipeline.cpp trailVS). The car's position comes
 // from the engine (its ObjectV at the car's G-buffer draw, effects_trail.cpp); the points are kept
 // in a ring buffer texture, quad k joins point k and k + 1, lying flat across the line on the road.
-//   t0 = points (xyz, time stamp; < 0: a new line starts here, 0 = none), 1 row
+//   t0 = points (xyz, time stamp; < 0: a new line starts here, 0 = none) in row 0, the car's up at
+//        each point in row 1
 //   b4: g_trail (points, next index + count of the ring, now (s), fade after (s, 0 = never)),
 //       g_trail2 (sideways offset (m), half width (m), ring size, 0), g_trailColour (rgb * strength)
 // entries: VS_Trail:vs_5_0 PS_Trail:ps_5_0
@@ -28,6 +29,15 @@ float4 trailPoint(float i)
     float n = g_trail2.z;
     i = fmod(i + 2.0 * n, n);
     return g_points.Load(int3((int)i, 0, 0));
+}
+
+// The car's up at point i (unit length; the world's up where none was written).
+float3 trailUp(float i)
+{
+    float n = g_trail2.z;
+    i = fmod(i + 2.0 * n, n);
+    float3 u = g_points.Load(int3((int)i, 1, 0)).xyz;
+    return dot(u, u) > 0.25 ? normalize(u) : float3(0, 1, 0);
 }
 
 // Each point averaged with its neighbours on the same line (weights 1 2 3 4 3 2 1), symmetric so
@@ -162,7 +172,20 @@ TrailOut VS_Trail(uint id : SV_VertexID)
     // again. (It was the points' age: driving slowly the line next to the car popped in and out,
     // at speed the points lie metres apart.) fromCar: see above.
     float3 dir = d / len;
-    float3 right = cross(float3(0, 1, 0), dir);
+    // Across the line in the road's plane: the car's up there (its neighbours' with it, a car
+    // rocking on its springs doesn't tilt the line), not the world's. With the world's up the line
+    // lay level on banked curves and walls: its lower half (on a wall all of the inner tyre's line)
+    // went into the road.
+    float firstJ = g_trail.y - g_trail.x, lastJ = g_trail.y - 1.0;
+    float3 up = trailUp(j) * 2.0;
+    if (j - 1.0 >= firstJ) up += trailUp(j - 1.0);
+    if (j + 1.0 <= lastJ) up += trailUp(j + 1.0);
+    up = normalize(up);
+    // Smoothing (the average of its neighbours) took the line under the road over a crest (10 cm
+    // over it here): the point may rise along the car's up (in dips), never sink below where the
+    // car was.
+    s += up * max(dot(pj.xyz - s, up), 0.0);
+    float3 right = cross(up, dir);
     float rl = length(right);
     float3 across = rl > 1e-3 ? right / rl : float3(1, 0, 0);
     float3 p = s + across * g_trail2.x;
@@ -177,8 +200,8 @@ TrailOut VS_Trail(uint id : SV_VertexID)
     side = sl > 1e-6 ? side / sl : float3(1, 0, 0);
     // Flat across the line, lying on the road: turned to the camera it flapped with every swing of
     // the chase camera and stood up like a wall where the line passes beside or above the camera
-    // (downhill). Where the line runs steeply (loops) "across" has no horizontal: turned to the
-    // camera there.
+    // (downhill). Only where the line runs along the car's up (flying straight up) "across" is
+    // unknown: turned to the camera there.
     float flatness = saturate((rl - 0.15) / 0.35);
     float3 wide = normalize(lerp(side, normalize(toView(p + across) - v), flatness));
     float facing = dot(wide, side);
@@ -197,7 +220,9 @@ TrailOut VS_Trail(uint id : SV_VertexID)
 float4 PS_Trail(TrailOut i) : SV_Target
 {
     float2 uv = i.pos.xy * u_Screen.zw;
-    clip(engineZ(uv) - i.data.z * 0.995);
+    // Hidden behind the scene, with 0.5 % and 3 cm to spare (the road seen at a grazing angle on
+    // slopes comes close to the line's depth; the line lies 10 cm over it).
+    clip(engineZ(uv) - (i.data.z * 0.995 - 0.03));
     float x = i.data.x;
     float light = exp(-x * x * 10.0) * 2.5 + exp(-x * x * 2.5) * 0.4;
     light *= i.data.y * smoothstep(1.6, 2.6, i.data.w);

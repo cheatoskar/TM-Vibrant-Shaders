@@ -521,6 +521,7 @@ int main(int argc, char** argv) {
     bool haveTrailCar = false;
     float trailFrom[3] = {}; // --carfrom x,y,z: where it starts (default: from the camera's side, at --car's height)
     bool haveTrailFrom = false;
+    float trailUp[3] = {0.0f, 1.0f, 0.0f}; // --carup x,y,z: the car's up (a banked curve: the line tilts with it)
     float focus[2] = {-1.0f, -1.0f}; // --focus u,v: the photo mode's focus point
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
@@ -554,6 +555,12 @@ int main(int argc, char** argv) {
         else if (opt == "--frames") frames = std::max(1, atoi(value.c_str()));
         else if (opt == "--car") haveTrailCar = sscanf(value.c_str(), "%f,%f,%f", &trailCar[0], &trailCar[1], &trailCar[2]) == 3;
         else if (opt == "--carfrom") haveTrailFrom = sscanf(value.c_str(), "%f,%f,%f", &trailFrom[0], &trailFrom[1], &trailFrom[2]) == 3;
+        else if (opt == "--carup") {
+            if (sscanf(value.c_str(), "%f,%f,%f", &trailUp[0], &trailUp[1], &trailUp[2]) == 3) {
+                const float l = std::sqrt(trailUp[0] * trailUp[0] + trailUp[1] * trailUp[1] + trailUp[2] * trailUp[2]);
+                for (float& c : trailUp) c = l > 1e-6f ? c / l : 0.0f;
+            }
+        }
         else if (opt == "--focus") {
             if (sscanf(value.c_str(), "%f,%f", &focus[0], &focus[1]) != 2) {
                 printf("--focus wants u,v\n");
@@ -734,7 +741,7 @@ int main(int argc, char** argv) {
                 if (haveTrailFrom)
                     for (int i = 0; i < 3; i++) car.position[i] = trailFrom[i] + (trailCar[i] - trailFrom[i]) * k;
                 car.valid = true;
-                car.up[1] = 1.0f;
+                for (int i = 0; i < 3; i++) car.up[i] = trailUp[i];
                 engine.car = &car;
             }
             if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look, engine)) {
