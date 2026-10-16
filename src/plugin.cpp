@@ -1026,8 +1026,12 @@ void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3D
         if (note(8)) TMVS_LOG("scene: the camera's part (%ld,%ld .. %ld,%ld) leaves columns free: rows outside it left alone", area.left, area.top, area.right, area.bottom);
         return;
     }
-    const bool clearedTop = g_clearedTop.target == target && g_clearedTop.frame == g_frame;
-    const bool clearedBottom = g_clearedBottom.target == target && g_clearedBottom.frame == g_frame;
+    // Only a clear of the bar rows themselves is the game's own bars. One that also covered the
+    // band was the frame's first clear, the band drawn over it after: after an alt-tab the game
+    // clears the whole screen black every frame, which left the bars black and unshaded (owner,
+    // 2026-10-16: "the mirroring isn't there" after minimising).
+    const bool clearedTop = g_clearedTop.target == target && g_clearedTop.frame == g_frame && g_clearedTop.bottom <= area.top;
+    const bool clearedBottom = g_clearedBottom.target == target && g_clearedBottom.frame == g_frame && g_clearedBottom.top >= area.bottom;
     const bool top = area.top > 0 && !clearedTop;
     const bool bottom = area.bottom < static_cast<LONG>(desc.Height) && !clearedBottom;
     int state = 0; // 0 left alone (cleared by the game), 1 filled, 2 failed
