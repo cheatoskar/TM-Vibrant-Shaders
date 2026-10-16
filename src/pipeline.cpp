@@ -20,7 +20,7 @@ const char* const kEntryPoints[] = {
     "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail", "PS_SnowFlake",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
-    "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine",
+    "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -2249,7 +2249,14 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 0, in.color, true);
         bind(device, 1, m_nd.texture, false);
         bind(device, 13, materials ? m_materialTexture : nullptr, false);
-        runPass(device, kSpillDown, m_spill[0]);
+        // EngineLights: the sources are what the game drew as light (its float image less what its
+        // additive draws added, their light, the lamp material, the neon strips), not bright colours.
+        if (engineLights) {
+            bind(device, 0, in.hdr, true);
+            if (in.added) bind(device, 14, in.added, true);
+        }
+        runPass(device, engineLights ? kSpillDownEngine : kSpillDown, m_spill[0]);
+        device->SetTexture(14, nullptr);
         bind(device, 0, m_spill[0].texture, true);
         passConstants(device, 1.0f / m_spill[0].width, 0.0f);
         runPass(device, kSpillBlur, m_spill[1]);

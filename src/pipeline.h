@@ -204,6 +204,7 @@ private:
         kWaterLevel,
         kResolve,
         kLightingEngine,
+        kSpillDownEngine,
         kPassCount
     };
 
