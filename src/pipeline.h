@@ -21,6 +21,10 @@ public:
         // With EngineLights it is the light source instead of the guess. Null = none.
         IDirect3DTexture9* added = nullptr;
         IDirect3DTexture9* depth = nullptr; // raw hardware depth in .r (INTZ or R32F)
+        // GameGBuffer: the normals the game's patched shaders wrote (A16B16G16R16F: world normal,
+        // distance from the eye in w, 0 = none). Used with the setting on, where they belong to the
+        // surface the depth shows; elsewhere the normal comes from the depth. Null = none.
+        IDirect3DTexture9* gbuffer = nullptr;
         UINT width = 0;
         UINT height = 0;
         float view[16] = {};
@@ -231,6 +235,7 @@ private:
         kSpillDownEngine,
         kLightGridInit,
         kLightGridSweep,
+        kPrepareGBuffer,
         kPassCount
     };
 

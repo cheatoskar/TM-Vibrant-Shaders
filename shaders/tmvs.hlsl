@@ -187,11 +187,13 @@ float4 PS_LinearDepth(float2 uv : TEXCOORD0) : COLOR0 {
 // ---------------------------------------------------------------------------------
 // Pass 1: reconstructed view-space normals (full res)
 //   s0 = linear depth (R32F)
+//   s1 = GameGBuffer (PS_PrepareGBuffer): the game's own normals (world xyz, distance from
+//        the eye in w, 0 where no patched shader drew)
 //   out = normal.xyz (view space, facing camera), view z (SKY_Z for sky)
 // ---------------------------------------------------------------------------------
 float sampleZ(float2 uv) { return tex2Dlod(s0, float4(uv, 0, 0)).r; }
 
-float4 PS_Prepare(float2 uv : TEXCOORD0) : COLOR0 {
+float4 prepare(float2 uv, uniform bool gameNormals) {
     float2 px = u_Screen.zw;
     float zc = sampleZ(uv);
     if (zc >= SKY_Z) return float4(0, 0, 0, SKY_Z);
@@ -210,8 +212,24 @@ float4 PS_Prepare(float2 uv : TEXCOORD0) : COLOR0 {
 
     float3 n = normalize(cross(dx, dy));
     if (dot(n, pc) > 0) n = -n; // face the camera regardless of the projection's handedness
+    if (gameNormals) {
+        // The game's normal (normal-mapped on blocks, the car's own shape) only where its shader
+        // drew what is seen here: the same distance from the eye as the depth (a road drawn
+        // over a block later by a shader without normals isn't), and still a unit vector.
+        float4 g = tex2Dlod(s1, float4(uv, 0, 0));
+        float len = length(g.xyz);
+        float dist = length(pc);
+        if (g.w > 0.0 && abs(g.w - dist) < 0.01 * dist + 0.03 && abs(len - 1.0) < 0.05) {
+            float3 game = worldToViewDir(g.xyz / len);
+            // Two-sided faces (fences, leaves) seen from behind: the side towards the camera.
+            n = dot(game, n) < 0.0 ? -game : game;
+        }
+    }
     return float4(n, zc);
 }
+
+float4 PS_Prepare(float2 uv : TEXCOORD0) : COLOR0 { return prepare(uv, false); }
+float4 PS_PrepareGBuffer(float2 uv : TEXCOORD0) : COLOR0 { return prepare(uv, true); }
 
 // Half-resolution copy of the normal/depth buffer (closest of each 2x2 block).
 //   s0 = full normal/depth, u_Pass0.xy = full-res texel size

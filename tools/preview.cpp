@@ -21,6 +21,8 @@
 //                             image, GameHdr): render from the 8-bit image only
 //     --nomat                 ignore capture_NNN.mat next to the capture (which material drew
 //                             each pixel): no material masks, as before F12 wrote them
+//     --nogbuf                ignore capture_NNN.nrm16 next to the capture (the game's normals,
+//                             GameGBuffer; used with --set GameGBuffer=1)
 //     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
 //                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
 //   An output ending in .jpg is a preset picture for the menu (384x216, the middle 16:9).
@@ -158,6 +160,7 @@ struct LoadedCapture {
     IDirect3DTexture9* hdr = nullptr; // capture_NNN.hdr16 next to it (GameHdr)
     IDirect3DTexture9* added = nullptr; // capture_NNN.add16: the light the game's additive draws added
     IDirect3DTexture9* materials = nullptr; // the class mask from capture_NNN.mat next to it
+    IDirect3DTexture9* normals = nullptr; // capture_NNN.nrm16: the game's normals (GameGBuffer)
 };
 
 // Batch file: one job per line, "out.bmp [cap=file.tmcap] [preset=Name] [Key=Value ...]".
@@ -272,6 +275,7 @@ int main(int argc, char** argv) {
     int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     bool useMaterials = true;            // capture_NNN.mat next to the capture (--nomat: no material masks)
+    bool useNormals = true;              // capture_NNN.nrm16 next to the capture (--nogbuf: none)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
     UINT bars = 0;                       // --bars: rows above and below the image (replay menu test)
     for (int i = 3; i < argc; i++) {
@@ -302,6 +306,8 @@ int main(int argc, char** argv) {
             useHdr = false;
         } else if (!strcmp(argv[i], "--nomat")) {
             useMaterials = false;
+        } else if (!strcmp(argv[i], "--nogbuf")) {
+            useNormals = false;
         } else if (!strcmp(argv[i], "--photo")) {
             photoMode = true;
         } else if (!strcmp(argv[i], "--video")) {
@@ -394,9 +400,10 @@ int main(int argc, char** argv) {
         c->depth = upload(device, c->cap.width, c->cap.height, D3DFMT_R32F, c->cap.depth);
         // The game's float image (GameHdr) and the light its additive draws added, written next to
         // the capture by F12 (capture_NNN.hdr16, .add16: "TMH1", width, height, RGBA half floats).
-        auto readHalf = [&](const char* extension, const char* what) -> IDirect3DTexture9* {
+        // GameGBuffer's normals (capture_NNN.nrm16) come the same way.
+        auto readHalf = [&](const char* extension, const char* what, bool wanted) -> IDirect3DTexture9* {
             std::string halfPath = path;
-            if (!useHdr || halfPath.size() <= 6 || halfPath.compare(halfPath.size() - 6, 6, ".tmcap") != 0) return nullptr;
+            if (!wanted || halfPath.size() <= 6 || halfPath.compare(halfPath.size() - 6, 6, ".tmcap") != 0) return nullptr;
             halfPath.replace(halfPath.size() - 6, 6, extension);
             FILE* f = fopen(halfPath.c_str(), "rb");
             if (!f) return nullptr;
@@ -413,8 +420,9 @@ int main(int argc, char** argv) {
             fclose(f);
             return texture;
         };
-        c->hdr = readHalf(".hdr16", "HDR");
-        c->added = readHalf(".add16", "added light");
+        c->hdr = readHalf(".hdr16", "HDR", useHdr);
+        c->added = readHalf(".add16", "added light", useHdr);
+        c->normals = readHalf(".nrm16", "normals (GameGBuffer)", useNormals);
         // The game's materials (capture_NNN.mat, F12 with the material masks on): the class mask
         // the game would have built (r light, g car 1 / glass .5 / grass .25, b water).
         std::string matPath = path;
@@ -470,6 +478,7 @@ int main(int argc, char** argv) {
         in.color = loaded->color;
         in.hdr = loaded->hdr;
         in.added = loaded->added;
+        in.gbuffer = loaded->normals;
         in.materialMask = loaded->materials;
         in.materials = loaded->materials != nullptr;
         in.depth = loaded->depth;
@@ -619,6 +628,7 @@ int main(int argc, char** argv) {
         if (c->depth) c->depth->Release();
         if (c->hdr) c->hdr->Release();
         if (c->added) c->added->Release();
+        if (c->normals) c->normals->Release();
         if (c->materials) c->materials->Release();
         delete c;
     }
