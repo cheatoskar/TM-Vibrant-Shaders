@@ -482,6 +482,36 @@ float4 PS_Lighting(VSOut i) : SV_Target
     float3 rest = c - sunPart - ambPart;
     float3 emissive = emissiveOf(rest, albedo, e, nWorld, rd);
     float3 restLight = rest - emissive; // light maps, local lights, reflections
+    // The sun's glint (its mirror image on metal and glass) is no light map: when a night sky takes
+    // the sun out, it goes too. It stayed at full strength on the darkened surfaces: white spots
+    // on the golden sculptures under the black hole (captures 020/021). The glint is the light in
+    // the sun's mirror direction above the surface's own diffuse light, of the sun's hue; it is
+    // squeezed to about that light. Both shares (lighting, light sources) come down by the same
+    // factor, so the colour stays and no edge shows where emissiveOf counts the light differently
+    // (taking it out of one share left grey holes with hard edges in the gold). Off with
+    // CleanHighlights (as in 1.4.0).
+    if (u_SunOut.x > 0.0 && u_Engine2.x > 0.5 && u_Engine2.w > 0.5)
+    {
+        float3 sunC = max(u_EngineSun.rgb, 1e-4);
+        float level = max(luma(sunPart + ambPart), 1e-4);
+        float3 above = max(rest - sunPart - ambPart, 0.0);
+        float mirror = smoothstep(0.55, 0.9, dot(reflect(rd, nWorld), u_SunOut.yzw));
+        // The glint: the most of the sun's colour that fits in that light (none in the gold
+        // floodlight light). Light purer than the sun (neon: blue neon under a blue moon) and
+        // white light (lamps, screens) stay; under a white sun only white light counts.
+        float3 glint = sunC * min(above.r / sunC.r, min(above.g / sunC.g, above.b / sunC.b));
+        float peak = max(above.r, max(above.g, above.b));
+        float sat = (peak - min(above.r, min(above.g, above.b))) / max(peak, 1e-4);
+        float sunPeak = max(sunC.r, max(sunC.g, sunC.b));
+        float sunSat = (sunPeak - min(sunC.r, min(sunC.g, sunC.b))) / sunPeak;
+        float hue = smoothstep(sunSat * 0.1, sunSat * 0.3, sat) * (1.0 - smoothstep(sunSat + 0.1, sunSat + 0.25, sat));
+        float colour = lerp(1.0 - smoothstep(0.55, 0.85, sat), hue, saturate(sunSat * 5.0));
+        float squeeze = 1.0 - 1.0 / (1.0 + luma(glint) / level);
+        float cut = luma(glint) * squeeze * mirror * colour * saturate(u_SunOut.x);
+        float keep = 1.0 - cut / max(luma(rest), 1e-4);
+        emissive *= keep;
+        restLight *= keep;
+    }
 
     float3 occ = upsampleOcclusion(uv, z, n);
     float ao = lerp(1.0, occ.r, u_Light.x);

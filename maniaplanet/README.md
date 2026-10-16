@@ -148,7 +148,7 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 
 | File | Content |
 |---|---|
-| `trace.txt` | Every draw of the frame: shader name, role, render targets, depth, inputs |
+| `trace.txt` | Every draw of the frame: shader name, role, render targets, depth, blending, inputs, viewport, scissor, depth-stencil state and stencil ref, rasterizer |
 | `hdr_t*.dds` | What the engine's tone map reads |
 | `input.dds/.bmp`, `view.txt` | The image before the mod, and the format it was drawn with |
 | `output.dds/.bmp` | The finished frame |
@@ -181,6 +181,8 @@ python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/Block_DefReadP1
 $env:TMVS_MP_DATA = "$env:TEMP\mp-test"
 build-mp/Release/mp_harness.exe build-mp/Release/d3d11.dll tonemap.dxbc ui.dxbc scene.dxbc defread.dxbc [--srgb]
 build-mp/Release/mp_harness.exe ... --grade in.bmp out.bmp "Punchy"   # a picture through a preset
+python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/DeferredDeCompFaceNormal_p decomp.dxbc
+build-mp/Release/mp_harness.exe ... defread.dxbc --decomp decomp.dxbc   # also: the light mask after a map change
 ```
 
 It checks that:
@@ -189,6 +191,7 @@ It checks that:
 - the depth buffer is found;
 - the camera is read from a SceneV upload (with multithread protection on, like the game);
 - the G-buffer and motion are found by name;
+- with `--decomp`: after a map change (new engine targets, the face-normal pass first) the light mask is the new one;
 - the TMVS curve replaces the engine's tone map and matches its mid grey (UNORM and sRGB);
 - the Present fallback works;
 - a capture writes its files;
