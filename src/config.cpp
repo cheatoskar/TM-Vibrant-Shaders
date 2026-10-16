@@ -106,7 +106,7 @@ const std::vector<Field>& fields() {
 
         TMVS_FIELD("MotionBlur", "Motion blur", "Cinematic", Float, motionBlur, 0.0f, 1.5f),
         TMVS_FIELD("DepthOfField", "Depth of field", "Cinematic", Float, depthOfField, 0.0f, 1.0f),
-        TMVS_FIELD("CinematicOnlyInReplays", "Replays only", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
+        TMVS_FIELD("CinematicOnlyInReplays", "In replays only", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
         TMVS_FIELD("VideoExportBest", "Best export quality", "Cinematic", Bool, videoExportBest, 0.0f, 1.0f),
         TMVS_FIELD("VideoCodec", "Video format", "Cinematic", Int, videoCodec, 0.0f, 2.0f),
         TMVS_FIELD("VideoBitrate", "Video bitrate (Mbit/s)", "Cinematic", Float, videoBitrate, 0.0f, 200.0f),
