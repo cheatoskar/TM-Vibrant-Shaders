@@ -88,6 +88,10 @@ void dump(const char* kind, const char* source, UINT length, const Macro* define
     FILE* f = _wfopen((g_dir + name).c_str(), L"wb");
     if (!f) return;
     fprintf(f, "// %s, profile %s, entry %s\n", kind, profile ? profile : "(asm)", function ? function : "-");
+    if (shader) {
+        fprintf(f, "// bytecode %016llx\n",
+                static_cast<unsigned long long>(bytecodeHash(shader->GetBufferPointer(), shader->GetBufferSize())));
+    }
     fputs(defs.c_str(), f);
     fwrite(source, 1, length, f);
     fputs(includes.c_str(), f);
@@ -123,6 +127,21 @@ HRESULT WINAPI assembleDetour(const char* source, UINT length, const Macro* defi
 }
 
 } // namespace
+
+uint64_t bytecodeHash(const void* code, size_t bytes) {
+    const DWORD* t = static_cast<const DWORD*>(code);
+    const size_t n = bytes / 4;
+    uint64_t h = 14695981039346656037ull;
+    for (size_t i = 0; i < n;) {
+        if (i > 0 && (t[i] & 0xFFFF) == 0xFFFE) {
+            i += 1 + ((t[i] >> 16) & 0x7FFF);
+            continue;
+        }
+        h = fnv(h, reinterpret_cast<const char*>(&t[i]), 4);
+        i++;
+    }
+    return h;
+}
 
 void install() {
     g_dir = log::dataDir() + L"\\gameshaders";

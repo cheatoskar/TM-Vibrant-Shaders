@@ -1,9 +1,12 @@
 #include "hook.h"
+#include "gameshaders.h"
 #include "proxy.h"
 #include "tracer.h"
 #include "log.h"
 #include <windows.h>
 #include <d3d9.h>
+#include <cstdint>
+#include <vector>
 
 #pragma comment(lib, "d3d9.lib")
 
@@ -98,6 +101,16 @@ bool tracingGame() {
     return g_internal == 0 && tracer::tracing();
 }
 
+template <typename Shader>
+uint64_t shaderHash(Shader* shader) {
+    if (!shader) return 0;
+    UINT size = 0;
+    if (FAILED(shader->GetFunction(nullptr, &size)) || size < 4) return 0;
+    std::vector<unsigned char> code(size);
+    if (FAILED(shader->GetFunction(code.data(), &size))) return 0;
+    return gameshaders::bytecodeHash(code.data(), size);
+}
+
 void traceDrawState(IDirect3DDevice9* device, const char* kind, UINT primitives) {
     DWORD z = 0, zw = 0, blend = 0, cw = 0;
     device->GetRenderState(D3DRS_ZENABLE, &z);
@@ -108,8 +121,10 @@ void traceDrawState(IDirect3DDevice9* device, const char* kind, UINT primitives)
     IDirect3DPixelShader9* ps = nullptr;
     device->GetVertexShader(&vs);
     device->GetPixelShader(&ps);
-    tracer::event("  %s prims=%u z=%lu zw=%lu blend=%lu cw=%lx vs=%p ps=%p", kind, primitives, z, zw, blend, cw,
-                  static_cast<void*>(vs), static_cast<void*>(ps));
+    // With the bytecode hashes the draws can be matched to the dumped sources (gameshaders).
+    tracer::event("  %s prims=%u z=%lu zw=%lu blend=%lu cw=%lx vs=%p#%016llx ps=%p#%016llx", kind, primitives, z, zw, blend, cw,
+                  static_cast<void*>(vs), static_cast<unsigned long long>(shaderHash(vs)), static_cast<void*>(ps),
+                  static_cast<unsigned long long>(shaderHash(ps)));
     if (vs) vs->Release();
     if (ps) ps->Release();
 }
