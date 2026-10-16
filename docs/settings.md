@@ -182,6 +182,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Bloom | `Bloom` | 0 – 0.4 | Soft glow around bright parts. |
 | Bloom radius | `BloomRadius` | 0.3 – 1.2 | Wider or tighter glow. |
 | Light source intensity | `HighlightBoost` | 0 – 8 | How bright lamps and neon become in HDR. |
+| Neon strips glow | `BorderGlow` | 0 – 3 | With *Light sources from the game*: how much the blue neon of the road borders glows, on top of the light source intensity (1 = as before, 0 = as the game draws it). |
 | Lens flare | `LensFlare` | 0 – 1.5 | Ghost reflections from the sun. |
 | Chromatic aberration | `ChromaticAberration` | 0 – 1 | Colour fringes towards the screen edges. |
 | Vignette | `Vignette` | 0 – 1 | Darker corners. |
