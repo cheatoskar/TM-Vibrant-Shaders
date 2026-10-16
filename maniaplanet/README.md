@@ -68,7 +68,7 @@ Settings and your presets are in `Documents\ManiaPlanet\TMVS` (`settings.ini`, `
 the same format as in TMNF. ManiaPlanet's own options are in `maniaplanet.ini`, on the Settings
 page, panel "ManiaPlanet":
 - **HDR stage:** on = the look on the engine's HDR image, off = on its finished image.
-- **Light sources from the engine's draws** (`EngineLightDraws`, off for now): the lamps, light
+- **Light sources from the engine's draws** (`EngineLightDraws`, on by default since the owner's test: grass no longer glows, the road borders still do): the lamps, light
   strips, screens, halos and the car's lights glow as the engine draws them, nothing is guessed
   from colours (TMNF's EngineLights). The draws of self-illuminated materials (`TMapSelfIllum`,
   `TMapAdvert`, `TMapIllum`) and the additive ones (`Tech3_Block_TAdd`: halos) are drawn a second
