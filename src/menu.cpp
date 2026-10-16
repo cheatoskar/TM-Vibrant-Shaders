@@ -1344,11 +1344,15 @@ bool drawSettings(Config& config, Settings& s) {
                           switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
                           return false;
                       }});
+    // Its own panel: in the long Game panel the owner didn't find it.
+    panels.push_back({"Video export", 3.0f, [&s] {
+                          bool l = drawKey(s, "VideoCodec", "File the replay editor's Shoot video writes (MP4: the graphics card encodes, the game's codec dialog is skipped; the .mp4 lands next to where the game would put the .avi)");
+                          l |= drawKey(s, "VideoBitrate", "Bitrate, Mbit/s (0 = auto: 4K 30 fps 50 H.264, 30 HEVC)");
+                          l |= drawKey(s, "VideoExportBest", "Full quality, effects on the video's clock");
+                          return l;
+                      }});
     panels.push_back({"Game", 8.0f, [&s] {
                           bool l = drawKey(s, "CinematicOnlyInReplays", "Motion blur, depth of field only in replays");
-                          l |= drawKey(s, "VideoExportBest", "Video export: full quality, effects on the video's clock");
-                          l |= drawKey(s, "VideoCodec", "Video export file (MP4: the graphics card encodes, no codec dialog)");
-                          l |= drawKey(s, "VideoBitrate", "Video export bitrate, Mbit/s (0 = auto: 4K 30 fps 50 H.264, 30 HEVC)");
                           l |= drawKey(s, "WeatherSound", "Rain and thunder volume");
                           l |= drawKey(s, "TAA", "Temporal anti-aliasing");
                           l |= drawKey(s, "TAAJitter", "TAA sub-pixel jitter");
