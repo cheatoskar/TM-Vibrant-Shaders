@@ -1,6 +1,7 @@
 #pragma once
 #include <d3d9.h>
 #include <string>
+#include <vector>
 
 // Small Direct3D 9 helpers shared by the in-game plugin and the offline previewer.
 namespace tmshaders {
@@ -19,6 +20,18 @@ IDirect3DPixelShader9* compilePixelShader(IDirect3DDevice9* device, const std::s
                                           const char* name, std::string* errors = nullptr);
 IDirect3DVertexShader9* compileVertexShader(IDirect3DDevice9* device, const std::string& source, const char* entry,
                                             const char* name, std::string* errors = nullptr);
+
+// HLSL compiled once a session: compilePixelShader / compileVertexShader keep what they compiled,
+// a pipeline created again (after a device reset, the compare split's second one) gets its shaders
+// from there instead of compiling again (the trail's vertex shader alone took half a second).
+// precompile() compiles a list ahead on a worker thread (the plugin's boot thread); a shader
+// still being compiled there is waited for, not compiled twice.
+struct ShaderSource {
+    std::string source, entry, profile, name;
+};
+void precompile(const std::vector<ShaderSource>& shaders);
+// The full-screen quad's vertex shader (Quad::init).
+void quadShaders(std::vector<ShaderSource>& out);
 
 // A 2D render-target texture with cached level-0 surface.
 struct Target {

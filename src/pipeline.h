@@ -186,6 +186,10 @@ public:
         m_shelterValid = false;
     }
 
+    // The HLSL the pipeline compiles while it runs (vertex shaders of the height map, trail and
+    // rain, small helpers): gfx::precompile compiles them ahead, off the render thread.
+    static void runtimeShaders(std::vector<gfx::ShaderSource>& out);
+
     // GPU timing per pass with timestamp queries (results arrive a few frames late).
     void setProfiling(bool enabled) { m_profiling = enabled; }
     void collectProfile(bool wait); // wait = block until every issued frame is resolved
@@ -269,6 +273,7 @@ private:
     bool buildMaterialMask(IDirect3DDevice9* device, const Inputs& in);
     bool ensureRain(IDirect3DDevice9* device);
     bool ensureTrail(IDirect3DDevice9* device);
+    static std::string trailSource();
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
     void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool splashes,
                   IDirect3DSurface9* target);

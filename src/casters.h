@@ -1,5 +1,7 @@
 #pragma once
+#include "gfx.h"
 #include <d3d9.h>
+#include <vector>
 
 // CasterShadows: light-space depth maps drawn from the game's own static geometry, for the
 // long shadows of the sun and the black hole.
@@ -54,6 +56,9 @@ bool update(IDirect3DDevice9* device, const float sunWorld[3], const float camer
 void reset(const char* why, bool log = true);
 // Device reset or shutdown: also the maps themselves (default pool).
 void releaseDevice();
+
+// The caster maps' shaders, for gfx::precompile (compiled ahead, off the render thread).
+void runtimeShaders(std::vector<gfx::ShaderSource>& out);
 
 // How many meshes are kept now (tests, the log).
 unsigned keptMeshes();

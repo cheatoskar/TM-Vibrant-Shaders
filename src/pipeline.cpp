@@ -1005,6 +1005,14 @@ bool Pipeline::ensureLut(IDirect3DDevice9* device) {
     return ok;
 }
 
+// One colour (the material debug view, the class mask), and material id -> its class's colour.
+const char* const kSolidPS = "float4 c : register(c32); float4 main() : COLOR0 { return c; }";
+const char* const kPalettePS = "sampler2D ids : register(s0); sampler2D palette : register(s1);\n"
+                               "float4 main(float2 uv : TEXCOORD0) : COLOR0 {\n"
+                               "    float id = floor(tex2D(ids, uv).r * 255.0 + 0.5);\n"
+                               "    return tex2D(palette, float2((id + 0.5) / 256.0, 0.5));\n"
+                               "}\n";
+
 bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     // The game's depth-stencil is our INTZ texture; its stencil holds the material class of
     // every pixel (written while the game drew, see the plugin). Bound as the depth-stencil
@@ -1016,7 +1024,7 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
         return false;
     if (in.materialClasses) return buildMaterialIds(device, in);
     if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
-    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
     if (!m_solidPS) return false;
     for (int i = 0; i < 16; i++) device->SetTexture(i, nullptr);
     IDirect3DSurface9* ds = nullptr;
@@ -1059,15 +1067,9 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
 bool Pipeline::buildMaterialIds(IDirect3DDevice9* device, const Inputs& in) {
     if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
     if (!m_materialIds.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
-    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
     if (!m_paletteLookupPS)
-        m_paletteLookupPS = gfx::compilePixelShader(device,
-                                                    "sampler2D ids : register(s0); sampler2D palette : register(s1);\n"
-                                                    "float4 main(float2 uv : TEXCOORD0) : COLOR0 {\n"
-                                                    "    float id = floor(tex2D(ids, uv).r * 255.0 + 0.5);\n"
-                                                    "    return tex2D(palette, float2((id + 0.5) / 256.0, 0.5));\n"
-                                                    "}\n",
-                                                    "main", "MaterialPalette");
+        m_paletteLookupPS = gfx::compilePixelShader(device, kPalettePS, "main", "MaterialPalette");
     if (!m_solidPS || !m_paletteLookupPS) return false;
     // Filled in system memory and uploaded (no managed pool on D3D9Ex).
     IDirect3DTexture9* staging = nullptr;
@@ -1564,6 +1566,22 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
 
 } // namespace
 
+std::string Pipeline::trailSource() {
+    char defines[96];
+    snprintf(defines, sizeof(defines), "#define TRAIL_W %u.0\n#define TRAIL_POINTS %u.0\n", kTrailWidth, kTrailPoints);
+    return std::string(defines) + kRainVS;
+}
+
+void Pipeline::runtimeShaders(std::vector<gfx::ShaderSource>& out) {
+    gfx::quadShaders(out);
+    // In the order the first frames need them: the height map, the trail, the material mask.
+    out.push_back({kSplatVS, "main", "vs_3_0", "SplatVS"});
+    out.push_back({trailSource(), "trailVS", "vs_3_0", "TrailVS"});
+    out.push_back({kSolidPS, "main", "ps_3_0", "Solid"});
+    out.push_back({kPalettePS, "main", "ps_3_0", "MaterialPalette"});
+    for (const char* entry : {"dropVS", "splashVS", "sprayVS", "snowVS"}) out.push_back({kRainVS, entry, "vs_3_0", "RainVS"});
+}
+
 bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
     if (!m_trailSupported) return false;
     if (m_trailVB && m_trailIB && m_trailPoints.valid()) return true;
@@ -1584,10 +1602,7 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
                                                          D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING,
                                                          D3DRTYPE_TEXTURE, D3DFMT_A16B16G16R16F));
         if (d3d) d3d->Release();
-        char defines[96];
-        snprintf(defines, sizeof(defines), "#define TRAIL_W %u.0\n#define TRAIL_POINTS %u.0\n", kTrailWidth, kTrailPoints);
-        const std::string source = std::string(defines) + kRainVS;
-        m_trailVS = ok ? gfx::compileVertexShader(device, source.c_str(), "trailVS", "TrailVS") : nullptr;
+        m_trailVS = ok ? gfx::compileVertexShader(device, trailSource(), "trailVS", "TrailVS") : nullptr;
         const D3DVERTEXELEMENT9 elements[] = {
             {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
             {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},

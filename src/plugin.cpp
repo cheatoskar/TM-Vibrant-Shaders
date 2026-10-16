@@ -2166,6 +2166,20 @@ void ensureBooted() {
 
 void boot() {
     ensureBooted();
+    // The HLSL compiled while the mod runs, compiled here ahead (this thread is the plugin's own;
+    // the game is not waiting for it): the first shaded frame took 1.4 s, most of it compiling
+    // the trail's and the height map's vertex shaders, and every device reset compiled them again.
+    if (g_passive) return;
+    LARGE_INTEGER t0, t1, f;
+    QueryPerformanceCounter(&t0);
+    std::vector<gfx::ShaderSource> shaders;
+    Pipeline::runtimeShaders(shaders);
+    casters::runtimeShaders(shaders);
+    gfx::precompile(shaders);
+    QueryPerformanceCounter(&t1);
+    QueryPerformanceFrequency(&f);
+    TMVS_LOG("boot: %u shaders compiled ahead in %.0f ms", static_cast<unsigned>(shaders.size()),
+             static_cast<double>(t1.QuadPart - t0.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart));
 }
 
 void shutdown() {

@@ -1,6 +1,11 @@
 #include "gfx.h"
 #include "log.h"
 #include <d3dcompiler.h>
+#include <condition_variable>
+#include <cstdint>
+#include <cstring>
+#include <map>
+#include <mutex>
 
 #pragma comment(lib, "d3dcompiler.lib")
 
@@ -8,7 +13,7 @@ namespace tmshaders {
 namespace gfx {
 namespace {
 
-ID3DBlob* compile(const std::string& source, const char* entry, const char* profile, const char* name, std::string* errors) {
+ID3DBlob* compileNow(const std::string& source, const char* entry, const char* profile, const char* name, std::string* errors) {
     ID3DBlob* code = nullptr;
     ID3DBlob* messages = nullptr;
     HRESULT hr = D3DCompile(source.data(), source.size(), name, nullptr, nullptr, entry, profile,
@@ -22,6 +27,54 @@ ID3DBlob* compile(const std::string& source, const char* entry, const char* prof
         return nullptr;
     }
     release(messages);
+    return code;
+}
+
+// Compiled shaders, kept for the whole session (see precompile in gfx.h). Keyed by a hash of
+// source, entry point and profile. `pending`: the worker is compiling it right now.
+struct CacheEntry {
+    ID3DBlob* code = nullptr;
+    bool pending = false;
+};
+std::mutex g_cacheMutex;
+std::condition_variable g_cacheDone;
+std::map<uint64_t, CacheEntry> g_cache;
+
+uint64_t cacheKey(const std::string& source, const char* entry, const char* profile) {
+    uint64_t h = 14695981039346656037ull;
+    auto add = [&h](const char* p, size_t n) {
+        for (size_t i = 0; i < n; i++) h = (h ^ static_cast<unsigned char>(p[i])) * 1099511628211ull;
+        h = (h ^ 0xFF) * 1099511628211ull; // a separator
+    };
+    add(source.data(), source.size());
+    add(entry, strlen(entry));
+    add(profile, strlen(profile));
+    return h;
+}
+
+// The compiled code (a reference for the caller): from the cache, or compiled now and kept.
+ID3DBlob* compile(const std::string& source, const char* entry, const char* profile, const char* name, std::string* errors) {
+    const uint64_t key = cacheKey(source, entry, profile);
+    {
+        std::unique_lock<std::mutex> lock(g_cacheMutex);
+        // The worker is on it: wait instead of compiling it twice.
+        g_cacheDone.wait(lock, [&] { return !g_cache[key].pending; });
+        CacheEntry& e = g_cache[key];
+        if (e.code) {
+            e.code->AddRef();
+            return e.code;
+        }
+        e.pending = true; // new (or it failed before: again, for the error text)
+    }
+    ID3DBlob* code = compileNow(source, entry, profile, name, errors);
+    {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        CacheEntry& e = g_cache[key];
+        e.code = code;
+        if (code) code->AddRef();
+        e.pending = false;
+    }
+    g_cacheDone.notify_all();
     return code;
 }
 
@@ -41,6 +94,29 @@ struct QuadVertex {
 };
 
 } // namespace
+
+void precompile(const std::vector<ShaderSource>& shaders) {
+    for (const ShaderSource& s : shaders) {
+        const uint64_t key = cacheKey(s.source, s.entry.c_str(), s.profile.c_str());
+        {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            if (g_cache.count(key)) continue; // compiled already (or being compiled where it was needed)
+            g_cache[key].pending = true;
+        }
+        ID3DBlob* code = compileNow(s.source, s.entry.c_str(), s.profile.c_str(), s.name.c_str(), nullptr);
+        {
+            std::lock_guard<std::mutex> lock(g_cacheMutex);
+            CacheEntry& e = g_cache[key];
+            e.code = code;
+            e.pending = false;
+        }
+        g_cacheDone.notify_all();
+    }
+}
+
+void quadShaders(std::vector<ShaderSource>& out) {
+    out.push_back({kQuadVS, "main", "vs_3_0", "QuadVS"});
+}
 
 IDirect3DPixelShader9* compilePixelShader(IDirect3DDevice9* device, const std::string& source, const char* entry, const char* name,
                                           std::string* errors) {

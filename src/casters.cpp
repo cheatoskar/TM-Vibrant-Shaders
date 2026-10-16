@@ -1053,6 +1053,11 @@ void pauseRecording(bool paused) {
     g_paused = paused;
 }
 
+void runtimeShaders(std::vector<gfx::ShaderSource>& out) {
+    out.push_back({kCasterVS, "main", "vs_3_0", "CasterVS"});
+    out.push_back({kCasterPS, "main", "ps_3_0", "CasterPS"});
+}
+
 unsigned keptMeshes() {
     return static_cast<unsigned>(g_casters.size());
 }

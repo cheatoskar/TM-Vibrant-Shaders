@@ -279,7 +279,7 @@ int main(int argc, char** argv) {
     const char* before = nullptr;
     const char* batch = nullptr;
     std::vector<const char*> overrides;
-    bool sunOverride = false, sunColorOverride = false, bench = false;
+    bool sunOverride = false, sunColorOverride = false, bench = false, precompile = false;
     bool moonReplaced = false;           // --moon: as in game with EngineMoon on a night map under the black hole
     float sun[3] = {}, sunColor[3] = {};
     const char* lutFile = nullptr;
@@ -309,6 +309,8 @@ int main(int argc, char** argv) {
             bars = static_cast<UINT>(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--bench")) {
             bench = true;
+        } else if (!strcmp(argv[i], "--precompile")) {
+            precompile = true; // as the plugin's boot: the runtime HLSL compiled before the pipeline
         } else if (!strcmp(argv[i], "--moon")) {
             moonReplaced = true;
         } else if (!strcmp(argv[i], "--before") && i + 1 < argc) {
@@ -401,14 +403,34 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // CPU time of creating the pipelines and of their first frame (the hitch in game).
+    LARGE_INTEGER clockFreq, initStart, initEnd;
+    QueryPerformanceFrequency(&clockFreq);
+    auto msSince = [&](const LARGE_INTEGER& from) {
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        return 1000.0 * static_cast<double>(now.QuadPart - from.QuadPart) / static_cast<double>(clockFreq.QuadPart);
+    };
+    if (precompile) {
+        QueryPerformanceCounter(&initStart);
+        std::vector<gfx::ShaderSource> shaders;
+        Pipeline::runtimeShaders(shaders);
+        gfx::precompile(shaders);
+        printf("CPU: %u shaders compiled ahead in %.1f ms\n", static_cast<unsigned>(shaders.size()), msSince(initStart));
+    }
+    QueryPerformanceCounter(&initStart);
     Pipeline pipeline;
     if (!pipeline.init(device, shaderDir)) {
         fprintf(stderr, "shader compilation failed:\n%s\n", pipeline.lastError().c_str());
         return 1;
     }
     // The compare split's preset side (plugin.cpp renderSideB): a pipeline of its own.
+    const double initMs = msSince(initStart);
+    QueryPerformanceCounter(&initEnd);
     Pipeline pipelineB;
     if (compare && !pipelineB.init(device, shaderDir)) return 1;
+    const double initBMs = compare ? msSince(initEnd) : 0.0;
+    bool firstFrame = true;
     if (lutFile) {
         lut::Table table;
         std::string error;
@@ -619,7 +641,10 @@ int main(int argc, char** argv) {
                 for (int j = 0; j < 3; j++) driven.carPosition[j] = carEnd[j] + carDir[j] * back * step;
             }
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
+            LARGE_INTEGER renderStart;
+            QueryPerformanceCounter(&renderStart);
             pipeline.render(device, driven, job.settings, output.surface);
+            if (firstFrame) printf("CPU: pipeline created in %.1f ms, its first frame %.1f ms\n", initMs, msSince(renderStart));
             // The export's supersampling: the same moment again (the output is the last one).
             for (int r = 0; r < repeats && frame == frames - 1; r++) {
                 Pipeline::Inputs again = driven;
@@ -627,7 +652,10 @@ int main(int argc, char** argv) {
                 again.repeat = true;
                 pipeline.render(device, again, job.settings, output.surface);
             }
+            QueryPerformanceCounter(&renderStart);
             if (compare) pipelineB.render(device, driven, settingsB, outputB.surface);
+            if (compare && firstFrame) printf("CPU: second pipeline (compare) created in %.1f ms, its first frame %.1f ms\n", initBMs, msSince(renderStart));
+            firstFrame = false;
             if (bench) pipeline.collectProfile(true);
         }
         if (compare) {
