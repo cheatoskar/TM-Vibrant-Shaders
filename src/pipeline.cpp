@@ -853,8 +853,9 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
         const bool fresh = pass ? !m_ceilingValid : !m_heightValid;
         bind(device, 0, map[previous].texture, false);
         bind(device, 1, m_heightFrame.texture, false);
+        bind(device, 2, m_linearDepth.texture, false); // what the camera sees past (a lower column)
         passConstants(device, shift[0], shift[1], fresh ? 1.0f : 0.0f, pass ? 0.0f : 0.08f);
-        const float texelSize[4] = {1.0f / m_heightSize, 0.0f, 0.0f, 0.0f};
+        const float texelSize[4] = {1.0f / m_heightSize, m_heightOrigin[0], m_heightOrigin[1], m_heightWorld};
         device->SetPixelShaderConstantF(33, texelSize, 1);
         runPass(device, kHeightMerge, map[m_heightIndex]);
     }

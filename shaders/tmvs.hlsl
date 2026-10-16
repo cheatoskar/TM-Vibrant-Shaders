@@ -223,9 +223,9 @@ float4 PS_DownsampleND(float2 uv : TEXCOORD0) : COLOR0 {
 // ray is traced through it, so shadows can be long and casters can be off screen.
 // Stored heights are offset by +10000 m; 0 = never seen.
 // ---------------------------------------------------------------------------------
-// s0 = previous height map, s1 = this frame's splat, u_Pass0.xy = uv shift of the map
-// origin since last frame, u_Pass0.z = 1 to drop the history, u_Pass0.w = decay (m),
-// u_Pass1.x = texel size of the map
+// s0 = previous height map, s1 = this frame's splat, s2 = linear depth, u_Pass0.xy = uv shift
+// of the map origin since last frame, u_Pass0.z = 1 to drop the history, u_Pass0.w = decay (m,
+// 0: the undersides), u_Pass1.x = texel size of the map, yz its new corner (world x, z), w its size
 float4 PS_HeightMerge(float2 uv : TEXCOORD0) : COLOR0 {
     float2 puv = uv + u_Pass0.xy;
     float previous = (u_Pass0.z > 0.5 || any(puv < 0.0) || any(puv > 1.0)) ? 0.0 : tex2Dlod(s0, float4(puv, 0, 0)).r;
@@ -247,7 +247,25 @@ float4 PS_HeightMerge(float2 uv : TEXCOORD0) : COLOR0 {
     // at once (kept as a running maximum, the noise raised the floor into bumps that shade
     // themselves in blotches under a low moon).
     float drop = previous - seen;
-    return float4(previous > 0.0 && drop > 0.5 ? max(seen, previous - u_Pass0.w) : seen, 0, 0, 1);
+    if (previous <= 0.0 || drop <= 0.5) return float4(seen, 0, 0, 1);
+    if (u_Pass0.w <= 0.0) return float4(previous, 0, 0, 1);
+    // Seen lower than before: gone (a car drove off, the depth missed the top) only where the
+    // camera now sees past the old top. Where it is off screen or hidden, it stays: tilted down
+    // (only a sculpture's foot in view) the tops sank by 2.4 m a second, their shadows came and
+    // went with the camera angle.
+    // The old top and four points half a texel around it (a pole thinner than a texel): the camera
+    // must see past all of them.
+    float3 top = float3(u_Pass1.y + uv.x * u_Pass1.w, previous - 10000.0, u_Pass1.z + uv.y * u_Pass1.w);
+    float h = u_Pass1.x * u_Pass1.w * 0.5;
+    bool past = true;
+    [unroll] for (int k = 0; k < 5; k++) {
+        float2 o = k == 0 ? float2(0, 0) : (k == 1 ? float2(h, 0) : (k == 2 ? float2(-h, 0) : (k == 3 ? float2(0, h) : float2(0, -h))));
+        float3 v = worldToViewDir(top + float3(o.x, 0, o.y) - cameraWorld());
+        float2 suv = projectToUV(v);
+        bool inView = v.z > 0.5 && all(suv > 0.0) && all(suv < 1.0);
+        past = past && inView && tex2Dlod(s2, float4(suv, 0, 0)).r > v.z + max(1.0, 0.03 * v.z);
+    }
+    return float4(past ? max(seen, previous - u_Pass0.w * 3.0) : previous, 0, 0, 1);
 }
 
 float4 PS_HeightSplat(float2 data : TEXCOORD0) : COLOR0 {
