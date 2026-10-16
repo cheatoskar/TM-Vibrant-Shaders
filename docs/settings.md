@@ -195,6 +195,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Trail width (m) | `TrailWidth` | 0.05 – 1 | |
 | Two lines from the rear tyres | `TrailTyres` | on / off | Two lines, or one from the middle of the car. |
 | Fade after (s) | `TrailDuration` | 0 – 120 | 0 keeps the trail for the whole run. A restart clears it, a respawn starts a new line. |
+| Earlier runs kept | `TrailKeepRuns` | 0 – 5 (0) | 0: a restart clears the trail. 1 – 5: the trails of that many earlier runs stay after a restart, dimmer (the last at 60 %, the oldest at 60 % / n); a new map clears them all. |
 
 ### Bloom and lens
 

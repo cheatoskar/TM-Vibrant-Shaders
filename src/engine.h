@@ -114,6 +114,12 @@ bool mapLitAtNight();
 // Real night switched on or off while a map runs: the weather jumps to midnight or back to the
 // map's time (only call it in gameplay: the weather of a map that was left may be gone).
 bool relightNight(bool night);
+// Real night kept: when the weather's clock left the forced midnight (an end-of-race replay may
+// set it itself, the sun came back), it is logged and, with `fix`, jumped back. Once a frame in
+// gameplay, before the scene is drawn. True when it jumped.
+bool keepNight(bool fix);
+// The game's lens flares since the last call (for the log): other lights, the sun, the sun's hidden.
+void flareCounts(unsigned& other, unsigned& sun, unsigned& hidden);
 // What the material being drawn is (from its shader file), Other between draws.
 enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5 };
 Material currentMaterial();

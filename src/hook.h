@@ -26,7 +26,7 @@ struct DeviceCallbacks {
     void (*setTransform)(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* matrix) = nullptr;
     void (*setLight)(DWORD index, const D3DLIGHT9* light) = nullptr;
     // Before the game's Clear (not the plugin's own).
-    void (*clear)(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags) = nullptr;
+    void (*clear)(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color) = nullptr;
     // Every pixel shader created, the plugin's own too (GameGBuffer: which ones write the normal).
     void (*createPixelShader)(IDirect3DPixelShader9* shader, const DWORD* code) = nullptr;
 };

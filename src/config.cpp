@@ -140,6 +140,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("TrailWidth", "Trail width (m)", "Neon trail", Float, trailWidth, 0.05f, 1.0f),
         TMVS_FIELD("TrailTyres", "Tyre lines", "Neon trail", Bool, trailTyres, 0.0f, 1.0f),
         TMVS_FIELD("TrailDuration", "Trail fade (s)", "Neon trail", Float, trailDuration, 0.0f, 120.0f),
+        TMVS_FIELD("TrailKeepRuns", "Earlier runs kept", "Neon trail", Int, trailKeepRuns, 0.0f, 5.0f),
     };
     return table;
 }
@@ -837,6 +838,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepJitter = s.taaJitter;
     const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
     const bool keepTrailTyres = s.trailTyres;
+    const int keepTrailRuns = s.trailKeepRuns;
     float keepTrailColor[3];
     memcpy(keepTrailColor, s.trailColor, sizeof(keepTrailColor));
     if (preset == Preset::Custom) return;
@@ -845,6 +847,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.trailWidth = keepTrailWidth;
     s.trailDuration = keepTrailDuration;
     s.trailTyres = keepTrailTyres;
+    s.trailKeepRuns = keepTrailRuns;
     memcpy(s.trailColor, keepTrailColor, sizeof(keepTrailColor));
     s.disableGameMSAA = keepMSAA;
     s.readableGameDepth = keepDepth;

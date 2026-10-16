@@ -42,6 +42,7 @@ struct Settings {
     float trailWidth = 0.2f;       // m
     bool trailTyres = true;        // two lines from the rear tyres, else one from the middle
     float trailDuration = 0.0f;    // s until a piece fades out, 0 = the whole run
+    int trailKeepRuns = 0;         // earlier runs still drawn (dimmer) after a restart, 0 = only this one
     bool taaJitter = false;         // TAA samples a different sub-pixel spot every frame (sharper, smoother)
     bool cinematicOnlyInReplays = true; // motion blur and DOF only in replays, intros and the video export
     bool videoExportBest = true;   // the game's video export: full quality, effects on the video's clock, every supersample shaded

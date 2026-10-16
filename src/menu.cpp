@@ -350,6 +350,7 @@ const char* tooltipFor(const char* key) {
         {"NeonTrail", "A glowing trail behind the car. 0 is off."},
         {"TrailTyres", "Two lines from the rear tyres instead of one."},
         {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},
+        {"TrailKeepRuns", "How many earlier runs' trails stay after a restart, dimmer the older they are. 0 clears the trail on every restart."},
     };
     for (const auto& t : kTips)
         if (!strcmp(t.key, key)) return t.tip;
@@ -1186,7 +1187,8 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"TrailColor", "Colour"},
                                     {"TrailWidth", "Width"},
                                     {"TrailTyres", "Tyre lines"},
-                                    {"TrailDuration", "Trail fade (s)"}}));
+                                    {"TrailDuration", "Trail fade (s)"},
+                                    {"TrailKeepRuns", "Earlier runs"}}));
     panels.push_back(settingsPanel("Cinematic", s,
                                    {{"MotionBlur", "Motion blur"},
                                     {"DepthOfField", "Depth of field"},
