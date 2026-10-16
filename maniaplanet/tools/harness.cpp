@@ -131,12 +131,15 @@ void viewport(ID3D11DeviceContext* ctx, float x, float y, float w, float h) {
 int main(int argc, char** argv) {
     if (argc < 6) {
         printf("usage: mp_harness <d3d11.dll> <tonemap.dxbc> <ui.dxbc> <scene.dxbc> <defread.dxbc> "
-               "[--srgb | --grade in.bmp out.bmp preset]\n");
+               "[--srgb | --grade in.bmp out.bmp preset | --decomp decomp.dxbc]\n");
         return 2;
     }
     const bool srgb = argc > 6 && strcmp(argv[6], "--srgb") == 0;
     // --grade: run one picture through a preset instead of the checks (to look at the presets).
     const bool grade = argc > 9 && strcmp(argv[6], "--grade") == 0;
+    // --decomp: Tech3/DeferredDeCompFaceNormal_p, for the check that the light mask follows the
+    // engine's new targets after a map change (that pass reads the G-buffer before the light mask).
+    const char* decompPath = argc > 7 && strcmp(argv[6], "--decomp") == 0 ? argv[7] : nullptr;
     std::vector<unsigned char> picture;
     UINT W = 640, H = 360;
     if (grade && !readBmp(argv[7], picture, W, H)) {
@@ -279,6 +282,15 @@ int main(int argc, char** argv) {
         }
     }
     ID3D11PixelShader *toneMap = engine[0], *ui = engine[1], *scene = engine[2], *lightRead = engine[3];
+    ID3D11PixelShader* decomp = nullptr;
+    if (decompPath) {
+        const std::vector<char> code = readFile(decompPath);
+        if (code.empty() || FAILED(device->CreatePixelShader(code.data(), code.size(), nullptr, &decomp))) {
+            printf("cannot create engine shader %s\n", decompPath);
+            return 2;
+        }
+    }
+    bool withDecomp = false; // the frames draw DeferredDeCompFaceNormal_p before the light-read pass
 
     // The engine's G-buffer and light buffers (contents don't matter) and its motion target.
     td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -373,6 +385,16 @@ int main(int argc, char** argv) {
             ctx->Unmap(sceneV, 0);
         }
         ctx->VSSetConstantBuffers(13, 1, &sceneV);
+        if (withDecomp) {
+            // Like the engine: the face normals decompressed first, from the G-buffer (diffuse t0,
+            // specular t1, normals t2), into a screen-sized target; no light mask there.
+            ctx->OMSetRenderTargets(1, &hdrRtv, dsv);
+            ctx->PSSetShaderResources(0, 3, &gbufferSrv[1]);
+            ctx->PSSetShader(decomp, nullptr, 0);
+            ctx->Draw(3, 0);
+            ID3D11ShaderResourceView* none[3] = {};
+            ctx->PSSetShaderResources(0, 3, none);
+        }
         ID3D11RenderTargetView* lightTargets[2] = {hdrRtv, motionRtv};
         ctx->OMSetRenderTargets(2, lightTargets, dsv);
         ctx->PSSetShaderResources(1, 4, gbufferSrv);
@@ -425,7 +447,7 @@ int main(int argc, char** argv) {
     stats(s);
     printf("  stats: placed %d, tone map %d, shaders %d/%d, depth %d, draws %d, camera %d, textures 0x%x; centre %u %u %u, "
            "hud %u %u %u\n", s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], centre[0], centre[1], centre[2], hud[0], hud[1], hud[2]);
-    check(s[2] == 4, "the four engine shaders are recognised (and only those)");
+    check(s[2] == (decomp ? 5 : 4), "the engine shaders are recognised (and only those)");
     check(s[6] == 1, "the engine camera is read from its SceneV upload");
     check(s[8] == 1000 && s[9] == 2000 && s[10] == 3000, "the camera's eye is (10, 20, 30)");
     const int wanted = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7);
@@ -553,6 +575,41 @@ int main(int argc, char** argv) {
               exists("output.dds") && exists("hdr_t0.dds"),
           "a capture writes trace, HDR input, input, depth and output");
     printf("  capture: %s\n", folder.c_str());
+
+    // A map change: the engine makes new targets, its light mask among them; the face-normal pass
+    // comes first in the frame and doesn't read the light mask. The mod must follow the new one
+    // (it kept the first map's: a frozen light mask, ghost shapes on the road).
+    if (decomp) {
+        withDecomp = true;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        ID3D11Texture2D* newMask = nullptr;
+        ID3D11RenderTargetView* newMaskRtv = nullptr;
+        device->CreateTexture2D(&td, nullptr, &newMask);
+        device->CreateRenderTargetView(newMask, nullptr, &newMaskRtv);
+        const float maskColour[4] = {0.2f, 0.4f, 0.6f, 1.0f};
+        ctx->ClearRenderTargetView(newMaskRtv, maskColour);
+        gbufferSrv[0]->Release();
+        device->CreateShaderResourceView(newMask, nullptr, &gbufferSrv[0]);
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        requestCapture();
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        std::string newest;
+        find = FindFirstFileA(pattern.c_str(), &fd);
+        if (find != INVALID_HANDLE_VALUE) {
+            do newest = fd.cFileName;
+            while (FindNextFileA(find, &fd));
+            FindClose(find);
+        }
+        const std::vector<char> dds = readFile((std::string(data) + "\\captures\\" + newest + "\\engine_lightmask.dds").c_str());
+        // The first texel after the header (148 bytes with the DX10 extension, else 128).
+        const size_t at = dds.size() > 88 && !memcmp(&dds[84], "DX10", 4) ? 148 : 128;
+        auto texelIs = [&](size_t i, int v) { return std::abs(static_cast<int>(static_cast<unsigned char>(dds[at + i])) - v) <= 1; };
+        const bool same = newest != last && dds.size() >= at + 4 && texelIs(0, 51) && texelIs(1, 102) && texelIs(2, 153);
+        check(same, "after a map change the light mask is the engine's new one (face-normal pass first)");
+        newMaskRtv->Release();
+        newMask->Release();
+    }
 
     // Resize like a resolution change.
     bbRtv->Release();

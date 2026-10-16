@@ -175,7 +175,7 @@ struct Frame {
     bool toneMapped = false;               // the mod's HDR stage replaced the engine's tone map
     bool toneMapSeen = false;
     bool injected = false;
-    bool texturesTaken = false;
+    unsigned texturesTaken = 0;            // the engine textures taken this frame (bit 1 << kTex*)
     Placed placed = Placed::None;
     const char* hudShader = nullptr;
     uint32_t draws = 0;
@@ -518,15 +518,16 @@ void takeCamera(ID3D11DeviceContext* ctx) {
     }
 }
 
-// The textures a scene shader reads by name (normals, light buffers, motion).
-void takeSceneTextures(ID3D11DeviceContext* ctx, const ShaderInfo& ps) {
+// The textures a scene shader reads by name (normals, light buffers, motion), each one not taken
+// yet this frame (taken: bits 1 << kTex*).
+void takeSceneTextures(ID3D11DeviceContext* ctx, const ShaderInfo& ps, unsigned& taken) {
     static const struct {
         Slot slot;
         int tex;
     } kWanted[] = {{kSlotNormal, kTexNormal},       {kSlotDiffuse, kTexDiffuse}, {kSlotSpecular, kTexSpecular},
                 {kSlotLightMask, kTexLightMask}, {kSlotMotion, kTexMotion}};
     for (const auto& m : kWanted) {
-        if (!ps.reads(m.slot)) continue;
+        if (!ps.reads(m.slot) || (taken & (1u << m.tex))) continue;
         ID3D11ShaderResourceView* srv = nullptr;
         ctx->PSGetShaderResources(ps.slots[m.slot], 1, &srv);
         if (!srv) continue;
@@ -536,6 +537,7 @@ void takeSceneTextures(ID3D11DeviceContext* ctx, const ShaderInfo& ps) {
         if (res) {
             setTexture(m.tex, res);
             res->Release();
+            taken |= 1u << m.tex;
         }
     }
 }
@@ -701,18 +703,28 @@ bool onDraw(ID3D11DeviceContext* ctx) {
         // The scene's depth: the last screen-shaped depth buffer a scene draw used.
         if (role == Role::Scene && f.ds && screenSized(f.dsW, f.dsH)) setSceneDepth(f.ds);
         // The lighting-read pass (it reads the normal and light buffers) runs with the main camera.
-        if (f.ps.reads(kSlotNormal) || f.ps.reads(kSlotDiffuse)) {
-            if (!g_cameraThisFrame) takeCamera(ctx);
-            if (!f.texturesTaken && f.rt && screenSized(f.rtW, f.rtH)) {
-                f.texturesTaken = true;
-                takeSceneTextures(ctx, f.ps);
-                // Its second target is the motion buffer (R16G16 float) that the motion blur reads.
+        const bool lightingRead = f.ps.reads(kSlotNormal) || f.ps.reads(kSlotDiffuse);
+        if (lightingRead && !g_cameraThisFrame) takeCamera(ctx);
+        // Each texture from the first screen-sized draw of the frame that reads it. (Once for all
+        // at the first draw that read the normals left the light mask behind: the engine's
+        // DeferredDeCompFaceNormal_p comes first and doesn't read it. The light mask kept from
+        // the first map stayed, frozen, after the engine made new targets for the next one: dark
+        // ghost shapes on the road, captures 023/024. The motion buffer was kept the same way.)
+        if ((lightingRead || f.ps.reads(kSlotSpecular) || f.ps.reads(kSlotLightMask) || f.ps.reads(kSlotMotion)) && f.rt &&
+            screenSized(f.rtW, f.rtH)) {
+            takeSceneTextures(ctx, f.ps, f.texturesTaken);
+            // The lighting pass's second target is the motion buffer (R16G16 float) that the
+            // motion blur reads.
+            if (!(f.texturesTaken & (1u << kTexMotion))) {
                 ID3D11RenderTargetView* rtv[2] = {};
                 ctx->OMGetRenderTargets(2, rtv, nullptr);
                 if (rtv[1]) {
                     D3D11_RENDER_TARGET_VIEW_DESC d;
                     rtv[1]->GetDesc(&d);
-                    if (d.Format == DXGI_FORMAT_R16G16_FLOAT) setTexture(kTexMotion, resourceOf(rtv[1]));
+                    if (d.Format == DXGI_FORMAT_R16G16_FLOAT) {
+                        setTexture(kTexMotion, resourceOf(rtv[1]));
+                        f.texturesTaken |= 1u << kTexMotion;
+                    }
                 }
                 for (auto* v : rtv)
                     if (v) v->Release();
