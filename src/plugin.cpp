@@ -464,6 +464,7 @@ IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs&
     // (a preset's own BokehSize made the same f-stop blur more or less on its side).
     b.depthOfField = shownA.depthOfField;
     b.focusDistance = shownA.focusDistance;
+    b.dofAutofocus = shownA.dofAutofocus;
     b.bokehSize = shownA.bokehSize;
     // Another preset picked (the bar at the bottom switches it in a click): no exposure, TAA or
     // sky history of the last one blending into the first frames of this one.
@@ -1250,6 +1251,23 @@ void processScene(IDirect3DDevice9* device) {
         static DWORD s_carSeen = 0;
         if (inputs.carKnown) s_carSeen = GetTickCount();
         inputs.carFromEngine = s_carSeen && GetTickCount() - s_carSeen < 5000;
+    }
+    {
+        // DofAutofocus Car: the engine's car; in the photo mode also the last position it gave
+        // on this map (the game may stop reporting it while paused, and the car stands still).
+        static float s_held[3] = {};
+        static bool s_haveHeld = false;
+        static int s_heldMap = -1;
+        if (engine::mapLoads() != s_heldMap) {
+            s_heldMap = engine::mapLoads();
+            s_haveHeld = false;
+        }
+        if (inputs.carKnown) {
+            memcpy(s_held, inputs.carPosition, sizeof(s_held));
+            s_haveHeld = true;
+        }
+        inputs.focusCarKnown = inputs.carKnown || (s_haveHeld && photo::active());
+        memcpy(inputs.focusCar, inputs.carKnown ? inputs.carPosition : s_held, sizeof(inputs.focusCar));
     }
     {
         // The log says which way the trail finds the car while it records (from the engine, the

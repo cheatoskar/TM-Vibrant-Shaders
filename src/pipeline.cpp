@@ -343,6 +343,22 @@ void Pipeline::passConstants(IDirect3DDevice9* device, float a, float b, float c
     device->SetPixelShaderConstantF(32, v, 1);
 }
 
+// PS_Focus's c33: the car to focus on (DofAutofocus Car), w = 0 for the middle of the screen
+// as before. Always set: c33 holds whatever the pass before left there. A click in the photo
+// mode and a set focus distance win. The log says once per change whether the engine gave the
+// car (whether its position reaches replays is the open question).
+void Pipeline::focusOnCarConstants(IDirect3DDevice9* device, const Inputs& in, const Settings& s) {
+    const bool wanted = s.dofAutofocus == 1 && s.focusDistance <= 0.0f && in.focusPoint[0] < 0.0f;
+    const bool onCar = wanted && in.focusCarKnown;
+    const float car[4] = {in.focusCar[0], in.focusCar[1], in.focusCar[2], onCar ? 1.0f : 0.0f};
+    device->SetPixelShaderConstantF(33, car, 1);
+    const int state = !wanted ? -1 : (onCar ? 1 : 0);
+    if (wanted && state != m_focusOnCar) {
+        TMVS_LOG("pipeline: depth of field focuses %s", onCar ? "on the car (engine position)" : "on the middle (no car position from the engine)");
+    }
+    m_focusOnCar = state;
+}
+
 void Pipeline::runPass(IDirect3DDevice9* device, Pass pass, gfx::Target& target) {
     runPass(device, pass, target.surface, target.width, target.height);
 }
@@ -2336,6 +2352,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
                 bind(device, 0, m_nd.texture, false);
                 bind(device, 1, m_focus[m_focusIndex].texture, false);
                 passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+                focusOnCarConstants(device, in, s);
                 runPass(device, kFocus, m_focus[focus]);
                 m_focusIndex = focus;
             }
@@ -2650,6 +2667,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
                 bind(device, 0, m_nd.texture, false);
                 bind(device, 1, m_focus[m_focusIndex].texture, false);
                 passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+                focusOnCarConstants(device, in, s);
                 runPass(device, kFocus, m_focus[focus]);
                 m_focusIndex = focus;
             }

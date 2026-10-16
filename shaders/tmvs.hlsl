@@ -2814,6 +2814,31 @@ float4 PS_Focus(float2 uv : TEXCOORD0) : COLOR0 {
             }
         }
         focus = 9.0 / inv;
+        // DofAutofocus Car: u_Pass1.xyz = the player's car from the engine (world, about its
+        // wheel centres), w = 1. Projected with this frame's camera; off screen or behind the
+        // camera the middle above stays. The car's own pixels: a 5x5 grid over a metre each
+        // side of its middle, only depths close to the car's distance count (the road beside
+        // it, the sky, a pillar in front don't). None of them (all of it hidden): the car's
+        // distance itself, so it is sharp when it comes out and the thing in front blurs.
+        if (u_Pass1.w > 0.5) {
+            float3 car = worldToViewDir(u_Pass1.xyz + float3(0.0, 0.3, 0.0) - cameraWorld());
+            float2 carAt = projectToUV(car);
+            if (car.z > 0.5 && all(abs(carAt - 0.5) < 0.47)) {
+                float2 step = float2(u_Proj.x, u_Proj.y) * 0.25 / car.z; // 0.5 m in uv (ndc / 2)
+                float tolerance = max(2.5, 0.1 * car.z);
+                float carInv = 0.0, count = 0.0;
+                [unroll] for (int cj = -2; cj <= 2; cj++) {
+                    [unroll] for (int ci = -2; ci <= 2; ci++) {
+                        float z = tex2Dlod(s0, float4(carAt + float2(ci, cj) * step, 0, 0)).w;
+                        if (abs(z - car.z) < tolerance) {
+                            carInv += 1.0 / z;
+                            count += 1.0;
+                        }
+                    }
+                }
+                focus = count > 0.0 ? count / carInv : car.z;
+            }
+        }
     }
     float previous = tex2Dlod(s1, float4(0.5, 0.5, 0, 0)).r;
     if (u_Pass0.y > 0.5 || !(previous > 0.0 && previous < 1e5)) previous = focus;

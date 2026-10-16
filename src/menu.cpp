@@ -240,6 +240,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("LensDrops")) return s.rain > 0.0f || s.snow > 0.0f;
     if (is("ReflectionBlur")) return s.reflections > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
+    if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it
     if (is("TargetFPS")) return s.autoQuality;
     if (is("TAAJitter")) return s.taa;
     if (!strncmp(f.key, "Trail", 5)) return s.neonTrail > 0.0f;
@@ -361,6 +362,7 @@ const char* tooltipFor(const char* key) {
         {"VideoCodec", "What the replay editor's Shoot video writes. MP4 is encoded by the graphics card and skips the game's codec dialog; the file lands where the .avi would."},
         {"VideoBitrate", "Mbit/s. 0 picks one: 50 for 4K 30 fps H.264, 30 for HEVC."},
         {"FocusDistance", "Metres to the sharp point. 0 focuses automatically."},
+        {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, wherever the replay camera puts it; the middle again while the car is off screen. A click in the photo mode still wins."},
         {"TAA", "Smooths edges by blending frames. Costs a little sharpness."},
         {"TAAJitter", "Shifts the image by sub-pixels each frame for finer edges."},
         {"Sharpen", "Contrast-adaptive sharpening (CAS)."},
@@ -461,6 +463,9 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             } else if (!strcmp(f.key, "VideoCodec")) {
                 static const char* kCodecs[] = {"Game's AVI", "MP4 (H.264)", "MP4 (HEVC)"};
                 changed |= ImGui::Combo(label, value, kCodecs, IM_ARRAYSIZE(kCodecs));
+            } else if (!strcmp(f.key, "DofAutofocus")) {
+                static const char* kFocusModes[] = {"Middle", "Car"};
+                changed |= ImGui::Combo(label, value, kFocusModes, IM_ARRAYSIZE(kFocusModes));
             } else if (!strcmp(f.key, "EngineMoon")) {
                 static const char* kMoons[] = {"Game's", "Black hole", "Off"};
                 changed |= ImGui::Combo(label, value, kMoons, IM_ARRAYSIZE(kMoons));
@@ -1252,6 +1257,7 @@ bool drawCustomize(Config& config, Settings& s) {
     panels.push_back(settingsPanel("Cinematic", s,
                                    {{"MotionBlur", "Motion blur"},
                                     {"DepthOfField", "Depth of field"},
+                                    {"DofAutofocus", "Focus on"},
                                     {"CinematicOnlyInReplays", "Cinematic in replays only"}}));
     panels.push_back(settingsPanel("Image quality", s,
                                    {{"TAA", "Temporal AA"},

@@ -152,6 +152,7 @@ struct Settings {
     float motionBlur = 0.0f;       // fraction of the frame-to-frame camera motion
     float depthOfField = 0.0f;
     float focusDistance = 0.0f;    // metres, 0 = auto focus
+    int dofAutofocus = 0;          // the auto focus sits on 0 the middle of the screen, 1 the player's car (where the engine draws it)
     float bokehSize = 12.0f;       // max blur radius in pixels at 1080p
 
     // Anti-aliasing & sharpening

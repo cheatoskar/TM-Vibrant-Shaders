@@ -43,7 +43,7 @@ static bool isMachine(const Field& f) {
 // default, and the default is the look from before the field. Add it here once you've checked that; a
 // changed default of an older field still fails the fingerprint below.
 static bool isAddedSinceV1(const Field& f) {
-    static const char* const kAdded[] = {"LampGlare", "LampHaze", "LampSkyHalos", "Floodlights"};
+    static const char* const kAdded[] = {"LampGlare", "LampHaze", "LampSkyHalos", "Floodlights", "DofAutofocus"};
     for (const char* key : kAdded) {
         if (!strcmp(key, f.key)) return true;
     }
