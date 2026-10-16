@@ -467,7 +467,23 @@ IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs&
         b.enabled = false;
         b.sharpen = 0.0f;
     } else {
-        if (!Config::get().presetSettings(name, b)) return nullptr;
+        // Your own preset is a file read field by field (about 100 GetPrivateProfileString calls,
+        // several ms): read once, again when another preset is picked, its file is written or
+        // your settings change (the machine settings are yours), not every frame.
+        static std::string s_name;
+        static unsigned long long s_written = 0;
+        static Settings s_mine, s_look;
+        static bool s_known = false;
+        const unsigned long long written = Config::get().presetWritten(name);
+        if (s_name != name || s_written != written || memcmp(&s_mine, &mine, sizeof(Settings)) != 0) {
+            s_name = name;
+            s_written = written;
+            memcpy(&s_mine, &mine, sizeof(Settings));
+            s_look = mine;
+            s_known = Config::get().presetSettings(name, s_look);
+        }
+        if (!s_known) return nullptr;
+        b = s_look;
         b.enabled = true; // with the shaders off: the preset next to the game's image with photo mode's lens
     }
     b.debugView = shownA.debugView;

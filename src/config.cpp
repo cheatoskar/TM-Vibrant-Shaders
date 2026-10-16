@@ -941,6 +941,12 @@ bool Config::namedSettings(const std::string& name, Settings& out) const {
     return true;
 }
 
+unsigned long long Config::presetWritten(const std::string& name) const {
+    WIN32_FILE_ATTRIBUTE_DATA data = {};
+    if (!isUserPreset(name) || !GetFileAttributesExW(presetFile(name).c_str(), GetFileExInfoStandard, &data)) return 0;
+    return (static_cast<unsigned long long>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+}
+
 bool Config::applyNamed(const std::string& name) {
     Settings out = settings;
     if (!namedSettings(name, out)) return false;

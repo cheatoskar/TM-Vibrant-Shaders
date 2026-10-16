@@ -106,6 +106,9 @@ public:
     bool previewSettings(Settings& s) const { return !previewPreset.empty() && namedSettings(previewPreset, s); }
     // Any preset's values (for the menu's cost estimate); false = unknown name.
     bool presetSettings(const std::string& name, Settings& s) const { return namedSettings(name, s); }
+    // When your preset's file was last written (zero for a built-in one or no file): a cached
+    // copy of its values is stale when this changes.
+    unsigned long long presetWritten(const std::string& name) const;
 
     // The current look as a share code, and a code applied as your unsaved look ("Custom" on top of
     // the built-in preset it is closest to; an exact copy of a built-in preset selects it). Nothing
