@@ -207,7 +207,7 @@ const Field* findField(const char* key) {
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights");
 }
 
@@ -1322,6 +1322,7 @@ bool drawSettings(Config& config, Settings& s) {
                       }});
     panels.push_back({"Game", 8.0f, [&s] {
                           bool l = drawKey(s, "CinematicOnlyInReplays", "Motion blur, depth of field only in replays");
+                          l |= drawKey(s, "VideoExportBest", "Video export: full quality, effects on the video's clock");
                           l |= drawKey(s, "WeatherSound", "Rain and thunder volume");
                           l |= drawKey(s, "TAA", "Temporal anti-aliasing");
                           l |= drawKey(s, "TAAJitter", "TAA sub-pixel jitter");

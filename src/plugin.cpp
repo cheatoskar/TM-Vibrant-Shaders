@@ -130,6 +130,29 @@ float seconds() {
     return static_cast<float>(static_cast<double>(now.QuadPart - g_startTime.QuadPart) / static_cast<double>(g_frequency.QuadPart));
 }
 
+// The game's video export (engine::videoExport), with VideoExportBest on; looked at once per
+// frame. Its clock runs at a fixed step: a frame of the video may take seconds to render, and
+// on the real clock the exposure adapted, the focus pulled, rain fell and the clouds drifted
+// that much faster in the video (and unevenly: as fast as each frame happened to render).
+// While it steps, the effects run on the video's clock: one step per rendered frame. Without
+// an export it is the real clock; after one it goes on from where the video ended (no jump).
+bool g_exporting = false;
+engine::VideoExport g_export;
+double g_videoClock = -1.0;  // >= 0: the export's clock (s), while it runs at a fixed step
+float g_clockOffset = 0.0f;  // added to the real clock after an export (0 until the first one)
+struct ExportStats {
+    unsigned frames = 0;      // rendered frames of the export
+    unsigned stepped = 0;     // of them on the video's clock
+    double clockStart = 0.0;  // the effects' clock at its start
+    double gameStart = 0.0;   // the game's clock at its start
+    int samplesSeen = 0;      // most main cameras shaded in one frame
+} g_exportStats;
+
+// The time the effects see (s).
+float effectTime() {
+    return g_videoClock >= 0.0 ? static_cast<float>(g_videoClock) : seconds() + g_clockOffset;
+}
+
 // CPU time the mod's own rendering takes (D3D calls of the pipeline, not the GPU work):
 // logged now and then for the first frames, to see whether the CPU side is worth working on.
 struct CpuStats {
@@ -709,14 +732,21 @@ void processScene(IDirect3DDevice9* device) {
     IDirect3DSurface9* target = nullptr;
     IDirect3DSurface9* savedDepth = nullptr;
     if (FAILED(device->GetRenderTarget(0, &target)) || !target) return;
+    // The video export's supersampling (its dialog's "high quality" without the sub-frames of
+    // its motion blur) renders the camera n x n times a frame into one target, each with a
+    // sub-pixel offset, and averages them. Each is shaded: with only the first, the video got
+    // 1 / (n n) of the effects. The rest repeat the first (its motion blur, focus, exposure).
+    const bool samples = g_exporting && g_export.samplesPerFrame > 1;
+    const bool repeat = samples && g_scene.processedCount > 0;
     // The same target twice in a frame would be shaded twice.
-    if (g_scene.processedCount > 0 && target == g_scene.processedTarget) {
+    if (g_scene.processedCount > 0 && target == g_scene.processedTarget && !repeat) {
         target->Release();
         return;
     }
-    // Only the first camera of a single-camera frame continues the temporal history.
-    const bool temporal = g_scene.processedCount == 0 && g_scene.lastFrameCount <= 1;
-    if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera) {
+    // Only the first camera of a single-camera frame continues the temporal history (and the
+    // first of the export's samples: every frame has them).
+    const bool temporal = g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples);
+    if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera && !repeat) {
         g_scene.loggedMultiCamera = true;
         TMVS_LOG("scene: several main cameras in one frame (camera blend) - shading each, temporal effects paused");
     }
@@ -795,8 +825,10 @@ void processScene(IDirect3DDevice9* device) {
     inputs.sunKnown = sunDirection(inputs.sunDirection);
     inputs.sunColorKnown = g_scene.haveLight;
     memcpy(inputs.sunColor, g_scene.lightColor, sizeof(inputs.sunColor));
-    inputs.time = seconds();
+    inputs.time = effectTime();
     inputs.temporal = temporal;
+    inputs.video = g_exporting;
+    inputs.repeat = repeat;
     {
         float lo = 0.0f, hi = 0.0f;
         if (engine::waterHeights(lo, hi)) {
@@ -808,7 +840,10 @@ void processScene(IDirect3DDevice9* device) {
             inputs.water[2] = !known ? 0.0f : (engine::stadium() ? 2.0f : 1.0f);
         }
     }
-    inputs.driving = !engine::cinematicActive();
+    // The export counts as cinematic for as long as it runs (the hooks' 500 ms ran out within
+    // one of its frames: a 4K frame with supersampling lost its blur halfway through).
+    const bool cinematic = engine::cinematicActive() || g_exporting;
+    inputs.driving = !cinematic;
     inputs.carKnown = engine::carLocation(inputs.carPosition);
     {
         static DWORD s_carSeen = 0;
@@ -874,12 +909,18 @@ void processScene(IDirect3DDevice9* device) {
         Settings effective = settings;
         // The menu points at a preset: show it (it glides in like a chosen one).
         if (Config::get().previewSettings(effective)) effective.debugView = settings.debugView;
-        smoothLook(effective, seconds());
-        // Photo mode: full quality, whatever the frame rate.
-        if (!inputs.photo) g_autoQuality.apply(effective);
+        smoothLook(effective, effectTime());
+        // Photo mode and the video export: full quality, whatever the frame rate.
+        if (!inputs.photo && !inputs.video) g_autoQuality.apply(effective);
+        if (inputs.video) {
+            effective.quality = 2;
+            // The game's supersampling is the anti-aliasing. TAA would run on the first of its
+            // samples in a frame only (the others repeat it), and over its sub-frames it smears.
+            if (g_export.samplesPerFrame > 1 || g_export.subFrames) effective.taa = false;
+        }
         // Motion blur and depth of field are for watching, not for driving (the auto focus
         // would blur the track ahead of you).
-        if (effective.cinematicOnlyInReplays && !engine::cinematicActive() && !inputs.photo) {
+        if (effective.cinematicOnlyInReplays && !cinematic && !inputs.photo) {
             effective.motionBlur = 0.0f;
             effective.depthOfField = 0.0f;
         }
@@ -921,6 +962,48 @@ void processScene(IDirect3DDevice9* device) {
     if (savedDepth) savedDepth->Release();
 }
 
+// The video export: its start and end in the log, its clock (effectTime), and a clean start
+// (the first frame of the video doesn't fade in from the editor's view).
+void updateVideoExport() {
+    engine::VideoExport v;
+    const bool on = Config::get().settings.videoExportBest && engine::videoExport(v);
+    ExportStats& stats = g_exportStats;
+    if (g_exporting && g_scene.processedCount > stats.samplesSeen) stats.samplesSeen = g_scene.processedCount;
+    if (on && !g_exporting) {
+        stats = ExportStats();
+        stats.clockStart = effectTime();
+        stats.gameStart = v.gameClock;
+        g_pipeline.resetHistory();
+        TMVS_LOG("video export: %dx%d at %.0f fps%s, %s; game step %.3f ms. Full quality, the effects on the video's clock%s", v.width,
+                 v.height, v.fps, v.writesVideo ? "" : " (a run without video output)",
+                 v.samplesPerFrame > 1 ? "supersampling, every sample shaded"
+                 : v.subFrames         ? "supersampling over sub-frames (the game's motion blur)"
+                                       : "no supersampling",
+                 v.step * 1000.0, v.samplesPerFrame > 1 || v.subFrames ? ", TAA off (the game's samples are the anti-aliasing)" : "");
+        if (v.samplesPerFrame > 1 || v.subFrames)
+            TMVS_LOG("video export: %d x %d samples (%d each frame, %d per video frame), stereo %d", v.hqSamples, v.hqSamples,
+                     v.samplesPerFrame, v.samplesPerVideoFrame, v.stereo);
+        if (v.step <= 0.0) TMVS_LOG("video export: the game's clock is not stepped (unexpected): the effects stay on the real clock");
+    } else if (!on && g_exporting) {
+        TMVS_LOG("video export ended: %u frames (%u on the video's clock), the effects' clock advanced %.2f s, the game's %.2f s; "
+                 "at most %d main cameras shaded in a frame (expected %d)",
+                 stats.frames, stats.stepped, effectTime() - stats.clockStart, g_export.gameClock - stats.gameStart, stats.samplesSeen,
+                 g_export.samplesPerFrame);
+    }
+    g_exporting = on;
+    if (on) {
+        g_export = v;
+        stats.frames++;
+    }
+    if (on && v.step > 0.0) {
+        g_videoClock = g_videoClock < 0.0 ? static_cast<double>(effectTime()) : g_videoClock + v.step;
+        stats.stepped++;
+    } else if (g_videoClock >= 0.0) {
+        g_clockOffset = static_cast<float>(g_videoClock - static_cast<double>(seconds()));
+        g_videoClock = -1.0;
+    }
+}
+
 // --- Engine callbacks -------------------------------------------------------
 
 // TAA jitter: a Halton (2, 3) sequence of 8 sub-pixel offsets, one per frame. Only while
@@ -937,10 +1020,12 @@ float halton(int index, int base) {
 
 void updateJitter() {
     Settings effective = Config::get().settings;
-    if (!photo::active()) g_autoQuality.apply(effective);
-    // Hi-res tiles: no jitter (each tile must line up with its neighbours to the pixel).
+    if (!photo::active() && !g_exporting) g_autoQuality.apply(effective);
+    // Hi-res tiles: no jitter (each tile must line up with its neighbours to the pixel). The
+    // export's supersampling: no TAA, and the game shifts its samples itself.
+    const bool supersampled = g_exporting && (g_export.samplesPerFrame > 1 || g_export.subFrames);
     const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0 &&
-                    !photo::tiling();
+                    !photo::tiling() && !supersampled;
     if (!on) {
         engine::setProjectionJitter(0.0f, 0.0f);
         g_jitterUV[0] = g_jitterUV[1] = 0.0f;
@@ -966,6 +1051,7 @@ void onFrameBegin() {
         engine::hideSunFlare(s.enabled && Pipeline::skyReplacesSun(s));
         engine::hideGameSky(s.enabled && Pipeline::skyReplacesSun(s) && !s.gameSkyClouds);
     }
+    updateVideoExport();
     updateJitter();
     g_cameraIndex = 0;
     g_scene.lastFrameCount = g_scene.processedCount;
@@ -1238,7 +1324,8 @@ void onPresent(IDirect3DDevice9* device) {
     g_pipeline.setProfiling(settings.autoQuality || Config::get().showOverlay);
     // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
     // frame times when it ends starts a quiet period).
-    if (!photo::active()) g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline, settings);
+    // The video export likewise: its frames are slow on purpose.
+    if (!photo::active() && !g_exporting) g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline, settings);
     D3DDEVICE_CREATION_PARAMETERS cp{};
     device->GetCreationParameters(&cp);
     audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);
