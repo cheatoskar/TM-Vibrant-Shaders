@@ -111,9 +111,14 @@ public:
     static bool blackHoleLights(const Settings& s) { return (s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f; }
     static void blackHoleDirection(const Settings& s, float toward[3]);
 
-    // Neon trail: start over (race restart, new map) / start a new line (respawn).
+    // Neon trail: start over (new map) / a new run (race restart: the earlier runs stay as
+    // TrailKeepRuns says, else it starts over) / start a new line (respawn).
     void resetTrail() { m_trailReset = true; }
-    void breakTrail() { m_trailBreak = true; }
+    void newTrailRun() { m_trailNewRun = true; }
+    void breakTrail() {
+        m_trailBreak = true;
+        m_trailRespawnAt = m_trailTime;
+    }
 
     // Restart or respawn: the height map starts over. The respawn camera shows the player's
     // car from outside the area kept out of the map, and the ground under the parked car is
@@ -428,6 +433,18 @@ private:
     float m_trailKept[3] = {};  // where the last point was kept (engine positions only)
     bool m_trailKeptValid = false;
     float m_trailTime = 0.0f;   // time since the reset (s)
+    // Runs (TrailKeepRuns): a restart keeps the points and starts a new run. Per run (0 this one,
+    // k the k-th before it) its first time stamp and the points kept before it began; older runs
+    // than the kept ones are cut off the drawn points, the kept ones drawn dimmer.
+    static constexpr int kTrailRunsMax = 5;
+    static constexpr float kTrailTeleport = 60.0f; // m in one frame without a respawn: a new run (a restart the hooks missed)
+    bool m_trailNewRun = false;
+    float m_trailRespawnAt = -100.0f; // m_trailTime of the last respawn (its jump is no new run)
+    UINT m_trailWritten = 0;          // points kept since the reset
+    int m_trailRuns = 0;              // earlier runs kept
+    float m_trailRunStart[kTrailRunsMax + 1] = {};
+    UINT m_trailRunFirst[kTrailRunsMax + 1] = {};
+    int m_trailLogged = 0;
     float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks)
     float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
     int m_boltSlot = -1000000;                  // lightning strike the bolt direction belongs to

@@ -1424,6 +1424,8 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
 // Neon trail: quad k joins point k and k + 1 of the ring buffer, widened towards the camera.
 float4 c_Trail  : register(c16); // points written, next index, now (s), fade after (s, 0 = never)
 float4 c_Trail2 : register(c17); // sideways offset (m), half width (m), 0, 0
+float4 c_Runs   : register(c20); // TrailKeepRuns: the first stamp of this run and of the 3 before it (-1e30 = none)
+float4 c_Runs2  : register(c21); // x the first stamp 4 runs back; y the last run's brightness, z less per run further back
 sampler2D s_trail : register(s2);
 #ifndef TRAIL_W
 #define TRAIL_W 128.0
@@ -1501,8 +1503,12 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float3 d = trailTangent(j, pj, s);
     float len = length(d);
     if (len < 1e-3) return o;
-    float age = c_Trail.z - (corner.y > 0.5 ? b.w : abs(a.w));
+    float stamp = corner.y > 0.5 ? b.w : abs(a.w);
+    float age = c_Trail.z - stamp;
     float fade = c_Trail.w > 0.0 ? saturate(1.0 - age / c_Trail.w) : 1.0;
+    // An earlier run (TrailKeepRuns) is drawn dimmer, the older the dimmer.
+    float run = dot(step(stamp + 1e-3, c_Runs), float4(1, 1, 1, 1)) + step(stamp + 1e-3, c_Runs2.x);
+    if (run > 0.5) fade *= c_Runs2.y - (run - 1.0) * c_Runs2.z;
     if (fade <= 0.0) return o;
     // It comes out behind the car: under and in it the line would flicker through the body
     // and the rear wheels (it runs through their centres, almost at the depth of the tread).
@@ -1639,14 +1645,59 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
 }
 
 void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt) {
+    // The car jumped far in one frame without a respawn: a restart the hooks didn't see (the
+    // log had "race reset" on some restarts only, the old run stayed under the new one).
+    if (!m_trailReset && !m_trailNewRun && in.driving && in.carKnown && m_trailKeptValid && m_trailTime - m_trailRespawnAt > 1.0f) {
+        const float dx = in.carPosition[0] - m_trailKept[0], dy = in.carPosition[1] - m_trailKept[1], dz = in.carPosition[2] - m_trailKept[2];
+        const float jump = sqrtf(dx * dx + dy * dy + dz * dz);
+        if (jump > kTrailTeleport) {
+            m_trailNewRun = true;
+            if (m_trailLogged < 20) {
+                m_trailLogged++;
+                TMVS_LOG("pipeline: neon trail: the car is %.0f m from its last point without a respawn: a new run", jump);
+            }
+        }
+    }
+    const int keepRuns = s.trailKeepRuns < 0 ? 0 : (s.trailKeepRuns > kTrailRunsMax ? kTrailRunsMax : s.trailKeepRuns);
+    if (m_trailNewRun) {
+        m_trailNewRun = false;
+        if (keepRuns == 0 || m_trailWritten == 0) {
+            m_trailReset = true; // as before: the trail starts over
+        } else if (!m_trailReset) {
+            // The points stay; this run begins with a new line and its own time stamps.
+            for (int k = kTrailRunsMax; k > 0; k--) {
+                m_trailRunStart[k] = m_trailRunStart[k - 1];
+                m_trailRunFirst[k] = m_trailRunFirst[k - 1];
+            }
+            m_trailRunStart[0] = m_trailTime + 1.0f; // the stamp of "now": every point of this run has a later one
+            m_trailRunFirst[0] = m_trailWritten;
+            m_trailRuns = m_trailRuns + 1 < kTrailRunsMax ? m_trailRuns + 1 : kTrailRunsMax;
+            m_trailBreak = true;
+            m_trailKeptValid = false;
+            m_trailClock = 0.0f;
+        }
+    }
     if (m_trailReset) {
         m_trailReset = false;
         m_trailBreak = true;
         m_trailHead = m_trailCount = 0;
         m_trailClock = m_trailTime = 0.0f;
         m_trailKeptValid = false;
+        m_trailRespawnAt = -100.0f;
+        m_trailWritten = 0;
+        m_trailRuns = 0;
+        for (int k = 0; k <= kTrailRunsMax; k++) {
+            m_trailRunStart[k] = 0.0f;
+            m_trailRunFirst[k] = 0;
+        }
         device->SetRenderTarget(0, m_trailPoints.surface);
         device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 0.0f, 0);
+    }
+    // Fewer runs wanted (the setting lowered): the older ones go.
+    if (m_trailRuns > keepRuns) m_trailRuns = keepRuns;
+    {
+        const UINT sinceOldest = m_trailWritten - m_trailRunFirst[m_trailRuns];
+        if (m_trailCount > sinceOldest) m_trailCount = sinceOldest;
     }
     m_trailTime += dt;
     m_trailClock += dt;
@@ -1694,6 +1745,7 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
             m_trailBreak = false;
             m_trailHead = (m_trailHead + 1) % kTrailPoints;
             if (m_trailCount < kTrailPoints) m_trailCount++;
+            m_trailWritten++;
             live = false; // just kept: it's the newest point now
         }
     }
@@ -1723,6 +1775,12 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     // The vertex shader works with unwrapped indices: next + kTrailPoints keeps them positive.
     const float trail[4] = {static_cast<float>(points), static_cast<float>(next + kTrailPoints), m_trailTime + 1.0f, s.trailDuration};
     device->SetVertexShaderConstantF(16, trail, 1);
+    // Earlier runs: where each began (a point stamped before it belongs to an older run; -1e30 =
+    // none kept) and their brightness, 0.6 for the last run down to 0.6 / n for the n-th.
+    float runs[8] = {-1e30f, -1e30f, -1e30f, -1e30f, -1e30f, 0.6f, 0.0f, 0.0f};
+    for (int k = 0; k < m_trailRuns && k < kTrailRunsMax; k++) runs[k] = m_trailRunStart[k];
+    if (m_trailRuns > 0) runs[6] = 0.6f / static_cast<float>(m_trailRuns);
+    device->SetVertexShaderConstantF(20, runs, 2);
 
     device->SetRenderTarget(0, m_hdr.surface);
     D3DVIEWPORT9 viewport = {0, 0, in.width, in.height, 0.0f, 1.0f};

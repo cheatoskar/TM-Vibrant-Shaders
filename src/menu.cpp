@@ -1101,7 +1101,8 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"TrailColor", "Colour"},
                                     {"TrailWidth", "Width"},
                                     {"TrailTyres", "Two lines from the tyres"},
-                                    {"TrailDuration", "Fade after (s)"}}));
+                                    {"TrailDuration", "Fade after (s)"},
+                                    {"TrailKeepRuns", "Earlier runs kept"}}));
     panels.push_back(settingsPanel("Cinematic", s,
                                    {{"MotionBlur", "Motion blur"},
                                     {"DepthOfField", "Depth of field"},
