@@ -3001,23 +3001,21 @@ float hazeAmount(float3 rd, float dist) {
 // haze takes on the way), out.a = what the haze took (luminance): it scatters around the lamp.
 float4 PS_LampSource(float2 uv : TEXCOORD0) : COLOR0 {
     float3 sum = 0;
-    float haze = 0.0;
     // Four bilinear taps cover the 4x4 block: a bulb a few pixels wide isn't missed.
     [unroll] for (int j = 0; j < 2; j++) {
         [unroll] for (int i = 0; i < 2; i++) {
             float2 suv = uv + (float2(i, j) * 2.0 - 1.0) * u_Screen.zw;
             float3 cGame = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
-            float3 added = max(toLinear(cGame) - toLinear(max(cGame - tex2Dlod(s14, float4(suv, 0, 0)).rgb, 0.0)), 0.0);
-            added *= 1.0 + u_Rays.w * u_Engine.y;
-            float z = tex2Dlod(s1, float4(suv, 0, 0)).w;
-            float3 v = viewPosition(suv, 1.0);
-            // A halo over the sky: the lighting pass doesn't haze it either.
-            float fog = z < SKY_Z ? hazeAmount(viewToWorldDir(normalize(v)), length(v) * z) : 0.0;
-            sum += added * (1.0 - 0.6 * fog);
-            haze += luma(added) * 0.6 * fog;
+            sum += max(toLinear(cGame) - toLinear(max(cGame - tex2Dlod(s14, float4(suv, 0, 0)).rgb, 0.0)), 0.0);
         }
     }
-    return float4(sum * 0.25, haze * 0.25);
+    float3 added = sum * 0.25 * (1.0 + u_Rays.w * u_Engine.y);
+    // The haze once for the block (the pass reads mostly bandwidth: three full-resolution
+    // targets). A halo over the sky: the lighting pass doesn't haze it either.
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float3 v = viewPosition(uv, 1.0);
+    float fog = z < SKY_Z ? hazeAmount(viewToWorldDir(normalize(v)), length(v) * z) : 0.0;
+    return float4(added * (1.0 - 0.6 * fog), luma(added) * 0.6 * fog);
 }
 
 // s0 = the level above, u_Pass0.xy = its texel: the bloom's 13-tap filter, on all four channels.
