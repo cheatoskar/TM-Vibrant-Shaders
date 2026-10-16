@@ -2024,7 +2024,14 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (water && u_Water.z > 0.5) {
         float waterY;
         float3 world = worldPosition(p);
-        onWater = waterLevelMatch(world, waterY) > 0.5;
+        float match = waterLevelMatch(world, waterY);
+        // Clean water: this pass reads the half-res depth, the nearest of each 2x2 pixels, at
+        // the 2x2's centre: the point comes out up to half a full-res pixel in front of the plane,
+        // above the water by about that pixel's height. From a high camera at mid distance that
+        // is more than the tolerance: whole rows of the water missed the plane and traced from
+        // the stepped depth, unchecked (horizontal streaks of the ramps in the channels).
+        // The ground lies 1 m above the water, well beyond one pixel up to 600 m.
+        onWater = u_Water2.x > 0.5 ? abs(world.y - waterY) < waterTolerance(waterY) * 0.8 + nd.w / (abs(u_Proj.y) * u_Screen.y) * 1.5 : match > 0.5;
         if (onWater) {
             float3 rdView = normalize(viewPosition(uv, 1.0));
             p = worldToViewDir(waterSurface(viewToWorldDir(rdView), waterY, world) - cameraWorld());
