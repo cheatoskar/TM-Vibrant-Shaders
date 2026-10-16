@@ -44,6 +44,8 @@ void frameDone();
 // While no pipeline uses the maps (long shadows and volumetric light off, no sun), the draws
 // aren't checked at all: what is kept stays, recording goes on where it was when they're used again.
 void pauseRecording(bool paused);
+// CPU time of the recording and of drawing the maps since the start, ms (the perf log).
+double cpuMs();
 
 // Draws what is new into the maps (inside the pipeline's state save). sunWorld: towards the
 // light; camera: world position. False while neither map is complete (the height map's

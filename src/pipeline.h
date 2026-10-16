@@ -193,7 +193,7 @@ public:
     // GPU timing per pass with timestamp queries (results arrive a few frames late).
     void setProfiling(bool enabled) { m_profiling = enabled; }
     void collectProfile(bool wait); // wait = block until every issued frame is resolved
-    int passCount() const { return kPassCount; }
+    int passCount() const { return kProfileSlots; } // the passes, then the CasterShadows maps' drawing
     static const char* passName(int pass);
     float passTime(int pass) const { return m_passMs[pass]; } // smoothed milliseconds
     float totalTime() const { return m_totalMs; }
@@ -254,6 +254,9 @@ private:
         kPrepareGBuffer,
         kPassCount
     };
+    // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
+    static constexpr int kProfileCasters = kPassCount;
+    static constexpr int kProfileSlots = kPassCount + 1;
 
     static constexpr int kBloomLevels = 6;
 
@@ -467,7 +470,7 @@ private:
     ProfileFrame m_profile[kProfileFrames];
     ProfileFrame* m_currentProfile = nullptr;
     int m_profileIndex = 0;
-    float m_passMs[kPassCount] = {};
+    float m_passMs[kProfileSlots] = {};
     float m_totalMs = 0.0f;
     float m_sunFade = 0.0f; // sun on screen (0 = shafts and flare invisible)
     float m_lastTime = 0.0f;

@@ -2,6 +2,7 @@
 #include "audio.h"
 #include "capture.h"
 #include "casters.h"
+#include "perflog.h"
 #include "config.h"
 #include "depth.h"
 #include "engine.h"
@@ -252,6 +253,7 @@ void logHangs(double ms, double captureMs, bool racing) {
 }
 
 void countPipelineCpu(double ms) {
+    perflog::addCpu(ms);
     if (g_cpuStats.frames >= 20000) return;
     g_cpuStats.total += ms;
     g_cpuStats.worst = ms > g_cpuStats.worst ? ms : g_cpuStats.worst;
@@ -1518,6 +1520,7 @@ void onCameraBegin(void* camera) {
     g_device->GetRenderTarget(0, &rt);
     g_scene.inMainCamera = isMainTarget(g_device, rt);
     if (g_scene.inMainCamera) {
+        perflog::mark(g_device, perflog::Mark::GameBegin);
         g_scene.haveView = false;
         g_scene.haveProjection = false;
         // The scene's perspective projection (as onSetTransform takes it), not an orthographic one.
@@ -1724,9 +1727,11 @@ void onCameraEnd(void* camera, const engine::CameraInfo&) {
         }
     }
     if (g_scene.inMainCamera && g_device) {
+        perflog::mark(g_device, perflog::Mark::GameEnd);
         endGBuffer(g_device);
         endHdr(g_device);
         processScene(g_device);
+        perflog::mark(g_device, perflog::Mark::ModEnd);
     }
     g_scene.inMainCamera = false;
 }
@@ -1767,6 +1772,7 @@ void onDeviceCreated(IDirect3DDevice9* device) {
 }
 
 void onPreReset() {
+    perflog::release();
     g_pipeline.release();
     releaseSideB();
     g_sceneCopy.destroy();
@@ -1879,9 +1885,11 @@ void onPresent(IDirect3DDevice9* device) {
     // Fallback when the engine hooks are unavailable: process at Present (HUD included).
     if (!engine::active() && g_scene.haveView) processScene(device);
 
-    // GPU timing costs a few queries per frame: only while it's used.
+    // GPU timing per pass: auto quality, the overlay and the perf log line use it (a few
+    // timestamp queries a frame, never waited for).
     const Settings& settings = Config::get().settings;
-    g_pipeline.setProfiling(settings.autoQuality || Config::get().showOverlay);
+    g_pipeline.setProfiling(true);
+    perflog::frame(device, g_pipeline, g_shadedThisFrame, casters::cpuMs());
     // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
     // frame times when it ends starts a quiet period).
     // The video export likewise: its frames are slow on purpose.

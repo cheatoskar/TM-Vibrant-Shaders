@@ -55,6 +55,7 @@ bool Pipeline::init(IDirect3DDevice9* device, const std::wstring& shaderDir) {
 }
 
 const char* Pipeline::passName(int pass) {
+    if (pass == kProfileCasters) return "Casters";
     return pass >= 0 && pass < kPassCount ? kEntryPoints[pass] + 3 : "?";
 }
 
@@ -109,13 +110,13 @@ bool Pipeline::profileResolve(ProfileFrame& frame, bool wait) {
     }
     frame.pending = false;
     if (disjoint || frequency == 0 || frame.count < 2) return true;
-    float ms[kPassCount] = {};
+    float ms[kProfileSlots] = {};
     for (int i = 1; i < frame.count; i++) {
         if (frame.pass[i] >= 0) ms[frame.pass[i]] += static_cast<float>(static_cast<double>(times[i] - times[i - 1]) * 1000.0 / frequency);
     }
     const float total = static_cast<float>(static_cast<double>(times[frame.count - 1] - times[0]) * 1000.0 / frequency);
     const float k = m_totalMs > 0.0f ? 0.1f : 1.0f;
-    for (int p = 0; p < kPassCount; p++) m_passMs[p] += (ms[p] - m_passMs[p]) * k;
+    for (int p = 0; p < kProfileSlots; p++) m_passMs[p] += (ms[p] - m_passMs[p]) * k;
     m_totalMs += (total - m_totalMs) * k;
     return true;
 }
@@ -2307,7 +2308,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     casters::Maps casterMaps;
     float camera[3];
     for (int j = 0; j < 3; j++) camera[j] = -(in.view[12] * in.view[j * 4 + 0] + in.view[13] * in.view[j * 4 + 1] + in.view[14] * in.view[j * 4 + 2]);
+    profileMark(-1);
     const bool casterShadows = (longShadows || (heightMap && wantVolume)) && in.casterMap && in.casterMap(device, m_sunWorld, camera, casterMaps);
+    profileMark(kProfileCasters); // the maps' draws (new meshes, the near map following the camera)
     const casters::MapInfo* casterInfo[2] = {&casterMaps.nearMap, &casterMaps.farMap};
     for (int k = 0; k < 2; k++) {
         float constants[4][4] = {};

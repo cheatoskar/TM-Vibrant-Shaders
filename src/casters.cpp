@@ -115,6 +115,7 @@ DWORD g_lastLog = 0;
 bool g_firstLog = false;
 bool g_full = false;
 double g_toMs = 0.0;
+double g_cpuTotal = 0.0; // the recording's and the maps' CPU time since the start (perflog)
 
 // The inverse of the camera's view (rigid), for the frame's view.
 float g_ivView[16] = {};
@@ -662,7 +663,9 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
         ~Timer() {
             LARGE_INTEGER to;
             QueryPerformanceCounter(&to);
-            g_stats.recordMs += milliseconds(from, to);
+            const double ms = milliseconds(from, to);
+            g_stats.recordMs += ms;
+            g_cpuTotal += ms;
         }
     } timer{t0};
     if (g_full || count == 0) return;
@@ -1027,6 +1030,7 @@ bool update(IDirect3DDevice9* device, const float sunWorld[3], const float camer
     if (g_far.complete) mapInfo(g_far, out.farMap);
     QueryPerformanceCounter(&t1);
     g_stats.updateMs += milliseconds(t0, t1);
+    g_cpuTotal += milliseconds(t0, t1);
     return out.nearMap.texture || out.farMap.texture;
 }
 
@@ -1040,6 +1044,10 @@ void reset(const char* why, bool log) {
     g_lastLog = GetTickCount();
     g_farBuilds = 0;
     g_stats = Stats();
+}
+
+double cpuMs() {
+    return g_cpuTotal;
 }
 
 void frameDone() {
