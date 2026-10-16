@@ -144,13 +144,14 @@ def shader_kind(blob):
     return '?'
 
 
-def dump(zip_path, needle, out_file):
-    """Writes the first pixel shader of the first entry whose name contains needle (for tests)."""
+def dump(zip_path, needle, out_file, checksum=''):
+    """Writes the first pixel shader of the first entry whose name contains needle (for tests);
+    with checksum, the variant whose DXBC checksum (hex) starts with it (a name has many)."""
     zf = zipfile.ZipFile(zip_path)
     for name in zf.namelist():
         if needle.lower() in name.lower():
             for b in dxbc_blobs(gbx_body(zf.read(name))):
-                if shader_kind(b) == 'ps':
+                if shader_kind(b) == 'ps' and b[4:20].hex().startswith(checksum.lower()):
                     open(out_file, 'wb').write(b)
                     print(f"{name} -> {out_file} ({len(b)} bytes)")
                     return
@@ -159,7 +160,7 @@ def dump(zip_path, needle, out_file):
 
 if __name__ == '__main__':
     if sys.argv[1] == '--dump':
-        dump(sys.argv[2], sys.argv[3], sys.argv[4])
+        dump(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5] if len(sys.argv) > 5 else '')
         sys.exit(0)
     zips = sys.argv[1:]
     for z in zips:
