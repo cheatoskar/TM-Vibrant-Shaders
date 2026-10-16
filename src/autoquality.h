@@ -38,7 +38,7 @@ private:
     float m_cost[kKnobs] = {};     // measured ms while the knob was on
     double m_blockUntil[kKnobs] = {}; // brought back and too slow again: leave it off a while
     double m_restoredAt[kKnobs] = {};
-    int m_passes[kKnobs][4] = {};  // pass indices per knob (-1 = none), looked up by name
+    int m_passes[kKnobs][8] = {};  // pass indices per knob (-1 = none), looked up by name: the shared, then the whole ones
     bool m_passesKnown = false;
 
     double m_windowStart = -1.0;

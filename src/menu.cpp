@@ -53,20 +53,21 @@ void drawPerformance() {
     }
     struct Group {
         const char* label;
-        const char* passes[3];
+        const char* passes[4];
     };
     static const Group kGroups[] = {
-        {"Depth & normals", {"LinearDepth", "Prepare", "DownsampleND"}},
+        {"Depth & normals", {"LinearDepth", "Prepare*", "DownsampleND"}},
         {"AO & sun shadows", {"OcclusionShadow", "BilateralBlur", nullptr}},
-        {"Long-range shadows / rain map", {"HeightSplat", "HeightMerge", nullptr}},
+        {"Long-range shadows / rain map", {"HeightSplat", "HeightMerge", "LightGrid*", "Casters"}},
         {"Volumetric light", {"ShadowHeight", "Volumetric", nullptr}},
         {"Bounce light (GI)", {"GI", "GITemporal", nullptr}},
         {"Neon trail", {"TrailPoint", "Trail", nullptr}},
         {"Custom sky", {"Sky*", "AuroraHalf", nullptr}},
         {"Volumetric clouds", {"Clouds", nullptr, nullptr}},
         {"Reflections", {"Reflect", nullptr, nullptr}},
-        {"Neon light", {"SpillDown", "SpillBlur", nullptr}},
-        {"Lighting, grass, weather, fog", {"Lighting", nullptr, nullptr}},
+        {"Neon light", {"SpillDown*", "SpillBlur", nullptr}},
+        {"Lamp glare and haze", {"Lamp*", nullptr, nullptr}},
+        {"Lighting, grass, weather, fog", {"Lighting*", nullptr, nullptr}},
         {"Rain and snow particles", {"RainDrop", "RainSplash", "SnowFlake"}},
         {"Depth of field, motion blur", {"Focus", "DofBlur", "Cinematic"}},
         {"Light shafts", {"RayMask", "RayBlur", nullptr}},
