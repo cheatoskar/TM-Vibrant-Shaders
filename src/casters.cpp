@@ -15,16 +15,25 @@ namespace tmshaders {
 namespace casters {
 namespace {
 
-// One map over the whole track. 4096^2 over a Stadium map (~1.3 km with its margins) is about
-// 0.3 m a texel across the light and 0.1 m along it (a low light stretches that over the
-// ground by 1 / sin(elevation)). INTZ: 64 MB of video memory, no colour target (NULL format).
+// Three INTZ maps of 4096^2 (64 MB of video memory each, no colour target: NULL format): the
+// whole track, and two around the camera (one in use while the other is drawn).
 constexpr UINT kMapSize = 4096;
-constexpr size_t kMaxCasters = 40000;  // a Stadium map shows a few thousand
+constexpr size_t kMaxCasters = 30000;   // a Stadium map keeps a few thousand
 constexpr size_t kMaxPending = 60000;
-constexpr UINT kDrawBudget = 1500;     // meshes drawn into the map per frame (a rebuild spreads)
-constexpr DWORD kStaticAfterMs = 500;  // seen again this much later at the same place: static
-constexpr float kMarginH = 128.0f;     // meshes reach this far from their origin (m)
-constexpr float kMarginDepth = 300.0f; // along the light (m)
+constexpr UINT kDrawBudget = 1000;      // meshes drawn into the maps per frame (measured: ~0.3 ms of CPU)
+constexpr UINT kCheckBudget = 40000;    // meshes looked at per frame (the near map's selection)
+constexpr DWORD kStaticAfterMs = 500;   // seen again this much later at the same place: static
+constexpr float kNearHalf = 160.0f;     // the near map: +-160 m around the camera (horizontally),
+constexpr float kNearBelow = 50.0f;     // this far below it
+constexpr float kNearAbove = 80.0f;     // and above it,
+constexpr float kNearMove = 40.0f;      // drawn again once the camera is this far from its centre
+constexpr float kNearLightBefore = 1500.0f; // depth window: casters up to this far towards the light
+constexpr float kNearLightAfter = 600.0f;
+constexpr float kFarMarginDepth = 300.0f;
+constexpr float kUnboundedReach = 64.0f; // a mesh whose vertices can't be read: this far around its origin
+// The same buffers this close are one mesh at one place: float noise of the camera's matrices,
+// and TAA jitter should the projection SetTransform gives lack it (a shear of up to 0.5 m at 1 km).
+constexpr double kSamePlace = 1.0, kSameAxes = 0.01;
 
 struct Caster {
     IDirect3DVertexBuffer9* vb = nullptr;
@@ -35,60 +44,76 @@ struct Caster {
     INT base = 0;
     UINT minIndex = 0, vertices = 0, start = 0, count = 0;
     float world[4][3] = {}; // mesh -> world, row vectors (rows 0..2 the axes, row 3 the place)
+    float lo[3] = {}, hi[3] = {}; // world bounds
+    float box[4] = {};            // light space bounds for the current light: across min/max, up min/max
 };
 
+// A mesh seen at a place, not yet for long enough.
 struct Pending {
-    DWORD firstSeen = 0;
-    DWORD lastSeen = 0;
+    float world[4][3];
+    DWORD firstSeen;
+    DWORD lastSeen;
 };
 
 // The game's vertex declarations: the stream and our declaration with its position alone.
 struct DeclInfo {
     IDirect3DVertexDeclaration9* own = nullptr; // null: no usable position
     WORD stream = 0;
+    WORD offset = 0;
+    BYTE type = 0;
+};
+
+struct LightMap {
+    IDirect3DTexture9* texture = nullptr;
+    IDirect3DSurface9* surface = nullptr;
+    float a0 = 0, sa = 1, b0 = 0, sb = 1, d0 = 0, sd = 1; // light space: across (u), up (v), along (f)
+    float centre[3] = {};  // the camera the near map was laid around
+    UINT cursor = 0;       // meshes before this one are in the map
+    bool cleared = false;
+    bool complete = false; // drawn through once: the shaders may use it
+    bool active = false;   // a region is set
 };
 
 struct Stats {
-    unsigned draws = 0, noShader = 0, noCamera = 0, notAffine = 0, noDecl = 0, stream = 0, pool = 0, pending = 0, known = 0, promoted = 0;
-    unsigned frames = 0;
+    unsigned frames = 0, draws = 0, noCamera = 0, otherProjection = 0, noDecl = 0, stream = 0, pool = 0, pending = 0, known = 0;
+    unsigned promoted = 0, duplicates = 0, unbounded = 0, mapDraws = 0, nearBuilds = 0;
+    double recordMs = 0.0, updateMs = 0.0;
 };
 
 std::vector<Caster> g_casters;
-std::unordered_set<uint64_t> g_known;
-std::unordered_map<uint64_t, Pending> g_pending;
-std::unordered_map<const void*, int> g_vsRegister;           // the game's vertex shader -> GbxVisualPrCamera's register, -1 none
-std::unordered_map<const void*, DeclInfo> g_decls;           // the game's declaration -> ours
+std::unordered_set<uint64_t> g_known;                         // exact keys of kept meshes (the quick way)
+std::unordered_map<uint64_t, std::vector<Pending>> g_pending; // buffers, draw call and 16 m cell -> places waiting
+size_t g_pendingCount = 0;
+std::unordered_map<uint64_t, std::vector<uint32_t>> g_byMesh; // buffers, draw call and 16 m cell -> the kept meshes there
+std::unordered_map<const void*, int> g_vsRegister;            // the game's vertex shader -> GbxVisualPrCamera's register, -1 none
+std::unordered_map<const void*, DeclInfo> g_decls;            // the game's declaration -> ours
 std::map<std::pair<WORD, BYTE>, IDirect3DVertexDeclaration9*> g_ownDecls; // (offset, type) -> position-only declaration
 Stats g_stats;
 DWORD g_lastSweep = 0;
 DWORD g_lastLog = 0;
-int g_logs = 0;
+bool g_firstLog = false;
+bool g_full = false;
+double g_toMs = 0.0;
 
-// Inverse of the camera's view-projection, for the frame's view and projection.
-float g_ivView[16] = {}, g_ivProj[16] = {};
-double g_invVP[4][4] = {};
+// The inverse of the camera's view (rigid), for the frame's view.
+float g_ivView[16] = {};
+double g_invView[4][4] = {};
 bool g_invValid = false;
 
-// Translations of the static meshes (world): what the map must cover.
-float g_placeMin[3] = {1e30f, 1e30f, 1e30f}, g_placeMax[3] = {-1e30f, -1e30f, -1e30f};
+// World bounds of every kept mesh: what the whole-track map must cover.
+float g_boundsLo[3] = {1e30f, 1e30f, 1e30f}, g_boundsHi[3] = {-1e30f, -1e30f, -1e30f};
 
-// The map.
-IDirect3DTexture9* g_depth = nullptr;
-IDirect3DSurface9* g_depthSurface = nullptr;
 IDirect3DSurface9* g_nullTarget = nullptr; // NULL format colour target (no memory), else R32F
 IDirect3DVertexShader9* g_vs = nullptr;
 IDirect3DPixelShader9* g_ps = nullptr;
 bool g_unsupported = false;
-struct Region {
-    float a0 = 0, sa = 1, b0 = 0, sb = 1, d0 = 0, sd = 1; // light space: across (U), up (V), along (F)
-    float light[3] = {0, 0, 0};
-    float u[3] = {}, v[3] = {}, f[3] = {};
-    UINT cursor = 0;       // casters before this one are in the map
-    bool complete = false; // drawn through once: the shaders may use it
-    bool cleared = false;
-    bool valid = false;
-} g_map;
-unsigned g_rebuilds = 0;
+bool g_loggedResources = false;
+LightMap g_far, g_near[2];
+int g_nearFront = -1; // the near map the shaders use, -1 none yet
+int g_nearBuild = -1; // the near map being drawn, -1 none
+bool g_lightSet = false;
+float g_f[3] = {}, g_u[3] = {}, g_v[3] = {};
+unsigned g_farBuilds = 0;
 
 const char* kCasterVS = R"(
 float4x4 u_MeshToMap : register(c0); // mesh -> the map's clip space (row vectors, columns in c0..c3)
@@ -105,6 +130,15 @@ uint64_t fnv(uint64_t h, const void* data, size_t bytes) {
     const unsigned char* p = static_cast<const unsigned char*>(data);
     for (size_t i = 0; i < bytes; i++) h = (h ^ p[i]) * 1099511628211ull;
     return h;
+}
+
+double milliseconds(const LARGE_INTEGER& a, const LARGE_INTEGER& b) {
+    if (g_toMs == 0.0) {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        g_toMs = 1000.0 / static_cast<double>(f.QuadPart);
+    }
+    return static_cast<double>(b.QuadPart - a.QuadPart) * g_toMs;
 }
 
 // GbxVisualPrCamera's first register, from the constant table in the shader's bytecode
@@ -174,6 +208,8 @@ DeclInfo declInfo(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
             }
             info.own = own;
             info.stream = e.Stream;
+            info.offset = e.Offset;
+            info.type = e.Type;
             break;
         }
     }
@@ -213,20 +249,55 @@ bool invert(const double m[4][4], double out[4][4]) {
     return true;
 }
 
-bool inverseViewProjection(const float view[16], const float projection[16]) {
-    if (g_invValid && !memcmp(view, g_ivView, sizeof(g_ivView)) && !memcmp(projection, g_ivProj, sizeof(g_ivProj))) return true;
-    double vp[4][4];
+bool inverseView(const float view[16]) {
+    if (g_invValid && !memcmp(view, g_ivView, sizeof(g_ivView))) return true;
+    double v[4][4];
+    for (int i = 0; i < 16; i++) v[i / 4][i % 4] = view[i];
+    memcpy(g_ivView, view, sizeof(g_ivView));
+    g_invValid = invert(v, g_invView);
+    return g_invValid;
+}
+
+// Mesh -> world from the game's mesh -> clip (c[j] = column j, row vectors) and the camera.
+// The view-space position comes from clip x, y and w alone: clip z carries the near plane,
+// which multiplied the float noise of the game's constants by 1 / near (up to 0.2 m of drift
+// with the camera, every drift a new copy of the mesh). Clip z is used only to check that the
+// draw used this projection (the sky's has another near plane). False: not this camera.
+bool meshToWorld(const float c[4][4], const float* p, double w[4][4], bool& otherProjection) {
+    otherProjection = false;
+    // Perspective: w = view z (P03 = P13 = 0, P23 = 1, P33 = 0).
+    if (p[3] != 0.0f || p[7] != 0.0f || p[11] != 1.0f || p[15] != 0.0f) {
+        otherProjection = true;
+        return false;
+    }
+    const double det = static_cast<double>(p[0]) * p[5] - static_cast<double>(p[4]) * p[1];
+    if (fabs(det) < 1e-9) return false;
+    double mv[4][4];
     for (int r = 0; r < 4; r++) {
-        for (int c = 0; c < 4; c++) {
+        const double e = r == 3 ? 1.0 : 0.0;
+        const double zv = c[3][r];
+        const double x = c[0][r] - zv * p[8] - e * p[12];
+        const double y = c[1][r] - zv * p[9] - e * p[13];
+        const double xv = (x * p[5] - y * p[4]) / det;
+        const double yv = (y * p[0] - x * p[1]) / det;
+        const double z = xv * p[2] + yv * p[6] + zv * p[10] + e * p[14];
+        if (fabs(c[2][r] - z) > 2e-5 * (1.0 + fabs(c[2][r]) + fabs(zv)) + 1e-4) {
+            otherProjection = true;
+            return false;
+        }
+        mv[r][0] = xv;
+        mv[r][1] = yv;
+        mv[r][2] = zv;
+        mv[r][3] = e;
+    }
+    for (int r = 0; r < 4; r++) {
+        for (int col = 0; col < 4; col++) {
             double sum = 0.0;
-            for (int k = 0; k < 4; k++) sum += static_cast<double>(view[r * 4 + k]) * projection[k * 4 + c];
-            vp[r][c] = sum;
+            for (int k = 0; k < 4; k++) sum += mv[r][k] * g_invView[k][col];
+            w[r][col] = sum;
         }
     }
-    memcpy(g_ivView, view, sizeof(g_ivView));
-    memcpy(g_ivProj, projection, sizeof(g_ivProj));
-    g_invValid = invert(vp, g_invVP);
-    return g_invValid;
+    return true;
 }
 
 bool managedStatic(IDirect3DVertexBuffer9* vb) {
@@ -239,6 +310,70 @@ bool managedStatic(IDirect3DIndexBuffer9* ib) {
     return SUCCEEDED(ib->GetDesc(&d)) && d.Pool == D3DPOOL_MANAGED && !(d.Usage & D3DUSAGE_DYNAMIC);
 }
 
+// The mesh's own bounds from its vertices (the managed pool keeps a copy in system memory:
+// reading it doesn't touch the GPU). False: not readable, or nonsense.
+bool meshBounds(const Caster& m, const DeclInfo& info, float lo[3], float hi[3]) {
+    const long long first = static_cast<long long>(m.base) + m.minIndex;
+    if (first < 0 || m.vertices == 0 || m.stride < info.offset + 12u) return false;
+    void* data = nullptr;
+    const UINT from = m.offset + static_cast<UINT>(first) * m.stride;
+    if (FAILED(m.vb->Lock(from, m.vertices * m.stride, &data, D3DLOCK_READONLY | D3DLOCK_NOSYSLOCK)) || !data) return false;
+    for (int j = 0; j < 3; j++) {
+        lo[j] = 1e30f;
+        hi[j] = -1e30f;
+    }
+    bool ok = true;
+    __try {
+        const unsigned char* v = static_cast<const unsigned char*>(data) + info.offset;
+        for (UINT i = 0; i < m.vertices; i++, v += m.stride) {
+            const float* p = reinterpret_cast<const float*>(v);
+            for (int j = 0; j < 3; j++) {
+                lo[j] = fminf(lo[j], p[j]);
+                hi[j] = fmaxf(hi[j], p[j]);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    m.vb->Unlock();
+    for (int j = 0; j < 3 && ok; j++) ok = std::isfinite(lo[j]) && std::isfinite(hi[j]) && hi[j] >= lo[j] && hi[j] - lo[j] < 5000.0f;
+    return ok;
+}
+
+float dot3(const float a[3], const float b[3]) {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+void normalize(float v[3]) {
+    const float l = sqrtf(dot3(v, v));
+    if (l > 1e-8f) {
+        for (int j = 0; j < 3; j++) v[j] /= l;
+    }
+}
+
+// A world box's bounds in the light's frame: across, up, along.
+void lightBox(const float lo[3], const float hi[3], float out[6]) {
+    out[0] = out[2] = out[4] = 1e30f;
+    out[1] = out[3] = out[5] = -1e30f;
+    for (int corner = 0; corner < 8; corner++) {
+        const float p[3] = {(corner & 1) ? hi[0] : lo[0], (corner & 2) ? hi[1] : lo[1], (corner & 4) ? hi[2] : lo[2]};
+        const float l[3] = {dot3(p, g_u), dot3(p, g_v), dot3(p, g_f)};
+        for (int j = 0; j < 3; j++) {
+            out[j * 2] = fminf(out[j * 2], l[j]);
+            out[j * 2 + 1] = fmaxf(out[j * 2 + 1], l[j]);
+        }
+    }
+}
+
+void casterBox(Caster& m) {
+    float b[6];
+    lightBox(m.lo, m.hi, b);
+    m.box[0] = b[0];
+    m.box[1] = b[1];
+    m.box[2] = b[2];
+    m.box[3] = b[3];
+}
+
 void forgetMeshes() {
     for (Caster& c : g_casters) {
         gfx::release(c.vb);
@@ -247,33 +382,51 @@ void forgetMeshes() {
     g_casters.clear();
     g_known.clear();
     g_pending.clear();
+    g_pendingCount = 0;
+    g_byMesh.clear();
     g_vsRegister.clear();
     g_decls.clear();
     g_invValid = false;
     for (int j = 0; j < 3; j++) {
-        g_placeMin[j] = 1e30f;
-        g_placeMax[j] = -1e30f;
+        g_boundsLo[j] = 1e30f;
+        g_boundsHi[j] = -1e30f;
     }
-    g_map.valid = false;
-    g_map.complete = false;
-    g_map.cursor = 0;
+    g_far.active = g_far.complete = false;
+    g_near[0].active = g_near[0].complete = false;
+    g_near[1].active = g_near[1].complete = false;
+    g_nearFront = g_nearBuild = -1;
+    g_lightSet = false;
+    g_full = false;
 }
 
 void logStats(const char* when) {
     const Stats& s = g_stats;
     const double f = s.frames ? static_cast<double>(s.frames) : 1.0;
-    TMVS_LOG("casters (%s): per frame %.0f opaque draws: %.0f without GbxVisualPrCamera, %.0f not mesh -> world, %.0f no float "
-             "position, %.0f instanced/no stream, %.0f not managed, %.0f waiting, %.0f known; %u meshes kept (%u new), map %s, %u rebuilds, "
-             "%u frames",
-             when, s.draws / f, s.noCamera / f, s.notAffine / f, s.noDecl / f, s.stream / f, s.pool / f, s.pending / f, s.known / f,
-             static_cast<unsigned>(g_casters.size()), s.promoted, g_map.complete ? "complete" : (g_map.valid ? "building" : "none"),
-             g_rebuilds, s.frames);
+    TMVS_LOG("casters (%s): %u meshes kept (%u new, %u copies merged, %u without readable bounds); per frame %.0f opaque draws "
+             "(%.0f known, %.0f waiting, %.0f other shader, %.0f other projection, %.0f no float position, %.0f instanced, %.0f not managed), "
+             "CPU %.3f ms recording + %.3f ms drawing, %.0f meshes drawn into the maps; near map drawn %u times, whole-track map %u "
+             "times; %u frames",
+             when, static_cast<unsigned>(g_casters.size()), s.promoted, s.duplicates, s.unbounded, s.draws / f, s.known / f, s.pending / f,
+             s.noCamera / f, s.otherProjection / f, s.noDecl / f, s.stream / f, s.pool / f, s.recordMs / f, s.updateMs / f,
+             s.mapDraws / f, s.nearBuilds, g_farBuilds, s.frames);
     g_stats = Stats();
+}
+
+bool createMap(IDirect3DDevice9* device, LightMap& m, D3DFORMAT intz) {
+    if (m.texture) return true;
+    return SUCCEEDED(device->CreateTexture(kMapSize, kMapSize, 1, D3DUSAGE_DEPTHSTENCIL, intz, D3DPOOL_DEFAULT, &m.texture, nullptr)) &&
+           SUCCEEDED(m.texture->GetSurfaceLevel(0, &m.surface));
+}
+
+void releaseMap(LightMap& m) {
+    gfx::release(m.surface);
+    gfx::release(m.texture);
+    m.active = m.complete = false;
 }
 
 bool ensureResources(IDirect3DDevice9* device) {
     if (g_unsupported) return false;
-    if (g_depth && g_nullTarget && g_vs && g_ps) return true;
+    if (g_far.texture && g_near[0].texture && g_near[1].texture && g_nullTarget && g_vs && g_ps) return true;
     IDirect3D9* d3d = nullptr;
     device->GetDirect3D(&d3d);
     D3DDEVICE_CREATION_PARAMETERS cp{};
@@ -292,11 +445,7 @@ bool ensureResources(IDirect3DDevice9* device) {
         g_unsupported = true;
         return false;
     }
-    bool ok = true;
-    if (!g_depth) {
-        ok = SUCCEEDED(device->CreateTexture(kMapSize, kMapSize, 1, D3DUSAGE_DEPTHSTENCIL, intz, D3DPOOL_DEFAULT, &g_depth, nullptr)) &&
-             SUCCEEDED(g_depth->GetSurfaceLevel(0, &g_depthSurface));
-    }
+    bool ok = createMap(device, g_far, intz) && createMap(device, g_near[0], intz) && createMap(device, g_near[1], intz);
     if (ok && !g_nullTarget) {
         // A colour target must be bound; the NULL format takes no memory.
         ok = SUCCEEDED(device->CreateRenderTarget(kMapSize, kMapSize, haveNull ? nullFormat : D3DFMT_R32F, D3DMULTISAMPLE_NONE, 0, FALSE,
@@ -305,58 +454,164 @@ bool ensureResources(IDirect3DDevice9* device) {
     if (ok && !g_vs) g_vs = gfx::compileVertexShader(device, kCasterVS, "main", "CasterVS");
     if (ok && !g_ps) g_ps = gfx::compilePixelShader(device, kCasterPS, "main", "CasterPS");
     if (!ok || !g_vs || !g_ps) {
-        TMVS_LOG("casters: map resources failed (%ux%u INTZ%s) - CasterShadows unavailable", kMapSize, kMapSize,
+        TMVS_LOG("casters: map resources failed (3 x %ux%u INTZ%s) - CasterShadows unavailable", kMapSize, kMapSize,
                  haveNull ? ", NULL target" : ", R32F target");
         releaseDevice();
         g_unsupported = true;
         return false;
     }
-    TMVS_LOG("casters: map %ux%u INTZ%s", kMapSize, kMapSize, haveNull ? " (NULL colour target)" : " (R32F colour target)");
-    hook::logMemory("after the caster map");
+    if (!g_loggedResources) {
+        g_loggedResources = true;
+        TMVS_LOG("casters: 3 maps %ux%u INTZ (%u MB of video memory)%s", kMapSize, kMapSize, 3 * kMapSize * kMapSize * 4 / (1024 * 1024),
+                 haveNull ? "" : " + an R32F colour target");
+        hook::logMemory("after the caster maps");
+    }
     return true;
 }
 
-void normalize(float v[3]) {
-    const float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-    if (l > 1e-8f) {
-        for (int j = 0; j < 3; j++) v[j] /= l;
+// The region of the whole-track map: every kept mesh, with room to grow.
+bool fitFar() {
+    float b[6];
+    lightBox(g_boundsLo, g_boundsHi, b);
+    b[4] -= kFarMarginDepth;
+    b[5] += kFarMarginDepth;
+    LightMap& m = g_far;
+    const bool outside = !m.active || b[0] < m.a0 || b[1] > m.a0 + m.sa || b[2] < m.b0 || b[3] > m.b0 + m.sb || b[4] < m.d0 ||
+                         b[5] > m.d0 + m.sd;
+    if (!outside) return false;
+    // A fifth more room on every side: a growing track doesn't start it over with every block.
+    const float ga = (b[1] - b[0]) * 0.2f, gb = (b[3] - b[2]) * 0.2f, gd = (b[5] - b[4]) * 0.2f;
+    m.a0 = b[0] - ga;
+    m.sa = b[1] - b[0] + 2.0f * ga;
+    m.b0 = b[2] - gb;
+    m.sb = b[3] - b[2] + 2.0f * gb;
+    m.d0 = b[4] - gd;
+    m.sd = b[5] - b[4] + 2.0f * gd;
+    m.cursor = 0;
+    m.cleared = m.complete = false;
+    m.active = true;
+    if (++g_farBuilds <= 12) {
+        TMVS_LOG("casters: whole-track map %.0f x %.0f m (%.2f x %.2f m a texel), %u meshes", m.sa, m.sb, m.sa / kMapSize, m.sb / kMapSize,
+                 static_cast<unsigned>(g_casters.size()));
     }
+    return true;
 }
 
-float dot3(const float a[3], const float b[3]) {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+// The near map's region around the camera.
+void fitNear(LightMap& m, const float camera[3]) {
+    const float lo[3] = {camera[0] - kNearHalf, camera[1] - kNearBelow, camera[2] - kNearHalf};
+    const float hi[3] = {camera[0] + kNearHalf, camera[1] + kNearAbove, camera[2] + kNearHalf};
+    float b[6];
+    lightBox(lo, hi, b);
+    const float d = dot3(camera, g_f);
+    m.a0 = b[0];
+    m.sa = b[1] - b[0];
+    m.b0 = b[2];
+    m.sb = b[3] - b[2];
+    m.d0 = d - kNearLightBefore;
+    m.sd = kNearLightBefore + kNearLightAfter;
+    memcpy(m.centre, camera, sizeof(m.centre));
+    m.cursor = 0;
+    m.cleared = m.complete = false;
+    m.active = true;
 }
 
-// The light-space box (across, up, along the light) that holds every kept mesh.
-void wantedBox(const float u[3], const float v[3], const float f[3], float lo[3], float hi[3]) {
-    for (int j = 0; j < 3; j++) {
-        lo[j] = 1e30f;
-        hi[j] = -1e30f;
+bool overlaps(const Caster& c, const LightMap& m) {
+    return c.box[1] >= m.a0 && c.box[0] <= m.a0 + m.sa && c.box[3] >= m.b0 && c.box[2] <= m.b0 + m.sb;
+}
+
+// Draws the meshes from the map's cursor on (only those over its region), within the budget.
+void drawInto(IDirect3DDevice9* device, LightMap& m, UINT& budget, UINT& checks, bool select) {
+    const UINT total = static_cast<UINT>(g_casters.size());
+    if (!m.active || (m.cleared && m.cursor >= total) || budget == 0 || checks == 0) return;
+    device->SetDepthStencilSurface(m.surface);
+    if (!m.cleared) {
+        device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+        m.cleared = true;
     }
-    for (int corner = 0; corner < 8; corner++) {
-        const float p[3] = {(corner & 1) ? g_placeMax[0] + kMarginH : g_placeMin[0] - kMarginH,
-                            (corner & 2) ? g_placeMax[1] + kMarginH : g_placeMin[1] - kMarginH,
-                            (corner & 4) ? g_placeMax[2] + kMarginH : g_placeMin[2] - kMarginH};
-        const float l[3] = {dot3(p, u), dot3(p, v), dot3(p, f)};
-        for (int j = 0; j < 3; j++) {
-            lo[j] = fminf(lo[j], l[j]);
-            hi[j] = fmaxf(hi[j], l[j]);
+    // World -> the map's clip space (row vectors): x across, y up, z along the light.
+    double lm[4][4] = {};
+    for (int r = 0; r < 3; r++) {
+        lm[r][0] = 2.0 * g_u[r] / m.sa;
+        lm[r][1] = 2.0 * g_v[r] / m.sb;
+        lm[r][2] = g_f[r] / m.sd;
+    }
+    lm[3][0] = -2.0 * m.a0 / m.sa - 1.0;
+    lm[3][1] = -2.0 * m.b0 / m.sb - 1.0;
+    lm[3][2] = -m.d0 / m.sd;
+    lm[3][3] = 1.0;
+    IDirect3DVertexDeclaration9* lastDecl = nullptr;
+    UINT i = m.cursor;
+    for (; i < total && budget > 0 && checks > 0; i++) {
+        checks--;
+        const Caster& c = g_casters[i];
+        if (select && !overlaps(c, m)) continue;
+        float columns[4][4];
+        for (int col = 0; col < 4; col++) {
+            for (int r = 0; r < 4; r++) {
+                double sum = r == 3 ? lm[3][col] : 0.0;
+                for (int k = 0; k < 3; k++) sum += static_cast<double>(c.world[r][k]) * lm[k][col];
+                columns[col][r] = static_cast<float>(sum);
+            }
         }
+        if (c.decl != lastDecl) {
+            device->SetVertexDeclaration(c.decl);
+            lastDecl = c.decl;
+        }
+        device->SetStreamSource(0, c.vb, c.offset, c.stride);
+        device->SetIndices(c.ib);
+        device->SetVertexShaderConstantF(0, &columns[0][0], 4);
+        device->DrawIndexedPrimitive(c.type, c.base, c.minIndex, c.vertices, c.start, c.count);
+        budget--;
+        g_stats.mapDraws++;
     }
-    lo[2] -= kMarginDepth;
-    hi[2] += kMarginDepth;
+    m.cursor = i;
+    if (i >= total) m.complete = true;
+}
+
+void mapInfo(const LightMap& m, MapInfo& out) {
+    // World -> the map's texture coordinates. D3D9 rasterizes texel i at screen x = i, which
+    // the texture holds at (i + 0.5) / size: half a texel on top of the projection.
+    const float half = 0.5f / kMapSize;
+    for (int j = 0; j < 3; j++) {
+        out.rows[0][j] = g_u[j] / m.sa;
+        out.rows[1][j] = -g_v[j] / m.sb;
+        out.rows[2][j] = g_f[j] / m.sd;
+    }
+    out.rows[0][3] = -m.a0 / m.sa + half;
+    out.rows[1][3] = 1.0f + m.b0 / m.sb + half;
+    out.rows[2][3] = -m.d0 / m.sd;
+    out.texel[0] = out.texel[1] = 1.0f / kMapSize;
+    // A receiver must lie this far behind the stored depth. One texel up the map covers
+    // texel / sin(elevation) of flat ground, whose depth changes by cos(elevation) per metre:
+    // the four taps of the filter see up to that much, plus a constant for the depth's noise.
+    const float sinEl = fmaxf(-g_f[1], 0.05f);
+    const float cosEl = sqrtf(fmaxf(1.0f - sinEl * sinEl, 0.0f));
+    const float ground = (m.sb / kMapSize) / sinEl;
+    out.bias = (0.15f + 1.5f * ground * cosEl) / m.sd;
+    out.texture = m.texture;
 }
 
 } // namespace
 
 void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
                 const float view[16], const float projection[16]) {
+    LARGE_INTEGER t0;
+    QueryPerformanceCounter(&t0);
+    struct Timer {
+        LARGE_INTEGER& from;
+        ~Timer() {
+            LARGE_INTEGER to;
+            QueryPerformanceCounter(&to);
+            g_stats.recordMs += milliseconds(from, to);
+        }
+    } timer{t0};
     g_stats.draws++;
-    if (g_casters.size() >= kMaxCasters || count == 0) return;
+    if (g_full || count == 0) return;
     IDirect3DVertexShader9* vs = nullptr;
     device->GetVertexShader(&vs);
     if (!vs) {
-        g_stats.noShader++;
+        g_stats.noCamera++;
         return;
     }
     const int reg = cameraRegister(vs);
@@ -366,23 +621,14 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
         return;
     }
     float c[4][4];
-    if (FAILED(device->GetVertexShaderConstantF(reg, &c[0][0], 4)) || !inverseViewProjection(view, projection)) {
+    if (FAILED(device->GetVertexShaderConstantF(reg, &c[0][0], 4)) || !inverseView(view)) {
         g_stats.noCamera++;
         return;
     }
-    // c[j] is column j of mesh -> clip (row vectors: clip.x = dot(p, c0)). Mesh -> world is
-    // that times (view * projection)^-1; for a mesh drawn with this camera it is affine.
     double w[4][4];
-    for (int r = 0; r < 4; r++) {
-        for (int col = 0; col < 4; col++) {
-            double sum = 0.0;
-            for (int k = 0; k < 4; k++) sum += static_cast<double>(c[k][r]) * g_invVP[k][col];
-            w[r][col] = sum;
-        }
-    }
-    const double reach = 1.0 + fabs(w[3][0]) + fabs(w[3][1]) + fabs(w[3][2]);
-    if (fabs(w[0][3]) > 1e-3 || fabs(w[1][3]) > 1e-3 || fabs(w[2][3]) > 1e-3 || fabs(w[3][3] - 1.0) > 1e-5 * reach + 1e-3) {
-        g_stats.notAffine++;
+    bool otherProjection = false;
+    if (!meshToWorld(c, projection, w, otherProjection)) {
+        g_stats.otherProjection++;
         return;
     }
     IDirect3DVertexDeclaration9* decl = nullptr;
@@ -415,13 +661,14 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
         gfx::release(ib);
         return;
     }
-    // The key: the mesh and its place (rounded: the inverse carries float noise of the
-    // camera's matrices, well below a millimetre).
-    uint64_t h = 14695981039346656037ull;
+    // The key: the mesh and its place (rounded to 2 cm and 1/2000; the recovery is exact to
+    // well below that, see meshToWorld).
+    uint64_t mesh = 14695981039346656037ull;
     const void* ids[2] = {vb, ib};
     const UINT draw[8] = {offset, stride, static_cast<UINT>(type), static_cast<UINT>(base), minIndex, vertices, start, count};
-    h = fnv(h, ids, sizeof(ids));
-    h = fnv(h, draw, sizeof(draw));
+    mesh = fnv(mesh, ids, sizeof(ids));
+    mesh = fnv(mesh, draw, sizeof(draw));
+    uint64_t h = mesh;
     for (int r = 0; r < 4; r++) {
         for (int col = 0; col < 3; col++) {
             const long long q = static_cast<long long>(floor(w[r][col] * (r == 3 ? 50.0 : 2000.0) + 0.5));
@@ -434,19 +681,77 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
         gfx::release(ib);
         return;
     }
+    auto samePlace = [&](const float k[4][3]) {
+        for (int r = 0; r < 4; r++) {
+            for (int col = 0; col < 3; col++) {
+                if (fabs(w[r][col] - k[r][col]) >= (r == 3 ? kSamePlace : kSameAxes)) return false;
+            }
+        }
+        return true;
+    };
+    // Places are looked up by mesh and 16 m cell (the cell and its neighbours): a block mesh
+    // the track uses hundreds of times isn't compared with every copy.
+    const long long cellX = static_cast<long long>(floor(w[3][0] / 16.0)), cellZ = static_cast<long long>(floor(w[3][2] / 16.0));
+    auto bucket = [&](long long x, long long z) {
+        const long long xz[2] = {x, z};
+        return fnv(mesh, xz, sizeof(xz));
+    };
+    // Kept already, under another rounding: its key leads there too from now on (bounded: with
+    // the jitter missing the keys would change every frame).
+    for (long long dz = -1; dz <= 1; dz++) {
+        for (long long dx = -1; dx <= 1; dx++) {
+            auto it = g_byMesh.find(bucket(cellX + dx, cellZ + dz));
+            if (it == g_byMesh.end()) continue;
+            for (uint32_t index : it->second) {
+                if (!samePlace(g_casters[index].world)) continue;
+                g_stats.known++;
+                g_stats.duplicates++;
+                if (g_known.size() < 4 * kMaxCasters) g_known.insert(h);
+                gfx::release(vb);
+                gfx::release(ib);
+                return;
+            }
+        }
+    }
+    // Waiting: kept once it stood at the same place for half a second.
     const DWORD now = GetTickCount();
-    Pending& p = g_pending[h];
-    if (!p.firstSeen) p.firstSeen = now;
-    p.lastSeen = now;
-    if (now - p.firstSeen < kStaticAfterMs) {
+    bool ready = false, found = false;
+    for (long long dz = -1; dz <= 1 && !found; dz++) {
+        for (long long dx = -1; dx <= 1 && !found; dx++) {
+            auto it = g_pending.find(bucket(cellX + dx, cellZ + dz));
+            if (it == g_pending.end()) continue;
+            std::vector<Pending>& waiting = it->second;
+            for (size_t i = 0; i < waiting.size(); i++) {
+                if (!samePlace(waiting[i].world)) continue;
+                found = true;
+                waiting[i].lastSeen = now;
+                if (now - waiting[i].firstSeen >= kStaticAfterMs) {
+                    ready = true;
+                    waiting.erase(waiting.begin() + i);
+                    g_pendingCount--;
+                }
+                break;
+            }
+        }
+    }
+    if (!found && g_pendingCount < kMaxPending) {
+        std::vector<Pending>& waiting = g_pending[bucket(cellX, cellZ)];
+        Pending fresh;
+        for (int r = 0; r < 4; r++) {
+            for (int col = 0; col < 3; col++) fresh.world[r][col] = static_cast<float>(w[r][col]);
+        }
+        fresh.firstSeen = fresh.lastSeen = now;
+        waiting.push_back(fresh);
+        g_pendingCount++;
+    }
+    if (!ready) {
         g_stats.pending++;
         gfx::release(vb);
         gfx::release(ib);
         return;
     }
-    // Static: kept, with the game's buffers (references held until reset()).
-    g_pending.erase(h);
     g_known.insert(h);
+    // Static: kept, with the game's buffers (references held until reset()).
     Caster m;
     m.vb = vb;
     m.offset = offset;
@@ -462,28 +767,69 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
     for (int r = 0; r < 4; r++) {
         for (int col = 0; col < 3; col++) m.world[r][col] = static_cast<float>(w[r][col]);
     }
-    for (int j = 0; j < 3; j++) {
-        g_placeMin[j] = fminf(g_placeMin[j], m.world[3][j]);
-        g_placeMax[j] = fmaxf(g_placeMax[j], m.world[3][j]);
+    float lo[3], hi[3];
+    if (meshBounds(m, info, lo, hi)) {
+        for (int j = 0; j < 3; j++) {
+            m.lo[j] = m.hi[j] = m.world[3][j];
+        }
+        for (int corner = 0; corner < 8; corner++) {
+            const float q[3] = {(corner & 1) ? hi[0] : lo[0], (corner & 2) ? hi[1] : lo[1], (corner & 4) ? hi[2] : lo[2]};
+            for (int j = 0; j < 3; j++) {
+                const float v = q[0] * m.world[0][j] + q[1] * m.world[1][j] + q[2] * m.world[2][j] + m.world[3][j];
+                m.lo[j] = fminf(m.lo[j], v);
+                m.hi[j] = fmaxf(m.hi[j], v);
+            }
+        }
+    } else {
+        g_stats.unbounded++;
+        for (int j = 0; j < 3; j++) {
+            m.lo[j] = m.world[3][j] - kUnboundedReach;
+            m.hi[j] = m.world[3][j] + kUnboundedReach;
+        }
     }
+    for (int j = 0; j < 3; j++) {
+        g_boundsLo[j] = fminf(g_boundsLo[j], m.lo[j]);
+        g_boundsHi[j] = fmaxf(g_boundsHi[j], m.hi[j]);
+    }
+    if (g_lightSet) casterBox(m);
+    g_byMesh[bucket(cellX, cellZ)].push_back(static_cast<uint32_t>(g_casters.size()));
     g_casters.push_back(m);
     g_stats.promoted++;
+    if (g_casters.size() >= kMaxCasters && !g_full) {
+        g_full = true;
+        TMVS_LOG("casters: %u meshes kept, no more for this map", static_cast<unsigned>(g_casters.size()));
+    }
 }
 
-bool update(IDirect3DDevice9* device, const float sunWorld[3], MapInfo& out) {
+bool update(IDirect3DDevice9* device, const float sunWorld[3], const float camera[3], Maps& out) {
+    LARGE_INTEGER t0, t1;
+    QueryPerformanceCounter(&t0);
+    out = Maps();
     g_stats.frames++;
     const DWORD now = GetTickCount();
     // Things that moved never come back to the same place: forget them after a while.
-    if (now - g_lastSweep > 5000 || g_pending.size() > kMaxPending) {
+    if (now - g_lastSweep > 3000 || g_pendingCount >= kMaxPending) {
         g_lastSweep = now;
+        const bool full = g_pendingCount >= kMaxPending;
         for (auto it = g_pending.begin(); it != g_pending.end();) {
-            if (now - it->second.lastSeen > 3000 || g_pending.size() > kMaxPending) it = g_pending.erase(it);
+            std::vector<Pending>& waiting = it->second;
+            for (size_t i = 0; i < waiting.size();) {
+                if (full || now - waiting[i].lastSeen > 2000) {
+                    waiting[i] = waiting.back();
+                    waiting.pop_back();
+                    g_pendingCount--;
+                } else {
+                    i++;
+                }
+            }
+            if (waiting.empty()) it = g_pending.erase(it);
             else ++it;
         }
     }
-    if ((g_logs < 3 && g_stats.frames >= 600) || now - g_lastLog > 120000) {
+    // The log: once ten seconds into a map with meshes, then every two minutes (never in menus).
+    if (!g_casters.empty() && (g_firstLog ? now - g_lastLog > 120000 : g_stats.frames >= 600)) {
+        g_firstLog = true;
         g_lastLog = now;
-        g_logs++;
         logStats("map so far");
     }
     if (g_casters.empty() || !ensureResources(device)) return false;
@@ -492,49 +838,47 @@ bool update(IDirect3DDevice9* device, const float sunWorld[3], MapInfo& out) {
     float f[3] = {-sunWorld[0], -sunWorld[1], -sunWorld[2]};
     normalize(f);
     if (f[1] > -0.02f) return false; // light at or below the horizon: no map
-    const float up[3] = {0.0f, 1.0f, 0.0f};
-    float u[3] = {up[1] * f[2] - up[2] * f[1], up[2] * f[0] - up[0] * f[2], up[0] * f[1] - up[1] * f[0]};
-    if (dot3(u, u) < 1e-6f) {
-        u[0] = 1.0f;
-        u[1] = u[2] = 0.0f;
+    if (!g_lightSet || dot3(f, g_f) < 0.999999f) {
+        const float up[3] = {0.0f, 1.0f, 0.0f};
+        float u[3] = {up[1] * f[2] - up[2] * f[1], up[2] * f[0] - up[0] * f[2], up[0] * f[1] - up[1] * f[0]};
+        if (dot3(u, u) < 1e-6f) {
+            u[0] = 1.0f;
+            u[1] = u[2] = 0.0f;
+        }
+        normalize(u);
+        float v[3] = {f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]};
+        normalize(v);
+        memcpy(g_f, f, sizeof(f));
+        memcpy(g_u, u, sizeof(u));
+        memcpy(g_v, v, sizeof(v));
+        g_lightSet = true;
+        for (Caster& c : g_casters) casterBox(c);
+        g_far.active = g_far.complete = false;
+        g_near[0].active = g_near[0].complete = false;
+        g_near[1].active = g_near[1].complete = false;
+        g_nearFront = g_nearBuild = -1;
     }
-    normalize(u);
-    float v[3] = {f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]};
-    normalize(v);
-
-    float lo[3], hi[3];
-    wantedBox(u, v, f, lo, hi);
-    const bool turned = !g_map.valid || dot3(f, g_map.light) < 0.999999f;
-    const bool outside = lo[0] < g_map.a0 || hi[0] > g_map.a0 + g_map.sa || lo[1] < g_map.b0 || hi[1] > g_map.b0 + g_map.sb ||
-                         lo[2] < g_map.d0 || hi[2] > g_map.d0 + g_map.sd;
-    if (turned || outside) {
-        // A new map: a fifth more room on every side, so a growing track doesn't start it over
-        // with every new block.
-        float grow[3];
-        for (int j = 0; j < 3; j++) grow[j] = (hi[j] - lo[j]) * 0.2f;
-        g_map.a0 = lo[0] - grow[0];
-        g_map.sa = hi[0] - lo[0] + 2.0f * grow[0];
-        g_map.b0 = lo[1] - grow[1];
-        g_map.sb = hi[1] - lo[1] + 2.0f * grow[1];
-        g_map.d0 = lo[2] - grow[2];
-        g_map.sd = hi[2] - lo[2] + 2.0f * grow[2];
-        memcpy(g_map.light, f, sizeof(f));
-        memcpy(g_map.u, u, sizeof(u));
-        memcpy(g_map.v, v, sizeof(v));
-        memcpy(g_map.f, f, sizeof(f));
-        g_map.cursor = 0;
-        g_map.complete = false;
-        g_map.cleared = false;
-        g_map.valid = true;
-        g_rebuilds++;
-        if (g_rebuilds <= 20) {
-            TMVS_LOG("casters: map over %.0f x %.0f m (%.2f x %.2f m a texel), %.0f m deep, %u meshes", g_map.sa, g_map.sb,
-                     g_map.sa / kMapSize, g_map.sb / kMapSize, g_map.sd, static_cast<unsigned>(g_casters.size()));
+    fitFar();
+    // The near map follows the camera: the next one is drawn in the background (the current
+    // one stays in use) once the camera is far enough from the current one's centre.
+    if (g_nearBuild < 0) {
+        bool want = g_nearFront < 0;
+        if (!want) {
+            const float* c = g_near[g_nearFront].centre;
+            const float dx = camera[0] - c[0], dz = camera[2] - c[2];
+            want = dx * dx + dz * dz > kNearMove * kNearMove || fabsf(camera[1] - c[1]) > kNearMove * 0.5f;
+        }
+        if (want) {
+            g_nearBuild = g_nearFront < 0 ? 0 : 1 - g_nearFront;
+            fitNear(g_near[g_nearBuild], camera);
+            g_stats.nearBuilds++;
         }
     }
 
     const UINT total = static_cast<UINT>(g_casters.size());
-    if (g_map.cursor < total || !g_map.cleared) {
+    const bool work = (g_far.cursor < total || !g_far.cleared) || g_nearBuild >= 0 ||
+                      (g_nearFront >= 0 && g_near[g_nearFront].cursor < total);
+    if (work) {
         hook::InternalScope internal;
         // State the game and the pipeline may rely on: given back afterwards (the pipeline's
         // state block gives the rest back to the game).
@@ -566,13 +910,8 @@ bool update(IDirect3DDevice9* device, const float sunWorld[3], MapInfo& out) {
         for (size_t i = 0; i < sizeof(kStates) / sizeof(kStates[0]); i++) device->GetRenderState(kStates[i], &saved[i]);
 
         device->SetRenderTarget(0, g_nullTarget);
-        device->SetDepthStencilSurface(g_depthSurface);
         D3DVIEWPORT9 viewport = {0, 0, kMapSize, kMapSize, 0.0f, 1.0f};
         device->SetViewport(&viewport);
-        if (!g_map.cleared) {
-            device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
-            g_map.cleared = true;
-        }
         device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
         device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
         device->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
@@ -590,41 +929,12 @@ bool update(IDirect3DDevice9* device, const float sunWorld[3], MapInfo& out) {
         device->SetVertexShader(g_vs);
         device->SetPixelShader(g_ps);
 
-        // World -> the map's clip space (row vectors): x across, y up, z along the light.
-        double lm[4][4] = {};
-        for (int r = 0; r < 3; r++) {
-            lm[r][0] = 2.0 * g_map.u[r] / g_map.sa;
-            lm[r][1] = 2.0 * g_map.v[r] / g_map.sb;
-            lm[r][2] = g_map.f[r] / g_map.sd;
-        }
-        lm[3][0] = -2.0 * g_map.a0 / g_map.sa - 1.0;
-        lm[3][1] = -2.0 * g_map.b0 / g_map.sb - 1.0;
-        lm[3][2] = -g_map.d0 / g_map.sd;
-        lm[3][3] = 1.0;
-
-        const UINT end = g_map.cursor + kDrawBudget < total ? g_map.cursor + kDrawBudget : total;
-        IDirect3DVertexDeclaration9* lastDecl = nullptr;
-        for (UINT i = g_map.cursor; i < end; i++) {
-            const Caster& m = g_casters[i];
-            float columns[4][4];
-            for (int col = 0; col < 4; col++) {
-                for (int r = 0; r < 4; r++) {
-                    double sum = r == 3 ? lm[3][col] : 0.0;
-                    for (int k = 0; k < 3; k++) sum += static_cast<double>(m.world[r][k]) * lm[k][col];
-                    columns[col][r] = static_cast<float>(sum);
-                }
-            }
-            if (m.decl != lastDecl) {
-                device->SetVertexDeclaration(m.decl);
-                lastDecl = m.decl;
-            }
-            device->SetStreamSource(0, m.vb, m.offset, m.stride);
-            device->SetIndices(m.ib);
-            device->SetVertexShaderConstantF(0, &columns[0][0], 4);
-            device->DrawIndexedPrimitive(m.type, m.base, m.minIndex, m.vertices, m.start, m.count);
-        }
-        g_map.cursor = end;
-        if (end >= total) g_map.complete = true;
+        // What the camera sees first: new meshes into the near map in use, then the next near
+        // map, then the whole-track map (all of it, a rebuild spreads over frames).
+        UINT budget = kDrawBudget, checks = kCheckBudget;
+        if (g_nearFront >= 0) drawInto(device, g_near[g_nearFront], budget, checks, true);
+        if (g_nearBuild >= 0) drawInto(device, g_near[g_nearBuild], budget, checks, true);
+        drawInto(device, g_far, budget, checks, false);
 
         for (size_t i = 0; i < sizeof(kStates) / sizeof(kStates[0]); i++) device->SetRenderState(kStates[i], saved[i]);
         device->SetVertexShaderConstantF(0, &savedConstants[0][0], 4);
@@ -644,51 +954,43 @@ bool update(IDirect3DDevice9* device, const float sunWorld[3], MapInfo& out) {
         gfx::release(savedDepth);
         gfx::release(savedTarget);
     }
-    if (!g_map.complete) return false;
-
-    // World -> the map's texture coordinates. D3D9 rasterizes texel i at screen x = i, which
-    // the texture holds at (i + 0.5) / size: half a texel on top of the projection.
-    const float half = 0.5f / kMapSize;
-    for (int j = 0; j < 3; j++) {
-        out.rows[0][j] = g_map.u[j] / g_map.sa;
-        out.rows[1][j] = -g_map.v[j] / g_map.sb;
-        out.rows[2][j] = g_map.f[j] / g_map.sd;
+    if (g_nearBuild >= 0 && g_near[g_nearBuild].complete) {
+        g_nearFront = g_nearBuild;
+        g_nearBuild = -1;
     }
-    out.rows[0][3] = -g_map.a0 / g_map.sa + half;
-    out.rows[1][3] = 1.0f + g_map.b0 / g_map.sb + half;
-    out.rows[2][3] = -g_map.d0 / g_map.sd;
-    out.texel[0] = out.texel[1] = 1.0f / kMapSize;
-    // A receiver must lie this far behind the stored depth. One texel along the light covers
-    // texel / sin(elevation) of flat ground, whose depth changes by cos(elevation) per metre:
-    // the four taps of the filter see up to that much, plus a constant for the depth's noise.
-    const float sinEl = fmaxf(-f[1], 0.05f);
-    const float cosEl = sqrtf(fmaxf(1.0f - sinEl * sinEl, 0.0f));
-    const float ground = (g_map.sb / kMapSize) / sinEl;
-    out.bias = (0.15f + 1.5f * ground * cosEl) / g_map.sd;
-    out.texture = g_depth;
-    return true;
+    if (g_nearFront >= 0 && g_near[g_nearFront].complete) mapInfo(g_near[g_nearFront], out.nearMap);
+    if (g_far.complete) mapInfo(g_far, out.farMap);
+    QueryPerformanceCounter(&t1);
+    g_stats.updateMs += milliseconds(t0, t1);
+    return out.nearMap.texture || out.farMap.texture;
 }
 
-void reset(const char* why) {
-    if (!g_casters.empty() || !g_pending.empty()) {
+void reset(const char* why, bool log) {
+    if (log && !g_casters.empty()) {
         logStats(why);
         TMVS_LOG("casters: %u meshes let go (%s)", static_cast<unsigned>(g_casters.size()), why);
     }
     forgetMeshes();
-    g_logs = 0;
-    g_rebuilds = 0;
+    g_firstLog = false;
+    g_lastLog = GetTickCount();
+    g_farBuilds = 0;
     g_stats = Stats();
 }
 
+unsigned keptMeshes() {
+    return static_cast<unsigned>(g_casters.size());
+}
+
 void releaseDevice() {
-    gfx::release(g_depthSurface);
-    gfx::release(g_depth);
+    releaseMap(g_far);
+    releaseMap(g_near[0]);
+    releaseMap(g_near[1]);
     gfx::release(g_nullTarget);
     gfx::release(g_vs);
     gfx::release(g_ps);
     for (auto& d : g_ownDecls) gfx::release(d.second);
     g_ownDecls.clear();
-    // The kept meshes point at those declarations, and the map is gone.
+    // The kept meshes point at those declarations, and the maps are gone.
     forgetMeshes();
     g_unsupported = false;
 }

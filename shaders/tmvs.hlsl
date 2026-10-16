@@ -62,10 +62,14 @@ float4 u_Water2    : register(c51); // x: clean water, 1 = on and the water's he
 float4 u_LightGrid : register(c52); // LongShadowQuality 1: horizontal light direction (world x, z), the light grid's corner along it and across it (m)
 float4 u_LightGrid2 : register(c53); // 1 / light grid size (m), horizontal length of the light direction, margin growth per m of ray, range (m; 0 = s2 is the height map)
 float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
-float4 u_CasterU   : register(c47); // CasterShadows (occlusion pass): world -> shadow map u
-float4 u_CasterV   : register(c48); // world -> shadow map v
+float4 u_CasterU   : register(c47); // CasterShadows (occlusion and volumetric passes), the near map in s3: world -> map u
+float4 u_CasterV   : register(c48); // world -> map v
 float4 u_CasterD   : register(c49); // world -> depth along the light, 0..1 as stored
 float4 u_Casters   : register(c50); // x: 1 = the map in s3 is complete; yz: texel size (uv); w: depth bias (map units)
+float4 u_FarU      : register(c54); // the same for the whole-track map in s4
+float4 u_FarV      : register(c55);
+float4 u_FarD      : register(c56);
+float4 u_Far       : register(c57);
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -308,25 +312,41 @@ float longShadow(float3 pView, float3 nView, float noise, float2 jitter) {
     return occlusion;
 }
 
-// CasterShadows: the game's own static meshes drawn from the light into s3 (INTZ, depth
-// along the light). Returns -1 where the point is outside the map (the height map decides),
-// else 0 (lit) .. 1 (shadowed). Four taps, bilinear weights, moved by `jitter` within a texel:
-// the blur after this pass and TAA turn the texel steps into a soft edge.
-float casterShadow(float3 pView, float3 nView, float2 jitter) {
-    // Off the surface a little along its normal: grazing light must not find the surface itself.
-    float4 w = float4(worldPosition(pView) + viewToWorldDir(nView) * (0.1 + 0.002 * pView.z), 1.0);
-    float2 uv = float2(dot(w, u_CasterU), dot(w, u_CasterV));
+// CasterShadows: the game's own static meshes drawn from the light (INTZ, depth along the
+// light): s3 around the camera (fine), s4 over the whole track (coarse). -1 where the point is
+// outside the map, else 0 (lit) .. 1 (shadowed). Four taps, bilinear weights, moved by
+// `jitter` within a texel: the blur after this pass and TAA turn the texel steps into a soft edge.
+float casterTaps(sampler2D map, float4 ru, float4 rv, float4 rd, float4 prm, float4 w, float2 jitter) {
+    float2 uv = float2(dot(w, ru), dot(w, rv));
     if (any(uv < 0.0) || any(uv > 1.0)) return -1.0;
-    float d = dot(w, u_CasterD) - u_Casters.w;
-    float2 t = u_Casters.yz;
+    float d = dot(w, rd) - prm.w;
+    float2 t = prm.yz;
     float2 cell = uv / t - 0.5 + (jitter - 0.5);
     float2 f = frac(cell);
     float2 c = (floor(cell) + 0.5) * t;
-    float s00 = tex2Dlod(s3, float4(c, 0, 0)).r < d ? 1.0 : 0.0;
-    float s10 = tex2Dlod(s3, float4(c + float2(t.x, 0), 0, 0)).r < d ? 1.0 : 0.0;
-    float s01 = tex2Dlod(s3, float4(c + float2(0, t.y), 0, 0)).r < d ? 1.0 : 0.0;
-    float s11 = tex2Dlod(s3, float4(c + t, 0, 0)).r < d ? 1.0 : 0.0;
+    float s00 = tex2Dlod(map, float4(c, 0, 0)).r < d ? 1.0 : 0.0;
+    float s10 = tex2Dlod(map, float4(c + float2(t.x, 0), 0, 0)).r < d ? 1.0 : 0.0;
+    float s01 = tex2Dlod(map, float4(c + float2(0, t.y), 0, 0)).r < d ? 1.0 : 0.0;
+    float s11 = tex2Dlod(map, float4(c + t, 0, 0)).r < d ? 1.0 : 0.0;
     return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+float casterShadow(float3 pView, float3 nView, float2 jitter) {
+    // Off the surface a little along its normal: grazing light must not find the surface itself.
+    float4 w = float4(worldPosition(pView) + viewToWorldDir(nView) * (0.1 + 0.002 * pView.z), 1.0);
+    float s = u_Casters.x > 0.5 ? casterTaps(s3, u_CasterU, u_CasterV, u_CasterD, u_Casters, w, jitter) : -1.0;
+    if (s < 0.0 && u_Far.x > 0.5) s = casterTaps(s4, u_FarU, u_FarV, u_FarD, u_Far, w, jitter);
+    return s;
+}
+
+// The same for a point in the haze (volumetric light): one tap, 1 = lit, -1 = outside both maps.
+float casterLit(float3 world) {
+    float4 w = float4(world, 1.0);
+    float2 uv = float2(dot(w, u_CasterU), dot(w, u_CasterV));
+    if (u_Casters.x > 0.5 && all(uv > 0.0) && all(uv < 1.0)) return tex2Dlod(s3, float4(uv, 0, 0)).r < dot(w, u_CasterD) - u_Casters.w ? 0.0 : 1.0;
+    uv = float2(dot(w, u_FarU), dot(w, u_FarV));
+    if (u_Far.x > 0.5 && all(uv > 0.0) && all(uv < 1.0)) return tex2Dlod(s4, float4(uv, 0, 0)).r < dot(w, u_FarD) - u_Far.w ? 0.0 : 1.0;
+    return -1.0;
 }
 
 // LongShadowQuality 1: the same test without stepping. The 24 steps above lie metres apart far
@@ -422,7 +442,7 @@ float4 PS_ShadowHeight(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // 2. March the view ray through the haze (half res). s0 = half normal/depth,
-//    s1 = shadow height map, u_Pass0.x = steps.
+//    s1 = shadow height map, s3/s4 = CasterShadows maps (where complete), u_Pass0.x = steps.
 //    out.r = lit fraction of the haze along the ray, out.g = lit path length / range
 float4 PS_Volumetric(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float z = tex2Dlod(s0, float4(uv, 0, 0)).w;
@@ -442,9 +462,14 @@ float4 PS_Volumetric(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         float dt = t - prev;
         prev = t;
         float3 p = cam + rd * t;
-        float2 m = (p.xz - u_HeightMap.xy) / u_HeightMap.z;
-        float sh = (any(m < 0.0) || any(m > 1.0)) ? 0.0 : tex2Dlod(s1, float4(m, 0, 0)).r;
-        float l = sh > 0.0 ? saturate((p.y - (sh - 10000.0)) * 0.7 + 0.5) : 1.0;
+        // CasterShadows: the same maps as the shadows on the ground (the shafts' gaps line up
+        // with them); the height map's shadow heights beyond them.
+        float l = u_Casters.x > 0.5 || u_Far.x > 0.5 ? casterLit(p) : -1.0;
+        if (l < 0.0) {
+            float2 m = (p.xz - u_HeightMap.xy) / u_HeightMap.z;
+            float sh = (any(m < 0.0) || any(m > 1.0)) ? 0.0 : tex2Dlod(s1, float4(m, 0, 0)).r;
+            l = sh > 0.0 ? saturate((p.y - (sh - 10000.0)) * 0.7 + 0.5) : 1.0;
+        }
         float w = dt * exp(-max(p.y - cam.y, 0.0) * falloff); // thinner haze higher up
         lit += l * w;
         total += w;
@@ -470,7 +495,8 @@ float4 volumetricLight(float2 uv, float3 rd, float daylight) {
 
 // ---------------------------------------------------------------------------------
 // Pass 2: ambient occlusion + ray-marched sun shadows (half res)
-//   s0 = half normal/depth, s1 = full normal/depth, s2 = height map (long shadows)
+//   s0 = half normal/depth, s1 = full normal/depth, s2 = height map (long shadows),
+//   s3/s4 = CasterShadows maps (near, whole track; where complete)
 //   out.r = AO visibility, out.g = sun visibility, out.b = long-shadow visibility
 // ---------------------------------------------------------------------------------
 float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
@@ -542,7 +568,7 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         float2 jitter = float2(noise2, frac(noise2 * 13.71 + noise));
         // CasterShadows: the map of the game's meshes where it reaches; beyond it the light grid
         // (LongShadowQuality 1) or the trace.
-        float casters = u_Casters.x > 0.5 ? casterShadow(p, n, jitter) : -1.0;
+        float casters = u_Casters.x > 0.5 || u_Far.x > 0.5 ? casterShadow(p, n, jitter) : -1.0;
         float occluded = casters >= 0.0 ? casters
                          : (u_LightGrid2.w > 0.5 ? longShadowGrid(p, n) : longShadow(p, n, frac(noise + 0.5), jitter));
         longVis = 1.0 - occluded * u_Temporal.w;
