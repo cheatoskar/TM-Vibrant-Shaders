@@ -968,36 +968,9 @@ PanelDef settingsPanel(const char* title, Settings& s, const Entries& entries) {
 
 // --- The other pages ---------------------------------------------------------------
 
-// The handful of things a player wants to change.
-bool drawCustomize(Config& config, Settings& s) {
-    pageTitle("Customize", "The main settings of the current preset. All settings are in Studio.");
-    std::vector<PanelDef> panels;
-    panels.push_back(settingsPanel("Sky", s,
-                                   {{"SkyMode", "Sky"},
-                                    {"SkyRotation", "Turn the sky"},
-                                    {"StarAmount", "Stars"},
-                                    {"AuroraSpeed", "Aurora movement"},
-                                    {"PlanetType", "Planet"},
-                                    {"PlanetSize", "Planet size"},
-                                    {"PlanetView", "View"},
-                                    {"PlanetAzimuth", "Planet direction"},
-                                    {"PlanetElevation", "Planet height"},
-                                    {"SkyEffectSize", "Black hole size (0 = off)"},
-                                    {"BlackHoleAzimuth", "Black hole direction"},
-                                    {"BlackHoleElevation", "Black hole height"},
-                                    {"VolumetricClouds", "Clouds"}}));
-    panels.push_back(settingsPanel("Look", s,
-                                   {{"ShadowStrength", "Shadows"},
-                                    {"GodRays", "Light shafts"},
-                                    {"Bloom", "Glow"},
-                                    {"HighlightBoost", "Light sources"},
-                                    {"BorderGlow", "Neon borders"},
-                                    {"NeonLight", "Neon light"},
-                                    {"Exposure", "Brightness"},
-                                    {"Saturation", "Colour"},
-                                    {"MotionBlur", "Motion blur"}}));
-    // On top of every preset (not part of one): a colour look from Resolve, Lightroom, ...
-    panels.push_back({"Colour look (LUT)", 3.0f, [&config] {
+// On top of every preset (not part of one): a colour look from Resolve, Lightroom, ...
+PanelDef lutPanel(Config& config) {
+    return {"Colour look (LUT)", 3.0f, [&config] {
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           if (ImGui::BeginCombo("Look", config.lutFile.empty() ? "None" : config.lutFile.c_str())) {
                               if (ImGui::Selectable("None", config.lutFile.empty())) {
@@ -1022,7 +995,45 @@ bool drawCustomize(Config& config, Settings& s) {
                               ShellExecuteW(nullptr, L"open", lut::folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                           }
                           return false;
-                      }});
+                      }};
+}
+
+// What a player wants to change; every setting is in Studio.
+bool drawCustomize(Config& config, Settings& s) {
+    pageTitle("Customize", "The settings most players want. Every setting is in Studio.");
+    std::vector<PanelDef> panels;
+    panels.push_back(settingsPanel("Sky", s,
+                                   {{"SkyMode", "Sky"},
+                                    {"SkyRotation", "Turn the sky"},
+                                    {"StarAmount", "Stars"},
+                                    {"AuroraSpeed", "Aurora movement"},
+                                    {"PlanetType", "Planet"},
+                                    {"PlanetSize", "Planet size"},
+                                    {"PlanetView", "View"},
+                                    {"PlanetAzimuth", "Planet direction"},
+                                    {"PlanetElevation", "Planet height"},
+                                    {"SkyEffectSize", "Black hole size (0 = off)"},
+                                    {"BlackHoleAzimuth", "Black hole direction"},
+                                    {"BlackHoleElevation", "Black hole height"},
+                                    {"VolumetricClouds", "Clouds"}}));
+    panels.push_back(settingsPanel("Light and shadows", s,
+                                   {{"ShadowStrength", "Shadows"},
+                                    {"LongShadows", "Long shadows"},
+                                    {"AOStrength", "Ambient occlusion"},
+                                    {"GodRays", "Light shafts"},
+                                    {"NeonLight", "Neon light on surroundings"},
+                                    {"Exposure", "Brightness"},
+                                    {"Contrast", "Contrast"},
+                                    {"Saturation", "Colour"}}));
+    panels.push_back(settingsPanel("Bloom and lens", s,
+                                   {{"Bloom", "Glow"},
+                                    {"BloomRadius", "Glow radius"},
+                                    {"HighlightBoost", "Light sources"},
+                                    {"BorderGlow", "Neon borders"},
+                                    {"LensFlare", "Lens flare"},
+                                    {"ChromaticAberration", "Colour fringes"},
+                                    {"Vignette", "Vignette"},
+                                    {"FilmGrain", "Film grain"}}));
     panels.push_back(settingsPanel("Weather", s,
                                    {{"Rain", "Rain"},
                                     {"Snow", "Snow"},
@@ -1036,6 +1047,22 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"WaterSurfaces", "Water"},
                                     {"Reflections", "Reflections (dry track)"},
                                     {"ReflectionBlur", "Reflection blur"}}));
+    panels.push_back(settingsPanel("Neon trail", s,
+                                   {{"NeonTrail", "Neon trail (0 = off)"},
+                                    {"TrailColor", "Colour"},
+                                    {"TrailWidth", "Width"},
+                                    {"TrailTyres", "Two lines from the tyres"},
+                                    {"TrailDuration", "Fade after (s)"}}));
+    panels.push_back(settingsPanel("Cinematic", s,
+                                   {{"MotionBlur", "Motion blur"},
+                                    {"DepthOfField", "Depth of field"},
+                                    {"CinematicOnlyInReplays", "Only in replays"}}));
+    panels.push_back(settingsPanel("Image quality", s,
+                                   {{"TAA", "Temporal anti-aliasing"},
+                                    {"FXAA", "FXAA"},
+                                    {"Sharpen", "Sharpening"},
+                                    {"Quality", "Effect quality"},
+                                    {"AutoQuality", "Auto quality"}}));
     for (PanelDef& p : panels) p.foldable = true; // closed at first, the title opens them
     const bool look = panelColumns(panels, 330.0f);
     if (config.preset == kCustomPreset) {
@@ -1167,6 +1194,10 @@ bool drawStudio(Config& config, Settings& s) {
             for (const PanelDef& d : panels) g_panelOpen[d.title] = !anyOpen;
         }
         ImGui::Spacing();
+    }
+    if (!searching || containsNoCase("Colour look LUT", query)) {
+        panels.insert(panels.begin(), lutPanel(config));
+        panels.front().foldable = !searching;
     }
     if (panels.empty()) ImGui::TextDisabled("Nothing found.");
     return panelColumns(panels, 360.0f);
