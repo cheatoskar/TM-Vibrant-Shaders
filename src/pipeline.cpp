@@ -1432,10 +1432,19 @@ sampler2D s_trail : register(s2);
 #define TRAIL_POINTS 8192.0
 #endif
 
+// The ring's texture: the points in its upper half, the car's up at each in the lower half.
 float4 trailPoint(float i) {
     i = fmod(i + 2.0 * TRAIL_POINTS, TRAIL_POINTS);
-    float2 uv = float2((fmod(i, TRAIL_W) + 0.5) / TRAIL_W, (floor(i / TRAIL_W) + 0.5) / (TRAIL_POINTS / TRAIL_W));
+    float2 uv = float2((fmod(i, TRAIL_W) + 0.5) / TRAIL_W, (floor(i / TRAIL_W) + 0.5) / (2.0 * TRAIL_POINTS / TRAIL_W));
     return tex2Dlod(s_trail, float4(uv, 0, 0));
+}
+
+// The car's up at point i (unit length; the world's up where none was written).
+float3 trailUp(float i) {
+    i = fmod(i + 2.0 * TRAIL_POINTS, TRAIL_POINTS);
+    float2 uv = float2((fmod(i, TRAIL_W) + 0.5) / TRAIL_W, 0.5 + (floor(i / TRAIL_W) + 0.5) / (2.0 * TRAIL_POINTS / TRAIL_W));
+    float3 u = tex2Dlod(s_trail, float4(uv, 0, 0)).xyz;
+    return dot(u, u) > 0.25 ? normalize(u) : float3(0, 1, 0);
 }
 
 // The car is found anew in every frame, so the raw points wobble (most in jumps, when the
@@ -1530,7 +1539,19 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
         fromCar = path;
     }
     float3 dir = d / len;
-    float3 right = cross(float3(0, 1, 0), dir);
+    // Across the line in the road's plane: the car's up there (its neighbours' with it, a car
+    // rocking on its springs doesn't tilt the line), not the world's. With the world's up the
+    // line lay level on banked curves and walls: its lower half (on a wall all of the inner tyre's
+    // line) went into the road.
+    float firstJ = c_Trail.y - c_Trail.x, lastJ = c_Trail.y - 1.0;
+    float3 up = trailUp(j) * 2.0;
+    if (j - 1.0 >= firstJ) up += trailUp(j - 1.0);
+    if (j + 1.0 <= lastJ) up += trailUp(j + 1.0);
+    up = normalize(up);
+    // Smoothing (the average of its neighbours) took the line under the road over a crest: the
+    // point may rise along the car's up (in dips), never sink below where the car was.
+    s += up * max(dot(pj.xyz - s, up), 0.0);
+    float3 right = cross(up, dir);
     float rl = length(right);
     float3 across = rl > 1e-3 ? right / rl : float3(1, 0, 0);
     float3 p = s + across * c_Trail2.x;
@@ -1545,8 +1566,8 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     side = sl > 1e-6 ? side / sl : float3(1, 0, 0);
     // Flat across the line, lying on the road: turned to the camera it flapped with every swing of
     // the chase camera and stood up like a wall where the line passes beside or above the camera
-    // (downhill). Where the line runs steeply (loops) "across" has no horizontal: turned to the
-    // camera there.
+    // (downhill). Only where the line runs along the car's up (flying straight up) "across" is
+    // unknown: turned to the camera there.
     float flatness = saturate((rl - 0.15) / 0.35);
     float3 wide = normalize(lerp(side, normalize(toView(p + across) - v), flatness));
     float facing = dot(wide, side);
@@ -1600,7 +1621,8 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
             return false;
         }
     }
-    bool ok = m_trailPoints.create(device, kTrailWidth, kTrailHeight, D3DFMT_A32B32G32R32F) &&
+    // The points in the upper half, the car's up at each point in the lower half.
+    bool ok = m_trailPoints.create(device, kTrailWidth, kTrailHeight * 2, D3DFMT_A32B32G32R32F) &&
               SUCCEEDED(device->CreateVertexBuffer(kTrailPoints * 4 * 24, D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &m_trailVB, nullptr)) &&
               SUCCEEDED(device->CreateIndexBuffer(kTrailPoints * 6 * 2, D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_trailIB, nullptr));
     float* v = nullptr;
@@ -1645,16 +1667,37 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
 }
 
 void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt) {
-    // The car jumped far in one frame without a respawn: a restart the hooks didn't see (the
-    // log had "race reset" on some restarts only, the old run stayed under the new one).
-    if (!m_trailReset && !m_trailNewRun && in.driving && in.carKnown && m_trailKeptValid && m_trailTime - m_trailRespawnAt > 1.0f) {
-        const float dx = in.carPosition[0] - m_trailKept[0], dy = in.carPosition[1] - m_trailKept[1], dz = in.carPosition[2] - m_trailKept[2];
-        const float jump = sqrtf(dx * dx + dy * dy + dz * dz);
-        if (jump > kTrailTeleport) {
+    // The player drives: also while a clip of the map plays (a camera in a loop, texts at the
+    // start). Those clips stopped the recording, and when one ended the car was 130 - 340 m from
+    // its last point: taken for a missed restart, the trail started over (every such line in the
+    // owner's log came with "cinematic off"; one clip right after each start: the trail came 6 s
+    // late).
+    const bool recording = in.driving || in.clipInRace;
+    // A restart the hooks didn't see (the log had "race reset" on some restarts only, the old run
+    // stayed under the new one): the car jumped far between two frames it was seen in, without a
+    // respawn; or, after frames without it, it is back where this run began.
+    if (!m_trailReset && !m_trailNewRun && recording && in.carKnown && m_trailTime - m_trailRespawnAt > 1.0f) {
+        auto apart = [](const float* a, const float* b) {
+            const float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+            return sqrtf(dx * dx + dy * dy + dz * dz);
+        };
+        const float since = m_trailTime - m_trailSeenAt;
+        if (since < 0.5f) {
+            const float jump = apart(in.carPosition, m_trailSeen);
+            if (jump > kTrailTeleport) {
+                m_trailNewRun = true;
+                if (m_trailLogged < 20) {
+                    m_trailLogged++;
+                    TMVS_LOG("pipeline: neon trail: the car jumped %.0f m in %.0f ms without a respawn: a new run", jump, since * 1000.0f);
+                }
+            }
+        } else if (m_trailKeptValid && m_trailRunAtValid && apart(in.carPosition, m_trailKept) > kTrailTeleport &&
+                   apart(in.carPosition, m_trailRunAt) < 12.0f) {
             m_trailNewRun = true;
             if (m_trailLogged < 20) {
                 m_trailLogged++;
-                TMVS_LOG("pipeline: neon trail: the car is %.0f m from its last point without a respawn: a new run", jump);
+                TMVS_LOG("pipeline: neon trail: the car is back where the run began (%.0f m from its last point, unseen for %.1f s): a new run",
+                         apart(in.carPosition, m_trailKept), since);
             }
         }
     }
@@ -1675,6 +1718,9 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
             m_trailBreak = true;
             m_trailKeptValid = false;
             m_trailClock = 0.0f;
+            m_trailRunAtValid = false;
+            m_trailFirstLogged = false;
+            m_trailRunBegan = m_trailTime;
         }
     }
     if (m_trailReset) {
@@ -1684,6 +1730,10 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         m_trailClock = m_trailTime = 0.0f;
         m_trailKeptValid = false;
         m_trailRespawnAt = -100.0f;
+        m_trailSeenAt = -100.0f;
+        m_trailRunAtValid = false;
+        m_trailFirstLogged = false;
+        m_trailRunBegan = 0.0f;
         m_trailWritten = 0;
         m_trailRuns = 0;
         for (int k = 0; k <= kTrailRunsMax; k++) {
@@ -1701,11 +1751,37 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     }
     m_trailTime += dt;
     m_trailClock += dt;
+    if (in.carKnown) {
+        memcpy(m_trailSeen, in.carPosition, sizeof(m_trailSeen));
+        m_trailSeenAt = m_trailTime;
+    }
     // Record the car while you drive (not in replays and intros): every frame into the next
-    // slot (the live end of the trail, so it stays on the car), kept 30 times a second.
+    // slot (the live end of the trail, so it stays on the car), kept 30 times a second. A camera
+    // cut only matters to the car found in the depth buffer: the engine's car is where it is
+    // whatever the camera does.
     bool live = false;
     if (in.carFromEngine && !in.carKnown) m_trailBreak = true; // a gap: the next point starts a new line
-    if (in.driving && dt > 0.0f && m_temporalValid && (in.carKnown || !in.carFromEngine)) {
+    const int pause = !recording ? 1 : (!m_temporalValid && !in.carKnown) ? 2 : (in.carFromEngine && !in.carKnown) ? 3 : 0;
+    if (dt > 0.0f) {
+        // The log tells when the trail records nothing for longer than half a second, and why.
+        static const char* const kWhy[] = {"", "not driving (a replay, an intro or the replay viewer)", "camera cuts (the car found in the depth buffer)",
+                                           "the engine lost the car"};
+        if (pause != m_trailPause) {
+            if (m_trailPause != 0 && m_trailPauseLogged && m_trailPauseLogs < 60) {
+                m_trailPauseLogs++;
+                TMVS_LOG("pipeline: neon trail: %s, over after %.1f s", kWhy[m_trailPause], m_trailTime - m_trailPauseAt);
+            }
+            m_trailPause = pause;
+            m_trailPauseAt = m_trailTime;
+            m_trailPauseLogged = false;
+        }
+        if (pause != 0 && !m_trailPauseLogged && m_trailTime - m_trailPauseAt > 0.5f && m_trailPauseLogs < 60) {
+            m_trailPauseLogged = true;
+            m_trailPauseLogs++;
+            TMVS_LOG("pipeline: neon trail records nothing for 0.5 s: %s", kWhy[pause]);
+        }
+    }
+    if (pause == 0 && dt > 0.0f) {
         live = true;
         bind(device, 0, m_nd.texture, false);
         const float stamp = m_trailTime + 1.0f; // never 0 (= no car)
@@ -1716,12 +1792,25 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         device->SetPixelShaderConstantF(33, car, 1);
         // One pixel of the ring buffer. (SetRenderTarget resets the scissor rect: set it after.)
         device->SetRenderTarget(0, m_trailPoints.surface);
-        const RECT pixel = {static_cast<LONG>(m_trailHead % kTrailWidth), static_cast<LONG>(m_trailHead / kTrailWidth),
-                            static_cast<LONG>(m_trailHead % kTrailWidth) + 1, static_cast<LONG>(m_trailHead / kTrailWidth) + 1};
+        const LONG px = static_cast<LONG>(m_trailHead % kTrailWidth), py = static_cast<LONG>(m_trailHead / kTrailWidth);
+        const RECT pixel = {px, py, px + 1, py + 1};
         device->SetScissorRect(&pixel);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
         device->SetPixelShader(m_shaders[kTrailPoint]);
-        m_quad.draw(device, kTrailWidth, kTrailHeight);
+        m_quad.draw(device, kTrailWidth, kTrailHeight * 2);
+        // And the car's up at that point, in the lower half (the world's up for the depth
+        // buffer's car).
+        const float up[4] = {in.carKnown ? in.carUp[0] : 0.0f, in.carKnown ? in.carUp[1] : 1.0f, in.carKnown ? in.carUp[2] : 0.0f, 0.0f};
+        if (in.carKnown && up[1] < 0.866f && !m_trailTiltLogged) {
+            m_trailTiltLogged = true;
+            TMVS_LOG("pipeline: neon trail: the car's up tilts %.0f degrees (%.2f %.2f %.2f; a banked curve, a wall or a loop): the line lies along the road",
+                     acosf(up[1] < -1.0f ? -1.0f : (up[1] > 1.0f ? 1.0f : up[1])) * 57.2958f, up[0], up[1], up[2]);
+        }
+        passConstants(device, 0.0f, 0.0f, 1.0f);
+        device->SetPixelShaderConstantF(33, up, 1);
+        const RECT upPixel = {px, py + static_cast<LONG>(kTrailHeight), px + 1, py + static_cast<LONG>(kTrailHeight) + 1};
+        device->SetScissorRect(&upPixel);
+        m_quad.draw(device, kTrailWidth, kTrailHeight * 2);
         profileMark(kTrailPoint);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
         // With the engine's position: kept 60 times a second while the car moves, and every
@@ -1742,6 +1831,17 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
             m_trailClock = moved >= 1.0f ? 0.0f : fmodf(m_trailClock, measured ? 1.0f / 60.0f : 1.0f / 30.0f);
             memcpy(m_trailKept, in.carPosition, sizeof(m_trailKept));
             m_trailKeptValid = in.carKnown;
+            if (in.carKnown && !m_trailRunAtValid) {
+                memcpy(m_trailRunAt, in.carPosition, sizeof(m_trailRunAt));
+                m_trailRunAtValid = true;
+            }
+            // The run's first point that leaves the start (the line shows from it on): when.
+            if (!m_trailFirstLogged && measured && m_trailLogged < 40) {
+                m_trailFirstLogged = true;
+                m_trailLogged++;
+                TMVS_LOG("pipeline: neon trail: the run's line begins %.2f s after the run began (%s)", m_trailTime - m_trailRunBegan,
+                         in.carKnown ? (in.driving ? "the engine's car" : "the engine's car, a clip of the map plays") : "the depth buffer's car");
+            }
             m_trailBreak = false;
             m_trailHead = (m_trailHead + 1) % kTrailPoints;
             if (m_trailCount < kTrailPoints) m_trailCount++;

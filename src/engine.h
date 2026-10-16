@@ -45,6 +45,10 @@ const CameraInfo& currentCamera();
 // True while a MediaTracker clip plays (replays, intros, the replay editor) or the video
 // export runs: the moments for motion blur and depth of field. False while driving.
 bool cinematicActive();
+// True while only the clip player runs (no clip viewer's cameras, no video export) and a race
+// checks its player every frame: a clip of the map (its in-game triggers: a camera in a loop,
+// texts at the start) plays while the player drives. cinematicActive() is true then too.
+bool clipInRace();
 
 // Sub-pixel offset (NDC) added to every perspective projection the engine computes from now
 // on, for TAA: each frame samples the pixels at a slightly different spot. 0, 0 = off.
@@ -158,8 +162,10 @@ int mapCloses();
 bool mapOpen();
 
 // Where the player's car is drawn now (world space), while a race runs (also with the car off
-// screen). False otherwise, or without the hooks (another game build).
-bool carLocation(float position[3]);
+// screen). False otherwise, or without the hooks (another game build). up (if given): the car's
+// up axis in the world (unit length), its roof's way: on a banked curve, a wall or in a loop
+// the road's up under the car.
+bool carLocation(float position[3], float up[3] = nullptr);
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.
 bool currentMapComments(std::string& comments);

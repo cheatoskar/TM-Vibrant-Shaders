@@ -3577,7 +3577,9 @@ float4 PS_Spray(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 // u_Pass1.xyz: where the car is drawn, about the height of the wheel centres), else found in
 // the depth buffer below the screen centre (like the spray), lowered to the middle of the tyres.
 //   s0 = full normal/depth, u_Pass0.x = time stamp (< 0: a new line starts here)
+//   u_Pass0.z = 1: the car's up at the point instead (u_Pass1.xyz, the ring's lower half)
 float4 PS_TrailPoint(float2 uv : TEXCOORD0) : COLOR0 {
+    if (u_Pass0.z > 0.5) return float4(u_Pass1.xyz, 1.0);
     if (u_Pass0.y > 0.5) return float4(u_Pass1.xyz, u_Pass0.x);
     float z0 = tex2Dlod(s0, float4(0.5, 0.6, 0, 0)).w;
     float z1 = tex2Dlod(s0, float4(0.5, 0.65, 0, 0)).w;
@@ -3595,7 +3597,9 @@ float4 PS_TrailPoint(float2 uv : TEXCOORD0) : COLOR0 {
 //   s0 = full normal/depth, u_Pass0.rgb = colour * strength
 float4 PS_Trail(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float2 uv = (vpos + 0.5) * u_Screen.zw;
-    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - data.z * 0.995);
+    // Hidden behind the scene, with 0.5 % and 3 cm to spare (the road seen at a grazing angle on
+    // slopes comes close to the line's depth; the line itself now lies along the road, see trailVS).
+    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - (data.z * 0.995 - 0.03));
     float x = data.x;
     float light = exp(-x * x * 10.0) * 2.5 + exp(-x * x * 2.5) * 0.4;
     // data.w: metres from the car (fresh points): the line comes out behind it.

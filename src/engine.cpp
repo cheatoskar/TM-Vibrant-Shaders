@@ -386,6 +386,7 @@ FxCanActiveFn g_fxCanActive[2] = {};
 bool g_skipGameFx = false;
 DWORD g_lastCinematic = 0;      // GetTickCount of the last cinematic hook call
 unsigned g_cinematicSources = 0;
+DWORD g_lastNotClip = 0;         // ... of the clip viewer's cameras or the video export (not the clip player)
 unsigned g_engineFrames = 0;    // RenderFrameBegin calls
 void* g_shooter = nullptr;      // the video shooter whose DoShoot ran last
 unsigned g_shootFrame = 0;      // and in which frame (g_engineFrames)
@@ -478,6 +479,7 @@ void* patchCall(uintptr_t site, uintptr_t callee, void* detour, const char* name
 void markCinematic(unsigned source) {
     g_lastCinematic = GetTickCount();
     g_cinematicSources |= source;
+    if (source != 1) g_lastNotClip = g_lastCinematic;
 }
 
 void __fastcall tracksUpdateDetour(void* self, void* edx, float time, float delta) {
@@ -1401,7 +1403,7 @@ std::string mapComments() {
     return g_mapComments;
 }
 
-bool carLocation(float position[3]) {
+bool carLocation(float position[3], float up[3]) {
     // Only the player of a race that runs now (the hook calls come every frame); the build's
     // own GetInterpolatedLocation in the slot, or nothing is called.
     if (!g_build || !g_build->interpolatedLocation || !g_racePlayer || GetTickCount() - g_racePlayerTick > 300) return false;
@@ -1419,6 +1421,38 @@ bool carLocation(float position[3]) {
         for (int i = 0; i < 3; i++) {
             position[i] = iso[9 + i];
             if (!(fabsf(position[i]) < 1e5f)) return false;
+        }
+        if (up) {
+            // The car's up is one column of the 3x3 (the model's y, column 1, if TMNF is like
+            // ManiaPlanet). Which one is taken from the first car seen standing level (at the
+            // start: one column within 18 degrees of the world's up), its sign with it, and
+            // logged once; until then the world's up.
+            static int s_axis = -1;
+            static float s_sign = 1.0f;
+            float column[3][3];
+            float length[3];
+            for (int c = 0; c < 3; c++) {
+                for (int r = 0; r < 3; r++) column[c][r] = iso[r * 3 + c];
+                length[c] = sqrtf(column[c][0] * column[c][0] + column[c][1] * column[c][1] + column[c][2] * column[c][2]);
+            }
+            if (s_axis < 0) {
+                for (int c = 0; c < 3; c++) {
+                    if (length[c] > 1e-3f && fabsf(column[c][1]) > 0.95f * length[c]) {
+                        s_axis = c;
+                        s_sign = column[c][1] > 0.0f ? 1.0f : -1.0f;
+                        TMVS_LOG("engine: the car's up is column %d of its matrix%s (columns %.2f %.2f %.2f / %.2f %.2f %.2f / %.2f %.2f %.2f)",
+                                 c, s_sign < 0.0f ? ", negated" : "", column[0][0], column[0][1], column[0][2], column[1][0], column[1][1],
+                                 column[1][2], column[2][0], column[2][1], column[2][2]);
+                        break;
+                    }
+                }
+            }
+            up[0] = 0.0f;
+            up[1] = 1.0f;
+            up[2] = 0.0f;
+            if (s_axis >= 0 && length[s_axis] > 1e-3f && length[s_axis] < 1e3f) {
+                for (int r = 0; r < 3; r++) up[r] = column[s_axis][r] * s_sign / length[s_axis];
+            }
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1555,6 +1589,16 @@ bool cinematicActive() {
     // settings behave as before.
     if (!g_tracksUpdate && !g_updateCams && !g_doShoot) return true;
     return g_lastCinematic != 0 && GetTickCount() - g_lastCinematic < 500;
+}
+
+bool clipInRace() {
+    // The map's own clips (in-game triggers) only run the clip player; replays, the end of race
+    // replay and the editor also run the clip viewer's cameras (the owner's log: "sources 3"
+    // there, "sources 1" for the clips on the track). The race checks its player's trigger zones
+    // every frame it runs, also while such a clip plays.
+    const DWORD now = GetTickCount();
+    if (!cinematicActive() || !g_tracksUpdate || (g_lastNotClip != 0 && now - g_lastNotClip < 500)) return false;
+    return g_racePlayer && now - g_racePlayerTick <= 300;
 }
 
 unsigned cinematicSources() {

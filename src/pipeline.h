@@ -52,6 +52,12 @@ public:
         // the depth buffer below the screen centre.
         bool carKnown = false;
         float carPosition[3] = {};
+        // The car's up (its roof's way, unit length): the trail lies flat on banked curves, walls
+        // and loops. The world's up when not known (the depth buffer's car).
+        float carUp[3] = {0.0f, 1.0f, 0.0f};
+        // A clip of the map plays while the player drives (driving is false then): the trail
+        // records the car on.
+        bool clipInRace = false;
         // The engine gave the car's position a moment ago: a frame without it records nothing
         // (no fall back to the depth search, a new line starts after the gap).
         bool carFromEngine = false;
@@ -113,7 +119,10 @@ public:
 
     // Neon trail: start over (new map) / a new run (race restart: the earlier runs stay as
     // TrailKeepRuns says, else it starts over) / start a new line (respawn).
-    void resetTrail() { m_trailReset = true; }
+    void resetTrail() {
+        m_trailReset = true;
+        m_trailTiltLogged = false;
+    }
     void newTrailRun() { m_trailNewRun = true; }
     void breakTrail() {
         m_trailBreak = true;
@@ -438,6 +447,19 @@ private:
     // than the kept ones are cut off the drawn points, the kept ones drawn dimmer.
     static constexpr int kTrailRunsMax = 5;
     static constexpr float kTrailTeleport = 60.0f; // m in one frame without a respawn: a new run (a restart the hooks missed)
+    float m_trailSeen[3] = {};        // the car's place last frame it was known, and when (m_trailTime)
+    float m_trailSeenAt = -100.0f;
+    float m_trailRunAt[3] = {};       // the first point of this run
+    bool m_trailRunAtValid = false;
+    // Why no point was recorded (the log tells once a pause, with its reason): 0 recording,
+    // 1 not driving (replay, intro), 2 camera cut, 3 the engine lost the car.
+    int m_trailPause = 0;
+    float m_trailPauseAt = 0.0f;
+    bool m_trailPauseLogged = false;
+    int m_trailPauseLogs = 0;
+    bool m_trailFirstLogged = false;  // the run's first point logged (how long after the restart)
+    float m_trailRunBegan = 0.0f;     // m_trailTime when this run began
+    bool m_trailTiltLogged = false;   // the car's up first tilted past 30 degrees (once per map)
     bool m_trailNewRun = false;
     float m_trailRespawnAt = -100.0f; // m_trailTime of the last respawn (its jump is no new run)
     UINT m_trailWritten = 0;          // points kept since the reset
