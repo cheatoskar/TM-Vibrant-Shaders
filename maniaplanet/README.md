@@ -92,7 +92,7 @@ The log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in `Documents\Man
   (from the constants the engine draws with) and the map's comments (for Author's Shaders). It
   writes only the comments of the map open in the editor, when you click *Set as Author's Shader*.
 - Whether servers or competitions allow a `d3d11.dll` mod is not confirmed. Check the rules of where you play.
-- *Soft sun shadows* (off by default) draws the engine's sun shadow pass with the mod's own shader.
+- *Soft sun shadows* (on by default, 1°) draws the engine's sun shadow pass with the mod's own shader.
   Nothing in the game's memory changes, but whether the anti-cheat minds a replaced shader is not known.
 - Openplanet can run at the same time (it loads as its own DLL). If something breaks with
   Openplanet, test once without it and report it with a capture.
@@ -156,7 +156,7 @@ At that draw the mod runs its own passes on the same inputs, and the engine's dr
 ## Soft sun shadows
 
 Setting *Soft sun shadows* (Settings page, panel "ManiaPlanet"; `SoftShadows` in
-`maniaplanet.ini`), **off by default**. Its value is the sun's size in the sky in degrees (the real
+`maniaplanet.ini`), **on by default (1°)**, 0 turns it off. Its value is the sun's size in the sky in degrees (the real
 sun: 0.53). The shadows are then sharp where a thing touches the ground and get wider the farther
 they fall from it, like real ones.
 

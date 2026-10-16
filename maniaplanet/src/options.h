@@ -24,8 +24,8 @@ struct Options {
     View view = View::Normal;
     float split = 0.5f; // Split: the game's own image left of this
     // Soft sun shadows: the light's angular diameter in degrees (the sun is 0.53) for the mod's
-    // PCSS shader in place of the engine's sun shadow pass; 0 keeps the engine's (default).
-    float softShadows = 0.0f;
+    // PCSS shader in place of the engine's sun shadow pass (default 1, the owner's pick); 0 keeps the engine's.
+    float softShadows = 1.0f;
     // The light sources (lamps, screens, halos, the car's lights) from what the engine draws as
     // light, not guessed from the image's colours (engine_lights.cpp). On since the owner's test
     // (2026-10-16, captures 031/032): grass no longer glows, the road borders still do.
