@@ -127,6 +127,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("CleanHighlights", "Clean highlights (no frost on floodlit white)", "Image", Bool, cleanHighlights, 0.0f, 1.0f),
         TMVS_FIELD("EngineLights", "Light sources from the game (with Game HDR)", "Image", Bool, engineLights, 0.0f, 1.0f),
         TMVS_FIELD("CasterShadows", "Long shadows from the game's meshes (experimental)", "Image", Bool, casterShadows, 0.0f, 1.0f),
+        TMVS_FIELD("CleanWater", "Clean water (a clear mirror, no blotches)", "Image", Bool, cleanWater, 0.0f, 1.0f),
+        TMVS_FIELD("ShadeMenuBars", "Shaded image under the replay menu's bars", "Image", Bool, shadeMenuBars, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
         TMVS_FIELD("TrailColor", "Trail colour", "Neon trail", Color, trailColor, 0.0f, 1.0f),
@@ -240,7 +242,8 @@ bool isSystemField(const Field& f) {
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
-           !strcmp(f.key, "CasterShadows");
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") ||
+           !strcmp(f.key, "ShadeMenuBars");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {
@@ -794,6 +797,8 @@ void applyPreset(Settings& s, Preset preset) {
     const int keepMoon = s.engineMoon;
     const bool keepSkyClouds = s.gameSkyClouds;
     const bool keepClean = s.cleanHighlights;
+    const bool keepCleanWater = s.cleanWater;
+    const bool keepMenuBars = s.shadeMenuBars;
     const bool keepHdr = s.gameHdr;
     const bool keepEngineLights = s.engineLights;
     const bool keepCasters = s.casterShadows;
@@ -823,6 +828,8 @@ void applyPreset(Settings& s, Preset preset) {
     s.engineMoon = keepMoon;
     s.gameSkyClouds = keepSkyClouds;
     s.cleanHighlights = keepClean;
+    s.cleanWater = keepCleanWater;
+    s.shadeMenuBars = keepMenuBars;
     s.gameHdr = keepHdr;
     s.engineLights = keepEngineLights;
     s.casterShadows = keepCasters;
@@ -1240,6 +1247,8 @@ void Config::load() {
     if (settings.engineMoon < 0 || settings.engineMoon > 2) settings.engineMoon = 0;
     settings.gameSkyClouds = GetPrivateProfileIntW(L"Settings", L"GameSkyClouds", 0, ini) != 0;
     settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
+    settings.cleanWater = GetPrivateProfileIntW(L"Settings", L"CleanWater", 1, ini) != 0;
+    settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;
     settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 0, ini) != 0;
     settings.engineLights = GetPrivateProfileIntW(L"Settings", L"EngineLights", 1, ini) != 0;
     settings.casterShadows = GetPrivateProfileIntW(L"Settings", L"CasterShadows", 0, ini) != 0;

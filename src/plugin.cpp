@@ -105,6 +105,13 @@ gfx::Target g_sceneCopy;
 // panels): its depth and the shaded image, the size of that part.
 gfx::Target g_partDepth;
 gfx::Target g_partOut;
+// The game's colour clears of this frame that reached the top and the bottom row of their
+// target (only compared, never used): rows it cleared itself are no leftovers (see fillBars).
+struct ClearedRows {
+    IDirect3DSurface9* target = nullptr;
+    unsigned frame = ~0u;
+};
+ClearedRows g_clearedTop, g_clearedBottom;
 // GameHdr: the main camera draws into a float target instead of the game's 8-bit one, so the
 // light the game computes above 1.0 isn't cut (captures for working out the tone curve). At
 // the camera's end it is resolved into the game's target, cut to 0..1 (the 8-bit copy the
@@ -703,6 +710,35 @@ void smoothLook(Settings& s, float now) {
     s.debugView = debugView;
 }
 
+// The replay menu at the end of a race: the replay shrinks into a full-width band between the
+// menu's half-transparent bars (2560x1364 at 0,38 down to 2560x1080 at 0,180 within half a
+// second) and the game draws nothing above and below it any more. Under the bars stays what the
+// shrinking band left there, a strip of each frame: in capture 075 the image jumps exactly at
+// rows 38, 56, 72, 88, ... 180 and 1402, 1384, ... 1260, the band's edges frame by frame. A
+// stepped, blocky copy, each strip from another frame, scaled differently and shaded on its own
+// (the pipeline's targets were new every frame: no history). The shaded band, mirrored at its
+// edges, fills those rows instead. Not where the game cleared them itself this frame (bars it
+// wants black), not for parts that leave columns free (the MediaTracker editor's panels).
+void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3DSURFACE_DESC& desc, const RECT& area, bool wanted) {
+    if (!wanted || area.left != 0 || area.right != static_cast<LONG>(desc.Width)) return;
+    const bool top = area.top > 0 && !(g_clearedTop.target == target && g_clearedTop.frame == g_frame);
+    const bool bottom = area.bottom < static_cast<LONG>(desc.Height) && !(g_clearedBottom.target == target && g_clearedBottom.frame == g_frame);
+    static unsigned s_logged = 0; // each outcome once: 0 left alone (cleared by the game), 1 filled, 2 failed
+    int state = 0;
+    if (top || bottom) state = g_pipeline.fillBars(device, g_partOut.texture, target, area, top, bottom) ? 1 : 2;
+    if (!(s_logged & (1u << state))) {
+        s_logged |= 1u << state;
+        if (state == 1) {
+            TMVS_LOG("scene: rows outside the camera's band (%ld above, %ld below) hold earlier frames: filled with the shaded band, mirrored",
+                     top ? area.top : 0L, bottom ? static_cast<LONG>(desc.Height) - area.bottom : 0L);
+        } else if (state == 2) {
+            TMVS_LOG("scene: filling the rows outside the camera's band failed: left as the game had them");
+        } else {
+            TMVS_LOG("scene: the game cleared the rows outside the camera's band itself: left alone");
+        }
+    }
+}
+
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
 void processScene(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
@@ -945,7 +981,10 @@ void processScene(IDirect3DDevice9* device) {
         }
         // Photo mode's compare split: the game's image (copied before the pipeline) on one side.
         photo::applySplit(device, g_sceneCopy.surface, shaded);
-        if (part) device->StretchRect(g_partOut.surface, nullptr, target, &area, D3DTEXF_NONE);
+        if (part) {
+            device->StretchRect(g_partOut.surface, nullptr, target, &area, D3DTEXF_NONE);
+            fillMenuBars(device, target, desc, area, settings.shadeMenuBars);
+        }
         QueryPerformanceCounter(&renderEnd);
         const double toMs = 1000.0 / static_cast<double>(g_frequency.QuadPart);
         countPipelineCpu(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * toMs);
@@ -1334,6 +1373,31 @@ void onSetTransform(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* m) {
     }
 }
 
+// Notes which game clears of this frame reached the top or bottom row of their target (the
+// viewport, or the rects inside it). Only for fillBars: those rows are the game's own then.
+void onClear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags) {
+    if (!(flags & D3DCLEAR_TARGET)) return;
+    IDirect3DSurface9* target = nullptr;
+    if (FAILED(device->GetRenderTarget(0, &target)) || !target) return;
+    D3DSURFACE_DESC desc{};
+    target->GetDesc(&desc);
+    target->Release(); // only the pointer is kept, to compare
+    D3DVIEWPORT9 viewport{};
+    device->GetViewport(&viewport);
+    LONG top = static_cast<LONG>(viewport.Y), bottom = static_cast<LONG>(viewport.Y + viewport.Height);
+    if (count > 0 && rects) {
+        LONG lo = bottom, hi = top;
+        for (DWORD i = 0; i < count; i++) {
+            lo = rects[i].y1 < lo ? rects[i].y1 : lo;
+            hi = rects[i].y2 > hi ? rects[i].y2 : hi;
+        }
+        top = lo > top ? lo : top;
+        bottom = hi < bottom ? hi : bottom;
+    }
+    if (top <= 0) g_clearedTop = {target, g_frame};
+    if (bottom >= static_cast<LONG>(desc.Height)) g_clearedBottom = {target, g_frame};
+}
+
 void onSetLight(DWORD, const D3DLIGHT9* light) {
     if (light->Type != D3DLIGHT_DIRECTIONAL) return;
     g_scene.lightDirection[0] = light->Direction.x;
@@ -1588,6 +1652,7 @@ void bootOnce() {
     deviceCallbacks.createDepthStencil = onCreateDepthStencil;
     deviceCallbacks.setTransform = onSetTransform;
     deviceCallbacks.setLight = onSetLight;
+    deviceCallbacks.clear = onClear;
     deviceCallbacks.draw = onDraw;
     deviceCallbacks.drawDone = onDrawDone;
     deviceCallbacks.drawIndexed = onDrawIndexed;

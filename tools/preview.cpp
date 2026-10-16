@@ -15,7 +15,9 @@
 //     --video                 the video export's quality (photo mode's depth of field, moving)
 //     --repeat <n>            n more sub-pixel samples of the last frame (the export's
 //                             supersampling: history read, not advanced); the last is written
-//     --nohdr                ignore capture_NNN.hdr16 next to the capture (the game's float
+//     --bars <rows>           the replay menu's band: the image goes between <rows> above and
+//                             below (magenta), which Pipeline::fillBars fills as in game
+//     --nohdr                 ignore capture_NNN.hdr16 next to the capture (the game's float
 //                             image, GameHdr): render from the 8-bit image only
 //     --nomat                 ignore capture_NNN.mat next to the capture (which material drew
 //                             each pixel): no material masks, as before F12 wrote them
@@ -271,6 +273,7 @@ int main(int argc, char** argv) {
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     bool useMaterials = true;            // capture_NNN.mat next to the capture (--nomat: no material masks)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
+    UINT bars = 0;                       // --bars: rows above and below the image (replay menu test)
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
             applyPresetByName(defaults.settings, argv[++i]);
@@ -280,6 +283,8 @@ int main(int argc, char** argv) {
             defaults.settings.debugView = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--shaders") && i + 1 < argc) {
             shaderDir = widen(argv[++i]);
+        } else if (!strcmp(argv[i], "--bars") && i + 1 < argc) {
+            bars = static_cast<UINT>(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--bench")) {
             bench = true;
         } else if (!strcmp(argv[i], "--moon")) {
@@ -562,6 +567,22 @@ int main(int argc, char** argv) {
             }
             if (bench) pipeline.collectProfile(true);
         }
+        // The replay menu's band (plugin.cpp fillMenuBars): the image between `bars` rows above
+        // and below, filled by the pipeline as in game; magenta where it leaves rows out.
+        UINT outHeight = cap.height;
+        if (bars > 0) {
+            gfx::Target tall;
+            if (tall.create(device, cap.width, cap.height + 2 * bars, D3DFMT_A8R8G8B8)) {
+                device->ColorFill(tall.surface, nullptr, D3DCOLOR_XRGB(255, 0, 255));
+                const RECT area = {0, static_cast<LONG>(bars), static_cast<LONG>(cap.width), static_cast<LONG>(bars + cap.height)};
+                device->StretchRect(output.surface, nullptr, tall.surface, &area, D3DTEXF_NONE);
+                if (!pipeline.fillBars(device, output.texture, tall.surface, area, true, true)) fprintf(stderr, "fillBars failed\n");
+                output.destroy();
+                output = tall;
+                tall = gfx::Target();
+                outHeight = cap.height + 2 * bars;
+            }
+        }
         device->EndScene();
         if (bench) {
             printf("GPU time per pass (ms, %ux%u):\n", cap.width, cap.height);
@@ -580,10 +601,10 @@ int main(int argc, char** argv) {
         QueryPerformanceCounter(&t1);
         const size_t length = job.output.size();
         if (length > 4 && !_stricmp(job.output.c_str() + length - 4, ".jpg")) {
-            image::writeThumbnail(widen(job.output.c_str()), pixels.data(), static_cast<int>(cap.width), static_cast<int>(cap.height),
+            image::writeThumbnail(widen(job.output.c_str()), pixels.data(), static_cast<int>(cap.width), static_cast<int>(outHeight),
                                   static_cast<int>(cap.width));
         } else {
-            writeBmp(job.output.c_str(), pixels, cap.width, cap.height);
+            writeBmp(job.output.c_str(), pixels, cap.width, outHeight);
         }
         printf("%s: %ux%u, sun %s (%.3f %.3f %.3f), last frame incl. readback %.1f ms\n", job.output.c_str(), cap.width, cap.height,
                in.sunKnown ? "known" : "unknown", in.sunDirection[0], in.sunDirection[1], in.sunDirection[2],

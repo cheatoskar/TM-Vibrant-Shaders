@@ -2020,6 +2020,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool engineLights = s.engineLights && in.hdr;
     const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, s.borderGlow};
     device->SetPixelShaderConstantF(46, engineConstants, 1);
+    // c47 x (CleanWater): the reflection on the game's water skips what it can't see (the tops
+    // of the ramps over the pools) and takes no dry-track blur. Only where the engine tells the
+    // water's height (or it was measured): the colour guess also takes blue kerbs for water.
+    const bool waterKnown = in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown);
+    const float waterConstants[4] = {s.cleanWater && waterKnown ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(47, waterConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
@@ -2645,6 +2651,45 @@ bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, 
 
 bool Pipeline::addScene(IDirect3DDevice9* device, IDirect3DTexture9* added, IDirect3DSurface9* target, const RECT& area) {
     return copyScene(device, added, target, area, true);
+}
+
+bool Pipeline::fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom) {
+    if (!m_ready || !band || !target) return false;
+    D3DSURFACE_DESC desc{};
+    target->GetDesc(&desc);
+    const LONG width = static_cast<LONG>(desc.Width), height = static_cast<LONG>(desc.Height);
+    const LONG bandHeight = area.bottom - area.top;
+    if (area.left != 0 || area.right != width || bandHeight < 1 || area.top < 0 || area.bottom > height) return false;
+    const float h = static_cast<float>(bandHeight), scale = static_cast<float>(height) / h;
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    device->SetPixelShader(m_shaders[kResolve]);
+    bind(device, 0, band, false);
+    const float mode[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // c33.x 0: cut to 0..1 (an 8-bit image anyway)
+    device->SetPixelShaderConstantF(33, mode, 1);
+    // PS_Resolve reads the band at u_Pass0.xy + uv * u_Pass0.zw, uv over the whole target: row y
+    // above the band gets band row (top - 1 - y), row y below it band row (2 h - 1 - (y - top)).
+    // The scissor rect after SetRenderTarget (which resets it); the quad sets only the viewport.
+    bool drew = false;
+    if (top && area.top > 0) {
+        const RECT rows = {0, area.top > bandHeight ? area.top - bandHeight : 0, width, area.top};
+        device->SetScissorRect(&rows);
+        passConstants(device, 0.0f, static_cast<float>(area.top) / h, 1.0f, -scale);
+        m_quad.draw(device, desc.Width, desc.Height);
+        drew = true;
+    }
+    if (bottom && area.bottom < height) {
+        const RECT rows = {0, area.bottom, width, height - area.bottom > bandHeight ? area.bottom + bandHeight : height};
+        device->SetScissorRect(&rows);
+        passConstants(device, 0.0f, (2.0f * h + static_cast<float>(area.top)) / h, 1.0f, -scale);
+        m_quad.draw(device, desc.Width, desc.Height);
+        drew = true;
+    }
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return drew;
 }
 
 bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add) {

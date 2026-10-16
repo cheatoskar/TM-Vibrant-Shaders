@@ -339,6 +339,7 @@ HRESULT APIENTRY endSceneDetour(IDirect3DDevice9* device) {
 HRESULT APIENTRY clearDetour(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color, float z,
                              DWORD stencil) {
     if (tracingGame()) tracer::event("Clear rects=%lu flags=%lx color=%08lx z=%.3f s=%lu", count, flags, color, z, stencil);
+    if (g_internal == 0 && g_callbacks.clear) g_callbacks.clear(device, count, rects, flags);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD)>(kClear)(
         device, count, rects, flags, color, z, stencil);
 }
