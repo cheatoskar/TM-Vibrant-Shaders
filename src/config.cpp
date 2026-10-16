@@ -1253,6 +1253,7 @@ void Config::load() {
     photoDof = 0.5f;
     if (GetPrivateProfileStringW(L"General", L"PhotoDof", L"", text, 128, ini)) photoDof = static_cast<float>(_wtof(text));
     photoDof = photoDof < 0.0f ? 0.0f : (photoDof > 1.0f ? 1.0f : photoDof);
+    splitPhotoLabels = GetPrivateProfileIntW(L"General", L"SplitPhotoLabels", 1, ini) != 0;
     lutFile = GetPrivateProfileStringW(L"General", L"Lut", L"", text, 128, ini) ? narrow(text) : std::string();
     lutAmount = 1.0f;
     if (GetPrivateProfileStringW(L"General", L"LutAmount", L"", text, 128, ini)) lutAmount = static_cast<float>(_wtof(text));
@@ -1333,6 +1334,7 @@ void Config::save() {
     WritePrivateProfileStringW(L"General", L"PhotoTiles", photo, ini);
     swprintf(photo, 32, L"%.2f", photoDof);
     WritePrivateProfileStringW(L"General", L"PhotoDof", photo, ini);
+    WritePrivateProfileStringW(L"General", L"SplitPhotoLabels", splitPhotoLabels ? L"1" : L"0", ini);
     WritePrivateProfileStringW(L"General", L"Lut", widen(lutFile).c_str(), ini);
     swprintf(photo, 32, L"%.2f", lutAmount);
     WritePrivateProfileStringW(L"General", L"LutAmount", photo, ini);

@@ -350,6 +350,8 @@ const char* tooltipFor(const char* key) {
         {"NeonTrail", "A glowing trail behind the car. 0 is off."},
         {"TrailTyres", "Two lines from the rear tyres instead of one."},
         {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},
+        // Photo mode (General, not a look setting).
+        {"SplitPhotoLabels", "Photos of the compare split get both sides' names burnt in at the bottom, at the line (the list on the screen is never in them)."},
     };
     for (const auto& t : kTips)
         if (!strcmp(t.key, key)) return t.tip;
@@ -1538,7 +1540,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "ShadeMenuBars");
                           return l;
                       }});
-    panels.push_back({"Photo mode", g_host->splitOn ? (g_host->splitPreset ? 12.0f : 11.0f) : 8.0f, [&config] {
+    panels.push_back({"Photo mode", g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f, [&config] {
                           const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
                           switchRow("Auto photo mode", &config.photoAuto,
@@ -1559,7 +1561,11 @@ bool drawSettings(Config& config, Settings& s) {
                               bool& split = *g_host->splitOn;
                               if (switchRow("Compare split", &split,
                                             ("One side of a line shows the game's image without the mod's effects (or another preset's look), the other yours (" + splitKey +
-                                             ").\nIn photos too, not in hi-res ones. The game's own changes stay on both sides (its bloom off, real night).").c_str())) {
+                                             ").\n" +
+                                             // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
+                                             (g_host->splitPreset ? "In photos too, hi-res ones included; the aperture blurs both sides alike."
+                                                                  : "In photos too, not in hi-res ones.") +
+                                             " The game's own changes stay on both sides (its bloom off, real night).").c_str())) {
                                   if (split && g_host->photoOn) g_host->photoOn();
                               }
                               ImGui::BeginDisabled(!split);
@@ -1577,6 +1583,7 @@ bool drawSettings(Config& config, Settings& s) {
                                   if (ImGui::IsItemHovered())
                                       ImGui::SetTooltip("What the other side of the line shows: the game's own image, or a preset's look next to yours.\n"
                                                         "A preset costs a second run of the effects every frame (photo mode only).");
+                                  switchRow("Photo labels", &config.splitPhotoLabels, tooltipFor("SplitPhotoLabels"));
                               }
                               ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                               ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");

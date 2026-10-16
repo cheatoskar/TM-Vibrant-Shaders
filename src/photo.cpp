@@ -64,10 +64,16 @@ struct SaveJob {
     std::vector<unsigned char> rgb;
     int width;
     int height;
+    // The compare split's names (SplitPhotoLabels), "" = none.
+    std::string left, right;
+    float splitAt = 0.5f;
 };
 
 DWORD WINAPI saveThread(LPVOID param) {
     SaveJob* job = static_cast<SaveJob*>(param);
+    // On this thread too: GDI draws the names in a few ms, a hi-res photo's in a few more.
+    if (!job->left.empty() || !job->right.empty())
+        image::drawSplitLabels(job->rgb.data(), job->width, job->height, 3, static_cast<size_t>(job->width) * 3, job->splitAt, job->left, job->right);
     const bool ok = image::writePng(job->path, job->rgb.data(), job->width, job->height);
     const size_t slash = job->path.find_last_of(L"\\/");
     const std::wstring file = slash == std::wstring::npos ? job->path : job->path.substr(slash + 1);
@@ -79,8 +85,21 @@ DWORD WINAPI saveThread(LPVOID param) {
     return 0;
 }
 
+// The photo has the compare split (the line and the other side are in the frame): which side
+// shows what, as the bar at the line names them on the screen (never in photos).
+void splitLabels(SaveJob& job) {
+    const Config& config = Config::get();
+    if (!g_split || !g_active || !config.splitPhotoLabels) return;
+    const std::string mine = !config.settings.enabled ? std::string("Shaders off") : (config.preset.empty() ? std::string("Your look") : config.preset);
+    const std::string other = g_splitPreset.empty() ? std::string("Game") : g_splitPreset;
+    job.splitAt = g_splitAt;
+    job.left = g_splitSwap ? mine : other;
+    job.right = g_splitSwap ? other : mine;
+}
+
 void save(std::vector<unsigned char>&& rgb, int width, int height) {
     SaveJob* job = new SaveJob{L"", std::move(rgb), width, height};
+    splitLabels(*job);
     wchar_t name[64];
     for (int n = 0;; n++) {
         swprintf(name, 64, L"\\photo_%03d.png", n);
@@ -368,7 +387,7 @@ void toggleSplit() {
 }
 
 bool splitShown() {
-    return g_split && g_active && g_job != Job::Tiles;
+    return g_split && g_active;
 }
 
 bool& splitOn() {
@@ -395,11 +414,22 @@ void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3D
     if (out.Width != in.Width || out.Height != in.Height) return;
     const LONG w = static_cast<LONG>(out.Width), h = static_cast<LONG>(out.Height);
     const float at = g_splitAt < 0.0f ? 0.0f : (g_splitAt > 1.0f ? 1.0f : g_splitAt);
-    const LONG x = static_cast<LONG>(lroundf(at * static_cast<float>(w)));
-    const RECT game = g_splitSwap ? RECT{x, 0, w, h} : RECT{0, 0, x, h};
+    LONG x = static_cast<LONG>(lroundf(at * static_cast<float>(w)));
+    LONG photoHeight = h;
+    // A hi-res photo's tile: the line where it falls in the whole photo (the tiles' inner parts
+    // put together show the screen's view), so it runs straight through the stitched photo and
+    // not through every tile. Not before the first tile's projection (that frame isn't kept).
+    if (g_job == Job::Tiles && g_width == out.Width && g_height == out.Height && g_innerW > 0) {
+        const LONG n = g_tiles, i = g_tile % g_tiles;
+        x = static_cast<LONG>(g_marginX) + static_cast<LONG>(lroundf(at * static_cast<float>(g_innerW * n))) - i * static_cast<LONG>(g_innerW);
+        photoHeight = static_cast<LONG>(g_innerH) * n;
+    }
+    const LONG cut = x < 0 ? 0 : (x > w ? w : x);
+    const RECT game = g_splitSwap ? RECT{cut, 0, w, h} : RECT{0, 0, cut, h};
     if (game.right > game.left) device->StretchRect(original, &game, shaded, &game, D3DTEXF_NONE);
-    // The line: light with dark edges, so it shows on sky and snow as on asphalt. 2 px at 1080p.
-    const LONG t = h >= 1080 ? h / 540 : 1;
+    // The line: light with dark edges, so it shows on sky and snow as on asphalt. 2 px at 1080p
+    // (of the photo: a hi-res one gets it as wide, relative to its size).
+    const LONG t = photoHeight >= 1080 ? photoHeight / 540 : 1;
     const auto fill = [&](LONG left, LONG right, D3DCOLOR colour) {
         const RECT r{left < 0 ? 0 : left, 0, right > w ? w : right, h};
         if (r.right > r.left) device->ColorFill(shaded, &r, colour);

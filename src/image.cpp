@@ -1,5 +1,7 @@
 #include "image.h"
+#include <windows.h>
 #include <cstdio>
+#include <cstring>
 
 // stb (public domain / MIT): only the JPEG reader and writer.
 #pragma warning(push, 0)
@@ -71,6 +73,108 @@ bool writePng(const std::wstring& path, const unsigned char* rgb, int width, int
     fclose(f);
     if (!ok) _wremove(path.c_str()); // no half-written photo
     return ok;
+}
+
+namespace {
+
+std::wstring wideName(const std::string& text) {
+    // Preset names are UTF-8 (file names); anything else as the system's code page.
+    UINT codePage = CP_UTF8;
+    DWORD flags = MB_ERR_INVALID_CHARS;
+    int n = MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (n <= 0) {
+        codePage = CP_ACP;
+        flags = 0;
+        n = MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    }
+    std::wstring out(n > 0 ? n : 0, L'\0');
+    if (n > 0) MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), &out[0], n);
+    return out;
+}
+
+// A line of text as coverage (0..255, rows top-down), drawn by GDI with grey anti-aliasing.
+bool textMask(const std::wstring& text, int pixelHeight, std::vector<unsigned char>& cover, int& w, int& h) {
+    if (text.empty()) return false;
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) return false;
+    HFONT font = CreateFontW(-pixelHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    SIZE size{};
+    bool ok = font && GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size) && size.cx > 0 && size.cy > 0;
+    void* bits = nullptr;
+    HBITMAP bitmap = nullptr;
+    if (ok) {
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = size.cx;
+        info.bmiHeader.biHeight = -size.cy; // top-down
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+        ok = bitmap && bits;
+    }
+    if (ok) {
+        HGDIOBJ oldBitmap = SelectObject(dc, bitmap);
+        memset(bits, 0, static_cast<size_t>(size.cx) * size.cy * 4);
+        SetTextColor(dc, RGB(255, 255, 255));
+        SetBkMode(dc, TRANSPARENT);
+        ok = TextOutW(dc, 0, 0, text.c_str(), static_cast<int>(text.size())) != FALSE;
+        GdiFlush();
+        if (ok) {
+            w = size.cx;
+            h = size.cy;
+            cover.resize(static_cast<size_t>(w) * h);
+            const unsigned char* src = static_cast<const unsigned char*>(bits);
+            for (size_t i = 0; i < cover.size(); i++) cover[i] = src[i * 4 + 1]; // white text: any channel is its coverage
+        }
+        SelectObject(dc, oldBitmap);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (oldFont) SelectObject(dc, oldFont);
+    if (font) DeleteObject(font);
+    DeleteDC(dc);
+    return ok;
+}
+
+} // namespace
+
+void drawSplitLabels(unsigned char* pixels, int width, int height, int bytesPerPixel, size_t pitch, float at, const std::string& left,
+                     const std::string& right) {
+    if (!pixels || width <= 0 || height <= 0 || bytesPerPixel < 3) return;
+    const int textHeight = height * 22 / 1000 > 12 ? height * 22 / 1000 : 12; // 24 px at 1080p, 32 at 1440p
+    const int padX = textHeight / 2, padY = textHeight / 6;
+    const int margin = textHeight * 4 / 5;
+    // Clear of the split's line (photo::applySplit: 2 px light and 2 px dark at 1080p each side).
+    const int line = height >= 1080 ? height / 540 : 1;
+    const int gap = 2 * line + textHeight / 2;
+    const float a = at < 0.0f ? 0.0f : (at > 1.0f ? 1.0f : at);
+    const int x = static_cast<int>(a * width + 0.5f);
+    for (int side = 0; side < 2; side++) {
+        std::vector<unsigned char> cover;
+        int tw = 0, th = 0;
+        if (!textMask(wideName(side ? right : left), textHeight, cover, tw, th)) continue;
+        const int boxW = tw + 2 * padX, boxH = th + 2 * padY;
+        // At the line, as the bar on the screen; a side too narrow for its name gets none (a name
+        // over the line would label the wrong side).
+        const int boxX = side ? x + gap : x - gap - boxW;
+        const int boxY = height - margin - boxH;
+        if (boxX < margin / 2 || boxX + boxW > width - margin / 2 || boxY < 0) continue;
+        for (int y = 0; y < boxH; y++) {
+            unsigned char* row = pixels + static_cast<size_t>(boxY + y) * pitch + static_cast<size_t>(boxX) * bytesPerPixel;
+            const int ty = y - padY;
+            for (int i = 0; i < boxW; i++) {
+                unsigned char* p = row + static_cast<size_t>(i) * bytesPerPixel;
+                const int tx = i - padX;
+                const int c = tx >= 0 && tx < tw && ty >= 0 && ty < th ? cover[static_cast<size_t>(ty) * tw + tx] : 0;
+                for (int k = 0; k < 3; k++) {
+                    const int dark = p[k] * 2 / 5; // the box: 60 % black, the scene shows through
+                    p[k] = static_cast<unsigned char>(dark + (235 - dark) * c / 255);
+                }
+            }
+        }
+    }
 }
 
 bool decodeJpeg(const void* data, size_t size, std::vector<uint32_t>& pixels, int& width, int& height) {
