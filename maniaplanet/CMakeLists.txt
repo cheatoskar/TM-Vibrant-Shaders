@@ -102,6 +102,7 @@ endforeach()
 add_library(tmvs_mp_core STATIC
   src/hooks.cpp
   src/engine_frame.cpp
+  src/engine_lights.cpp
   src/shaderdb.cpp
   src/renderer.cpp
   src/effects.cpp

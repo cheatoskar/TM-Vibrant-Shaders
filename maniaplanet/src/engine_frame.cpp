@@ -54,7 +54,7 @@ float rowDot(const float m[16], int row, const float v[4]) {
 
 const char* engineTextureName(int index) {
     static const char* const kNames[kTexCount] = {"hdr",       "exposure", "depth",       "normal",     "diffuse",    "specular",
-                                                   "lightmask", "motion",   "shadowdepth", "shadowmap0", "shadowmap1"};
+                                                   "lightmask", "motion",   "shadowdepth", "shadowmap0", "shadowmap1", "lights"};
     return index >= 0 && index < kTexCount ? kNames[index] : "?";
 }
 

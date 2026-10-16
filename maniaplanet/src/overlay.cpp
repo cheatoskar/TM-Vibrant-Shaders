@@ -285,6 +285,11 @@ void gamePanel() {
     changed |= ImGui::RadioButton("End of frame (interface too)", &placement, 1);
     o.placement = static_cast<Placement>(placement);
     changed |= ImGui::Checkbox("End of frame when the interface start isn't found", &o.fallbackAtEnd);
+    changed |= ImGui::Checkbox("Light sources from the engine's draws", &o.engineLightDraws);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("On: lamps, light strips, screens, halos and the car's lights glow as the engine draws them\n"
+                          "(drawn a second time into a buffer of their own); nothing is guessed from colours.\n"
+                          "Off: the light sources are guessed from the image (as before). F12 saves the buffer.");
     if (changed) options::save();
     int view = static_cast<int>(o.view);
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
