@@ -48,7 +48,7 @@ const char* const kSupported[] = {
     "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "NeonLight", "GlobalIllumination", "SunLight", "AmbientTint",
     "SunColor", "GameSunColor", "SkyColor", "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter",
     "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
-    "VolumetricLight", "GameNight"};
+    "VolumetricLight", "GameNight", "EngineMoon"};
 
 } // namespace
 
@@ -432,7 +432,10 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     toView(sw, sv);
     const bool ringWorld = s.skyMode == 5;
     const bool nightSky = s.skyMode >= 2 && !ringWorld;
-    const bool mapNight = tmshaders::classifyMood(cam.sunColour) == tmshaders::Mood::Night;
+    // The map's time of day from the engine when it tells it (its night moon passed for a day sun
+    // by its colour: taken out under the black hole, shadows came out brighter than the ground).
+    const int dayMood = dayTimeMood(cam);
+    const bool mapNight = dayMood >= 0 ? dayMood == 0 : tmshaders::classifyMood(cam.sunColour) == tmshaders::Mood::Night;
     const bool gameNight = mapNight && !blackHole;
     const bool sunKnown = blackHole || (cam.sunDirectionKnown && !nightSky);
     const float daylight = blackHole ? fminf(0.3f + 0.12f * s.skyEffectSize, 1.0f) : smoothstepf(-0.08f, 0.18f, sw[1]) * (gameNight ? 0.35f : 1.0f);
@@ -613,7 +616,9 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[41][3] = 1.0f / fmaxf(s.hazeDistance, 0.1f);
     // How much of the engine's sun comes out: every night sky over a day map (not on night maps,
     // whose "sun" is the moon already).
-    c[43][0] = nightSky && !mapNight ? 1.0f : 0.0f;
+    // On night maps the moon stays (EngineMoon 0 and 1: ManiaPlanet's moon can't be moved), EngineMoon 2
+    // takes it out too.
+    c[43][0] = nightSky && (!mapNight || s.engineMoon == 2) ? 1.0f : 0.0f;
     const float glen = sqrtf(gameSun[0] * gameSun[0] + gameSun[1] * gameSun[1] + gameSun[2] * gameSun[2]);
     for (int i = 0; i < 3; i++) c[43][1 + i] = glen > 1e-5f ? cam.sunDirection[i] / glen : 0.0f;
     c[44][1] = s.gameNight ? 1.0f : 0.0f;

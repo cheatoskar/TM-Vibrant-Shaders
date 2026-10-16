@@ -1163,7 +1163,9 @@ bool onPresent(IDXGISwapChain* sc) {
     // The map's time of day from the engine's light (day, sunset, night presets, as in TMNF):
     // only in frames with a scene, and only once it holds for a second.
     if (g_cameraThisFrame && f.toneMapSeen) {
-        const tmshaders::Mood mood = tmshaders::classifyMood(g_camera.sunColour);
+        static const tmshaders::Mood kByDayTime[] = {tmshaders::Mood::Night, tmshaders::Mood::Dusk, tmshaders::Mood::Day};
+        const int dayMood = dayTimeMood(g_camera);
+        const tmshaders::Mood mood = dayMood >= 0 ? kByDayTime[dayMood] : tmshaders::classifyMood(g_camera.sunColour);
         g_moodFrames = mood == g_seenMood ? g_moodFrames + 1 : 0;
         g_seenMood = mood;
         if (g_moodFrames == 60) tmshaders::Config::get().onMoodDetected(mood);

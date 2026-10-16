@@ -30,6 +30,7 @@ constexpr UINT kScenePLightDirRgbLinear0 = 144;
 constexpr UINT kScenePLightDirInWorld0 = 160;
 constexpr UINT kScenePCloudsMin = 304;
 constexpr UINT kScenePCloudsMax = 320;
+constexpr UINT kScenePDayTime = 464; // GbxP_DayTime: x = the map's time of day (0..1, 0.5 noon)
 
 struct Camera {
     bool valid = false;
@@ -51,7 +52,13 @@ struct Camera {
     unsigned char raw[kSceneVSize] = {}; // the whole buffer, for captures
     unsigned char rawP[kScenePSize] = {};
     bool hasSceneP = false;
+    float dayTime = -1.0f; // the map's time of day from SceneP (0..1, 0.5 noon), -1 unknown
 };
+
+// The map's mood from its time of day: 0 night, 1 sunrise or sunset, 2 day; -1 unknown.
+// (Stadium: night 0.10, sunrise 0.32, day 0.50, sunset 0.81. Its night "sun" is the moon,
+// (0.36, 0.53, 1.16): bright enough to pass for day by its colour.)
+int dayTimeMood(const Camera& c);
 
 enum EngineTexture : int {
     kTexHdr = 0,      // the tone map's input (R11G11B10 float)
