@@ -137,6 +137,31 @@ struct CpuStats {
     unsigned frames = 0;
 } g_cpuStats;
 
+// Hangs: a frame the mod held up for long (logged with the time, so a sound glitch or stutter the
+// player noticed can be matched to it), and long gaps between two shaded frames in a race (the
+// game or the driver stood still: loading is no race).
+void logHangs(double ms, double captureMs, bool racing) {
+    static int s_logged = 0;
+    static float s_last = -1.0f;
+    static int s_maps = -1;
+    const float now = seconds();
+    // A map loaded or closed in between: that wait is the loading screen.
+    const int maps = engine::mapLoads() + engine::mapCloses();
+    if (maps != s_maps) s_last = -1.0f;
+    s_maps = maps;
+    if (s_logged < 60) {
+        if (ms > 100.0) {
+            s_logged++;
+            TMVS_LOG("cpu: one frame of the mod took %.0f ms (%.0f ms of it writing the F12 capture)", ms, captureMs);
+        }
+        if (racing && s_last >= 0.0f && now - s_last > 0.25f) {
+            s_logged++;
+            TMVS_LOG("frame: %.0f ms since the last shaded frame in a race", (now - s_last) * 1000.0f);
+        }
+    }
+    s_last = racing ? now : -1.0f;
+}
+
 void countPipelineCpu(double ms) {
     if (g_cpuStats.frames >= 20000) return;
     g_cpuStats.total += ms;
@@ -862,7 +887,10 @@ void processScene(IDirect3DDevice9* device) {
         LARGE_INTEGER renderStart, renderEnd;
         QueryPerformanceCounter(&renderStart);
         g_pipeline.render(device, inputs, effective, shaded);
+        LARGE_INTEGER captureStart, captureEnd;
+        QueryPerformanceCounter(&captureStart);
         if (capture) writeCapture(device, inputs, idFrame);
+        QueryPerformanceCounter(&captureEnd);
         // A preset was just saved: this frame (without HUD and menu) becomes its picture, never
         // with the compare split.
         std::string picture;
@@ -874,7 +902,11 @@ void processScene(IDirect3DDevice9* device) {
         photo::applySplit(device, g_sceneCopy.surface, shaded);
         if (part) device->StretchRect(g_partOut.surface, nullptr, target, &area, D3DTEXF_NONE);
         QueryPerformanceCounter(&renderEnd);
-        countPipelineCpu(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart));
+        const double toMs = 1000.0 / static_cast<double>(g_frequency.QuadPart);
+        countPipelineCpu(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * toMs);
+        logHangs(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * toMs,
+                 static_cast<double>(captureEnd.QuadPart - captureStart.QuadPart) * toMs,
+                 inputs.driving && !inputs.photo && g_scene.projection[14] > -1.0f); // not a menu background
         g_shadedThisFrame = true;
         // The shaded frame before the HUD: a photo or a hi-res tile.
         if (temporal) photo::afterRender(device, shaded);

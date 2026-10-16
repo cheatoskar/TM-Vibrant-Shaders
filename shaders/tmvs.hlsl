@@ -57,7 +57,7 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
-float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off)
+float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
 float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
 
 sampler2D s0 : register(s0);
@@ -2131,6 +2131,22 @@ float removeGameSun(float3 c, float3 nWorld, float3 rd, float sat, float night) 
     return k * cap * flatten;
 }
 
+// EngineLights: the neon strips (road borders) are plain block material to the game, a blue
+// stripe in a grey texture: only their colour tells them. Bright, deeply saturated blue (in the
+// game's float image above 1.0 near by); not the paler, darker blue of platform paint or banner
+// letters, not floodlit grass (green), white or a car. Returns 0..1.
+//   c = linear colour (unclamped), mat = the game's material (g: car, glass, grass)
+float neonStrip(float3 c, float dist, float4 mat) {
+    float peak = max(c.r, max(c.g, c.b));
+    float3 cl = min(c, 1.0);
+    float pl = min(peak, 1.0);
+    float sat = (pl - min(cl.r, min(cl.g, cl.b))) / max(pl, 1e-3);
+    float blue = (cl.b - max(cl.r, cl.g)) / max(pl, 1e-3);
+    // Far away the mipmaps blend the strip with its frame: dimmer.
+    float low = lerp(0.6, 0.35, saturate((dist - 20.0) / 150.0));
+    return smoothstep(0.7, 0.9, sat) * smoothstep(0.25, 0.45, blue) * smoothstep(low, low + 0.4, peak) * (mat.g < 0.1 ? 1.0 : 0.0);
+}
+
 // engine (PS_LightingEngine, EngineLights): the light sources are what the game drew as light
 // (lamp materials, its additive glows), nothing is guessed from the image. Its own entry point:
 // without the guess it has room, and PS_Lighting stays exactly as it was.
@@ -2232,7 +2248,14 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     float peakC = max(c.r, max(c.g, c.b));
     emissive = max(emissive * saturate(6.0 - mat.g * u_Clean.x), // car (g 1) 0; glass (.5), grass, off: 1
                    mat.r * saturate(peakC * u_Clean.z + u_Clean.w)); // its bright parts (0.4..0.8); no GameHdr: 0
+    // EngineLights: the neon strips glow as the guess let them (its neon branch, x 0.75), by their
+    // own strength (u_Engine.w, Neon strips glow). No reflection, wet sheen or grass on them.
     float3 glow = min(c, 1.0) * u_Rays.w * emissive;
+    if (engine) {
+        float neon = neonStrip(c, dist, mat) * 0.75;
+        glow = min(c, 1.0) * u_Rays.w * max(emissive, neon * u_Engine.w);
+        emissive = max(emissive, neon);
+    }
     // White lights and screens glow less than coloured ones, or they bleach to flat white.
     float sat = (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3);
     glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, sat));

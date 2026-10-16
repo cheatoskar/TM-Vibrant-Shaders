@@ -418,6 +418,7 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[7][1] = sw[1];
     c[7][2] = sw[2];
     c[7][3] = sunKnown ? daylight : 1.0f;
+    for (int j = 0; j < 3; j++) m_sunWorld[j] = sw[j];
     m_sunKnown = sunKnown;
 
     // Sun position on screen.
@@ -765,6 +766,7 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
         m_heightSupported = false;
     }
     m_heightValid = false;
+    m_shadowHeightStale = true;
     return ok;
 }
 
@@ -1970,16 +1972,19 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const float cleanConstants[4] = {s.cleanHighlights ? 8.0f : 0.0f, in.hdr ? 1.0f : 0.0f, in.hdr ? 2.5f : 0.0f, -1.0f};
     device->SetPixelShaderConstantF(45, cleanConstants, 1);
     // c46 (EngineLights): x s14 holds the added light; y its extra strength per HighlightBoost;
-    // z the reflections' boost of bright hits (1: as before; 0: the light sources are known).
+    // z the reflections' boost of bright hits (1: as before; 0: the light sources are known);
+    // w the neon strips' glow (they are plain block material to the game: found by their colour).
     const bool engineLights = s.engineLights && in.hdr;
-    const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, 0.0f};
+    const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, s.borderGlow};
     device->SetPixelShaderConstantF(46, engineConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
-    // Photo mode: a 3x larger height map (twice the texels), so far views get long shadows.
-    const UINT heightSize = in.photo ? 1024 : 512;
-    const float heightWorld = in.photo ? 960.0f : 320.0f;
+    // 640 m around the camera (0.625 m a texel): at speed the shadows ahead were only known
+    // 120..160 m out, the next blocks' shadows popped up in front of the car. Photo mode: 960 m,
+    // far views get long shadows.
+    const UINT heightSize = 1024;
+    const float heightWorld = in.photo ? 960.0f : 640.0f;
     if (heightSize != m_heightSize || heightWorld != m_heightWorld) {
         m_heightSize = heightSize;
         m_heightWorld = heightWorld;
@@ -2074,7 +2079,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
     // Roofs and bridges for the rain and snow, only while it falls.
     const bool ceilings = s.weatherShelter && (s.rain > 0.0f || s.snow > 0.0f);
-    if (heightMap && splat && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s, ceilings);
+    if (heightMap && splat && (!m_heightValid || (m_frame & 1))) {
+        updateHeightMap(device, in, s, ceilings);
+        m_shadowHeightStale = true;
+    }
     if (!ceilings) m_ceilingValid = false;
     const bool longShadows = heightMap && wantLong;
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
@@ -2105,8 +2113,15 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (volume) {
         static const float kVolumeSteps[3] = {8.0f, 12.0f, 16.0f};
         const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
-        bind(device, 0, m_heightMap[m_heightIndex].texture, false);
-        runPass(device, kShadowHeight, m_shadowHeight);
+        // Only when the map or the sun changed (the map: every other frame).
+        const bool sunMoved = fabsf(m_sunWorld[0] - m_shadowHeightSun[0]) + fabsf(m_sunWorld[1] - m_shadowHeightSun[1]) +
+                                  fabsf(m_sunWorld[2] - m_shadowHeightSun[2]) > 1e-4f;
+        if (m_shadowHeightStale || sunMoved) {
+            bind(device, 0, m_heightMap[m_heightIndex].texture, false);
+            runPass(device, kShadowHeight, m_shadowHeight);
+            for (int j = 0; j < 3; j++) m_shadowHeightSun[j] = m_sunWorld[j];
+            m_shadowHeightStale = false;
+        }
         bind(device, 0, m_ndHalf.texture, false);
         bind(device, 1, m_shadowHeight.texture, false); // R32F: no filtering on older GPUs
         passConstants(device, kVolumeSteps[q], 0.0f);

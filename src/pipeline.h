@@ -320,8 +320,8 @@ private:
     bool m_havePrevious = false;
 
     // Long-range shadows: world-space height map built from the depth buffer.
-    UINT m_heightSize = 512;
-    float m_heightWorld = 320.0f;                    // metres covered (photo mode: 960)
+    UINT m_heightSize = 1024;
+    float m_heightWorld = 640.0f;                    // metres covered (photo mode: 960)
     gfx::Target m_heightFrame;                       // this frame's splat
     gfx::Target m_heightMap[2];                         // accumulated, ping-pong
     gfx::Target m_ceilingMap[2];                        // undersides (roofs, bridges), kept, ping-pong
@@ -338,6 +338,9 @@ private:
     float m_heightHoldUntil = -1.0f; // no splats until the player's camera is back (or this time)
     bool m_heightSupported = true;
     bool m_heightFilter = false;     // R32F can be filtered: the long-shadow trace reads it bilinear
+    bool m_shadowHeightStale = true; // the volumetric light's shadow heights need their pass again
+    float m_sunWorld[3] = {};        // this frame's sun direction (c7)
+    float m_shadowHeightSun[3] = {}; // the sun the shadow heights were made for
     float m_heightOrigin[2] = {};
 
     IDirect3DVolumeTexture9* m_cloudNoise = nullptr;

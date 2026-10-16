@@ -64,6 +64,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Bloom", "Bloom", "Bloom & Lens", Float, bloom, 0.0f, 0.4f),
         TMVS_FIELD("BloomRadius", "Bloom radius", "Bloom & Lens", Float, bloomRadius, 0.3f, 1.2f),
         TMVS_FIELD("HighlightBoost", "Light source intensity", "Bloom & Lens", Float, highlightBoost, 0.0f, 8.0f),
+        TMVS_FIELD("BorderGlow", "Neon strips glow (with light sources from the game)", "Bloom & Lens", Float, borderGlow, 0.0f, 3.0f),
         TMVS_FIELD("LensFlare", "Lens flare", "Bloom & Lens", Float, lensFlare, 0.0f, 1.5f),
         TMVS_FIELD("ChromaticAberration", "Chromatic aberration", "Bloom & Lens", Float, chromaticAberration, 0.0f, 1.0f),
         TMVS_FIELD("Vignette", "Vignette", "Bloom & Lens", Float, vignette, 0.0f, 1.0f),
@@ -363,7 +364,7 @@ const char* const kTagKeys[] = {
     "Wetness", "Rain", "Snow", "SnowCover", "Puddles", "Lightning", "LensDrops", "WaterSurfaces", "Reflections",
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
-    "WeatherShelter", "HazeDistance",
+    "WeatherShelter", "HazeDistance", "BorderGlow",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",

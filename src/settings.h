@@ -94,6 +94,7 @@ struct Settings {
     float bloom = 0.09f;
     float bloomRadius = 0.85f;
     float highlightBoost = 3.5f;   // LDR -> HDR expansion of light sources
+    float borderGlow = 1.0f;       // EngineLights: the neon strips' (road borders') glow, 1 = as the guess let them glow
     float lensFlare = 0.25f;
     float chromaticAberration = 0.05f;
     float vignette = 0.25f;

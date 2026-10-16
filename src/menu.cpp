@@ -979,6 +979,7 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"GodRays", "Light shafts"},
                                     {"Bloom", "Glow"},
                                     {"HighlightBoost", "Light sources"},
+                                    {"BorderGlow", "Neon borders"},
                                     {"NeonLight", "Neon light"},
                                     {"Exposure", "Brightness"},
                                     {"Saturation", "Colour"},
