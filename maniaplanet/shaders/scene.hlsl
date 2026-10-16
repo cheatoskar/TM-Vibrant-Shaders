@@ -488,9 +488,10 @@ float4 PS_Lighting(VSOut i) : SV_Target
     // the sun's mirror direction above the surface's own diffuse light, of the sun's hue; it is
     // squeezed to about that light. Both shares (lighting, light sources) come down by the same
     // factor, so the colour stays and no edge shows where emissiveOf counts the light differently
-    // (taking it out of one share left grey holes with hard edges in the gold). Off with
+    // (taking it out of one share left grey holes with hard edges in the gold). On night maps the
+    // moon's glint the same (it stays, but blew out on metal: capture 025). Off with
     // CleanHighlights (as in 1.4.0).
-    if (u_SunOut.x > 0.0 && u_Engine2.x > 0.5 && u_Engine2.w > 0.5)
+    if ((u_SunOut.x > 0.0 || u_Engine2.x < -0.5) && abs(u_Engine2.x) > 0.5 && u_Engine2.w > 0.5)
     {
         float3 sunC = max(u_EngineSun.rgb, 1e-4);
         float level = max(luma(sunPart + ambPart), 1e-4);
@@ -507,7 +508,7 @@ float4 PS_Lighting(VSOut i) : SV_Target
         float hue = smoothstep(sunSat * 0.1, sunSat * 0.3, sat) * (1.0 - smoothstep(sunSat + 0.1, sunSat + 0.25, sat));
         float colour = lerp(1.0 - smoothstep(0.55, 0.85, sat), hue, saturate(sunSat * 5.0));
         float squeeze = 1.0 - 1.0 / (1.0 + luma(glint) / level);
-        float cut = luma(glint) * squeeze * mirror * colour * saturate(u_SunOut.x);
+        float cut = luma(glint) * squeeze * mirror * colour * (u_Engine2.x < -0.5 ? 1.0 : saturate(u_SunOut.x));
         float keep = 1.0 - cut / max(luma(rest), 1e-4);
         emissive *= keep;
         restLight *= keep;
@@ -535,6 +536,20 @@ float4 PS_Lighting(VSOut i) : SV_Target
     // the sun was, cold and dim).
     float3 sunTint = u_SunColor.rgb / max(luma(u_SunColor.rgb), 1e-3);
     float3 skyTint = u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3);
+    // The engine lights with 2 x its cloud factor (Block_DefReadP1_p: between its CloudsX2min and
+    // CloudsX2max by the cloud texture, 0.3-0.63), engineLight with 2 alone: its sun is about
+    // twice the real one (captures 022/026: 1.6-2.2 x the step at the shadows' edges). Taking all
+    // of it out under a night sky took the light maps' light as well: lit ground came out darker
+    // than its shadows (capture 026, the car's shadow a light silhouette). Only the sun with the
+    // darkest cloud factor goes, so a lit area can't end up below its shadowed neighbours; the
+    // rest stays as light-map light. With CleanHighlights.
+    if (u_SunOut.x > 0.0 && u_Engine2.w > 0.5)
+    {
+        float3 factor = u_EngineClouds.w > 0.5 ? u_EngineClouds.rgb : 0.3;
+        float3 extra = sunPart * (1.0 - saturate(factor)) * saturate(u_SunOut.x);
+        sunPart -= extra;
+        restLight += extra;
+    }
     float3 sun = sunPart * sunVis * lerp(float3(1, 1, 1), sunTint, u_SunColor.w * 0.35);
     float3 moon = sunPart * sunVis * float3(0.35, 0.5, 0.85) * 0.05;
     sun = lerp(sun, moon, saturate(u_SunOut.x));

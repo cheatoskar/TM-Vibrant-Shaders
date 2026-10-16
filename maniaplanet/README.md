@@ -155,12 +155,15 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 | `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion |
 | `camera.txt`, `scenev.bin` | The engine camera, decoded and raw |
 | `tonemap_cb.bin` | The engine's tone-map constants (for `mp_preview --hdr`) |
+| `car.txt` | The car per frame over the last 240 frames: time, frame time, found, position, step (is the neon trail's source even?) |
 
 `mp_preview` renders a capture through the same renderer as the game, without the game:
 
 ```powershell
 build-mp/Release/mp_preview.exe <capture folder> out.bmp [--preset Punchy] [--view 6] [--set Exposure=0.5]
 build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr [--set ToneCurve=1] [--set Bloom=0.3] [--tonecb file]
+build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 40 --car x,y,z [--carfrom x,y,z]   # the neon trail of a car driving there
+build-mp/Release/mp_preview.exe --trailtest   # the trail's recording at 144 fps: how evenly its end follows the car
 ```
 
 ## Build and test

@@ -142,7 +142,18 @@ bool decodeSceneP(Camera& c) {
     memcpy(c.ambient, c.rawP + kScenePLightAmbientLinear, sizeof(c.ambient));
     memcpy(c.sunColour, c.rawP + kScenePLightDirRgbLinear0, sizeof(c.sunColour));
     memcpy(c.fog, c.rawP + kScenePFog, sizeof(c.fog));
+    float day = -1.0f;
+    memcpy(&day, c.rawP + kScenePDayTime, sizeof(day));
+    c.dayTime = std::isfinite(day) && day >= 0.0f && day <= 1.0f ? day : -1.0f;
     return true;
+}
+
+int dayTimeMood(const Camera& c) {
+    if (!c.hasSceneP || c.dayTime < 0.0f) return -1;
+    const float t = c.dayTime;
+    if (t < 0.22f || t > 0.9f) return 0;
+    if (t < 0.42f || t > 0.7f) return 1;
+    return 2;
 }
 
 } // namespace tmvs_mp

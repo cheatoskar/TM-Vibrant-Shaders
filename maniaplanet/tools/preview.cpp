@@ -15,6 +15,7 @@
 // The capture holds the image the mod graded (input.dds and the view format it was drawn with),
 // the engine's textures (engine_*.dds) and its camera (scenev.bin). --view takes the menu's views:
 // 0 normal, 1 split, 2 depth, 3 normals, 4 motion, 5 light buffer, 6 world grid.
+#include "effects_trail.h"
 #include "engine_frame.h"
 #include "log.h"
 #include "renderer.h"
@@ -24,6 +25,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -119,9 +121,73 @@ bool writeBmp(const std::string& path, const D3D11_MAPPED_SUBRESOURCE& m, UINT w
     return true;
 }
 
+
+// --trailtest: the trail's recording on a car driving straight along x at 144 frames a second
+// (frame times +-20 %, 3 % of the frames without the car): how far its drawn end lags behind the
+// car, and how evenly the fade-in behind the car (1.6 m from that end) moves from frame to frame.
+// "old" is the recording before 2026-10-16 (the live end only from 30 cm on, none without the car).
+int trailTest() {
+    struct Old { // the old recording, for comparison
+        float kept = 0, clock = 0, liveX = 0;
+        bool keptValid = false;
+        float newest = 0;
+        void step(float dt, bool seen, float x) {
+            clock += dt;
+            if (!seen) { newest = kept; return; }
+            const float moved = keptValid ? std::fabs(x - kept) : 0.0f;
+            bool live = moved >= 0.3f || !keptValid;
+            if ((clock >= 1.0f / 60.0f && moved >= 0.3f) || moved >= 1.0f || !keptValid) {
+                clock = moved >= 1.0f ? 0.0f : std::fmod(clock, 1.0f / 60.0f);
+                kept = x;
+                keptValid = true;
+                live = false;
+            }
+            newest = live ? x : kept;
+        }
+    };
+    unsigned seed = 12345;
+    auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0f; };
+    for (float speed : {8.0f, 25.0f, 60.0f}) {
+        TrailStage trail;
+        trail.startRecording();
+        Old old;
+        float x = 0.0f, lastFadeNew = 0.0f, lastFadeOld = 0.0f;
+        double lagNew = 0, lagOld = 0, jerkNew = 0, jerkOld = 0;
+        int backNew = 0, backOld = 0, frames = 0;
+        for (int f = 0; f < 2000; f++) {
+            const float dt = (1.0f / 144.0f) * (0.8f + 0.4f * rnd());
+            x += speed * dt;
+            const bool seen = rnd() > 0.03f;
+            const float car[3] = {x, 0.0f, 0.0f};
+            trail.tick(dt);
+            const bool live = trail.record(dt, seen ? car : nullptr);
+            const float newest = trail.point(live ? trail.head() : trail.head() + 16384 - 1)[0];
+            old.step(dt, seen, x);
+            const float fadeNew = newest - 1.6f, fadeOld = old.newest - 1.6f;
+            if (f > 10) {
+                frames++;
+                lagNew += x - newest;
+                lagOld += x - old.newest;
+                // How far the fade-in's move this frame differs from the car's.
+                jerkNew += std::fabs((fadeNew - lastFadeNew) - speed * dt);
+                jerkOld += std::fabs((fadeOld - lastFadeOld) - speed * dt);
+                backNew += fadeNew < lastFadeNew - 1e-4f;
+                backOld += fadeOld < lastFadeOld - 1e-4f;
+            }
+            lastFadeNew = fadeNew;
+            lastFadeOld = fadeOld;
+        }
+        printf("trail test %4.0f m/s, 144 fps: end behind the car  new %.3f m, old %.3f m (mean); fade-in step off the car's  "
+               "new %.4f m, old %.4f m (mean); frames it went back  new %d, old %d of %d\n",
+               speed, lagNew / frames, lagOld / frames, jerkNew / frames, jerkOld / frames, backNew, backOld, frames);
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && !strcmp(argv[1], "--trailtest")) return trailTest();
     if (argc < 3) {
         printf("usage: mp_preview <capture folder> <out.bmp> [--preset Name] [--view N] [--set Key=Value ...]\n");
         return 2;
