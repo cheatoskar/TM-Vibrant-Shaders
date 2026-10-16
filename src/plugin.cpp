@@ -103,6 +103,15 @@ float g_jitterUV[2] = {};         // TAA jitter of this frame (uv shift of the i
 UINT g_frameWidth = 0, g_frameHeight = 0;
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
 gfx::Target g_sceneCopy;
+// Photo mode's compare split with a preset on the other side: that look from a pipeline of its
+// own. Its TAA, exposure, bounce light, focus and sky history stay its own: one pipeline's
+// history shared by two looks would blend each into the other. Only while it is shown (it
+// doubles the effects' cost and memory).
+Pipeline g_pipelineB;
+bool g_pipelineBFailed = false;
+gfx::Target g_splitOut;  // the preset's side, the whole frame
+float g_casterSun[3] = {}; // the light the caster maps were drawn for this frame (side A)
+bool g_casterSunSet = false;
 // A camera that draws into part of the screen (the MediaTracker editor's 3D view between its
 // panels): its depth and the shaded image, the size of that part.
 gfx::Target g_partDepth;
@@ -348,8 +357,64 @@ float updateLut() {
             TMVS_LOG("lut: %s (%d^3)", loaded.c_str(), table.size);
         }
         g_pipeline.setLut(table.texels, table.size);
+        g_pipelineB.setLut(table.texels, table.size); // the compare split's preset side (also before it starts)
     }
     return loaded.empty() ? 0.0f : config.lutAmount;
+}
+
+// CasterShadows for the main pipeline: also notes the light (see castersSideB).
+bool castersSideA(IDirect3DDevice9* device, const float sunWorld[3], const float camera[3], casters::Maps& out) {
+    memcpy(g_casterSun, sunWorld, sizeof(g_casterSun));
+    g_casterSunSet = true;
+    return casters::update(device, sunWorld, camera, out);
+}
+
+// The compare split's preset side: the same maps when its light comes from where side A's does.
+// Another sun (a preset with its own) gets none, the height map's shadows stand in: the maps are
+// drawn for one light, a second one would redraw them twice a frame.
+bool castersSideB(IDirect3DDevice9* device, const float sunWorld[3], const float camera[3], casters::Maps& out) {
+    const float d = sunWorld[0] * g_casterSun[0] + sunWorld[1] * g_casterSun[1] + sunWorld[2] * g_casterSun[2];
+    if (!g_casterSunSet || d < 0.999999f) return false;
+    return casters::update(device, sunWorld, camera, out);
+}
+
+void releaseSideB() {
+    if (g_pipelineB.ready()) TMVS_LOG("photo: compare split with a preset off, its pipeline released");
+    g_pipelineB.release();
+    g_splitOut.destroy();
+    g_pipelineBFailed = false;
+}
+
+// The compare split's other side as a preset's look (photo::splitPreset()), from the same frame
+// and inputs as side A. Null: the game's image stays there (none chosen, or it failed).
+IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs& inputsA, const Settings& mine, const Settings& shownA) {
+    const std::string& name = photo::splitPreset();
+    // Kept while the split is on (a hi-res photo hides it for a while: its history stays).
+    if (!photo::splitOn() || !photo::active() || name.empty()) {
+        if (g_pipelineB.ready() || g_splitOut.texture) releaseSideB();
+        return nullptr;
+    }
+    if (!photo::splitShown()) return nullptr;
+    // Your machine settings (the game's own changes are made once, for both sides), the preset's look.
+    Settings b = mine;
+    if (!Config::get().presetSettings(name, b)) return nullptr;
+    b.enabled = true; // with the shaders off: the preset next to the game's image with photo mode's lens
+    b.debugView = shownA.debugView;
+    photo::adjust(b);
+    if (!g_pipelineB.ready()) {
+        if (g_pipelineBFailed || !g_pipelineB.init(device, g_dev.shaderDir)) {
+            if (!g_pipelineBFailed) TMVS_LOG("photo: compare split with %s: its pipeline failed (%s)", name.c_str(), g_pipelineB.lastError().c_str());
+            g_pipelineBFailed = true;
+            return nullptr;
+        }
+        TMVS_LOG("photo: compare split with the preset %s (a second pipeline)", name.c_str());
+    }
+    if (!g_splitOut.create(device, inputsA.width, inputsA.height, D3DFMT_A8R8G8B8)) return nullptr;
+    Pipeline::Inputs in = inputsA;
+    in.materialClasses = nullptr; // the F12 capture is side A's
+    if (in.casterMap) in.casterMap = castersSideB;
+    g_pipelineB.render(device, in, b, g_splitOut.surface);
+    return g_splitOut.surface;
 }
 
 float halfToFloat(uint16_t h) {
@@ -747,6 +812,7 @@ void processScene(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
     if (!g_scene.haveView || !g_scene.haveProjection) return;
     if (!settings.enabled && !photo::active() && !g_captureRequested) {
+        if (g_pipelineB.ready()) releaseSideB(); // photo mode ended with the shaders off
         return;
     }
     if (g_sceneStart < 0.0f && g_scene.projection[14] > -1.0f) {
@@ -930,7 +996,8 @@ void processScene(IDirect3DDevice9* device) {
     inputs.freeze = photo::tiling();
     inputs.lut = updateLut();
     inputs.materials = materialsWanted();
-    if (g_castersOn) inputs.casterMap = casters::update;
+    g_casterSunSet = false;
+    if (g_castersOn) inputs.casterMap = castersSideA;
     g_frameWidth = width;
     g_frameHeight = height;
 
@@ -982,8 +1049,10 @@ void processScene(IDirect3DDevice9* device) {
             thumbnails::savePicture(device, shaded, Config::get().presetPicture(picture));
             Config::get().pictureTaken();
         }
-        // Photo mode's compare split: the game's image (copied before the pipeline) on one side.
-        photo::applySplit(device, g_sceneCopy.surface, shaded);
+        // Photo mode's compare split: the game's image (copied before the pipeline) on one side,
+        // or a preset's look.
+        IDirect3DSurface9* otherSide = renderSideB(device, inputs, settings, effective);
+        photo::applySplit(device, otherSide ? otherSide : g_sceneCopy.surface, shaded);
         if (part) {
             device->StretchRect(g_partOut.surface, nullptr, target, &area, D3DTEXF_NONE);
             fillMenuBars(device, target, desc, area, settings.shadeMenuBars);
@@ -1355,6 +1424,7 @@ void onDeviceCreated(IDirect3DDevice9* device) {
 
 void onPreReset() {
     g_pipeline.release();
+    releaseSideB();
     g_sceneCopy.destroy();
     g_partDepth.destroy();
     g_partOut.destroy();
@@ -1490,6 +1560,7 @@ void onPresent(IDirect3DDevice9* device) {
     if (reload) {
         g_pipelineFailed = false;
         g_pipeline.reloadShaders(device);
+        releaseSideB(); // starts again from the reloaded shaders
     }
 
     if (tracer::tracing() || g_screenshotRequested) {

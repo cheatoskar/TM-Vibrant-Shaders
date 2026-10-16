@@ -12,6 +12,12 @@
 //     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
 //                             view, 0.1 s apart (neon trail test)
 //     --bench                 GPU time per pass
+//     --compare <preset>      photo mode's compare split with a preset: that preset's look
+//                             from a second pipeline (its own history, as in game) left of
+//                             the line, the job's look right of it
+//     --split <0..1>          where the compare line sits (default 0.5)
+//     --refocus <u,v>         photo mode: focus there in the first half of the frames, then
+//                             on --focus (a click on another point; the focus must follow)
 //     --video                 the video export's quality (photo mode's depth of field, moving)
 //     --repeat <n>            n more sub-pixel samples of the last frame (the export's
 //                             supersampling: history read, not advanced); the last is written
@@ -112,6 +118,12 @@ bool setByKey(Settings& s, const char* assignment) {
     char* base = reinterpret_cast<char*>(&s);
     if (key == "DebugView") {
         s.debugView = atoi(value);
+        return true;
+    }
+    // F7 / the menu's switch (General, not a look setting): 0 = the shaders off, with --photo
+    // only photo mode's camera effects on the game's image.
+    if (key == "Enabled") {
+        s.enabled = atoi(value) != 0;
         return true;
     }
     for (const Field& f : fields()) {
@@ -273,6 +285,9 @@ int main(int argc, char** argv) {
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     bool useMaterials = true;            // capture_NNN.mat next to the capture (--nomat: no material masks)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
+    float refocus[2] = {-2.0f, -2.0f};   // --refocus: the point clicked before (first half of the frames)
+    const char* compare = nullptr;       // --compare: the preset on the split's other side
+    float splitAt = 0.5f;
     UINT bars = 0;                       // --bars: rows above and below the image (replay menu test)
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
@@ -310,6 +325,12 @@ int main(int argc, char** argv) {
             repeats = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &focus[0], &focus[1]);
+        } else if (!strcmp(argv[i], "--compare") && i + 1 < argc) {
+            compare = argv[++i];
+        } else if (!strcmp(argv[i], "--split") && i + 1 < argc) {
+            splitAt = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--refocus") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f", &refocus[0], &refocus[1]);
         } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
             lutFile = argv[++i];
         } else if (!strcmp(argv[i], "--lutmix") && i + 1 < argc) {
@@ -368,6 +389,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "shader compilation failed:\n%s\n", pipeline.lastError().c_str());
         return 1;
     }
+    // The compare split's preset side (plugin.cpp renderSideB): a pipeline of its own.
+    Pipeline pipelineB;
+    if (compare && !pipelineB.init(device, shaderDir)) return 1;
     if (lutFile) {
         lut::Table table;
         std::string error;
@@ -376,6 +400,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         pipeline.setLut(table.texels, table.size);
+        pipelineB.setLut(table.texels, table.size);
     }
 
     std::vector<LoadedCapture*> captures;
@@ -461,6 +486,13 @@ int main(int argc, char** argv) {
             continue;
         }
         const FrameCapture& cap = loaded->cap;
+        // The other side: the preset's look on the job's machine settings.
+        Settings settingsB = job.settings;
+        if (compare && !applyPresetByName(settingsB, compare)) return 1;
+        settingsB.enabled = true;
+        settingsB.debugView = job.settings.debugView;
+        gfx::Target outputB;
+        if (compare && !outputB.create(device, loaded->cap.width, loaded->cap.height, D3DFMT_A8R8G8B8)) return 1;
         Pipeline::Inputs in;
         in.lut = lutFile ? lutMix : 0.0f;
         in.photo = photoMode;
@@ -539,6 +571,7 @@ int main(int argc, char** argv) {
         LARGE_INTEGER t0{}, t1{}, freq{};
         QueryPerformanceFrequency(&freq);
         pipeline.resetHistory();
+        if (compare) pipelineB.resetHistory();
         const int frames = bench ? 200 : (trail ? 150 : 40);
         device->BeginScene();
         for (int frame = 0; frame < frames; frame++) {
@@ -550,6 +583,10 @@ int main(int argc, char** argv) {
             // the distance still to drive.
             for (int j = 0; j < 3; j++) driven.view[12 + j] += back * job.drive[j];
             driven.time = job.time >= 0.0f ? job.time - (frames - 1 - frame) * 0.02f : cap.time + frame * 0.1f;
+            if (refocus[0] > -1.5f && frame < frames / 2) {
+                driven.focusPoint[0] = refocus[0];
+                driven.focusPoint[1] = refocus[1];
+            }
             if (trail) {
                 driven.driving = driven.carKnown = driven.carFromEngine = true;
                 // Per frame as far as the frame's time step (time=: 0.02 s, else 0.1 s).
@@ -565,7 +602,21 @@ int main(int argc, char** argv) {
                 again.repeat = true;
                 pipeline.render(device, again, job.settings, output.surface);
             }
+            if (compare) pipelineB.render(device, driven, settingsB, outputB.surface);
             if (bench) pipeline.collectProfile(true);
+        }
+        if (compare) {
+            // As photo::applySplit: the preset's side left of the line, the line light with dark edges.
+            const LONG w = static_cast<LONG>(cap.width), h = static_cast<LONG>(cap.height);
+            const LONG x = static_cast<LONG>(lroundf((splitAt < 0.0f ? 0.0f : (splitAt > 1.0f ? 1.0f : splitAt)) * w));
+            const RECT side{0, 0, x, h};
+            if (x > 0) device->StretchRect(outputB.surface, &side, output.surface, &side, D3DTEXF_NONE);
+            const LONG t = h >= 1080 ? h / 540 : 1;
+            const RECT dark{x - 2 * t < 0 ? 0 : x - 2 * t, 0, x + 2 * t > w ? w : x + 2 * t, h};
+            const RECT light{x - t < 0 ? 0 : x - t, 0, x + t > w ? w : x + t, h};
+            if (dark.right > dark.left) device->ColorFill(output.surface, &dark, D3DCOLOR_XRGB(16, 16, 16));
+            if (light.right > light.left) device->ColorFill(output.surface, &light, D3DCOLOR_XRGB(235, 235, 235));
+            outputB.destroy();
         }
         // The replay menu's band (plugin.cpp fillMenuBars): the image between `bars` rows above
         // and below, filled by the pipeline as in game; magenta where it leaves rows out.
@@ -614,6 +665,7 @@ int main(int argc, char** argv) {
     if (before && !captures.empty()) writeBmp(before, captures[0]->cap.color, captures[0]->cap.width, captures[0]->cap.height);
 
     pipeline.release();
+    pipelineB.release();
     for (LoadedCapture* c : captures) {
         if (c->color) c->color->Release();
         if (c->depth) c->depth->Release();

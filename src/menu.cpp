@@ -1454,7 +1454,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "ShadeMenuBars", "Replay menu: the shaded image under its bars (off = leftovers of earlier frames)");
                           return l;
                       }});
-    panels.push_back({"Photo mode", g_host->splitOn ? 11.0f : 8.0f, [&config] {
+    panels.push_back({"Photo mode", g_host->splitOn ? (g_host->splitPreset ? 12.0f : 11.0f) : 8.0f, [&config] {
                           const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
                           switchRow("With the free camera (cam 7)", &config.photoAuto,
@@ -1474,11 +1474,26 @@ bool drawSettings(Config& config, Settings& s) {
                           if (g_host->splitOn) {
                               bool& split = *g_host->splitOn;
                               if (switchRow("Compare split", &split,
-                                            ("One side of a line shows the game's image without the mod's effects, the other the mod's (" + splitKey +
+                                            ("One side of a line shows the game's image without the mod's effects (or another preset's look), the other yours (" + splitKey +
                                              ").\nIn photos too, not in hi-res ones. The game's own changes stay on both sides (its bloom off, real night).").c_str())) {
                                   if (split && g_host->photoOn) g_host->photoOn();
                               }
                               ImGui::BeginDisabled(!split);
+                              if (std::string* other = g_host->splitPreset) {
+                                  // The other side: the game's image or a preset (your look stays on the mod's side;
+                                  // to compare two presets, pick one as your look and the other here).
+                                  ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                                  if (ImGui::BeginCombo("Other side", other->empty() ? "The game's image" : other->c_str())) {
+                                      if (ImGui::Selectable("The game's image", other->empty())) other->clear();
+                                      for (const std::string& name : config.presetNames()) {
+                                          if (ImGui::Selectable(name.c_str(), *other == name)) *other = name;
+                                      }
+                                      ImGui::EndCombo();
+                                  }
+                                  if (ImGui::IsItemHovered())
+                                      ImGui::SetTooltip("What the other side of the line shows: the game's own image, or a preset's look next to yours.\n"
+                                                        "A preset costs a second run of the effects every frame (photo mode only).");
+                              }
                               ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                               ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");
                               if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where the line sits, from the left (Ctrl+Shift+wheel in the game).");
