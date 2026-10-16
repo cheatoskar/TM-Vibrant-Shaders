@@ -222,14 +222,7 @@ Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Hori
   and reflections, and in AO (normal-mapped normals tilt the AO hemisphere: AO may pick up the
   bump pattern - if it looks noisy, AO should keep the depth's normal); TMUF environments (other
   shaders: the log's patched/skipped counts per environment).
-- **Next (not built): the light apart from the albedo (COLOR2).** In the block shader
-  `LDiffus = (Ambient + PreLightGen) * Occlusion + Lighting` is the light a surface gets (baked
-  lightmap, ambient cube, prelight) and `Diffuse` its albedo; the spike compiled it into COLOR2
-  (49 slots). That gives exact relighting at night (take the baked sun out by division, put the
-  moon or the black hole in) instead of guessing from the image. Missing: a third 64-bit target
-  (29 MB at 1440p), the ground's light (`Color0/Color1` per vertex, `TcLight` lightmap: their own
-  rule), and room in the lighting pass (PS_Lighting 3899/3900; PS_LightingEngine has 62 slots or a
-  pass of its own).
+- **Next: the light apart from the albedo (COLOR2)**: built as `GameLight`, below.
 
 ### Owner test of GameGBuffer
 
@@ -253,3 +246,66 @@ Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Hori
 6. Watch for: surfaces black, flickering or with wrong colour (a broken patch: not expected),
    noisy AO on bumpy blocks, water reflections changed, frame time (overlay) more than ~0.3 ms up.
    Anything wrong: setting off, everything as before.
+
+## The game's light apart from the paint (GameLight, G-buffer step 5, 2026-10-17, off by default)
+
+- **Why:** every night decision the mod makes on the image confuses paint with light: a white wall
+  in the moonlight and dark asphalt under a lamp come out equally bright. The game's shaders know
+  the difference: they multiply the paint (`Diffuse`) with the light (`LDiffus`). Steps 1-4 (the
+  normals) changed only 0.5 % of the pixels by more than 8 of 255 (wall and border edges).
+- **The patch (`gbufpatch`, `Mode::Light`)**: the light is what each shader's own editor debug view
+  shows as `MDbg_LightDiffuse(X)`: blocks `LDiffus = (Ambient + PreLightGen) * Occlusion + Lighting`,
+  the ground `Light` (at night its baked `PreLightGen`: dome, moon with shadows, lamps), the car
+  `LHdr` / `LAmbient + LDiffus`. COLOR2 = `float4(X, |eye vector|)`. Every shader patched in this
+  mode writes COLOR1 too (0 instead of a normal on the ground), so both targets come from the same
+  draws. The ground shaders have only `PosToEyeV` (object space; the ground isn't scaled) as eye
+  vector: accepted here, and a wrong length only means the pipeline drops the pixel. A light that
+  doesn't compile in the shader (the three ps_2_0 water shaders: a constant would move) gives the
+  same patch with 0 for the light. The `Clouds * 2` factor and the ground's `Occlusion` stay outside
+  X (they multiply the paint and the light alike).
+- **Dumped Stadium shaders (`tmvs_gbuftest <gameshaders> --light --device`):** 45 of 97 patched (35
+  with their light: 18 blocks, 10 mown grass, 7 car; 10 with 0: water, the self-illuminated material
+  and others without that debug line; the soil shaders have no eye vector and stay as they are), 0
+  failed; the normal patch is still byte-identical to the game's dumped bytecode (95 of 95). On the
+  GTX 1080 Ti with random inputs: COLOR2 equals the shader's own light (a reference that swaps it
+  into COLOR0) on all 35, COLOR2.a = COLOR1.a; COLOR0 identical except one block shader where 1 of
+  4096 pixels differed by one float16 step (0.0005: the compiler ordered an instruction
+  differently; far below one 8-bit step). Three targets bound: fog only on the game's.
+- **Cost:** full-screen 2560x1440 layers, averaged over the 35 shaders: game 0.083 ms, + normal
+  target 0.126 ms, + light target 0.183 ms (+0.057 ms per layer, bandwidth); the light target's
+  clear 0.005 ms. The patched draws cover 60-75 % of the image (`.nrm16` of 089/093), about one to
+  two layers with overdraw: ~0.06-0.12 ms in game, plus 29.5 MB at 1440p. Lighting pass 1.739 ->
+  1.772 ms (`--bench`, 083). Without the normals on, GameLight binds their target too (+0.04-0.08 ms).
+  Compiling: ~0.5 ms more per patched shader at the game's start.
+- **The use (PS_LightingGameLight, its own entry point: PS_Lighting and PS_LightingEngine are
+  byte-identical to before):** under a night sky (u_Sky.y > 0) and only where the game's light is the
+  night's (`u_Light2.y` -1: night map or a map lit at midnight), `lamp = smoothstep(1.0, 1.6, max(L))`
+  where the light belongs to the surface seen (distance within 1 % + 3 cm of the depth's): the
+  day-for-night darkening and blue tint step back by `lamp`. 1.0 is "the paint as it is" (the day
+  sun's full light on the ground, which the ground shader caps there); at night only stacked lamp
+  light gets above it. Where lamp = 0 or the light is unknown: exactly the old formula.
+- **Considered and left out:** tinting the light instead of the paint (keeps colours saturated at
+  night: the image-wide desaturation is the night look's intent, not an error); the black hole's
+  light by the paint (`unlit / L`) instead of by the lit colour: the right physics, but its
+  strength needs the real light's level first (next step, one change per test).
+- **Not verified offline:** the real light's levels at night (no capture has a `.lit16` yet; the
+  synthetic one from `tools/gbuffer.py --synth-light`, grey light from the blurred float image, only
+  tests the plumbing: it takes white paint for light). Thresholds 1.0..1.6 are the first guess; the
+  first F12 with GameLight calibrates them (`tools/gbuffer.py --light` prints the percentiles and how
+  much counts as lamp light).
+
+### Owner test of GameLight
+
+1. Menu, *Game* page: *Night on game light* on (`GameLight=1`), *Game HDR* and *Game light sources*
+   on. Restart the game.
+2. Log at the start: `gbuffer: on with the light (GameLight), ...`. After a map: `gbuffer: N pixel
+   shaders patched (L with their light), ...` (Stadium: L about 10-30), `gbuffer: the patched
+   shaders' light goes into a third target (2560x1440)`, after 8 s `gbuffer: X of those draws wrote
+   their light (GameLight)`. Not expected: `kept after a failed patch` > 0, `two targets at a time`.
+3. A night map (A13 or C12) with the night preset (Horizon): switch *Night on game light* off and on
+   in the menu at one spot. Expected: lamp-lit asphalt, the floodlit stands and the area right under
+   the masts brighter and warmer with it on; dark, moonlit parts unchanged. Too bright or a whole
+   floodlit field lifted: say so (the threshold is a guess).
+4. F12 at the same spot, once with it on: the capture gets `capture_NNN.lit16`; the log says
+   `gbuffer (capture): light on X% of the image, brightest Y`. Send `.tmcap`, `.lit16`, `.hdr16`.
+5. A day map: nothing may change (no night sky). Frame time: ~0.1-0.2 ms more at most.
