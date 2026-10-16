@@ -46,6 +46,7 @@ LARGE_INTEGER g_frequency{};
 // Times are seconds since the plugin started.
 struct DevOptions {
     float traceAt = 0.0f;        // write a frame trace (0 = off)
+    int traceVideoFrame = 0;     // trace the video export's n-th frame on its clock (0 = off)
     float captureAt = 0.0f;      // start writing .tmcap captures (0 = off)
     float captureInterval = 2.0f;
     int captureCount = 1;
@@ -80,6 +81,13 @@ struct SceneState {
     IDirect3DSurface9* processedTarget = nullptr; // identity only, not referenced
     int lastFrameCount = 0;
     bool loggedMultiCamera = false;
+    // The matrices the engine computed for this main camera before it began
+    // (engine::cameraMatrices), for the video export's samples.
+    float engineView[16] = {};
+    float engineProjection[16] = {};
+    bool haveEngine = false;
+    int mainRenders = 0;  // main camera renders this frame (shaded or not)
+    int otherRenders = 0; // other cameras into a target of the video's size this frame (export only)
 } g_scene;
 
 bool g_captureRequested = false;
@@ -181,11 +189,23 @@ float g_clockOffset = 0.0f;  // added to the real clock after an export (0 until
 struct ExportStats {
     unsigned frames = 0;      // rendered frames of the export
     unsigned stepped = 0;     // of them on the video's clock
+    unsigned before = 0;      // before it stepped (its dialog, the first frame)
+    unsigned after = 0;       // after it stepped: the game plays the clip again in real time for its sound
     double clockStart = 0.0;  // the effects' clock at its start
     double gameStart = 0.0;   // the game's clock at its start
     double clockEnd = 0.0, gameEnd = 0.0; // both at its last stepped frame
+    // Over the frames on the video's clock only (the sound pass renders one camera a frame).
     int samplesSeen = 0;      // most main cameras shaded in one frame
+    int samplesLeast = -1;    // fewest
+    int rendersSeen = 0;      // most main camera renders in one frame
+    int othersSeen = 0;       // most other cameras into a target of the video's size in one frame
+    unsigned engineMatrices = 0; // main cameras shaded with the engine's matrices
+    unsigned noneSet = 0;        // of them with no view or projection set within the camera
+    unsigned floatCopies = 0;    // copied from a float target
+    D3DFORMAT targetFormat = D3DFMT_UNKNOWN; // the last shaded target
+    UINT targetWidth = 0, targetHeight = 0;
 } g_exportStats;
+bool g_frameStepped = false; // the frame being rendered is on the video's clock
 
 // The time the effects see (s).
 float effectTime() {
@@ -245,6 +265,7 @@ void loadDevOptions() {
     std::wstring path = log::dataDir() + L"\\dev.ini";
     const wchar_t* ini = path.c_str();
     g_dev.traceAt = iniFloat(ini, L"TraceAt", 0.0f);
+    g_dev.traceVideoFrame = GetPrivateProfileIntW(L"dev", L"TraceVideoFrame", 0, ini);
     g_dev.captureAt = iniFloat(ini, L"CaptureAt", 0.0f);
     g_dev.captureInterval = iniFloat(ini, L"CaptureInterval", 2.0f);
     g_dev.captureCount = GetPrivateProfileIntW(L"dev", L"CaptureCount", 1, ini);
@@ -967,6 +988,27 @@ void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3D
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
 void processScene(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
+    // The video export's supersampling (its dialog's "high quality" without the sub-frames of
+    // its motion blur): CSceneFxSuperSample::FxRender renders the camera n x n times a frame,
+    // each sample with a sub-pixel offset into the texture "FxSS Color" (CameraToTexture), and
+    // adds each into "FxSS Accum1"; the average goes to the screen. Each sample is shaded (the
+    // video got 1 / (n n) of the effects otherwise), the first as the frame, the rest repeat it
+    // (its motion blur, focus, exposure). Only in the video's frames: the sound pass after them
+    // renders without it (CHmsViewport::HighQualityDisableAll), one camera a frame.
+    const bool samples = g_exporting && g_frameStepped && g_export.samplesPerFrame > 1;
+    // A camera drawn into a texture has its view and projection set before it begins (see
+    // engine::cameraMatrices): within it the SetTransform hook sees none, or a shadow's or a
+    // projector's. During the export the samples take the engine's (all alike), and so does any
+    // main camera without them.
+    if (g_exporting && g_scene.haveEngine && (samples || !g_scene.haveView || !g_scene.haveProjection)) {
+        if (g_frameStepped) {
+            g_exportStats.engineMatrices++;
+            if (!g_scene.haveView || !g_scene.haveProjection) g_exportStats.noneSet++;
+        }
+        memcpy(g_scene.view, g_scene.engineView, sizeof(g_scene.view));
+        memcpy(g_scene.projection, g_scene.engineProjection, sizeof(g_scene.projection));
+        g_scene.haveView = g_scene.haveProjection = true;
+    }
     if (!g_scene.haveView || !g_scene.haveProjection) return;
     if (!settings.enabled && !photo::active() && !g_captureRequested) {
         if (g_pipelineB.ready()) releaseSideB(); // photo mode ended with the shaders off
@@ -996,11 +1038,6 @@ void processScene(IDirect3DDevice9* device) {
     IDirect3DSurface9* target = nullptr;
     IDirect3DSurface9* savedDepth = nullptr;
     if (FAILED(device->GetRenderTarget(0, &target)) || !target) return;
-    // The video export's supersampling (its dialog's "high quality" without the sub-frames of
-    // its motion blur) renders the camera n x n times a frame into one target, each with a
-    // sub-pixel offset, and averages them. Each is shaded: with only the first, the video got
-    // 1 / (n n) of the effects. The rest repeat the first (its motion blur, focus, exposure).
-    const bool samples = g_exporting && g_export.samplesPerFrame > 1;
     const bool repeat = samples && g_scene.processedCount > 0;
     // The same target twice in a frame would be shaded twice.
     if (g_scene.processedCount > 0 && target == g_scene.processedTarget && !repeat) {
@@ -1052,7 +1089,17 @@ void processScene(IDirect3DDevice9* device) {
         if (savedDepth) savedDepth->Release();
         return;
     }
-    if (!g_sceneCopy.create(device, width, height, D3DFMT_A8R8G8B8) || (part && !g_partOut.create(device, width, height, D3DFMT_A8R8G8B8))) {
+    // The supersampling's sample texture can be a float one: StretchRect doesn't convert float
+    // into 8 bits, the copy takes its format then (export only).
+    const bool floatTarget = desc.Format == D3DFMT_A16B16G16R16F || desc.Format == D3DFMT_A32B32G32R32F;
+    const D3DFORMAT copyFormat = g_exporting && floatTarget && !part ? desc.Format : D3DFMT_A8R8G8B8;
+    if (g_exporting && g_frameStepped) {
+        if (copyFormat != D3DFMT_A8R8G8B8) g_exportStats.floatCopies++;
+        g_exportStats.targetFormat = desc.Format;
+        g_exportStats.targetWidth = desc.Width;
+        g_exportStats.targetHeight = desc.Height;
+    }
+    if (!g_sceneCopy.create(device, width, height, copyFormat) || (part && !g_partOut.create(device, width, height, D3DFMT_A8R8G8B8))) {
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
@@ -1241,7 +1288,13 @@ void updateVideoExport() {
     engine::VideoExport v;
     const bool on = Config::get().settings.videoExportBest && engine::videoExport(v);
     ExportStats& stats = g_exportStats;
-    if (g_exporting && g_scene.processedCount > stats.samplesSeen) stats.samplesSeen = g_scene.processedCount;
+    // The frame that just ended, if it was one of the video's.
+    if (g_exporting && g_frameStepped) {
+        stats.samplesSeen = (std::max)(stats.samplesSeen, g_scene.processedCount);
+        stats.samplesLeast = stats.samplesLeast < 0 ? g_scene.processedCount : (std::min)(stats.samplesLeast, g_scene.processedCount);
+        stats.rendersSeen = (std::max)(stats.rendersSeen, g_scene.mainRenders);
+        stats.othersSeen = (std::max)(stats.othersSeen, g_scene.otherRenders);
+    }
     // DoShoot runs from the moment its dialog opens: the dialog's numbers are its defaults
     // (512x384, 24 fps) until OK, and the game's clock only steps once it shoots. The settings
     // are logged when the stepping starts (and again if they change).
@@ -1269,19 +1322,34 @@ void updateVideoExport() {
                      v.samplesPerFrame, v.samplesPerVideoFrame, v.stereo);
     }
     if (!on && g_exporting) {
-        TMVS_LOG("video export ended: %u frames (%u on the video's clock), while it shot the effects' clock advanced %.2f s, the game's %.2f s; "
-                 "at most %d main cameras shaded in a frame (expected %d)",
-                 stats.frames, stats.stepped, stats.clockEnd - stats.clockStart, stats.gameEnd - stats.gameStart, stats.samplesSeen,
-                 g_export.samplesPerFrame);
+        // Expected: n x n samples a frame with the supersampling inside a frame, else one (the
+        // sub-frames are frames of their own). Frames before and after the video's: its dialog,
+        // and DoShoot playing the clip again in real time to record the sound.
+        TMVS_LOG("video export ended: %u frames (%u before it shot, %u on the video's clock, %u after: the sound pass), while it shot the "
+                 "effects' clock advanced %.2f s, the game's %.2f s; main cameras shaded in a frame of the video %d..%d (expected %d), "
+                 "rendered at most %d, other cameras of the video's size at most %d",
+                 stats.frames, stats.before, stats.stepped, stats.after, stats.clockEnd - stats.clockStart, stats.gameEnd - stats.gameStart,
+                 (std::max)(stats.samplesLeast, 0), stats.samplesSeen, g_export.samplesPerFrame, stats.rendersSeen, stats.othersSeen);
+        TMVS_LOG("video export: %u main cameras took the engine's matrices (%u had none set within them), %u copied from a float "
+                 "target; the last shaded target %ux%u format %d",
+                 stats.engineMatrices, stats.noneSet, stats.floatCopies, stats.targetWidth, stats.targetHeight,
+                 static_cast<int>(stats.targetFormat));
     }
     g_exporting = on;
     if (on) {
         g_export = v;
         stats.frames++;
     }
+    g_frameStepped = on && v.step > 0.0;
+    if (on && !g_frameStepped) (stats.stepped ? stats.after : stats.before)++;
     if (on && v.step > 0.0) {
         g_videoClock = g_videoClock < 0.0 ? static_cast<double>(effectTime()) : g_videoClock + v.step;
         stats.stepped++;
+        // dev.ini TraceVideoFrame=n: a trace of one frame of the video (written at its Present).
+        if (g_dev.traceVideoFrame > 0 && stats.stepped == static_cast<unsigned>(g_dev.traceVideoFrame)) {
+            TMVS_LOG("video export: tracing frame %u of the video", stats.stepped);
+            tracer::arm();
+        }
         stats.clockEnd = g_videoClock;
         stats.gameEnd = v.gameClock;
     } else if (g_videoClock >= 0.0) {
@@ -1342,6 +1410,8 @@ void onFrameBegin() {
     g_cameraIndex = 0;
     g_scene.lastFrameCount = g_scene.processedCount;
     g_scene.processedCount = 0;
+    g_scene.mainRenders = 0;
+    g_scene.otherRenders = 0;
 }
 
 void onCameraBegin(void* camera) {
@@ -1352,6 +1422,10 @@ void onCameraBegin(void* camera) {
     if (g_scene.inMainCamera) {
         g_scene.haveView = false;
         g_scene.haveProjection = false;
+        // The scene's perspective projection (as onSetTransform takes it), not an orthographic one.
+        g_scene.haveEngine = engine::cameraMatrices(g_scene.engineView, g_scene.engineProjection) && g_scene.engineProjection[11] == 1.0f &&
+                             g_scene.engineProjection[14] != 0.0f;
+        g_scene.mainRenders++;
         engine::setMainCamera(camera);
         // Material masks: nothing left from the last frame where nothing is drawn (the sky).
         if (materialsWanted()) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
@@ -1359,6 +1433,11 @@ void onCameraBegin(void* camera) {
         if (g_idFrame) g_idMaterials.clear();
         beginHdr(g_device, rt);
     } else if (rt) {
+        if (g_exporting) {
+            D3DSURFACE_DESC exportDesc{};
+            rt->GetDesc(&exportDesc);
+            if (static_cast<int>(exportDesc.Width) == g_export.width && static_cast<int>(exportDesc.Height) == g_export.height) g_scene.otherRenders++;
+        }
         // A screen-sized camera that isn't shaded: say why (a player's shaders stayed off in
         // races while they worked in the editor, and the log showed nothing). Each kind once.
         static std::vector<std::array<UINT, 5>> s_logged;
