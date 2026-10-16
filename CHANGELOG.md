@@ -2,6 +2,10 @@
 
 ### Unreleased
 
+- Faster on big maps: *Caster shadows* looked at every draw of the game's camera every frame, up to 11 ms of CPU a frame on a large Stadium map (60 FPS where the graphics card had room for more). It now checks at most ~700 draws a frame (each one still every few frames), cheaper per draw, and none while long shadows and volumetric light are off: about 0.5 ms. The shadows look the same; a newly seen block casts a fraction of a second later.
+- No more hang when the shaders start (1.4 s in the account screen), after alt-tab (0.7 s) or when the compare split shows a preset (0.4 – 1.4 s): the shaders the mod compiled while running are compiled ahead when the game starts and kept. What remains on the first frame is the driver preparing the shaders once.
+- Stadium maps: the water level measurement no longer stops the CPU until the graphics card catches up, four times a second.
+- `tmvs.log` gets a *perf* line every 2000 frames in a race: FPS, the graphics card's time for the game's scene and for the shaders (their most expensive passes by name, the caster maps), the CPU time of the mod. See [docs/performance.md](docs/performance.md).
 - Neon trail: a restart the game's hooks didn't report (the car more than 60 m from its last point in one frame without a respawn) now starts the trail over too; the log says when. New setting *Earlier runs kept* (`TrailKeepRuns`, 0 â€“ 5, default 0 = as before): the trails of that many earlier runs stay after a restart, dimmer the older they are.
 - Replay menu bars (`ShadeMenuBars`): a clear of the whole screen that the game limits to the camera's band with its scissor rect no longer counts as the game clearing the rows under the bars itself (the leftover strips came back). The log names every change of what happens to those rows, and which clear it was.
 - Real night: when the weather's clock leaves the forced midnight during a map (reported: the sun came back in the end-of-race replay), it is logged and put back before the frame is drawn. The log also names changes of the game's light during a map and counts the game's sun flares per cinematic switch.
