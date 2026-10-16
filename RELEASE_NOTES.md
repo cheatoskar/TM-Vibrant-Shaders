@@ -23,8 +23,8 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 - The interface stays sharp: the mod draws before the HUD and its tone map replaces the engine's.
 
 **Install (TrackMania 2 / ManiaPlanet 4):**
-1. Download **`TM-Vibrant-Shaders-ManiaPlanet.zip`** (or `TM-Vibrant-Shaders.zip`) and extract it.
-2. Close ManiaPlanet and run **`TM-Vibrant-Shaders-Setup.exe`** (or double-click `Install.cmd`).
+1. Download **`TM-Vibrant-Shaders.zip`** (one zip for both games) and extract it.
+2. Close ManiaPlanet and run **`TM-Vibrant-Shaders-Setup.exe`**.
 3. Start ManiaPlanet **64-bit**. `F8` opens the menu, **`F5`** switches effects on/off (`F7` is ManiaPlanet's friends list).
 
 ---
@@ -68,8 +68,6 @@ Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders
 |---|---|
 | `TM-Vibrant-Shaders.zip` | `d7b0fd4bf0dd067bad314452aa6fcdd45b2708de117ddc52284d63d18904916a` |
 | `TMVibrantShaders.dll` | `4069c934afdafda76807698f4f0d4acd82e7af3bfa1fe0e9f8f99f5bea6f7083` |
-| `TM-Vibrant-Shaders-ManiaPlanet.zip` | `52a2aea6e73b5195d6c0f3448d149df3449961ce7e29b375bd89e44467667638` |
-| `d3d11.dll` | `c0baec38d97ed5e01e88b4689baaf5bc6d3c3efe88e5f8c0b4101f902e3792e4` |
 
 Check a download in PowerShell: `Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256`
 </details>
