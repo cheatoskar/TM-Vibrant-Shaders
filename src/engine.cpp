@@ -365,8 +365,11 @@ float g_weatherTime = -1.0f;                  // the time of day the game asked 
 // midnight left it, and the weather's vtable then (the object is checked before it is used again).
 constexpr size_t kWeatherTimer = 0x1c;
 float g_nightClock = -1.0f;
+float g_nightClockAsync = -1.0f; // its other time then (each clock is compared with its own)
 const void* g_weatherVtable = nullptr;
 int g_nightLogged = 0;
+int g_nightJumps = 0;            // keepNight's jumps back to midnight on this map (logged at the next)
+DWORD g_nightJumpTick = 0;       // the last one (at most one a second)
 volatile LONG g_flares[3] = {}; // lens flares since the last read: other lights, the sun, the sun hidden
 using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
 ReadInputFn g_readInput = nullptr;
@@ -858,9 +861,17 @@ void readMapComments(const void* challenge) {
     InterlockedIncrement(&g_mapLoads);
 }
 
+// Once a map: how often keepNight put the weather back (a replay or a clip that keeps setting
+// the clock would otherwise jump it unseen once the drift log's 20 lines are used up).
+void reportNightJumps() {
+    if (g_nightJumps > 0) TMVS_LOG("engine: real night kept: the weather was put back to midnight %d times on the last map", g_nightJumps);
+    g_nightJumps = 0;
+}
+
 void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     g_app = self;
     // Another map (or none: back to the menu): the objects of the last one go with it.
+    reportNightJumps();
     g_freeCam = nullptr;
     g_weather = nullptr;
     g_racePlayer = nullptr;
@@ -933,7 +944,9 @@ void noteNightClock() {
     }
     float async = 0.0f, timed = 0.0f, speed = 0.0f;
     int mode = 0;
-    g_nightClock = weatherClock(async, timed, mode, speed) ? timed : -1.0f;
+    const bool known = weatherClock(async, timed, mode, speed);
+    g_nightClock = known ? timed : -1.0f;
+    g_nightClockAsync = known ? async : -1.0f;
 }
 
 void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
@@ -1343,8 +1356,13 @@ bool keepNight(bool fix) {
         const float d = fabsf(a - b);
         return d < 0.5f ? d : 1.0f - d;
     };
-    const float moved = apart(timed, g_nightClock) > apart(async, g_nightClock) ? apart(timed, g_nightClock) : apart(async, g_nightClock);
+    const float movedTimed = apart(timed, g_nightClock), movedAsync = g_nightClockAsync >= 0.0f ? apart(async, g_nightClockAsync) : 0.0f;
+    const float moved = movedTimed > movedAsync ? movedTimed : movedAsync;
     if (moved < 0.01f) return false; // a quarter of an hour of the game's day
+    // At most one jump a second: a clock that doesn't come back within 0.01 (or a replay that keeps
+    // setting it) would otherwise jump the weather every frame.
+    const DWORD now = GetTickCount();
+    if (fix && g_nightJumps > 0 && now - g_nightJumpTick < 1000) return false;
     if (g_nightLogged < 20) {
         g_nightLogged++;
         TMVS_LOG("engine: the weather's time of day moved away from the forced midnight (%.3f -> timed %.3f, async %.3f; clock mode %d, speed %.3f, "
@@ -1353,11 +1371,15 @@ bool keepNight(bool fix) {
     }
     if (!fix) return false;
     __try {
-        g_jumpTime(g_weather, nullptr, 0.0f); // the detour forces midnight anyway and notes the clock
+        g_jumpTime(g_weather, nullptr, 0.0f); // the original (trampoline): the detour doesn't see it
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_weather = nullptr;
         return false;
     }
+    // Where the clocks are now is the midnight to keep (the next frame compares with this).
+    noteNightClock();
+    g_nightJumps++;
+    g_nightJumpTick = now;
     return true;
 }
 
