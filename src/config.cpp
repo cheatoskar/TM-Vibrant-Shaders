@@ -111,6 +111,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("VideoCodec", "Video format", "Cinematic", Int, videoCodec, 0.0f, 2.0f),
         TMVS_FIELD("VideoBitrate", "Video bitrate (Mbit/s)", "Cinematic", Float, videoBitrate, 0.0f, 200.0f),
         TMVS_FIELD("FocusDistance", "Focus distance (m)", "Cinematic", Float, focusDistance, 0.0f, 200.0f),
+        TMVS_FIELD("DofAutofocus", "Focus on", "Cinematic", Int, dofAutofocus, 0.0f, 1.0f),
         TMVS_FIELD("BokehSize", "Max blur (px)", "Cinematic", Float, bokehSize, 2.0f, 24.0f),
 
         TMVS_FIELD("FXAA", "FXAA", "Image", Bool, fxaa, 0.0f, 1.0f),
@@ -377,7 +378,7 @@ const char* const kTagKeys[] = {
     "Wetness", "Rain", "Snow", "SnowCover", "Puddles", "Lightning", "LensDrops", "WaterSurfaces", "Reflections",
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
-    "WeatherShelter", "HazeDistance", "BorderGlow",
+    "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",

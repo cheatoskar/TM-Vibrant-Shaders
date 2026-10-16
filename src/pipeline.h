@@ -55,6 +55,11 @@ public:
         // The engine gave the car's position a moment ago: a frame without it records nothing
         // (no fall back to the depth search, a new line starts after the gap).
         bool carFromEngine = false;
+        // DofAutofocus Car: the car the depth of field focuses on (world, as carPosition). The
+        // engine's position; in the photo mode also the last one it gave (a paused game may not
+        // report it, and the car stands still then). Unknown: the focus stays in the middle.
+        bool focusCarKnown = false;
+        float focusCar[3] = {};
         // Photo mode: effects reach 3x farther, a larger height map, no car assumed in the
         // middle of the screen.
         bool photo = false;
@@ -254,6 +259,7 @@ private:
     void runPass(IDirect3DDevice9* device, Pass pass, IDirect3DSurface9* target, UINT width, UINT height);
     void bind(IDirect3DDevice9* device, int stage, IDirect3DBaseTexture9* texture, bool linear);
     void passConstants(IDirect3DDevice9* device, float a, float b, float c = 0.0f, float d = 0.0f);
+    void focusOnCarConstants(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings);
     bool ensureHeightMap(IDirect3DDevice9* device);
     void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, bool ceilings);
     bool updateLightGrid(IDirect3DDevice9* device, const Settings& settings);
@@ -349,6 +355,7 @@ private:
     gfx::Target m_taa[2];       // full: TAA history ping-pong (rgb, view z)
     int m_adaptIndex = 0;
     int m_focusIndex = 0;
+    int m_focusOnCar = -1;      // DofAutofocus Car: the log's last word on where the car came from (-1 none yet)
     int m_taaIndex = 0;
     bool m_taaValid = false;
     bool m_temporalValid = false; // this frame continues the previous one (no camera cut)

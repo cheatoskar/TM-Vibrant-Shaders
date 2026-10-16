@@ -2,6 +2,7 @@
 
 ### Unreleased
 
+- New setting *Focus on* (`DofAutofocus`, *Cinematic* panel, *Middle* by default = as before): *Car* keeps your car sharp in replays and the photo mode while the camera moves around it. The depth of field's auto focus follows the car's position from the game (projected onto the screen, the depth of the car's own pixels there) instead of the middle of the screen; off screen it falls back to the middle, a replay camera cut jumps to the new distance at once. TrackMania Nations/United.
 - Neon trail: a restart the game's hooks didn't report (the car more than 60 m from its last point in one frame without a respawn) now starts the trail over too; the log says when. New setting *Earlier runs kept* (`TrailKeepRuns`, 0 – 5, default 0 = as before): the trails of that many earlier runs stay after a restart, dimmer the older they are.
 - Replay menu bars (`ShadeMenuBars`): a clear of the whole screen that the game limits to the camera's band with its scissor rect no longer counts as the game clearing the rows under the bars itself (the leftover strips came back). The log names every change of what happens to those rows, and which clear it was.
 - Real night: when the weather's clock leaves the forced midnight during a map (reported: the sun came back in the end-of-race replay), it is logged and put back before the frame is drawn. The log also names changes of the game's light during a map and counts the game's sun flares per cinematic switch.

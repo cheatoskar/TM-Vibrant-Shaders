@@ -20,6 +20,8 @@
 //     --labels <left|right>   the compare split's names burnt in at the bottom, as in photos
 //     --refocus <u,v>         photo mode: focus there in the first half of the frames, then
 //                             on --focus (a click on another point; the focus must follow)
+//     --car <u,v>             DofAutofocus Car: the engine reports the car where the capture
+//                             shows the point u,v (its depth, lowered to the wheel centres)
 //     --video                 the video export's quality (photo mode's depth of field, moving)
 //     --repeat <n>            n more sub-pixel samples of the last frame (the export's
 //                             supersampling: history read, not advanced); the last is written
@@ -292,6 +294,7 @@ int main(int argc, char** argv) {
     bool useNormals = true;              // capture_NNN.nrm16 next to the capture (--nogbuf: none)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
     float refocus[2] = {-2.0f, -2.0f};   // --refocus: the point clicked before (first half of the frames)
+    float carAt[2] = {-1.0f, -1.0f};     // --car: where the car is on screen (uv), as the engine would report it
     const char* compare = nullptr;       // --compare: the preset on the split's other side
     float splitAt = 0.5f;
     const char* labels = nullptr;        // --labels "left|right": the names in a photo of the split
@@ -340,6 +343,8 @@ int main(int argc, char** argv) {
             splitAt = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--labels") && i + 1 < argc) {
             labels = argv[++i];
+        } else if (!strcmp(argv[i], "--car") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f", &carAt[0], &carAt[1]);
         } else if (!strcmp(argv[i], "--refocus") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &refocus[0], &refocus[1]);
         } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
@@ -514,6 +519,7 @@ int main(int argc, char** argv) {
         // As renderSideB: the lens is the camera's, the same on both sides.
         settingsB.depthOfField = job.settings.depthOfField;
         settingsB.focusDistance = job.settings.focusDistance;
+        settingsB.dofAutofocus = job.settings.dofAutofocus;
         settingsB.bokehSize = job.settings.bokehSize;
         gfx::Target outputB;
         if (compare && !outputB.create(device, loaded->cap.width, loaded->cap.height, D3DFMT_A8R8G8B8)) return 1;
@@ -534,6 +540,22 @@ int main(int argc, char** argv) {
         in.height = cap.height;
         memcpy(in.view, cap.view, sizeof(in.view));
         memcpy(in.projection, cap.projection, sizeof(in.projection));
+        if (carAt[0] >= 0.0f && cap.depth.size() == static_cast<size_t>(cap.width) * cap.height) {
+            // The world point seen there, 0.3 m lower: about the wheel centres, as the engine gives it.
+            const float* V = cap.view;
+            const float* P = cap.projection;
+            const UINT x = static_cast<UINT>(carAt[0] * cap.width), y = static_cast<UINT>(carAt[1] * cap.height);
+            const float d = cap.depth[static_cast<size_t>(y < cap.height ? y : cap.height - 1) * cap.width + (x < cap.width ? x : cap.width - 1)];
+            const float z = P[14] / (d - P[10]);
+            const float pv[3] = {((carAt[0] * 2.0f - 1.0f) - P[8]) * z / P[0], ((1.0f - 2.0f * carAt[1]) - P[9]) * z / P[5], z};
+            for (int j = 0; j < 3; j++) {
+                const float camera = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
+                in.focusCar[j] = camera + pv[0] * V[j * 4 + 0] + pv[1] * V[j * 4 + 1] + pv[2] * V[j * 4 + 2];
+            }
+            in.focusCar[1] -= 0.3f;
+            in.focusCarKnown = true;
+            printf("%s: car at %.1f %.1f %.1f, %.1f m from the camera\n", job.output.c_str(), in.focusCar[0], in.focusCar[1], in.focusCar[2], z);
+        }
         if (sunOverride) {
             memcpy(in.sunDirection, sun, sizeof(sun));
             in.sunKnown = true;
