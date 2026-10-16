@@ -12,6 +12,8 @@
 //     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
 //                             view, 0.1 s apart (neon trail test)
 //     --bench                 GPU time per pass
+//     --refocus <u,v>         photo mode: focus there in the first half of the frames, then
+//                             on --focus (a click on another point; the focus must follow)
 //     --video                 the video export's quality (photo mode's depth of field, moving)
 //     --repeat <n>            n more sub-pixel samples of the last frame (the export's
 //                             supersampling: history read, not advanced); the last is written
@@ -112,6 +114,12 @@ bool setByKey(Settings& s, const char* assignment) {
     char* base = reinterpret_cast<char*>(&s);
     if (key == "DebugView") {
         s.debugView = atoi(value);
+        return true;
+    }
+    // F7 / the menu's switch (General, not a look setting): 0 = the shaders off, with --photo
+    // only photo mode's camera effects on the game's image.
+    if (key == "Enabled") {
+        s.enabled = atoi(value) != 0;
         return true;
     }
     for (const Field& f : fields()) {
@@ -273,6 +281,7 @@ int main(int argc, char** argv) {
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     bool useMaterials = true;            // capture_NNN.mat next to the capture (--nomat: no material masks)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
+    float refocus[2] = {-2.0f, -2.0f};   // --refocus: the point clicked before (first half of the frames)
     UINT bars = 0;                       // --bars: rows above and below the image (replay menu test)
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
@@ -310,6 +319,8 @@ int main(int argc, char** argv) {
             repeats = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &focus[0], &focus[1]);
+        } else if (!strcmp(argv[i], "--refocus") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f", &refocus[0], &refocus[1]);
         } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
             lutFile = argv[++i];
         } else if (!strcmp(argv[i], "--lutmix") && i + 1 < argc) {
@@ -550,6 +561,10 @@ int main(int argc, char** argv) {
             // the distance still to drive.
             for (int j = 0; j < 3; j++) driven.view[12 + j] += back * job.drive[j];
             driven.time = job.time >= 0.0f ? job.time - (frames - 1 - frame) * 0.02f : cap.time + frame * 0.1f;
+            if (refocus[0] > -1.5f && frame < frames / 2) {
+                driven.focusPoint[0] = refocus[0];
+                driven.focusPoint[1] = refocus[1];
+            }
             if (trail) {
                 driven.driving = driven.carKnown = driven.carFromEngine = true;
                 // Per frame as far as the frame's time step (time=: 0.02 s, else 0.1 s).

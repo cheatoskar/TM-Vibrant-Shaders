@@ -2142,7 +2142,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 
     if (!s.enabled && in.photo) {
         // Vanilla photo mode: only depth of field and sharpening on the game's original image (in.color).
-        const float dt = m_historyValid ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
+        // The time step from the last frame of this camera: m_historyValid belongs to the exposure,
+        // which never runs here. With it the focus froze where it was first measured (the shaders
+        // off from the start, or after a resize): clicks and the auto focus didn't move it.
+        const float dt = m_havePrevious ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
         if (temporal) m_lastTime = in.time;
         IDirect3DTexture9* current = in.color;
         const bool dof = s.depthOfField > 0.0f;

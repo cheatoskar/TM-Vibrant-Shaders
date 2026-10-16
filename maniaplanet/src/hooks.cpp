@@ -1061,42 +1061,7 @@ void prepareLook() {
     photo::adjust(g_lookSettings);
     float lutAmount = config.lutAmount;
     if (!config.settings.enabled && photo::active()) {
-        // Vanilla photo mode: neutral look with only DoF and Sharpen on the game's image
-        g_lookSettings.aoStrength = 0.0f;
-        g_lookSettings.shadowStrength = 0.0f;
-        g_lookSettings.globalIllumination = 0.0f;
-        g_lookSettings.neonLight = 0.0f;
-        g_lookSettings.sunLight = 0.0f;
-        g_lookSettings.ambientTint = 0.0f;
-        g_lookSettings.fogDensity = 0.0f;
-        g_lookSettings.skyMode = 0;
-        g_lookSettings.skyEnhance = 0.0f;
-        g_lookSettings.volumetricClouds = 0.0f;
-        g_lookSettings.godRays = 0.0f;
-        g_lookSettings.volumetricLight = 0.0f;
-        g_lookSettings.bloom = 0.0f;
-        g_lookSettings.lensFlare = 0.0f;
-        g_lookSettings.wetness = 0.0f;
-        g_lookSettings.rain = 0.0f;
-        g_lookSettings.snow = 0.0f;
-        g_lookSettings.puddles = 0.0f;
-        g_lookSettings.reflections = 0.0f;
-        g_lookSettings.lightning = 0.0f;
-        g_lookSettings.neonTrail = 0.0f;
-        g_lookSettings.exposure = 0.0f;
-        g_lookSettings.contrast = 1.0f;
-        g_lookSettings.saturation = 1.0f;
-        g_lookSettings.vibrance = 0.0f;
-        g_lookSettings.temperature = 0.0f;
-        g_lookSettings.tint = 0.0f;
-        g_lookSettings.shadowTint = 0.0f;
-        g_lookSettings.lift = 0.0f;
-        g_lookSettings.gamma = 1.0f;
-        g_lookSettings.gain = 1.0f;
-        g_lookSettings.vignette = 0.0f;
-        g_lookSettings.filmGrain = 0.0f;
-        g_lookSettings.chromaticAberration = 0.0f;
-        g_lookSettings.toneCurve = 0; // game's curve
+        photo::vanillaLook(g_lookSettings);
         lutAmount = 0.0f;
     }
     g_look.settings = &g_lookSettings;

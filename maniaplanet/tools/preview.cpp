@@ -21,6 +21,7 @@
 #include "renderer.h"
 #include "config.h"
 #include "options.h"
+#include "photo11.h"
 #include "settings.h"
 #include <windows.h>
 #include <d3d11.h>
@@ -353,6 +354,14 @@ int main(int argc, char** argv) {
     look.settings = &config.settings;
     look.lut = config.lutFile;
     look.lutAmount = config.lutAmount;
+    // --photo --set Enabled=0: photo mode with the shaders off, as hooks.cpp prepareLook.
+    tmshaders::Settings vanilla = config.settings;
+    if (photo && !config.settings.enabled) {
+        photo::vanillaLook(vanilla);
+        look.settings = &vanilla;
+        look.lutAmount = 0.0f;
+        printf("  photo mode with the shaders off: the camera's effects only\n");
+    }
     if (haveCamera) {
         const float peak = std::max(camera.sunColour[0], std::max(camera.sunColour[1], camera.sunColour[2]));
         if (peak > 1e-3f)

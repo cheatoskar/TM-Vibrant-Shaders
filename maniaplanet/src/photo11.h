@@ -29,6 +29,10 @@ void request();
 // The look of this frame: full quality, depth of field on the focus point, no motion blur.
 void adjust(tmshaders::Settings& s);
 
+// The shaders off (F5) in photo mode: only the camera's effects (depth of field, sharpening) on
+// the game's own image; every other effect and the grade off, the engine's tone curve. After adjust.
+void vanillaLook(tmshaders::Settings& s);
+
 // Compare split (Shift+F6, as in TMNF): one side of a line shows the game's own image. Only in
 // photo mode (switching it on turns photo mode on). Ctrl+Shift+wheel moves the line.
 bool& splitOn();
