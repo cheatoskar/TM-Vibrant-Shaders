@@ -2479,7 +2479,12 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
         }
     }
     // Water is flat: the normal from the depth steps row by row far out (striped mirror images).
-    float3 nRefl = normalize(lerp(nWorld, float3(0.0, 1.0, 0.0), saturate(water * 2.0)) + float3(-slope.x, 0.0, -slope.y));
+    // Clean water: the mirrored direction (sky, Fresnel, glint) takes a quarter of the waves'
+    // slope; the full slope still moves the mirror image and the pool floor on screen. Seen at a
+    // flat angle (a camera 24 m up, the water 100-160 m away: 14 px per wave) the full slope
+    // swung the mirrored sky between the bright horizon and the darker sky above and the Fresnel
+    // term with it: the regular wave field came out as a checker of bright and dark dashes.
+    float3 nRefl = normalize(lerp(nWorld, float3(0.0, 1.0, 0.0), saturate(water * 2.0)) + float3(-slope.x, 0.0, -slope.y) * (1.0 - water * u_Water2.x * 0.75));
     // Refraction: the pool floor seen through moving waves, a little bluer with depth.
     if (water > 0.0) {
         float2 refr = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.03;
