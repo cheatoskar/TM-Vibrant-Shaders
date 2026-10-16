@@ -2549,6 +2549,46 @@ float4 PS_SpillDown(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
 }
 
+// EngineLights: the light comes from what the game drew as light, as in the lighting pass,
+// not from bright colours (floodlit grass, banners and car paint passed for neon): what its
+// additive draws added (halos, floodlight heads, start lights), the lamp material, and the neon
+// strips (block material to the game, found by colour) by their glow (BorderGlow). Each in
+// its own colour; white lamps light things too, white paint is no source any more.
+//   s0 = the game's float image (bilinear), s14 = its added light (bilinear), s1, s13 as above
+float4 PS_SpillDownEngine(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 sum = 0, strongest = 0;
+    float zmin = SKY_Z;
+    [unroll] for (int j = 0; j < 2; j++) {
+        [unroll] for (int i = 0; i < 2; i++) {
+            float2 suv = uv + (float2(i, j) * 2.0 - 1.0) * u_Screen.zw;
+            float3 cGame = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
+            float3 c = toLinear(cGame);
+            float3 added = 0;
+            if (u_Engine.x > 0.5) {
+                float3 surface = toLinear(max(cGame - tex2Dlod(s14, float4(suv, 0, 0)).rgb, 0.0));
+                added = max(c - surface, 0.0);
+                c = surface;
+            }
+            float4 nd = tex2Dlod(s1, float4(suv, 0, 0));
+            float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(suv, 0, 0)) : float4(0, 0, 0, 0);
+            float peak = max(c.r, max(c.g, c.b));
+            // The lamp material's bright parts, the same ramp as its glow in the lighting pass.
+            float lamp = mat.r * saturate(peak * u_Clean.z + u_Clean.w);
+            float neon = neonStrip(c, length(viewPosition(suv, nd.w)), mat) * u_Engine.w;
+            // On the 0..1 range the guess had: the float image's 2..3 would burn the road white.
+            float3 light = max(min(added, 1.0), min(c, 1.0) * max(lamp, neon)) * (nd.w < SKY_Z ? 1.0 : 0.0);
+            // White lamps light less than coloured ones, as they glow less: the stadium's rows of
+            // floodlights washed the roof around them out to a white haze.
+            float lp = max(light.r, max(light.g, light.b));
+            light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-3)));
+            sum += light;
+            strongest = max(strongest, light);
+            zmin = min(zmin, nd.w);
+        }
+    }
+    return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
+}
+
 // s0 = light buffer, u_Pass0.xy = direction * texel. Radius scales with 1/z (about 3 m).
 float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
     float4 center = tex2Dlod(s0, float4(uv, 0, 0));
