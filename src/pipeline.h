@@ -204,6 +204,8 @@ private:
         kWaterLevel,
         kResolve,
         kLightingEngine,
+        kLightGridInit,
+        kLightGridSweep,
         kPassCount
     };
 
@@ -219,6 +221,7 @@ private:
     void passConstants(IDirect3DDevice9* device, float a, float b, float c = 0.0f, float d = 0.0f);
     bool ensureHeightMap(IDirect3DDevice9* device);
     void updateHeightMap(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, bool ceilings);
+    bool updateLightGrid(IDirect3DDevice9* device, const Settings& settings);
     bool ensureCloudNoise(IDirect3DDevice9* device);
     bool ensureLut(IDirect3DDevice9* device);
     bool buildMaterialMask(IDirect3DDevice9* device, const Inputs& in);
@@ -230,7 +233,7 @@ private:
     bool detectCameraCut(const Inputs& inputs) const;
 
     struct ProfileFrame {
-        static constexpr int kMaxStamps = 72;
+        static constexpr int kMaxStamps = 80; // the long shadows' light grid takes up to 6
         IDirect3DQuery9* disjoint = nullptr;
         IDirect3DQuery9* frequency = nullptr;
         IDirect3DQuery9* stamps[kMaxStamps] = {};
@@ -326,6 +329,12 @@ private:
     gfx::Target m_heightMap[2];                         // accumulated, ping-pong
     gfx::Target m_ceilingMap[2];                        // undersides (roofs, bridges), kept, ping-pong
     gfx::Target m_shadowHeight;                      // volumetric light: shadow height per column
+    gfx::Target m_lightGrid[2];                      // LongShadowQuality 1: height map turned to the light, swept towards it
+    int m_lightGridIndex = 0;                        // which of the two holds the finished grid
+    bool m_lightGridSupported = true;                // G32R32F render targets
+    bool m_lightGridFilter = false;                  // ... that can be filtered
+    bool m_lightGridStale = true;                    // the height map, the light or the range changed
+    float m_lightGridConstants[2][4] = {};           // c47, c48 of the finished grid
     IDirect3DSurface9* m_heightDepth = nullptr;      // keeps the highest splat per texel
     IDirect3DVertexShader9* m_splatVS = nullptr;
     IDirect3DVertexDeclaration9* m_splatDecl = nullptr;

@@ -49,6 +49,7 @@ struct Settings {
     float shadowLength = 9.0f;      // metres
     float longShadows = 0.8f;       // world-space height map shadows (long, off-screen casters)
     float longShadowRange = 120.0f; // metres
+    int longShadowQuality = 1;      // 0: traced in 24 steps (as before 2026-10-16), 1: every map cell along the ray (light grid)
     float neonLight = 0.6f;         // coloured light sources light up their surroundings
     float sunLight = 0.6f;          // directional sun relighting (N.L)
     float ambientTint = 0.55f;      // sky-coloured fill in shadow
