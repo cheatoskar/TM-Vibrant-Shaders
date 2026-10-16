@@ -59,6 +59,10 @@ std::string& splitPreset();
 // Copies the other side's image (`original`: the unshaded one, or the preset's; same size) onto
 // its side of `shaded` and draws the line. Call it before afterRender, so the photo has it.
 void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3DSurface9* shaded);
+// The game draws one frame, lit for your look: real night, its moon, its sky and its sun's halo
+// follow your look on both sides. "" when the preset on the other side would get the same light,
+// else a short line saying what it misses (its sun effects can't show on a frame lit otherwise).
+std::string splitLightNote();
 
 // A line for the screen (photo mode on, progress, saved as ...), "" = nothing to show.
 const char* status();

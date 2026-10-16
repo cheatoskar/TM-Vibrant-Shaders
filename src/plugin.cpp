@@ -339,9 +339,8 @@ bool isMainTarget(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     return rtDesc.Width == depthDesc.Width && rtDesc.Height == depthDesc.Height && rtDesc.Width >= 320;
 }
 
-// World-space direction towards the sun.
-bool sunDirection(float out[3]) {
-    const Settings& s = Config::get().settings;
+// World-space direction towards the sun: the look's own (SunElevation) or the game's light.
+bool sunDirection(const Settings& s, float out[3]) {
     if (s.sunElevationOverride >= 0.0f) {
         const float el = s.sunElevationOverride * 3.14159265f / 180.0f;
         const float az = s.sunAzimuthOverride * 3.14159265f / 180.0f;
@@ -387,12 +386,14 @@ bool castersSideA(IDirect3DDevice9* device, const float sunWorld[3], const float
     return casters::update(device, sunWorld, camera, out);
 }
 
-// The compare split's preset side: the same maps when its light comes from where side A's does.
-// Another sun (a preset with its own) gets none, the height map's shadows stand in: the maps are
-// drawn for one light, a second one would redraw them twice a frame.
+// The compare split's preset side: the same maps when its light comes from where side A's does,
+// or its own when side A drew none this frame (your look a night sky without sun, the preset a
+// day look: before, it got none and its sun cast only the height map's coarse shadows).
+// Another sun than side A's gets none, the height map's shadows stand in: the maps are drawn for
+// one light, a second one would redraw them twice a frame.
 bool castersSideB(IDirect3DDevice9* device, const float sunWorld[3], const float camera[3], casters::Maps& out) {
     const float d = sunWorld[0] * g_casterSun[0] + sunWorld[1] * g_casterSun[1] + sunWorld[2] * g_casterSun[2];
-    if (!g_casterSunSet || d < 0.999999f) return false;
+    if (g_casterSunSet && d < 0.999999f) return false;
     return casters::update(device, sunWorld, camera, out);
 }
 
@@ -419,6 +420,11 @@ IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs&
     b.enabled = true; // with the shaders off: the preset next to the game's image with photo mode's lens
     b.debugView = shownA.debugView;
     photo::adjust(b);
+    // Another preset picked (the bar at the bottom switches it in a click): no exposure, TAA or
+    // sky history of the last one blending into the first frames of this one.
+    static std::string s_shown;
+    const bool switched = s_shown != name;
+    if (switched) s_shown = name;
     if (!g_pipelineB.ready()) {
         if (g_pipelineBFailed || !g_pipelineB.init(device, g_dev.shaderDir)) {
             if (!g_pipelineBFailed) TMVS_LOG("photo: compare split with %s: its pipeline failed (%s)", name.c_str(), g_pipelineB.lastError().c_str());
@@ -426,10 +432,20 @@ IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs&
             return nullptr;
         }
         TMVS_LOG("photo: compare split with the preset %s (a second pipeline)", name.c_str());
+    } else if (switched) {
+        g_pipelineB.resetHistory();
+        TMVS_LOG("photo: compare split now with the preset %s", name.c_str());
+    }
+    if (switched) {
+        // The frame is lit for your look; say once when the preset would have been lit otherwise.
+        const std::string note = photo::splitLightNote();
+        if (!note.empty()) TMVS_LOG("photo: compare split: %s", note.c_str());
     }
     if (!g_splitOut.create(device, inputsA.width, inputsA.height, D3DFMT_A8R8G8B8)) return nullptr;
     Pipeline::Inputs in = inputsA;
     in.materialClasses = nullptr; // the F12 capture is side A's
+    // The preset's own sun position (SunElevation), not yours; without one the game's light.
+    in.sunKnown = sunDirection(b, in.sunDirection);
     if (in.casterMap) in.casterMap = castersSideB;
     g_pipelineB.render(device, in, b, g_splitOut.surface);
     return g_splitOut.surface;
@@ -1087,7 +1103,7 @@ void processScene(IDirect3DDevice9* device) {
     inputs.height = height;
     memcpy(inputs.view, g_scene.view, sizeof(inputs.view));
     memcpy(inputs.projection, g_scene.projection, sizeof(inputs.projection));
-    inputs.sunKnown = sunDirection(inputs.sunDirection);
+    inputs.sunKnown = sunDirection(settings, inputs.sunDirection);
     inputs.sunColorKnown = g_scene.haveLight;
     inputs.moonReplaced = engine::moonReplaced();
     memcpy(inputs.sunColor, g_scene.lightColor, sizeof(inputs.sunColor));
@@ -1132,6 +1148,7 @@ void processScene(IDirect3DDevice9* device) {
         if (engine::mapLoads() != s_maps) {
             s_maps = engine::mapLoads();
             g_pipeline.resetSeaLevel();
+            g_pipelineB.resetSeaLevel(); // the compare split's preset side (its history is its own)
         }
         if (resets != s_resets) {
             if (s_resets >= 0) TMVS_LOG("engine: race reset (trail cleared)");
@@ -1139,12 +1156,17 @@ void processScene(IDirect3DDevice9* device) {
             g_pipeline.resetTrail();
             g_pipeline.resetHeights();
             g_pipeline.resetCeilings();
+            g_pipelineB.resetTrail();
+            g_pipelineB.resetHeights();
+            g_pipelineB.resetCeilings();
         }
         if (respawns != s_respawns) {
             if (s_respawns >= 0) TMVS_LOG("engine: respawn");
             s_respawns = respawns;
             g_pipeline.breakTrail();
             g_pipeline.resetHeights();
+            g_pipelineB.breakTrail();
+            g_pipelineB.resetHeights();
         }
     }
     inputs.jitter[0] = g_jitterUV[0];
@@ -1722,7 +1744,7 @@ void onPresent(IDirect3DDevice9* device) {
     status.autoQuality = &g_autoQuality;
     status.depthAvailable = depth::texture() != nullptr;
     status.engineHooks = engine::active();
-    status.sunKnown = sunDirection(status.sunDirection);
+    status.sunKnown = sunDirection(Config::get().settings, status.sunDirection);
     status.shaderError = g_pipeline.lastError().empty() ? nullptr : g_pipeline.lastError().c_str();
     overlay::setStatus(status);
     overlay::draw(device);
