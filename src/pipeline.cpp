@@ -280,6 +280,7 @@ void Pipeline::destroyTargets() {
     m_lampSource.destroy();
     for (auto& t : m_lampDown) t.destroy();
     for (auto& t : m_lampUp) t.destroy();
+    m_lampFailed = false;
     m_luminance.destroy();
     for (auto& t : m_adapted) t.destroy();
     m_ldr.destroy();
@@ -2315,7 +2316,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // the part added over the sky as well, at night only (by day the game's sun glow is an added
     // light too). w: Floodlights for the light they spill onto their surroundings (NeonLight).
     const bool lampMask = engineLights && in.added;
-    const bool lampLight = lampMask && (s.lampGlare > 0.0f || s.lampHaze > 0.0f);
+    // Without its targets (allocation failed) no glare is added back: the core keeps its light.
+    const bool lampLight = lampMask && !m_lampFailed && (s.lampGlare > 0.0f || s.lampHaze > 0.0f);
     const float floodlights = lampMask ? fmaxf(s.floodlights, 0.0f) : 1.0f;
     const float lampGlareTaken = lampLight ? fminf(fmaxf(s.lampGlare, 0.0f), 1.0f) : 0.0f;
     const float lampCore = floodlights * (1.0f - lampGlareTaken);
@@ -2792,6 +2794,15 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             lh = lh > 3 ? (lh + 1) / 2 : 2;
             lampReady = m_lampDown[i].create(device, lw, lh, D3DFMT_A16B16G16R16F) &&
                         (i == kLampLevels - 1 || m_lampUp[i].create(device, lw, lh, D3DFMT_A16B16G16R16F));
+        }
+        // Out of video memory: no new try (and log line) every frame, the next map or device
+        // reset tries again. What was created goes back.
+        if (!lampReady) {
+            m_lampFailed = true;
+            m_lampSource.destroy();
+            for (auto& t : m_lampDown) t.destroy();
+            for (auto& t : m_lampUp) t.destroy();
+            TMVS_LOG("pipeline: lamp glare and haze off: their render targets failed (until the next map)");
         }
     }
     if (lampReady) {

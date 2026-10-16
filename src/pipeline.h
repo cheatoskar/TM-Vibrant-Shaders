@@ -146,7 +146,9 @@ public:
     // A restart or a new map: the roofs and bridges remembered for the rain are gone too.
     void resetCeilings() { m_ceilingValid = false; }
     // A new map: the sea level measured from the water material is the last map's.
+    // (And the lamp glare's render targets get another try if they failed.)
     void resetSeaLevel() {
+        m_lampFailed = false;
         m_seaKnown = false;
         m_waterMaterialSeen = false;
         m_waterPending = -1;
@@ -359,6 +361,7 @@ private:
     gfx::Target m_bloomDown[kBloomLevels];
     gfx::Target m_bloomUp[kBloomLevels];
     gfx::Target m_lampSource;              // quarter: the lamps' light (LampGlare, LampHaze), created when used
+    bool m_lampFailed = false;             // their creation failed: off until the next map or device reset
     gfx::Target m_lampDown[kLampLevels];   // its pyramid, an eighth down
     gfx::Target m_lampUp[kLampLevels - 1];
     gfx::Target m_luminance;    // 1x1
