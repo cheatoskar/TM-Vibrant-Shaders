@@ -1720,12 +1720,16 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         };
         const float since = m_trailTime - m_trailSeenAt;
         if (since < 0.5f) {
+            // The car drove for this frame's dt too (m_trailTime grows below): a frame hitch while
+            // driving fast covers more than 60 m (0.25 s at 250 m/s), no restart. 350 m/s is faster
+            // than any car drives.
+            const float elapsed = since + dt;
             const float jump = apart(in.carPosition, m_trailSeen);
-            if (jump > kTrailTeleport) {
+            if (jump > fmaxf(kTrailTeleport, elapsed * 350.0f)) {
                 m_trailNewRun = true;
                 if (m_trailLogged < 20) {
                     m_trailLogged++;
-                    TMVS_LOG("pipeline: neon trail: the car jumped %.0f m in %.0f ms without a respawn: a new run", jump, since * 1000.0f);
+                    TMVS_LOG("pipeline: neon trail: the car jumped %.0f m in %.0f ms without a respawn: a new run", jump, elapsed * 1000.0f);
                 }
             }
         } else if (m_trailKeptValid && m_trailRunAtValid && apart(in.carPosition, m_trailKept) > kTrailTeleport &&
