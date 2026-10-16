@@ -57,6 +57,10 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 // The camera (CHmsCamera) the plugin shades: zoom and tiles apply to its projection only.
 void setMainCamera(const void* camera);
 
+// The view and projection (D3D layout, as SetTransform gets them) the engine computed for the
+// camera that began last, before its RenderCameraBegin. False when it computed none.
+bool cameraMatrices(float view[16], float projection[16]);
+
 // Photo mode zoom: every perspective projection magnified about the centre (1 = off; only
 // in, never out, since the engine culls with its own field of view).
 void setProjectionZoom(float zoom);

@@ -290,6 +290,17 @@ float g_zoom = 1.0f;             // photo mode zoom (>= 1: the engine culls with
 // the reflection cameras (water planes, the cube maps of the car, which need their 90 degrees).
 const void* g_mainCamera = nullptr;
 bool g_loggedMainProjection = false;
+// The matrices the engine computed last (ComputeDriverViewMatrix / ComputeDriverProjection), as
+// it hands them to SetTransform, and those it had computed when a camera began. A camera drawn
+// into a texture (TexRender_RenderTexture: TransformStackCameraPush, then RenderCameraBegin; the
+// video export's supersampling renders every sample that way) gets its view and projection set
+// on the device BEFORE its RenderCameraBegin, with the dirty bits cleared, so the plugin's
+// SetTransform hook sees none within the camera. A camera drawn to the viewport
+// (RenderCameraNormal) gets them lazily at its first draw (UpdateCameraAndRect), within it.
+Matrix4 g_lastView{}, g_lastProjection{};
+bool g_lastViewSet = false, g_lastProjectionSet = false;
+Matrix4 g_beginView{}, g_beginProjection{};
+bool g_beginMatrices = false;
 bool g_hideOverlay = false;      // skip the game's HUD and menus (photo mode)
 using FreeCamFn = void(__fastcall*)(void*, void*, int);
 FreeCamFn g_freeCamSet = nullptr;
@@ -1048,6 +1059,14 @@ void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* cle
     g_camera.camera = camera;
     g_camera.hasView = false;
     g_camera.hasProjection = false;
+    // This camera's matrices, computed just before its begin (both paths); the next camera
+    // computes its own.
+    g_beginMatrices = g_lastViewSet && g_lastProjectionSet;
+    if (g_beginMatrices) {
+        g_beginView = g_lastView;
+        g_beginProjection = g_lastProjection;
+    }
+    g_lastViewSet = g_lastProjectionSet = false;
     if (g_callbacks.cameraBegin) g_callbacks.cameraBegin(camera);
     g_cameraBegin(self, edx, camera, clearDesc);
 }
@@ -1077,6 +1096,8 @@ void __fastcall viewMatrixDetour(void* self, void* edx, void* location) {
     memcpy(g_camera.location, base, sizeof(g_camera.location));
     memcpy(&g_camera.view, base + 0x60, sizeof(Matrix4));
     g_camera.hasView = true;
+    memcpy(&g_lastView, base + 0x60, sizeof(Matrix4)); // what SetTransform(D3DTS_VIEW) gets
+    g_lastViewSet = true;
 }
 
 // SHmsCameraProjection: +0x00 GmMat4 projection, +0x40 transposed copy.
@@ -1121,6 +1142,8 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
     }
     memcpy(&g_camera.projection, projection, sizeof(Matrix4));
     g_camera.hasProjection = true;
+    memcpy(&g_lastProjection, m + 16, sizeof(Matrix4)); // the D3D layout SetTransform(D3DTS_PROJECTION) gets
+    g_lastProjectionSet = true;
 }
 
 // EShadow: 0 None, 1 Minimum, 2 Medium, 3 High, 4 VeryHigh, 5 Complex (assumed launcher order).
@@ -1375,6 +1398,13 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 
 void setMainCamera(const void* camera) {
     g_mainCamera = camera;
+}
+
+bool cameraMatrices(float view[16], float projection[16]) {
+    if (!g_beginMatrices) return false;
+    memcpy(view, &g_beginView, sizeof(g_beginView));
+    memcpy(projection, &g_beginProjection, sizeof(g_beginProjection));
+    return true;
 }
 
 void setProjectionZoom(float zoom) {
