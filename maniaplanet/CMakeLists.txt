@@ -186,6 +186,11 @@ add_executable(mp_shadowtest tools/shadowtest.cpp)
 target_link_libraries(mp_shadowtest PRIVATE tmvs_mp_core d3d11 d3dcompiler)
 target_compile_options(mp_shadowtest PRIVATE /W4 /EHsc /permissive- /utf-8)
 
+# Share codes against ManiaPlanet's presets (the same test as tmvs_sharetest, tools/sharetest.cpp).
+add_executable(mp_sharetest ${TMVS_ROOT}/tools/sharetest.cpp)
+target_link_libraries(mp_sharetest PRIVATE tmvs_mp_core d3d11)
+target_compile_options(mp_sharetest PRIVATE /W4 /EHsc /permissive- /utf-8)
+
 # Offline test: a small D3D11 program that draws like the game (scene with depth, the engine's own
 # tone-map pixel shader, then an interface draw) through the proxy and checks where the effects land.
 add_executable(mp_harness tools/harness.cpp)

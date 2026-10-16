@@ -65,7 +65,7 @@ the stages' `supports()`). The Studio's debug views show what the effects see: d
 shadows, the engine's light taken apart, light sources, light shafts, clouds, sky, focus, motion.
 
 Settings and your presets are in `Documents\ManiaPlanet\TMVS` (`settings.ini`, `presets\`), in
-the same format as in TMNF. ManiaPlanet's own options are in `maniaplanet.ini`, on the Settings
+the same format as in TMNF. The *Shaders* page also shares a look as one line of text (*Copy share code* / *Paste share code*, `TMVS1:...`); a code from TrackMania Nations/United loads here and the other way round ([docs/settings.md](../docs/settings.md#share-a-preset-as-text)). ManiaPlanet's own options are in `maniaplanet.ini`, on the Settings
 page, panel "ManiaPlanet":
 - **HDR stage:** on = the look on the engine's HDR image, off = on its finished image.
 - **Light sources from the engine's draws** (`EngineLightDraws`, on by default since the owner's test: grass no longer glows, the road borders still do): the lamps, light

@@ -198,6 +198,11 @@ add_executable(tmvs_keystest tools/keystest.cpp)
 target_link_libraries(tmvs_keystest PRIVATE tmvs_core)
 target_compile_options(tmvs_keystest PRIVATE ${TMVS_OPTIONS})
 
+# Share code test: every preset round-trips, garbage is refused, the clipboard (development tool).
+add_executable(tmvs_sharetest tools/sharetest.cpp)
+target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)
+target_compile_options(tmvs_sharetest PRIVATE ${TMVS_OPTIONS})
+
 # GameGBuffer test: the game's dumped pixel shaders through the compile patch with the game's own
 # compiler, and (--device) drawn next to the game's on a D3D9 device (development tool).
 add_executable(tmvs_gbuftest tools/gbuftest.cpp)

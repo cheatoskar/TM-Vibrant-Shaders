@@ -380,6 +380,9 @@ const char* tooltipFor(const char* key) {
         {"TrailTyres", "Two lines from the rear tyres instead of one."},
         {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},
         {"TrailKeepRuns", "How many earlier runs' trails stay after a restart, dimmer the older they are. 0 clears the trail on every restart."},
+        // Sharing presets as text (Shaders page).
+        {"ShareCopy", "Puts the current look on the clipboard as one line of text (TMVS1:...) to paste into a chat. Only the look's settings are in it, not your installation's (auto quality, sound volume, neon trail, ...). The same code works in TrackMania Nations/United and TrackMania 2."},
+        {"SharePaste", "Reads a share code from the clipboard and makes it your look: unsaved, on top of the built-in preset it is closest to, so Save as preset keeps it. Nothing saved is replaced. Settings this version doesn't know are ignored and counted; values out of range are moved into range."},
         // Photo mode (General, not a look setting).
         {"SplitPhotoLabels", "Photos of the compare split get both sides' names burnt in at the bottom, at the line (the list on the screen is never in them)."},
     };
@@ -1009,6 +1012,27 @@ void drawShaders(Config& config) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens Explorer. In fullscreen the game may minimise.");
     ImGui::SameLine();
     ImGui::TextDisabled("Each preset is a .ini file plus a .jpg picture. Copy both to share it.");
+
+    // Sharing as text: one line to paste into a chat (the same code reads in both games).
+    static std::string s_shareStatus;
+    static bool s_shareOk = true;
+    if (ImGui::Button("Copy share code")) {
+        s_shareOk = copyTextToClipboard(config.shareCode());
+        s_shareStatus = s_shareOk ? "Share code copied." : "The clipboard is busy. Try again.";
+    }
+    if (ImGui::IsItemHovered()) showTip(tooltipFor("ShareCopy"));
+    ImGui::SameLine();
+    if (ImGui::Button("Paste share code")) {
+        std::string text;
+        s_shareOk = textFromClipboard(text, s_shareStatus) && config.applyShareCode(text, s_shareStatus);
+    }
+    if (ImGui::IsItemHovered()) showTip(tooltipFor("SharePaste"));
+    if (!s_shareStatus.empty()) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, s_shareOk ? ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled) : ImVec4(1.0f, 0.5f, 0.4f, 1.0f));
+        ImGui::TextUnformatted(s_shareStatus.c_str());
+        ImGui::PopStyleColor();
+    }
 }
 
 // --- Panels: settings side by side ---------------------------------------------------
