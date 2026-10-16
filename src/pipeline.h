@@ -134,6 +134,11 @@ public:
         m_trailTiltLogged = false;
     }
     void newTrailRun() { m_trailNewRun = true; }
+    // Photo mode's compare split: this (the preset's side) draws `from`'s trail, its points, runs
+    // and clock as they are (read only), and records none (the game is paused there: its own
+    // ring buffer stayed empty, the preset was compared without the trail your side has). Each
+    // frame before render; nullptr: its own again.
+    void shareTrail(const Pipeline* from);
     void breakTrail() {
         m_trailBreak = true;
         m_trailRespawnAt = m_trailTime;
@@ -511,6 +516,7 @@ private:
     float m_trailRunBegan = 0.0f;     // m_trailTime when this run began
     bool m_trailTiltLogged = false;   // the car's up first tilted past 30 degrees (once per map)
     bool m_trailNewRun = false;
+    const Pipeline* m_trailFrom = nullptr; // shareTrail: whose points are drawn (null: its own)
     float m_trailRespawnAt = -100.0f; // m_trailTime of the last respawn (its jump is no new run)
     UINT m_trailWritten = 0;          // points kept since the reset
     int m_trailRuns = 0;              // earlier runs kept

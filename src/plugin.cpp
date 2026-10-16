@@ -527,6 +527,8 @@ IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs&
         in.sunKnown = sunDirection(b, in.sunDirection);
         if (in.casterMap) in.casterMap = castersSideB;
     }
+    // Your side's neon trail on the preset's side too (the trail is a machine setting, the same on both).
+    g_pipelineB.shareTrail(game ? nullptr : &g_pipeline);
     g_pipelineB.render(device, in, b, g_splitOut.surface);
     return g_splitOut.surface;
 }

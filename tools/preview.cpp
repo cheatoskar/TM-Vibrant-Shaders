@@ -767,7 +767,10 @@ int main(int argc, char** argv) {
                 pipeline.render(device, again, job.settings, output.surface);
             }
             QueryPerformanceCounter(&renderStart);
-            if (compare) pipelineB.render(device, driven, settingsB, outputB.surface);
+            if (compare) {
+                pipelineB.shareTrail(&pipeline); // as in game: the preset's side draws this side's trail
+                pipelineB.render(device, driven, settingsB, outputB.surface);
+            }
             if (compare && firstFrame) printf("CPU: second pipeline (compare) created in %.1f ms, its first frame %.1f ms\n", initBMs, msSince(renderStart));
             firstFrame = false;
             if (bench) pipeline.collectProfile(true);

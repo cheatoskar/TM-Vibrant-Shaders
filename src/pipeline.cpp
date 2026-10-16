@@ -1716,13 +1716,35 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
     return ok;
 }
 
+void Pipeline::shareTrail(const Pipeline* from) {
+    const Pipeline* was = m_trailFrom;
+    m_trailFrom = from && from != this && from->m_trailPoints.texture ? from : nullptr;
+    if (!m_trailFrom) {
+        if (was) m_trailReset = true; // the copied counts don't belong to its own (empty) points
+        return;
+    }
+    // Its state as of its render this frame; nothing here resets or records over it.
+    m_trailReset = false;
+    m_trailNewRun = false;
+    m_trailHead = from->m_trailHead;
+    m_trailCount = from->m_trailCount;
+    m_trailTime = from->m_trailTime;
+    m_trailWritten = from->m_trailWritten;
+    m_trailRuns = from->m_trailRuns;
+    memcpy(m_trailRunStart, from->m_trailRunStart, sizeof(m_trailRunStart));
+    memcpy(m_trailRunFirst, from->m_trailRunFirst, sizeof(m_trailRunFirst));
+    m_trailPause = from->m_trailPause;
+    m_trailPauseAt = from->m_trailPauseAt;
+    m_trailPauseLogged = true; // its log is the other pipeline's
+}
+
 void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt) {
     // The player drives: also while a clip of the map plays (a camera in a loop, texts at the
     // start). Those clips stopped the recording, and when one ended the car was 130 - 340 m from
     // its last point: taken for a missed restart, the trail started over (every such line in the
     // owner's log came with "cinematic off"; one clip right after each start: the trail came 6 s
     // late).
-    const bool recording = in.driving || in.clipInRace;
+    const bool recording = !m_trailFrom && (in.driving || in.clipInRace);
     // A restart the hooks didn't see (the log had "race reset" on some restarts only, the old run
     // stayed under the new one): the car jumped far between two frames it was seen in, without a
     // respawn; or, after frames without it, it is back where this run began.
@@ -1955,7 +1977,7 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     // Alpha too: it adds the trail's coverage to the 1 the lighting wrote (TAA's mask).
     device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
     bind(device, 0, m_nd.texture, false);
-    device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailPoints.texture);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailFrom ? m_trailFrom->m_trailPoints.texture : m_trailPoints.texture);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MINFILTER, D3DTEXF_POINT);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
