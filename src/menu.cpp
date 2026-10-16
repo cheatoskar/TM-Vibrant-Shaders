@@ -1344,7 +1344,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "GameHdr", "Game HDR: the game draws into a float target, bright light keeps its texture (F12 also saves it)");
                           l |= drawKey(s, "CleanHighlights", "Clean highlights: floodlit white at night stays even (off = as in 1.4.0)");
                           l |= drawKey(s, "EngineLights", "Light sources from the game: lamps and glows as the game draws them glow, nothing is guessed (with Game HDR)");
-                          l |= drawKey(s, "CasterShadows", "Experimental: long shadows from the game's own meshes drawn from the sun or black hole (needs Long-range shadows)");
+                          l |= drawKey(s, "CasterShadows", "Long shadows from the game's own meshes drawn from the sun or black hole (needs Long-range shadows)");
                           l |= drawKey(s, "CleanWater", "Clean water: pools mirror only what they can see, sharp (off = blotches of the ramps over them)");
                           l |= drawKey(s, "ShadeMenuBars", "Replay menu: the shaded image under its bars (off = leftovers of earlier frames)");
                           return l;

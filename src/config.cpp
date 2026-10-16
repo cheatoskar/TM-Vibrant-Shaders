@@ -127,7 +127,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("GameHdr", "Game HDR (float target: texture in bright light)", "Image", Bool, gameHdr, 0.0f, 1.0f),
         TMVS_FIELD("CleanHighlights", "Clean highlights (no frost on floodlit white)", "Image", Bool, cleanHighlights, 0.0f, 1.0f),
         TMVS_FIELD("EngineLights", "Light sources from the game (with Game HDR)", "Image", Bool, engineLights, 0.0f, 1.0f),
-        TMVS_FIELD("CasterShadows", "Long shadows from the game's meshes (experimental)", "Image", Bool, casterShadows, 0.0f, 1.0f),
+        TMVS_FIELD("CasterShadows", "Long shadows from the game's meshes", "Image", Bool, casterShadows, 0.0f, 1.0f),
         TMVS_FIELD("CleanWater", "Clean water (a clear mirror, no blotches)", "Image", Bool, cleanWater, 0.0f, 1.0f),
         TMVS_FIELD("ShadeMenuBars", "Shaded image under the replay menu's bars", "Image", Bool, shadeMenuBars, 0.0f, 1.0f),
 
@@ -1244,15 +1244,15 @@ void Config::load() {
     settings.disableGameFx = GetPrivateProfileIntW(L"Settings", L"DisableGameFX", 1, ini) != 0;
     settings.gameMaterials = GetPrivateProfileIntW(L"Settings", L"GameMaterials", 1, ini) != 0;
     settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 1, ini) != 0;
-    settings.engineMoon = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"EngineMoon", 0, ini));
-    if (settings.engineMoon < 0 || settings.engineMoon > 2) settings.engineMoon = 0;
+    settings.engineMoon = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"EngineMoon", 1, ini));
+    if (settings.engineMoon < 0 || settings.engineMoon > 2) settings.engineMoon = 1;
     settings.gameSkyClouds = GetPrivateProfileIntW(L"Settings", L"GameSkyClouds", 0, ini) != 0;
     settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
     settings.cleanWater = GetPrivateProfileIntW(L"Settings", L"CleanWater", 1, ini) != 0;
     settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;
     settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 0, ini) != 0;
     settings.engineLights = GetPrivateProfileIntW(L"Settings", L"EngineLights", 1, ini) != 0;
-    settings.casterShadows = GetPrivateProfileIntW(L"Settings", L"CasterShadows", 0, ini) != 0;
+    settings.casterShadows = GetPrivateProfileIntW(L"Settings", L"CasterShadows", 1, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
     wchar_t target[32] = {};
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
