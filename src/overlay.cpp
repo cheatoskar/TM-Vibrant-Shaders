@@ -57,11 +57,24 @@ bool foreignOwnsMouse(HWND hwnd) {
     return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                               reinterpret_cast<LPCWSTR>(owner), &module) != 0;
 }
-// Every frame: take the property when we want the mouse and it is free, give it back when we don't.
+// Z-order between the two mods' overlays: the one that drew last is on top and gets the mouse when
+// both menus lie under the pointer. After our ImGui render we write our HMODULE here; at the start
+// of the next frame the property still holds the last writer, so "it is ours" = we were on top.
+const wchar_t* const kTopOverlay = L"TMMods.TopOverlay";
+bool g_weAreTop = false;
+void updateTop() {
+    g_weAreTop = g_hwnd && GetPropW(g_hwnd, kTopOverlay) == selfHandle();
+}
+void removeTop() {
+    g_weAreTop = false;
+    if (g_hwnd && GetPropW(g_hwnd, kTopOverlay) == selfHandle()) RemovePropW(g_hwnd, kTopOverlay);
+}
+// Every frame: take the property when we want the mouse and it is free (or the other mod has it but
+// we are on top, so our menu is what the pointer is over), give it back when we don't want it.
 void publishMouseOwner(bool want) {
     if (!g_hwnd) return;
     HANDLE owner = GetPropW(g_hwnd, kMouseOwner);
-    if (want && !owner) SetPropW(g_hwnd, kMouseOwner, selfHandle());
+    if (want && owner != selfHandle() && (!owner || g_weAreTop || !foreignOwnsMouse(g_hwnd))) SetPropW(g_hwnd, kMouseOwner, selfHandle());
     else if (!want && owner == selfHandle()) RemovePropW(g_hwnd, kMouseOwner);
 }
 
@@ -107,7 +120,10 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     // (A release of a press ImGui already took is still shown to it, so nothing sticks.)
     if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST && foreignOwnsMouse(hwnd)) {
         if (ImGui::GetCurrentContext()) {
-            if (msg == WM_MOUSEMOVE) ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+            // On top of the other mod's window we keep hovering (moves only, no buttons), so we can take
+            // the mouse next frame when the pointer is over our menu. Underneath we stay out of sight.
+            if (msg == WM_MOUSEMOVE && g_weAreTop) ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam);
+            else if (msg == WM_MOUSEMOVE) ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
             else if (releaseUp && ImGui::GetIO().MouseDown[button]) ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam);
         }
         return false;
@@ -229,7 +245,10 @@ void init(IDirect3DDevice9* device) {
 
 
 void shutdown() {
-    if (g_hwnd) publishMouseOwner(false); // never leave the other mod deaf
+    if (g_hwnd) {
+        publishMouseOwner(false); // never leave the other mod deaf
+        removeTop();
+    }
 }
 
 void preReset() {
@@ -300,10 +319,12 @@ void draw(IDirect3DDevice9* device) {
         if (!*photoHint) {
             g_splitBar = false;
             publishMouseOwner(false);
+            removeTop(); // nothing of ours on screen: the other mod is on top
             return;
         }
     }
 
+    updateTop(); // the previous frame's last writer, before anything of this frame
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
     // Draw ImGui's cursor over the menu or the split's bar (the game hides the OS cursor), the game's elsewhere.
@@ -366,6 +387,7 @@ void draw(IDirect3DDevice9* device) {
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
         ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+        if (ImGui::GetDrawData()->TotalVtxCount > 0) SetPropW(g_hwnd, kTopOverlay, selfHandle()); // drawn last: on top
         device->EndScene();
     }
 }
