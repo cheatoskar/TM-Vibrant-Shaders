@@ -29,7 +29,7 @@ struct Settings {
     bool gameNight = true;         // night skies over day maps: the game lights the map at midnight (map load), no baked sun
     int engineMoon = 1;            // night maps under the black hole: the game's moon 0 as it is, 1 shines from the black hole (lightmap, specular, car), 2 off (ambient and lamps stay)
     bool disableGameFx = true;     // skip the game's bloom and colour filter (launcher "FX") while the mod shades
-    bool gameHdr = false;          // the game draws its 3D image into a float target: light above 1.0 keeps its texture (car body, floodlit white)
+    bool gameHdr = true;           // the game draws its 3D image into a float target: light above 1.0 keeps its texture (car body, floodlit white)
     bool engineLights = true;      // with GameHdr: light sources as the game draws them (lamp materials, its additive glows), nothing guessed from the image
     bool cleanHighlights = true;   // the game's clipped white maps to one smooth result (no frost on floodlit surfaces); off = 1.4.0
     bool casterShadows = true;     // long shadows from a light-space map of the game's own static meshes (casters.cpp)

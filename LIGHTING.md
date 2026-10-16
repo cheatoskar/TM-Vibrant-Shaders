@@ -119,7 +119,7 @@ Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Hori
 - The main camera draws straight into the back buffer (trace: 590 draws, 52 fixed function,
   no StretchRect or target switch in between), and `TmForever.exe` compiles its shaders at run
   time (`d3dx9_30.dll`: `D3DXCompileShader`, `D3DXAssembleShader`; ps_2_0 / ps_3_0).
-- `GameHdr` (off by default, diagnostic): at the main camera's begin a float target
+- `GameHdr` (on by default since 1.4.0, which EngineLights needs; first a diagnostic): at the main camera's begin a float target
   (A16B16G16R16F) stands in for the game's; at its end it is resolved into the game's target,
   cut to 0..1 (`PS_Resolve`), so the pipeline and the look are unchanged. The log says once
   per map how much of the image lies above 1.0; F12 writes it next to the capture as
