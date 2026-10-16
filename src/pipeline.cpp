@@ -2283,6 +2283,14 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // 2b. Volumetric light: shadow heights from the height map, then the view rays through
     // the haze at half resolution (the light shaft target is free until later).
     const bool volume = heightMap && wantVolume;
+    // c37 before the march, which reads its range (u_Volume.y): set after it, the march took the
+    // value of whatever set c37 last (the game's own shaders in game, the compare split's other
+    // pipeline, the previous frame).
+    const bool gi = s.globalIllumination > 0.0f;
+    const float lensDrops = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f;
+    const float lensSnow = s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f;
+    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
+    device->SetPixelShaderConstantF(37, volumeConstants, 1);
     if (volume) {
         static const float kVolumeSteps[3] = {8.0f, 12.0f, 16.0f};
         const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
@@ -2309,7 +2317,6 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         }
     }
     // 2c. One-bounce global illumination, blurred like the AO.
-    const bool gi = s.globalIllumination > 0.0f;
     if (gi) {
         static const float kGISamples[3] = {4.0f, 6.0f, 8.0f};
         const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
@@ -2337,10 +2344,6 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     } else {
         m_giValid = false;
     }
-    const float lensDrops = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f;
-    const float lensSnow = s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f;
-    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
-    device->SetPixelShaderConstantF(37, volumeConstants, 1);
 
     // 3. Custom sky, the average sky colour (fog), volumetric clouds.
     if (s.skyMode > 0) {
