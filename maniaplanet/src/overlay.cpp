@@ -276,23 +276,26 @@ void gamePanel() {
     Options& o = options::current();
     const hooks::Stats& st = hooks::stats();
     const ImVec4 good(0.45f, 0.85f, 0.45f, 1), warn(0.95f, 0.75f, 0.3f, 1), bad(0.95f, 0.4f, 0.35f, 1);
-    bool changed = ImGui::Checkbox("HDR stage (the look on the engine's HDR image)", &o.hdrStage);
+    bool changed = ImGui::Checkbox("HDR stage", &o.hdrStage);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("On: the mod replaces the engine's tone map; bright lights and sky keep colour and detail.\n"
                           "Off: the engine's tone map stays and the look goes on its finished image.");
     int placement = static_cast<int>(o.placement);
-    changed |= ImGui::RadioButton("Before the interface", &placement, 0);
+    changed |= ImGui::RadioButton("Before HUD", &placement, 0);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The look is applied before the interface is drawn, so the HUD stays untouched.");
     ImGui::SameLine();
-    changed |= ImGui::RadioButton("End of frame (interface too)", &placement, 1);
+    changed |= ImGui::RadioButton("End of frame", &placement, 1);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The look is applied to the finished frame, interface included.");
     o.placement = static_cast<Placement>(placement);
-    changed |= ImGui::Checkbox("End of frame when the interface start isn't found", &o.fallbackAtEnd);
-    changed |= ImGui::Checkbox("Light sources from the engine's draws", &o.engineLightDraws);
+    changed |= ImGui::Checkbox("Fallback: end of frame", &o.fallbackAtEnd);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Use the end of the frame when the start of the interface isn't found.");
+    changed |= ImGui::Checkbox("Game light sources", &o.engineLightDraws);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("On: lamps, light strips, screens, halos and the car's lights glow as the engine draws them\n"
                           "(drawn a second time into a buffer of their own); nothing is guessed from colours.\n"
                           "Off: the light sources are guessed from the image (as before). F12 saves the buffer.");
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
-    ImGui::SliderFloat("Soft sun shadows", &o.softShadows, 0.0f, 4.0f, o.softShadows > 0.0f ? "light %.2f degrees" : "off (the game's)");
+    ImGui::SliderFloat("Soft sun shadows", &o.softShadows, 0.0f, 4.0f, o.softShadows > 0.0f ? "%.2f deg" : "Off");
     if (o.softShadows < 0.05f) o.softShadows = 0.0f;
     changed |= ImGui::IsItemDeactivatedAfterEdit();
     if (ImGui::IsItemHovered())
@@ -305,14 +308,15 @@ void gamePanel() {
     int view = static_cast<int>(o.view);
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
     if (ImGui::Combo("View", &view,
-                     "The mod\0Compare with the game (split)\0Check: depth\0Check: normals\0Check: motion\0Check: albedo\0"
+                     "The mod\0Split with the game\0Check: depth\0Check: normals\0Check: motion\0Check: albedo\0"
                      "Check: world grid\0"))
         o.view = static_cast<View>(view);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compare with the game or check what the mod reads from the engine (debug views).");
     if (o.view == View::Split) {
         ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
         ImGui::SliderFloat("Split", &o.split, 0.0f, 1.0f);
     }
-    if (ImGui::Button(("Capture this frame (" + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Capture)) + ")").c_str()))
+    if (ImGui::Button(("Capture (" + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Capture)) + ")").c_str()))
         capture::request();
     if (!capture::lastFolder().empty()) {
         ImGui::SameLine();
