@@ -1748,14 +1748,23 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         if (keepRuns == 0 || m_trailWritten == 0) {
             m_trailReset = true; // as before: the trail starts over
         } else if (!m_trailReset) {
-            // The points stay; this run begins with a new line and its own time stamps.
-            for (int k = kTrailRunsMax; k > 0; k--) {
-                m_trailRunStart[k] = m_trailRunStart[k - 1];
-                m_trailRunFirst[k] = m_trailRunFirst[k - 1];
+            // The points stay; this run begins with a new line and its own time stamps. A run
+            // without a point (the hook's restart a frame after a teleport-detected one, two quick
+            // restarts) takes no slot: it would push the real previous run out.
+            if (m_trailWritten != m_trailRunFirst[0]) {
+                for (int k = kTrailRunsMax; k > 0; k--) {
+                    m_trailRunStart[k] = m_trailRunStart[k - 1];
+                    m_trailRunFirst[k] = m_trailRunFirst[k - 1];
+                }
+                m_trailRuns = m_trailRuns + 1 < kTrailRunsMax ? m_trailRuns + 1 : kTrailRunsMax;
             }
-            m_trailRunStart[0] = m_trailTime + 1.0f; // the stamp of "now": every point of this run has a later one
+            // Just after the stamp of "now" (= the last frame's point, m_trailTime grows below):
+            // the shader counts a point as older when its stamp + 1e-3 <= this, so that last point
+            // belongs to the old run with a margin (without one it counted as this run's: a metre
+            // at the end of each kept run was drawn at full brightness), and every point of this
+            // run, a frame later, is newer.
+            m_trailRunStart[0] = (m_trailTime + 1.0f) + 2e-3f;
             m_trailRunFirst[0] = m_trailWritten;
-            m_trailRuns = m_trailRuns + 1 < kTrailRunsMax ? m_trailRuns + 1 : kTrailRunsMax;
             m_trailBreak = true;
             m_trailKeptValid = false;
             m_trailClock = 0.0f;
