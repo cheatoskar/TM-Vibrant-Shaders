@@ -73,7 +73,8 @@ void Pipeline::profileBegin(IDirect3DDevice9* device) {
     }
     if (!frame.frequency || !frame.stamps[ProfileFrame::kMaxStamps - 1]) return;
     frame.count = 0;
-    frame.disjoint->Issue(D3DISSUE_BEGIN);
+    frame.outer = m_outerDisjoint;
+    if (!frame.outer) frame.disjoint->Issue(D3DISSUE_BEGIN);
     m_currentProfile = &frame;
     profileMark(-1);
 }
@@ -88,7 +89,7 @@ void Pipeline::profileMark(int pass) {
 void Pipeline::profileEnd() {
     ProfileFrame* frame = m_currentProfile;
     if (!frame) return;
-    frame->disjoint->Issue(D3DISSUE_END);
+    if (!frame->outer) frame->disjoint->Issue(D3DISSUE_END);
     frame->frequency->Issue(D3DISSUE_END);
     frame->pending = true;
     m_currentProfile = nullptr;
@@ -104,12 +105,20 @@ bool Pipeline::profileResolve(ProfileFrame& frame, bool wait) {
         }
         return hr == S_OK;
     };
-    if (!get(frame.disjoint, &disjoint, sizeof(disjoint)) || !get(frame.frequency, &frequency, sizeof(frequency))) return false;
+    if (frame.outer) disjoint = FALSE; // the caller's bracket tells it, not read here: the checks below
+    else if (!get(frame.disjoint, &disjoint, sizeof(disjoint))) return false;
+    if (!get(frame.frequency, &frequency, sizeof(frequency))) return false;
     UINT64 times[ProfileFrame::kMaxStamps] = {};
     for (int i = 0; i < frame.count; i++) {
         if (!get(frame.stamps[i], &times[i], sizeof(UINT64))) return false;
     }
     frame.pending = false;
+    // Without its own disjoint query: a frame whose stamps run backwards or span more than a
+    // second (the clock changed under them) is left out rather than smoothed in.
+    if (frame.outer && frequency != 0) {
+        for (int i = 1; i < frame.count && !disjoint; i++) disjoint = times[i] < times[i - 1];
+        if (frame.count >= 2 && times[frame.count - 1] - times[0] > frequency) disjoint = TRUE;
+    }
     if (disjoint || frequency == 0 || frame.count < 2) return true;
     float ms[kProfileSlots] = {};
     for (int i = 1; i < frame.count; i++) {
@@ -282,6 +291,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     m_lampSource.destroy();
     for (auto& t : m_lampDown) t.destroy();
     for (auto& t : m_lampUp) t.destroy();
+    m_lampFailed = false;
     m_ldr.destroy();
     m_ldr2.destroy();
     m_materials.destroy();
@@ -364,8 +374,11 @@ void Pipeline::focusOnCarConstants(IDirect3DDevice9* device, const Inputs& in, c
     const float car[4] = {in.focusCar[0], in.focusCar[1], in.focusCar[2], onCar ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(33, car, 1);
     const int state = !wanted ? -1 : (onCar ? 1 : 0);
-    if (wanted && state != m_focusOnCar) {
-        TMVS_LOG("pipeline: depth of field focuses %s", onCar ? "on the car (engine position)" : "on the middle (no car position from the engine)");
+    // At most 20 lines: in a replay whose car position comes and goes it would change every frame.
+    if (wanted && state != m_focusOnCar && m_focusLogs < 20) {
+        m_focusLogs++;
+        TMVS_LOG("pipeline: depth of field focuses %s%s", onCar ? "on the car (engine position)" : "on the middle (no car position from the engine)",
+                 m_focusLogs == 20 ? " (further changes not logged)" : "");
     }
     m_focusOnCar = state;
 }
@@ -1715,13 +1728,35 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
     return ok;
 }
 
+void Pipeline::shareTrail(const Pipeline* from) {
+    const Pipeline* was = m_trailFrom;
+    m_trailFrom = from && from != this && from->m_trailPoints.texture ? from : nullptr;
+    if (!m_trailFrom) {
+        if (was) m_trailReset = true; // the copied counts don't belong to its own (empty) points
+        return;
+    }
+    // Its state as of its render this frame; nothing here resets or records over it.
+    m_trailReset = false;
+    m_trailNewRun = false;
+    m_trailHead = from->m_trailHead;
+    m_trailCount = from->m_trailCount;
+    m_trailTime = from->m_trailTime;
+    m_trailWritten = from->m_trailWritten;
+    m_trailRuns = from->m_trailRuns;
+    memcpy(m_trailRunStart, from->m_trailRunStart, sizeof(m_trailRunStart));
+    memcpy(m_trailRunFirst, from->m_trailRunFirst, sizeof(m_trailRunFirst));
+    m_trailPause = from->m_trailPause;
+    m_trailPauseAt = from->m_trailPauseAt;
+    m_trailPauseLogged = true; // its log is the other pipeline's
+}
+
 void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt) {
     // The player drives: also while a clip of the map plays (a camera in a loop, texts at the
     // start). Those clips stopped the recording, and when one ended the car was 130 - 340 m from
     // its last point: taken for a missed restart, the trail started over (every such line in the
     // owner's log came with "cinematic off"; one clip right after each start: the trail came 6 s
     // late).
-    const bool recording = in.driving || in.clipInRace;
+    const bool recording = !m_trailFrom && (in.driving || in.clipInRace);
     // A restart the hooks didn't see (the log had "race reset" on some restarts only, the old run
     // stayed under the new one): the car jumped far between two frames it was seen in, without a
     // respawn; or, after frames without it, it is back where this run began.
@@ -1732,12 +1767,16 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         };
         const float since = m_trailTime - m_trailSeenAt;
         if (since < 0.5f) {
+            // The car drove for this frame's dt too (m_trailTime grows below): a frame hitch while
+            // driving fast covers more than 60 m (0.25 s at 250 m/s), no restart. 350 m/s is faster
+            // than any car drives.
+            const float elapsed = since + dt;
             const float jump = apart(in.carPosition, m_trailSeen);
-            if (jump > kTrailTeleport) {
+            if (jump > fmaxf(kTrailTeleport, elapsed * 350.0f)) {
                 m_trailNewRun = true;
                 if (m_trailLogged < 20) {
                     m_trailLogged++;
-                    TMVS_LOG("pipeline: neon trail: the car jumped %.0f m in %.0f ms without a respawn: a new run", jump, since * 1000.0f);
+                    TMVS_LOG("pipeline: neon trail: the car jumped %.0f m in %.0f ms without a respawn: a new run", jump, elapsed * 1000.0f);
                 }
             }
         } else if (m_trailKeptValid && m_trailRunAtValid && apart(in.carPosition, m_trailKept) > kTrailTeleport &&
@@ -1756,14 +1795,23 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         if (keepRuns == 0 || m_trailWritten == 0) {
             m_trailReset = true; // as before: the trail starts over
         } else if (!m_trailReset) {
-            // The points stay; this run begins with a new line and its own time stamps.
-            for (int k = kTrailRunsMax; k > 0; k--) {
-                m_trailRunStart[k] = m_trailRunStart[k - 1];
-                m_trailRunFirst[k] = m_trailRunFirst[k - 1];
+            // The points stay; this run begins with a new line and its own time stamps. A run
+            // without a point (the hook's restart a frame after a teleport-detected one, two quick
+            // restarts) takes no slot: it would push the real previous run out.
+            if (m_trailWritten != m_trailRunFirst[0]) {
+                for (int k = kTrailRunsMax; k > 0; k--) {
+                    m_trailRunStart[k] = m_trailRunStart[k - 1];
+                    m_trailRunFirst[k] = m_trailRunFirst[k - 1];
+                }
+                m_trailRuns = m_trailRuns + 1 < kTrailRunsMax ? m_trailRuns + 1 : kTrailRunsMax;
             }
-            m_trailRunStart[0] = m_trailTime + 1.0f; // the stamp of "now": every point of this run has a later one
+            // Just after the stamp of "now" (= the last frame's point, m_trailTime grows below):
+            // the shader counts a point as older when its stamp + 1e-3 <= this, so that last point
+            // belongs to the old run with a margin (without one it counted as this run's: a metre
+            // at the end of each kept run was drawn at full brightness), and every point of this
+            // run, a frame later, is newer.
+            m_trailRunStart[0] = (m_trailTime + 1.0f) + 2e-3f;
             m_trailRunFirst[0] = m_trailWritten;
-            m_trailRuns = m_trailRuns + 1 < kTrailRunsMax ? m_trailRuns + 1 : kTrailRunsMax;
             m_trailBreak = true;
             m_trailKeptValid = false;
             m_trailClock = 0.0f;
@@ -1941,7 +1989,7 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     // Alpha too: it adds the trail's coverage to the 1 the lighting wrote (TAA's mask).
     device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
     bind(device, 0, m_nd.texture, false);
-    device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailPoints.texture);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailFrom ? m_trailFrom->m_trailPoints.texture : m_trailPoints.texture);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MINFILTER, D3DTEXF_POINT);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
@@ -2323,7 +2371,8 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // the part added over the sky as well, at night only (by day the game's sun glow is an added
     // light too). w: Floodlights for the light they spill onto their surroundings (NeonLight).
     const bool lampMask = engineLights && in.added;
-    const bool lampLight = lampMask && (s.lampGlare > 0.0f || s.lampHaze > 0.0f);
+    // Without its targets (allocation failed) no glare is added back: the core keeps its light.
+    const bool lampLight = lampMask && !m_lampFailed && (s.lampGlare > 0.0f || s.lampHaze > 0.0f);
     const float floodlights = lampMask ? fmaxf(s.floodlights, 0.0f) : 1.0f;
     const float lampGlareTaken = lampLight ? fminf(fmaxf(s.lampGlare, 0.0f), 1.0f) : 0.0f;
     const float lampCore = floodlights * (1.0f - lampGlareTaken);
@@ -2801,6 +2850,15 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             lh = lh > 3 ? (lh + 1) / 2 : 2;
             lampReady = m_lampDown[i].create(device, lw, lh, D3DFMT_A16B16G16R16F) &&
                         (i == kLampLevels - 1 || m_lampUp[i].create(device, lw, lh, D3DFMT_A16B16G16R16F));
+        }
+        // Out of video memory: no new try (and log line) every frame, the next map or device
+        // reset tries again. What was created goes back.
+        if (!lampReady) {
+            m_lampFailed = true;
+            m_lampSource.destroy();
+            for (auto& t : m_lampDown) t.destroy();
+            for (auto& t : m_lampUp) t.destroy();
+            TMVS_LOG("pipeline: lamp glare and haze off: their render targets failed (until the next map)");
         }
     }
     if (lampReady) {

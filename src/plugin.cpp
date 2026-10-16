@@ -467,7 +467,23 @@ IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs&
         b.enabled = false;
         b.sharpen = 0.0f;
     } else {
-        if (!Config::get().presetSettings(name, b)) return nullptr;
+        // Your own preset is a file read field by field (about 100 GetPrivateProfileString calls,
+        // several ms): read once, again when another preset is picked, its file is written or
+        // your settings change (the machine settings are yours), not every frame.
+        static std::string s_name;
+        static unsigned long long s_written = 0;
+        static Settings s_mine, s_look;
+        static bool s_known = false;
+        const unsigned long long written = Config::get().presetWritten(name);
+        if (s_name != name || s_written != written || memcmp(&s_mine, &mine, sizeof(Settings)) != 0) {
+            s_name = name;
+            s_written = written;
+            memcpy(&s_mine, &mine, sizeof(Settings));
+            s_look = mine;
+            s_known = Config::get().presetSettings(name, s_look);
+        }
+        if (!s_known) return nullptr;
+        b = s_look;
         b.enabled = true; // with the shaders off: the preset next to the game's image with photo mode's lens
     }
     b.debugView = shownA.debugView;
@@ -511,6 +527,8 @@ IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs&
         in.sunKnown = sunDirection(b, in.sunDirection);
         if (in.casterMap) in.casterMap = castersSideB;
     }
+    // Your side's neon trail on the preset's side too (the trail is a machine setting, the same on both).
+    g_pipelineB.shareTrail(game ? nullptr : &g_pipeline);
     g_pipelineB.render(device, in, b, g_splitOut.surface);
     return g_splitOut.surface;
 }
@@ -2233,6 +2251,7 @@ void onDeviceCreated(IDirect3DDevice9* device) {
 
 void onPreReset() {
     perflog::release();
+    g_pipeline.setProfiling(true, false); // perflog's bracket is gone until the next Present
     g_pipeline.release();
     releaseSideB();
     g_sceneCopy.destroy();
@@ -2351,8 +2370,10 @@ void onPresent(IDirect3DDevice9* device) {
     // GPU timing per pass: auto quality, the overlay and the perf log line use it (a few
     // timestamp queries a frame, never waited for).
     const Settings& settings = Config::get().settings;
-    g_pipeline.setProfiling(true);
     perflog::frame(device, g_pipeline, g_shadedThisFrame, casters::cpuMs());
+    // Inside perflog's frame-wide disjoint query (open from here to the next Present) the
+    // pipeline opens none of its own: only one at a time.
+    g_pipeline.setProfiling(true, perflog::bracketOpen());
     // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
     // frame times when it ends starts a quiet period).
     // The video export likewise: its frames are slow on purpose.

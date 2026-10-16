@@ -144,6 +144,11 @@ public:
         m_trailTiltLogged = false;
     }
     void newTrailRun() { m_trailNewRun = true; }
+    // Photo mode's compare split: this (the preset's side) draws `from`'s trail, its points, runs
+    // and clock as they are (read only), and records none (the game is paused there: its own
+    // ring buffer stayed empty, the preset was compared without the trail your side has). Each
+    // frame before render; nullptr: its own again.
+    void shareTrail(const Pipeline* from);
     void breakTrail() {
         m_trailBreak = true;
         m_trailRespawnAt = m_trailTime;
@@ -156,7 +161,9 @@ public:
     // A restart or a new map: the roofs and bridges remembered for the rain are gone too.
     void resetCeilings() { m_ceilingValid = false; }
     // A new map: the sea level measured from the water material is the last map's.
+    // (And the lamp glare's render targets get another try if they failed.)
     void resetSeaLevel() {
+        m_lampFailed = false;
         m_seaKnown = false;
         m_waterMaterialSeen = false;
         m_waterPending = -1;
@@ -233,7 +240,13 @@ public:
     static void runtimeShaders(std::vector<gfx::ShaderSource>& out);
 
     // GPU timing per pass with timestamp queries (results arrive a few frames late).
-    void setProfiling(bool enabled) { m_profiling = enabled; }
+    // outerDisjoint: the caller's own frame-wide TIMESTAMPDISJOINT bracket (perflog) is open
+    // around the next renders: the pipeline opens none of its own inside it (two open at once
+    // are untested off NVIDIA) and checks its stamps for sense instead.
+    void setProfiling(bool enabled, bool outerDisjoint = false) {
+        m_profiling = enabled;
+        m_outerDisjoint = outerDisjoint;
+    }
     void collectProfile(bool wait); // wait = block until every issued frame is resolved
     int passCount() const { return kProfileSlots; } // the passes, then the CasterShadows maps' drawing
     static const char* passName(int pass);
@@ -337,13 +350,16 @@ private:
     void swapRepeatCamera();
 
     struct ProfileFrame {
-        static constexpr int kMaxStamps = 80; // the long shadows' light grid takes up to 6
+        // About 70 with lamps, light grid, GI and depth of field on: room for the passes at the
+        // end of the frame (else they go untimed).
+        static constexpr int kMaxStamps = 128;
         IDirect3DQuery9* disjoint = nullptr;
         IDirect3DQuery9* frequency = nullptr;
         IDirect3DQuery9* stamps[kMaxStamps] = {};
         int pass[kMaxStamps] = {};
         int count = 0;
         bool pending = false;
+        bool outer = false; // timed inside the caller's disjoint bracket (its own not issued)
     };
     static constexpr int kProfileFrames = 4;
     void profileBegin(IDirect3DDevice9* device);
@@ -386,6 +402,7 @@ private:
     gfx::Target m_bloomDown[kBloomLevels];
     gfx::Target m_bloomUp[kBloomLevels];
     gfx::Target m_lampSource;              // quarter: the lamps' light (LampGlare, LampHaze), created when used
+    bool m_lampFailed = false;             // their creation failed: off until the next map or device reset
     gfx::Target m_lampDown[kLampLevels];   // its pyramid, an eighth down
     gfx::Target m_lampUp[kLampLevels - 1];
     gfx::Target m_luminance;    // 1x1
@@ -424,6 +441,7 @@ private:
     int m_adaptIndex = 0;
     int m_focusIndex = 0;
     int m_focusOnCar = -1;      // DofAutofocus Car: the log's last word on where the car came from (-1 none yet)
+    int m_focusLogs = 0;        // its lines so far (a session gets 20)
     int m_taaIndex = 0;
     bool m_taaValid = false;
     bool m_temporalValid = false; // this frame continues the previous one (no camera cut)
@@ -528,6 +546,7 @@ private:
     float m_trailRunBegan = 0.0f;     // m_trailTime when this run began
     bool m_trailTiltLogged = false;   // the car's up first tilted past 30 degrees (once per map)
     bool m_trailNewRun = false;
+    const Pipeline* m_trailFrom = nullptr; // shareTrail: whose points are drawn (null: its own)
     float m_trailRespawnAt = -100.0f; // m_trailTime of the last respawn (its jump is no new run)
     UINT m_trailWritten = 0;          // points kept since the reset
     int m_trailRuns = 0;              // earlier runs kept
@@ -540,6 +559,7 @@ private:
     float m_boltAzimuth = 0.0f;
     bool m_historyValid = false;
     bool m_profiling = false;
+    bool m_outerDisjoint = false;
     ProfileFrame m_profile[kProfileFrames];
     ProfileFrame* m_currentProfile = nullptr;
     int m_profileIndex = 0;

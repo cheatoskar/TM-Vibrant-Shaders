@@ -12,17 +12,19 @@ constexpr double kSettle = 3.0;   // after a change, let the new frame rate show
 // What auto quality can turn down, in order: the most milliseconds for the least look
 // first, the glowing neon (the look itself) last. `share` = the part of the passes' time
 // the knob saves (fewer samples make the same passes cheaper, long shadows are a part of
-// the AO/shadow pass).
+// the AO/shadow pass); `whole` = passes the knob saves entirely. Exact pass names: the
+// lighting and spill passes have engine variants (SpillDownEngine), each listed.
 struct Knob {
     const char* name;
     const char* passes[4];
     float share;
+    const char* whole[4];
 };
 constexpr Knob kKnobTable[AutoQuality::kKnobs] = {
     {"volumetric light", {"Volumetric", "ShadowHeight"}, 1.0f},
     {"GI", {"GI", "GITemporal"}, 1.0f},
     {"fewer samples", {"OcclusionShadow", "Clouds", "Volumetric", "GI"}, 0.3f},
-    {"long shadows", {"OcclusionShadow", "HeightSplat", "HeightMerge"}, 0.4f},
+    {"long shadows", {"OcclusionShadow", "HeightSplat", "HeightMerge"}, 0.4f, {"LightGridInit", "LightGridSweep", "Casters"}},
     {"reflections, grass detail", {"Reflect"}, 1.0f},
     {"volumetric clouds", {"Clouds"}, 1.0f},
     {"TAA", {"TAA"}, 1.0f},
@@ -31,7 +33,7 @@ constexpr Knob kKnobTable[AutoQuality::kKnobs] = {
     {"depth of field, motion blur", {"Focus", "DofBlur", "Cinematic"}, 1.0f},
     {"light shafts", {"RayMask", "RayBlur"}, 1.0f},
     {"lens flare, sharpening", {"Sharpen"}, 1.0f},
-    {"neon light", {"SpillDown", "SpillBlur"}, 1.0f},
+    {"neon light", {"SpillDown", "SpillDownEngine", "SpillBlur"}, 1.0f},
 };
 
 void applyKnob(int knob, Settings& s) {
@@ -77,11 +79,12 @@ bool matters(int knob, const Settings& s) {
 void AutoQuality::measure(const Pipeline& pipeline) {
     if (!m_passesKnown) {
         for (int k = 0; k < kKnobs; k++) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 8; i++) {
                 m_passes[k][i] = -1;
-                if (!kKnobTable[k].passes[i]) continue;
+                const char* name = i < 4 ? kKnobTable[k].passes[i] : kKnobTable[k].whole[i - 4];
+                if (!name) continue;
                 for (int p = 0; p < pipeline.passCount(); p++) {
-                    if (!strcmp(Pipeline::passName(p), kKnobTable[k].passes[i])) m_passes[k][i] = p;
+                    if (!strcmp(Pipeline::passName(p), name)) m_passes[k][i] = p;
                 }
             }
         }
@@ -90,11 +93,11 @@ void AutoQuality::measure(const Pipeline& pipeline) {
     // A knob's cost is known while it is on; once off, its last measurement stands.
     for (int k = 0; k < kKnobs; k++) {
         if (m_reduced[k]) continue;
-        float ms = 0.0f;
-        for (int i = 0; i < 4; i++) {
-            if (m_passes[k][i] >= 0) ms += pipeline.passTime(m_passes[k][i]);
+        float ms = 0.0f, whole = 0.0f;
+        for (int i = 0; i < 8; i++) {
+            if (m_passes[k][i] >= 0) (i < 4 ? ms : whole) += pipeline.passTime(m_passes[k][i]);
         }
-        m_cost[k] = ms * kKnobTable[k].share;
+        m_cost[k] = ms * kKnobTable[k].share + whole;
     }
 }
 
