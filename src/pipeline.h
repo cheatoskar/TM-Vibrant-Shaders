@@ -406,6 +406,7 @@ private:
     int m_adaptIndex = 0;
     int m_focusIndex = 0;
     int m_focusOnCar = -1;      // DofAutofocus Car: the log's last word on where the car came from (-1 none yet)
+    int m_focusLogs = 0;        // its lines so far (a session gets 20)
     int m_taaIndex = 0;
     bool m_taaValid = false;
     bool m_temporalValid = false; // this frame continues the previous one (no camera cut)

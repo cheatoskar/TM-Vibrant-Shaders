@@ -366,8 +366,11 @@ void Pipeline::focusOnCarConstants(IDirect3DDevice9* device, const Inputs& in, c
     const float car[4] = {in.focusCar[0], in.focusCar[1], in.focusCar[2], onCar ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(33, car, 1);
     const int state = !wanted ? -1 : (onCar ? 1 : 0);
-    if (wanted && state != m_focusOnCar) {
-        TMVS_LOG("pipeline: depth of field focuses %s", onCar ? "on the car (engine position)" : "on the middle (no car position from the engine)");
+    // At most 20 lines: in a replay whose car position comes and goes it would change every frame.
+    if (wanted && state != m_focusOnCar && m_focusLogs < 20) {
+        m_focusLogs++;
+        TMVS_LOG("pipeline: depth of field focuses %s%s", onCar ? "on the car (engine position)" : "on the middle (no car position from the engine)",
+                 m_focusLogs == 20 ? " (further changes not logged)" : "");
     }
     m_focusOnCar = state;
 }
