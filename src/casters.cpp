@@ -147,8 +147,12 @@ std::unordered_set<uint64_t, KeyHash> g_known;                         // exact 
 std::unordered_map<uint64_t, std::vector<Pending>, KeyHash> g_pending; // buffers, draw call and 16 m cell -> places waiting
 size_t g_pendingCount = 0;
 std::unordered_map<uint64_t, std::vector<uint32_t>, KeyHash> g_byMesh; // buffers, draw call and 16 m cell -> the kept meshes there
-std::unordered_map<const void*, int> g_vsRegister;            // the game's vertex shader -> GbxVisualPrCamera's register, -1 none
-std::unordered_map<const void*, DeclInfo> g_decls;            // the game's declaration -> ours
+// Keyed by the game's objects, each held (AddRef) while it is a key: one freed and another
+// created at its address would otherwise get the old one's camera register or position offset
+// (a wrong caster, a read past the vertex buffer). Let go with the meshes.
+std::unordered_map<IDirect3DVertexShader9*, int> g_vsRegister;            // the game's vertex shader -> GbxVisualPrCamera's register, -1 none
+std::unordered_map<IDirect3DVertexDeclaration9*, DeclInfo> g_decls;       // the game's declaration -> ours
+constexpr size_t kMaxLookups = 4096; // more: let them all go (a game that keeps making new ones)
 // The last shader and declaration looked up: the game draws by material, most draws repeat them.
 const void* g_lastVS = nullptr;
 int g_lastRegister = -1;
@@ -274,6 +278,14 @@ bool forEachConstant(const std::vector<DWORD>& code, Entry entry) {
 // GbxVisualPrCamera's first register, from the constant table in the shader's bytecode
 // (shaders the game compiled from HLSL keep it). -1: the shader has none (assembled ones,
 // the sky, 2D). c0 in every material shader seen so far (62 of 74 dumped vertex shaders).
+void forgetLookups() {
+    for (auto& e : g_vsRegister) e.first->Release();
+    for (auto& e : g_decls) e.first->Release();
+    g_vsRegister.clear();
+    g_decls.clear();
+    g_lastVS = g_lastDecl = nullptr;
+}
+
 int cameraRegister(IDirect3DVertexShader9* vs) {
     if (vs == g_lastVS) return g_lastRegister;
     auto it = g_vsRegister.find(vs);
@@ -292,6 +304,8 @@ int cameraRegister(IDirect3DVertexShader9* vs) {
             }
         });
     }
+    if (g_vsRegister.size() >= kMaxLookups) forgetLookups();
+    vs->AddRef();
     g_vsRegister[vs] = result;
     g_lastVS = vs;
     g_lastRegister = result;
@@ -330,6 +344,8 @@ DeclInfo declInfo(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
             break;
         }
     }
+    if (g_decls.size() >= kMaxLookups) forgetLookups();
+    decl->AddRef();
     g_decls[decl] = info;
     g_lastDecl = decl;
     g_lastDeclInfo = info;
@@ -629,9 +645,7 @@ void forgetMeshes() {
     g_pending.clear();
     g_pendingCount = 0;
     g_byMesh.clear();
-    g_vsRegister.clear();
-    g_decls.clear();
-    g_lastVS = g_lastDecl = nullptr;
+    forgetLookups();
     g_invValid = false;
     for (int j = 0; j < 3; j++) {
         g_boundsLo[j] = 1e30f;
