@@ -2335,10 +2335,11 @@ float neonStrip(float3 c, float dist, float4 mat) {
 // shader lit it with (s15: its debug view's diffuse light, baked lightmap and prelight plus
 // ambient; the car's sun and ambient), not from the image. In the image a white wall in the
 // moonlight and dark asphalt under a lamp can be equally bright; their light is not. 1 is the
-// paint as it is (the day sun's full light on the ground, which the game caps there): at night
-// only stacked baked light (lamps over the dome and the moon) gets above it. 0 where the light
-// isn't the surface's (drawn by a shader without it, or covered later by one: its distance
-// doesn't match the depth's).
+// paint as it is (the day sun's full light on the ground, which the game caps there): at night it
+// should take stacked baked light (lamps over the dome and the moon) to get above it. A first
+// guess: the first F12 with GameLight (.lit16, tools/gbuffer.py --light) shows the real levels.
+// 0 where the light isn't the surface's (drawn by a shader without it, or covered later by one:
+// its distance doesn't match the depth's).
 //   dist = the surface's distance from the eye
 float lampLight(float2 uv, float dist) {
     float4 g = tex2Dlod(s15, float4(uv, 0, 0));
