@@ -379,7 +379,7 @@ void draw(IDirect3DDevice9* device) {
     // The compare split: which side is which, at the line near the bottom, the other side a list
     // to switch it without the menu. With photo mode's line on screen only (drawn at Present:
     // never in the photos).
-    g_splitBar = photo::splitShown() && *photoHint;
+    g_splitBar = photo::splitShown() && !photo::tiling() && *photoHint; // not over a hi-res photo's tiles
     if (g_splitBar) drawSplitBar();
     ImGui::EndFrame();
     // Does one of our windows want the mouse (hovered or held)? Then the other mod stays out of it.

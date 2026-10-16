@@ -433,38 +433,56 @@ void releaseSideB() {
 }
 
 // The compare split's other side as a preset's look (photo::splitPreset()), from the same frame
-// and inputs as side A. Null: the game's image stays there (none chosen, or it failed).
+// and inputs as side A; or the game's image through the same lens as side A when its aperture
+// blurs (a fair reference: the same focus and blur on both sides). Null: the game's image as it
+// came in stays there (no depth of field, or it failed).
 IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs& inputsA, const Settings& mine, const Settings& shownA) {
     const std::string& name = photo::splitPreset();
-    // Kept while the split is on (a hi-res photo hides it for a while: its history stays).
-    if (!photo::splitOn() || !photo::active() || name.empty()) {
+    // Kept while the split is on, also while it shows the game's image without depth of field
+    // (the aperture goes up and down on the wheel: no new pipeline at every step).
+    if (!photo::splitOn() || !photo::active()) {
         if (g_pipelineB.ready() || g_splitOut.texture) releaseSideB();
         return nullptr;
     }
     if (!photo::splitShown()) return nullptr;
+    const bool game = name.empty();
+    if (game && shownA.depthOfField <= 0.0f) return nullptr;
     // Your machine settings (the game's own changes are made once, for both sides), the preset's look.
     Settings b = mine;
-    if (!Config::get().presetSettings(name, b)) return nullptr;
-    b.enabled = true; // with the shaders off: the preset next to the game's image with photo mode's lens
+    if (game) {
+        // Pipeline::render's vanilla photo path (as with the shaders off): the depth of field on
+        // the game's image and nothing else of the mod, not even the sharpening.
+        b.enabled = false;
+        b.sharpen = 0.0f;
+    } else {
+        if (!Config::get().presetSettings(name, b)) return nullptr;
+        b.enabled = true; // with the shaders off: the preset next to the game's image with photo mode's lens
+    }
     b.debugView = shownA.debugView;
     photo::adjust(b);
+    // The lens is the camera's, not the look's: the same aperture, focus and largest blur as side A
+    // (a preset's own BokehSize made the same f-stop blur more or less on its side).
+    b.depthOfField = shownA.depthOfField;
+    b.focusDistance = shownA.focusDistance;
+    b.bokehSize = shownA.bokehSize;
     // Another preset picked (the bar at the bottom switches it in a click): no exposure, TAA or
     // sky history of the last one blending into the first frames of this one.
     static std::string s_shown;
     const bool switched = s_shown != name;
     if (switched) s_shown = name;
+    const char* shown = game ? "the game's image (depth of field)" : name.c_str();
     if (!g_pipelineB.ready()) {
         if (g_pipelineBFailed || !g_pipelineB.init(device, g_dev.shaderDir)) {
-            if (!g_pipelineBFailed) TMVS_LOG("photo: compare split with %s: its pipeline failed (%s)", name.c_str(), g_pipelineB.lastError().c_str());
+            if (!g_pipelineBFailed) TMVS_LOG("photo: compare split with %s: its pipeline failed (%s)", shown, g_pipelineB.lastError().c_str());
             g_pipelineBFailed = true;
             return nullptr;
         }
-        TMVS_LOG("photo: compare split with the preset %s (a second pipeline)", name.c_str());
+        TMVS_LOG("photo: compare split with %s%s (a second pipeline)", game ? "" : "the preset ", shown);
     } else if (switched) {
         g_pipelineB.resetHistory();
-        TMVS_LOG("photo: compare split now with the preset %s", name.c_str());
+        TMVS_LOG("photo: compare split now with %s%s", game ? "" : "the preset ", shown);
     }
-    if (switched) {
+    if (switched && !game) {
         // The frame is lit for your look; say once when the preset would have been lit otherwise.
         const std::string note = photo::splitLightNote();
         if (!note.empty()) TMVS_LOG("photo: compare split: %s", note.c_str());
@@ -472,9 +490,14 @@ IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs&
     if (!g_splitOut.create(device, inputsA.width, inputsA.height, D3DFMT_A8R8G8B8)) return nullptr;
     Pipeline::Inputs in = inputsA;
     in.materialClasses = nullptr; // the F12 capture is side A's
-    // The preset's own sun position (SunElevation), not yours; without one the game's light.
-    in.sunKnown = sunDirection(b, in.sunDirection);
-    if (in.casterMap) in.casterMap = castersSideB;
+    if (game) {
+        in.materials = false; // the vanilla path needs the depth only
+        in.casterMap = nullptr;
+    } else {
+        // The preset's own sun position (SunElevation), not yours; without one the game's light.
+        in.sunKnown = sunDirection(b, in.sunDirection);
+        if (in.casterMap) in.casterMap = castersSideB;
+    }
     g_pipelineB.render(device, in, b, g_splitOut.surface);
     return g_splitOut.surface;
 }

@@ -14,8 +14,10 @@
 //     --bench                 GPU time per pass
 //     --compare <preset>      photo mode's compare split with a preset: that preset's look
 //                             from a second pipeline (its own history, as in game) left of
-//                             the line, the job's look right of it
+//                             the line, the job's look right of it; "game" (with --photo):
+//                             the game's image through the same lens (depth of field only)
 //     --split <0..1>          where the compare line sits (default 0.5)
+//     --labels <left|right>   the compare split's names burnt in at the bottom, as in photos
 //     --refocus <u,v>         photo mode: focus there in the first half of the frames, then
 //                             on --focus (a click on another point; the focus must follow)
 //     --video                 the video export's quality (photo mode's depth of field, moving)
@@ -292,6 +294,7 @@ int main(int argc, char** argv) {
     float refocus[2] = {-2.0f, -2.0f};   // --refocus: the point clicked before (first half of the frames)
     const char* compare = nullptr;       // --compare: the preset on the split's other side
     float splitAt = 0.5f;
+    const char* labels = nullptr;        // --labels "left|right": the names in a photo of the split
     UINT bars = 0;                       // --bars: rows above and below the image (replay menu test)
     for (int i = 3; i < argc; i++) {
         if (!strcmp(argv[i], "--preset") && i + 1 < argc) {
@@ -335,6 +338,8 @@ int main(int argc, char** argv) {
             compare = argv[++i];
         } else if (!strcmp(argv[i], "--split") && i + 1 < argc) {
             splitAt = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--labels") && i + 1 < argc) {
+            labels = argv[++i];
         } else if (!strcmp(argv[i], "--refocus") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &refocus[0], &refocus[1]);
         } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
@@ -356,6 +361,12 @@ int main(int argc, char** argv) {
         }
     }
     for (const char* o : overrides) setByKey(defaults.settings, o);
+    // The split's other side as the game's image (plugin.cpp renderSideB): the vanilla photo path.
+    const bool compareGame = compare && !_stricmp(compare, "game");
+    if (compareGame && !photoMode) {
+        fprintf(stderr, "--compare game needs --photo (the game's side gets photo mode's lens)\n");
+        return 1;
+    }
     std::vector<Job> jobs;
     if (batch) {
         if (!readBatch(batch, defaults, jobs)) {
@@ -496,9 +507,14 @@ int main(int argc, char** argv) {
         const FrameCapture& cap = loaded->cap;
         // The other side: the preset's look on the job's machine settings.
         Settings settingsB = job.settings;
-        if (compare && !applyPresetByName(settingsB, compare)) return 1;
-        settingsB.enabled = true;
+        if (compare && !compareGame && !applyPresetByName(settingsB, compare)) return 1;
+        settingsB.enabled = !compareGame;
+        if (compareGame) settingsB.sharpen = 0.0f; // the depth of field and nothing else of the mod
         settingsB.debugView = job.settings.debugView;
+        // As renderSideB: the lens is the camera's, the same on both sides.
+        settingsB.depthOfField = job.settings.depthOfField;
+        settingsB.focusDistance = job.settings.focusDistance;
+        settingsB.bokehSize = job.settings.bokehSize;
         gfx::Target outputB;
         if (compare && !outputB.create(device, loaded->cap.width, loaded->cap.height, D3DFMT_A8R8G8B8)) return 1;
         Pipeline::Inputs in;
@@ -657,6 +673,14 @@ int main(int argc, char** argv) {
             fprintf(stderr, "readback failed\n");
             failures++;
             continue;
+        }
+        if (labels) {
+            // As photo.cpp's save: the names on the finished image (left|right of the line).
+            const std::string both = labels;
+            const size_t bar = both.find('|');
+            image::drawSplitLabels(reinterpret_cast<unsigned char*>(pixels.data()), static_cast<int>(cap.width), static_cast<int>(outHeight), 4,
+                                   static_cast<size_t>(cap.width) * 4, splitAt, both.substr(0, bar),
+                                   bar == std::string::npos ? std::string() : both.substr(bar + 1));
         }
         QueryPerformanceCounter(&t1);
         const size_t length = job.output.size();

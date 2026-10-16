@@ -75,6 +75,7 @@ public:
     bool photoHideHud = true;
     int photoTiles = 2;
     float photoDof = 0.5f;
+    bool splitPhotoLabels = true; // the compare split's names burnt into photos (TMNF)
     // Colour look-up table on top of every preset: a .cube file in TMVS\luts ("" = none)
     // and how much of it (0..1).
     std::string lutFile;
