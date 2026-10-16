@@ -2050,7 +2050,14 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (water && u_Water.z > 0.5) {
         float waterY;
         float3 world = worldPosition(p);
-        onWater = waterLevelMatch(world, waterY) > 0.5;
+        float match = waterLevelMatch(world, waterY);
+        // Clean water: this pass reads the half-res depth, the nearest of each 2x2 pixels, at
+        // the 2x2's centre: the point comes out up to half a full-res pixel in front of the plane,
+        // above the water by about that pixel's height. From a high camera at mid distance that
+        // is more than the tolerance: whole rows of the water missed the plane and traced from
+        // the stepped depth, unchecked (horizontal streaks of the ramps in the channels).
+        // The ground lies 1 m above the water, well beyond one pixel up to 600 m.
+        onWater = u_Water2.x > 0.5 ? abs(world.y - waterY) < waterTolerance(waterY) * 0.8 + nd.w / (abs(u_Proj.y) * u_Screen.y) * 1.5 : match > 0.5;
         if (onWater) {
             float3 rdView = normalize(viewPosition(uv, 1.0));
             p = worldToViewDir(waterSurface(viewToWorldDir(rdView), waterY, world) - cameraWorld());
@@ -2498,7 +2505,12 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
         }
     }
     // Water is flat: the normal from the depth steps row by row far out (striped mirror images).
-    float3 nRefl = normalize(lerp(nWorld, float3(0.0, 1.0, 0.0), saturate(water * 2.0)) + float3(-slope.x, 0.0, -slope.y));
+    // Clean water: the mirrored direction (sky, Fresnel, glint) takes a quarter of the waves'
+    // slope; the full slope still moves the mirror image and the pool floor on screen. Seen at a
+    // flat angle (a camera 24 m up, the water 100-160 m away: 14 px per wave) the full slope
+    // swung the mirrored sky between the bright horizon and the darker sky above and the Fresnel
+    // term with it: the regular wave field came out as a checker of bright and dark dashes.
+    float3 nRefl = normalize(lerp(nWorld, float3(0.0, 1.0, 0.0), saturate(water * 2.0)) + float3(-slope.x, 0.0, -slope.y) * (1.0 - water * u_Water2.x * 0.75));
     // Refraction: the pool floor seen through moving waves, a little bluer with depth.
     if (water > 0.0) {
         float2 refr = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.03;
