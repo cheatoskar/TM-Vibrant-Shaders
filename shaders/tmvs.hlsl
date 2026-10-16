@@ -87,6 +87,7 @@ sampler2D s11 : register(s11); // global illumination (lighting pass)
 sampler3D s12 : register(s12); // colour look-up table (final pass)
 sampler2D s13 : register(s13); // the game's materials: r lamp, g car 1 / glass .5 / grass .25, b water, a light added on top
 sampler2D s14 : register(s14); // the light the game's additive draws added, float (lighting pass, EngineLights)
+sampler2D s15 : register(s15); // GameLight: the light the game's shaders lit each surface with (rgb) and its distance from the eye (w, 0 = none) (lighting pass)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -2331,10 +2332,28 @@ float neonStrip(float3 c, float dist, float4 mat) {
     return smoothstep(0.7, 0.9, sat) * smoothstep(0.25, 0.45, blue) * smoothstep(low, low + 0.4, peak) * (mat.g < 0.1 ? 1.0 : 0.0);
 }
 
+// GameLight: how much of a surface's light is the game's lamps, from the light the game's own
+// shader lit it with (s15: its debug view's diffuse light, baked lightmap and prelight plus
+// ambient; the car's sun and ambient), not from the image. In the image a white wall in the
+// moonlight and dark asphalt under a lamp can be equally bright; their light is not. 1 is the
+// paint as it is (the day sun's full light on the ground, which the game caps there): at night it
+// should take stacked baked light (lamps over the dome and the moon) to get above it. A first
+// guess: the first F12 with GameLight (.lit16, tools/gbuffer.py --light) shows the real levels.
+// 0 where the light isn't the surface's (drawn by a shader without it, or covered later by one:
+// its distance doesn't match the depth's).
+//   dist = the surface's distance from the eye
+float lampLight(float2 uv, float dist) {
+    float4 g = tex2Dlod(s15, float4(uv, 0, 0));
+    bool known = g.w > 0.0 && abs(g.w - dist) < 0.01 * dist + 0.03;
+    return known ? smoothstep(1.0, 1.6, max(g.r, max(g.g, g.b))) : 0.0;
+}
+
 // engine (PS_LightingEngine, EngineLights): the light sources are what the game drew as light
 // (lamp materials, its additive glows), nothing is guessed from the image. Its own entry point:
 // without the guess it has room, and PS_Lighting stays exactly as it was.
-float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
+// gameLight (PS_LightingGameLight, GameLight): engine, and the night spares what the game's lamps
+// light, by the game's own light (s15).
+float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLight) {
     // s0: with GameHdr the game's float image: the colour keeps the light its 8-bit target cut
     // (a floodlit ramp, the car body: texture instead of flat white). The lamp guess and the
     // glow work on the 0..1 range they were tuned on.
@@ -2671,7 +2690,14 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     // Day-for-night for the night skies: darker, cooler, less saturated - but lights keep glowing.
     float night = u_Sky.y;
     float3 unlit = c;
-    c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55) * lerp(1.0, 0.16, night);
+    // GameLight: where the game's lamps light the surface (its own light, s15), the darkening and
+    // the moon's blue step back: the lamp-lit stays as bright and as warm as the game drew it,
+    // everything else gets the night as before. Only where the game's light is the night's (a
+    // night map or a map lit at midnight: no sun baked in to pass for a lamp).
+    float lamp = 0.0;
+    if (gameLight && night > 0.0 && u_Light2.y < -0.5) lamp = lampLight(uv, dist);
+    if (lamp > 0.0) c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55 * (1.0 - lamp)) * lerp(lerp(1.0, 0.16, night), 1.0, lamp);
+    else c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55) * lerp(1.0, 0.16, night);
     // A black hole in the sky is the brightest light around: warm light on everything that
     // faces it, and the haze glows towards it.
     float4 bh = blackHoleLight();
@@ -2698,8 +2724,9 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     return float4(c, 1);
 }
 
-float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, false); }
-float4 PS_LightingEngine(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, true); }
+float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, false, false); }
+float4 PS_LightingEngine(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, true, false); }
+float4 PS_LightingGameLight(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, true, true); }
 
 // ---------------------------------------------------------------------------------
 // Neon light spill: coloured light sources light up the surfaces around them.

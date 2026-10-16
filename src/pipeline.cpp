@@ -22,6 +22,7 @@ const char* const kEntryPoints[] = {
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
     "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer", "PS_LampSource", "PS_LampDown", "PS_LampUp",
+    "PS_LightingGameLight",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -2657,7 +2658,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (in.hdr) bind(device, 0, in.hdr, false); // GameHdr: light above 1.0 (the guesses in there clamp it)
     // EngineLights: light sources from the game, not guessed (s14 = what its additive draws added).
     if (engineLights && in.added) bind(device, 14, in.added, false);
-    runPass(device, engineLights ? kLightingEngine : kLighting, m_hdr);
+    // GameLight: the light the game's shaders lit each surface with (s15): the night sky spares
+    // what the game's lamps light. A pass of its own: without it PS_LightingEngine is as it was.
+    const bool gameLight = engineLights && in.gameLight && s.gameLight;
+    if (gameLight) bind(device, 15, in.gameLight, false);
+    runPass(device, gameLight ? kLightingGameLight : (engineLights ? kLightingEngine : kLighting), m_hdr);
+    if (gameLight) device->SetTexture(15, nullptr);
     device->SetTexture(14, nullptr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);

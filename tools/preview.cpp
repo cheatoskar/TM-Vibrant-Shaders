@@ -34,8 +34,9 @@
 //                             image, GameHdr): render from the 8-bit image only
 //     --nomat                 ignore capture_NNN.mat next to the capture (which material drew
 //                             each pixel): no material masks, as before F12 wrote them
-//     --nogbuf                ignore capture_NNN.nrm16 next to the capture (the game's normals,
-//                             GameGBuffer; used with --set GameGBuffer=1)
+//     --nogbuf                ignore capture_NNN.nrm16 and .lit16 next to the capture (the game's
+//                             normals, GameGBuffer, and its light, GameLight; used with
+//                             --set GameGBuffer=1 / GameLight=1)
 //     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
 //                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
 //   An output ending in .jpg is a preset picture for the menu (384x216, the middle 16:9).
@@ -182,6 +183,7 @@ struct LoadedCapture {
     IDirect3DTexture9* added = nullptr; // capture_NNN.add16: the light the game's additive draws added
     IDirect3DTexture9* materials = nullptr; // the class mask from capture_NNN.mat next to it
     IDirect3DTexture9* normals = nullptr; // capture_NNN.nrm16: the game's normals (GameGBuffer)
+    IDirect3DTexture9* light = nullptr;   // capture_NNN.lit16: the light its shaders lit each surface with (GameLight)
 };
 
 // Batch file: one job per line, "out.bmp [cap=file.tmcap] [preset=Name] [Key=Value ...]".
@@ -532,7 +534,7 @@ int main(int argc, char** argv) {
         c->depth = upload(device, c->cap.width, c->cap.height, D3DFMT_R32F, c->cap.depth);
         // The game's float image (GameHdr) and the light its additive draws added, written next to
         // the capture by F12 (capture_NNN.hdr16, .add16: "TMH1", width, height, RGBA half floats).
-        // GameGBuffer's normals (capture_NNN.nrm16) come the same way.
+        // GameGBuffer's normals (capture_NNN.nrm16) and GameLight's light (.lit16) come the same way.
         auto readHalf = [&](const char* extension, const char* what, bool wanted) -> IDirect3DTexture9* {
             std::string halfPath = path;
             if (!wanted || halfPath.size() <= 6 || halfPath.compare(halfPath.size() - 6, 6, ".tmcap") != 0) return nullptr;
@@ -555,6 +557,7 @@ int main(int argc, char** argv) {
         c->hdr = readHalf(".hdr16", "HDR", useHdr);
         c->added = readHalf(".add16", "added light", useHdr);
         c->normals = readHalf(".nrm16", "normals (GameGBuffer)", useNormals);
+        c->light = readHalf(".lit16", "light (GameLight)", useNormals);
         // The game's materials (capture_NNN.mat, F12 with the material masks on): the class mask
         // the game would have built (r light, g car 1 / glass .5 / grass .25, b water).
         std::string matPath = path;
@@ -624,6 +627,7 @@ int main(int argc, char** argv) {
         in.hdr = loaded->hdr;
         in.added = loaded->added;
         in.gbuffer = loaded->normals;
+        in.gameLight = loaded->light;
         in.materialMask = loaded->materials;
         in.materials = loaded->materials != nullptr;
         in.depth = loaded->depth;

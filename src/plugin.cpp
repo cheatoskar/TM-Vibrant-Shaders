@@ -173,9 +173,18 @@ bool g_gbufBound = false;      // bound as render target 1 right now
 bool g_gbufValid = false;      // holds the last main camera's normals
 bool g_gameMrt = false;        // the game binds a second target itself: hands off
 int g_mrtSupported = -1;       // two render targets at once: -1 not checked yet
+int g_mrtCount = 0;            // how many at once (GameLight needs three)
+// GameLight: the light the patched shaders lit each surface with (COLOR2), the third target for
+// the same draws as the normals (every shader patched for it writes both; it is bound after the
+// normal target and unbound before it, so the targets never leave a gap). Its own distance in w:
+// the pipeline takes the light only where it belongs to the surface the depth shows.
+gfx::Target g_gbufLight;       // A16B16G16R16F: light rgb, distance from the eye (0: none)
+bool g_gbufLightActive = false; // this main camera: cleared, takes the light of the patched draws
+bool g_gbufLightBound = false; // bound as render target 2 right now
+bool g_gbufLightValid = false; // holds the last main camera's light
 // The last main camera's opaque draws (depth writes, no blending), for the log.
 struct GBufferDraws {
-    unsigned opaque = 0, written = 0, otherShader = 0, noShader = 0, otherTarget = 0, binds = 0;
+    unsigned opaque = 0, written = 0, otherShader = 0, noShader = 0, otherTarget = 0, binds = 0, light = 0;
 } g_gbufDraws, g_gbufCounting;
 
 float seconds() {
@@ -575,37 +584,55 @@ bool hdrSupported(IDirect3DDevice9* device) {
 bool mrtSupported(IDirect3DDevice9* device) {
     if (g_mrtSupported < 0) {
         D3DCAPS9 caps{};
-        g_mrtSupported = SUCCEEDED(device->GetDeviceCaps(&caps)) && caps.NumSimultaneousRTs >= 2 ? 1 : 0;
+        g_mrtCount = SUCCEEDED(device->GetDeviceCaps(&caps)) ? static_cast<int>(caps.NumSimultaneousRTs) : 0;
+        g_mrtSupported = g_mrtCount >= 2 ? 1 : 0;
         if (!g_mrtSupported) TMVS_LOG("gbuffer: the GPU draws into one target at a time: no normals from the game's shaders");
+        else if (g_mrtCount < 3 && gameshaders::lightPatching()) TMVS_LOG("gbuffer: the GPU draws into two targets at a time: no light from the game's shaders");
     }
     return g_mrtSupported == 1;
 }
 
 // GameGBuffer at the main camera's start (from beginHdr, which keeps the game's viewport): the
-// normals start empty. Needs the float scene: two targets must have the same bit depth.
+// normals start empty. Needs the float scene: two targets must have the same bit depth. GameLight
+// takes the same draws (it needs their distance too) and a third target.
 void beginGBuffer(IDirect3DDevice9* device, UINT width, UINT height) {
     g_gbufActive = false;
     g_gbufBound = false;
+    g_gbufLightActive = false;
+    g_gbufLightBound = false;
     g_gbufCounting = GBufferDraws();
     const Settings& s = Config::get().settings;
-    if (!s.enabled || !s.gameGBuffer || !gameshaders::patching() || g_gameMrt || !mrtSupported(device)) return;
+    if (!s.enabled || !gameshaders::patching() || g_gameMrt || !mrtSupported(device)) return;
+    const bool light = s.gameLight && gameshaders::lightPatching() && g_mrtCount >= 3;
+    if (!s.gameGBuffer && !light) return;
     if (!g_gbuf.create(device, width, height, D3DFMT_A16B16G16R16F) || FAILED(device->SetRenderTarget(0, g_gbuf.surface))) return;
     DWORD scissorTest = FALSE;
     device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
     device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
     g_gbufActive = SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0));
+    if (g_gbufActive && light && g_gbufLight.create(device, width, height, D3DFMT_A16B16G16R16F) &&
+        SUCCEEDED(device->SetRenderTarget(0, g_gbufLight.surface))) {
+        g_gbufLightActive = SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0));
+    }
     device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissorTest);
-    static bool s_logged = false;
+    static bool s_logged = false, s_lightLogged = false;
     if (g_gbufActive && !s_logged) {
         s_logged = true;
         TMVS_LOG("gbuffer: the patched shaders' normals go into a second target (%ux%u)", width, height);
     }
+    if (g_gbufLightActive && !s_lightLogged) {
+        s_lightLogged = true;
+        TMVS_LOG("gbuffer: the patched shaders' light goes into a third target (%ux%u)", width, height);
+    }
 }
 
 void unbindGBuffer(IDirect3DDevice9* device) {
-    if (!g_gbufBound || !device) return;
+    if (!device || (!g_gbufBound && !g_gbufLightBound)) return;
     hook::InternalScope internal;
-    device->SetRenderTarget(1, nullptr);
+    // The light target first: target 1 never goes while target 2 is bound.
+    if (g_gbufLightBound) device->SetRenderTarget(2, nullptr);
+    g_gbufLightBound = false;
+    if (g_gbufBound) device->SetRenderTarget(1, nullptr);
     g_gbufBound = false;
 }
 
@@ -638,27 +665,35 @@ void onDrawGBuffer(IDirect3DDevice9* device) {
             else if (!patched) g_gbufCounting.otherShader++;
             else if (!onScene) g_gbufCounting.otherTarget++;
             else g_gbufCounting.written++;
+            if (want && g_gbufLightActive && gameshaders::writesLight(ps)) g_gbufCounting.light++;
         }
     }
-    if (want == g_gbufBound) return;
+    // GameLight: every shader patched for it writes COLOR2 too (0 where it has no light).
+    const bool wantLight = want && g_gbufLightActive;
+    if (want == g_gbufBound && wantLight == g_gbufLightBound) return;
     // F11 traces show where the normal target comes and goes (the mod's own calls aren't traced);
     // the line follows the draw it applies to (the trace writes a draw before its callbacks run).
-    if (tracer::tracing()) tracer::event("  gbuffer: normal target %s from the draw above on", want ? "bound" : "unbound");
+    if (tracer::tracing()) tracer::event("  gbuffer: normal target %s%s from the draw above on", want ? "bound" : "unbound", wantLight ? " (and the light's)" : "");
     if (!want) {
         unbindGBuffer(device);
         return;
     }
     hook::InternalScope internal;
-    g_gbufBound = SUCCEEDED(device->SetRenderTarget(1, g_gbuf.surface));
-    if (g_gbufBound) g_gbufCounting.binds++;
+    if (!g_gbufBound) {
+        g_gbufBound = SUCCEEDED(device->SetRenderTarget(1, g_gbuf.surface));
+        if (g_gbufBound) g_gbufCounting.binds++;
+    }
+    if (wantLight && g_gbufBound && !g_gbufLightBound) g_gbufLightBound = SUCCEEDED(device->SetRenderTarget(2, g_gbufLight.surface));
 }
 
 // At the main camera's end, before the image is resolved and shaded.
 void endGBuffer(IDirect3DDevice9* device) {
     unbindGBuffer(device);
     g_gbufValid = g_gbufActive;
+    g_gbufLightValid = g_gbufLightActive;
     if (g_gbufActive) g_gbufDraws = g_gbufCounting;
     g_gbufActive = false;
+    g_gbufLightActive = false;
     // Once per map, a few seconds into the driving: how many of the game's opaque draws wrote normals.
     static int s_map = -1;
     static DWORD s_since = 0;
@@ -672,6 +707,7 @@ void endGBuffer(IDirect3DDevice9* device) {
             TMVS_LOG("gbuffer: %u opaque draws in the main camera, %u wrote normals, %u with shaders that have none, %u without a "
                      "pixel shader, %u into another target; %u binds; %d shaders patched so far",
                      d.opaque, d.written, d.otherShader, d.noShader, d.otherTarget, d.binds, gameshaders::patchedCount());
+            if (g_gbufLightValid) TMVS_LOG("gbuffer: %u of those draws wrote their light (GameLight)", d.light);
         }
     }
 }
@@ -684,6 +720,8 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_hdrAddedBound = false;
     g_gbufValid = false;
     g_gbufActive = false;
+    g_gbufLightValid = false;
+    g_gbufLightActive = false;
     const Settings& s = Config::get().settings;
     if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
     D3DSURFACE_DESC desc{};
@@ -715,6 +753,7 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
         device->SetScissorRect(&scissor);
         g_hdrAddedActive = false;
         g_gbufActive = false;
+        g_gbufLightActive = false;
         return;
     }
     device->SetViewport(&viewport);
@@ -767,6 +806,7 @@ IDirect3DSurface9* onSetRenderTarget(DWORD index, IDirect3DSurface9* surface) {
     if (index > 0 && surface && !g_gameMrt && gameshaders::patching()) {
         g_gameMrt = true;
         g_gbufActive = false;
+        g_gbufLightActive = false;
         TMVS_LOG("gbuffer: the game draws into a second target itself: no normals from its shaders");
     }
     if (index != 0 || !surface) return surface;
@@ -878,6 +918,28 @@ void writeGBufferCapture(IDirect3DDevice9* device, const std::wstring& path) {
     writeHalfFile(path, g_gbuf.width, g_gbuf.height, half);
 }
 
+// GameLight: the light next to the capture (capture_NNN.lit16, the same format: the light the
+// game's shader multiplied the surface's colour with, rgb, and the distance from the eye in w; 0
+// where no shader with its light drew). tools/gbuffer.py --light reads it against the depth.
+void writeLightCapture(IDirect3DDevice9* device, const std::wstring& path) {
+    std::vector<uint16_t> half;
+    if (!g_pipeline.readHalfColor(device, g_gbufLight.surface, half)) {
+        TMVS_LOG("gbuffer: light not read");
+        return;
+    }
+    const size_t count = half.size() / 4;
+    size_t written = 0;
+    float brightest = 0.0f;
+    for (size_t i = 0; i < count; i++) {
+        if (halfToFloat(half[i * 4 + 3]) <= 0.0f) continue;
+        written++;
+        brightest = std::max(brightest, std::max(halfToFloat(half[i * 4]), std::max(halfToFloat(half[i * 4 + 1]), halfToFloat(half[i * 4 + 2]))));
+    }
+    TMVS_LOG("gbuffer (capture): light on %.1f%% of the image, brightest %.2f; %u of %u opaque draws wrote it", count ? 100.0 * written / count : 0.0,
+             brightest, g_gbufDraws.light, g_gbufDraws.opaque);
+    writeHalfFile(path, g_gbufLight.width, g_gbufLight.height, half);
+}
+
 // The material ids next to the capture: "TMM1", width, height, count, then per id (1..count)
 // class (engine::Material), flags (1 depth writes, 2 one-one blending), draws, the length
 // and UTF-8 bytes of its shader file; then one id byte per pixel, rows top-down (0: none).
@@ -954,6 +1016,12 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs, bool
         std::wstring normals = log::dataDir() + name;
         normals.replace(normals.size() - 6, 6, L".nrm16");
         writeGBufferCapture(device, normals);
+    }
+    // GameLight: the light the game's shaders lit each surface with (capture_NNN.lit16).
+    if (g_gbufLightValid && g_gbufLight.width == inputs.width && g_gbufLight.height == inputs.height) {
+        std::wstring light = log::dataDir() + name;
+        light.replace(light.size() - 6, 6, L".lit16");
+        writeLightCapture(device, light);
     }
     // Which material drew each pixel (capture_NNN.mat).
     if (materialIds) {
@@ -1217,6 +1285,7 @@ void processScene(IDirect3DDevice9* device) {
         inputs.hdr = g_hdrScene.texture;
         if (g_hdrAddedValid) inputs.added = g_hdrAdded.texture;
         if (g_gbufValid && g_gbuf.width == width && g_gbuf.height == height) inputs.gbuffer = g_gbuf.texture;
+        if (g_gbufLightValid && g_gbufLight.width == width && g_gbufLight.height == height) inputs.gameLight = g_gbufLight.texture;
     }
     inputs.depth = sceneDepth;
     inputs.width = width;
@@ -1820,6 +1889,8 @@ void onPreReset() {
     unbindGBuffer(g_device);
     g_gbufActive = g_gbufValid = false;
     g_gbuf.destroy();
+    g_gbufLightActive = g_gbufLightValid = false;
+    g_gbufLight.destroy();
     casters::releaseDevice();
     depth::onPreReset();
     overlay::preReset();
