@@ -1,6 +1,7 @@
 #pragma once
 #include <d3d9.h>
 #include <windows.h>
+#include <string>
 
 namespace tmshaders {
 struct Settings;
@@ -52,8 +53,11 @@ bool splitShown();      // switched on, photo mode on, no hi-res photo being tak
 bool& splitOn();        // the switch (for the menu)
 float& splitPosition(); // 0..1 from the left
 bool& splitSwapped();   // the game's image on the right instead of the left
-// Copies the unshaded image (`original`, same size) onto its side of `shaded` and draws the
-// line. Call it before afterRender, so the photo has it.
+// What the other side shows: "" the game's image, else a preset's look (rendered by a pipeline
+// of its own, see plugin.cpp). Your look stays on the mod's side.
+std::string& splitPreset();
+// Copies the other side's image (`original`: the unshaded one, or the preset's; same size) onto
+// its side of `shaded` and draws the line. Call it before afterRender, so the photo has it.
 void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3DSurface9* shaded);
 
 // A line for the screen (photo mode on, progress, saved as ...), "" = nothing to show.

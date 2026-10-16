@@ -42,6 +42,7 @@ enum Slot : int {
     kDrawIndexedPrimitiveUP = 84,
     kSetVertexShader = 92,
     kSetVertexShaderConstantF = 94,
+    kCreatePixelShader = 106,
     kSetPixelShader = 107,
     kSetPixelShaderConstantF = 109,
     kSlotCount = 119
@@ -448,6 +449,13 @@ HRESULT APIENTRY setVertexShaderConstantFDetour(IDirect3DDevice9* device, UINT s
                                                                                                             count);
 }
 
+HRESULT APIENTRY createPixelShaderDetour(IDirect3DDevice9* device, const DWORD* code, IDirect3DPixelShader9** shader) {
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const DWORD*, IDirect3DPixelShader9**)>(kCreatePixelShader)(device, code,
+                                                                                                                 shader);
+    if (SUCCEEDED(hr) && shader && *shader && g_callbacks.createPixelShader) g_callbacks.createPixelShader(*shader, code);
+    return hr;
+}
+
 HRESULT APIENTRY setPixelShaderDetour(IDirect3DDevice9* device, IDirect3DPixelShader9* shader) {
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DPixelShader9*)>(kSetPixelShader)(device, shader);
 }
@@ -497,6 +505,7 @@ const Detour kDetours[] = {
     {kDrawIndexedPrimitiveUP, reinterpret_cast<void*>(&drawIndexedPrimitiveUPDetour)},
     {kSetVertexShader, reinterpret_cast<void*>(&setVertexShaderDetour)},
     {kSetVertexShaderConstantF, reinterpret_cast<void*>(&setVertexShaderConstantFDetour)},
+    {kCreatePixelShader, reinterpret_cast<void*>(&createPixelShaderDetour)},
     {kSetPixelShader, reinterpret_cast<void*>(&setPixelShaderDetour)},
     {kSetPixelShaderConstantF, reinterpret_cast<void*>(&setPixelShaderConstantFDetour)},
 };

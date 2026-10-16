@@ -9,6 +9,7 @@
 #include "gameshaders.h"
 #include "gfx.h"
 #include "hook.h"
+#include "keys.h"
 #include "log.h"
 #include "lut.h"
 #include "overlay.h"
@@ -102,6 +103,15 @@ float g_jitterUV[2] = {};         // TAA jitter of this frame (uv shift of the i
 UINT g_frameWidth = 0, g_frameHeight = 0;
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
 gfx::Target g_sceneCopy;
+// Photo mode's compare split with a preset on the other side: that look from a pipeline of its
+// own. Its TAA, exposure, bounce light, focus and sky history stay its own: one pipeline's
+// history shared by two looks would blend each into the other. Only while it is shown (it
+// doubles the effects' cost and memory).
+Pipeline g_pipelineB;
+bool g_pipelineBFailed = false;
+gfx::Target g_splitOut;  // the preset's side, the whole frame
+float g_casterSun[3] = {}; // the light the caster maps were drawn for this frame (side A)
+bool g_casterSunSet = false;
 // A camera that draws into part of the screen (the MediaTracker editor's 3D view between its
 // panels): its depth and the shaded image, the size of that part.
 gfx::Target g_partDepth;
@@ -133,6 +143,24 @@ bool g_hdrAddedActive = false; // cleared at this camera's start, takes the addi
 bool g_hdrAddedBound = false;  // the render target during the current (additive) draw
 bool g_hdrAddedValid = false;  // holds the last main camera's added light
 bool g_castersOn = false;      // CasterShadows this frame: the main camera's meshes are recorded (casters.cpp)
+// GameGBuffer: the game's patched pixel shaders (gameshaders.h) also write the world normal and the
+// distance from the eye of what they draw into COLOR1. During the main camera this target is the
+// second render target for exactly those draws: opaque ones (depth writes, no blending: the blend
+// would act on the normals too) into the float scene. Every other draw (other shaders, glows, the
+// game's effect passes) finds no second target bound. The game's clears and target switches unbind
+// it first (a Clear would wipe it). Cleared to 0 (no normal) at the camera's start; the pipeline takes
+// a normal only where its distance matches the depth buffer, so a surface drawn later by a shader
+// without normals (a road over a block) keeps the normal from the depth.
+gfx::Target g_gbuf;            // A16B16G16R16F: world normal, distance from the eye (0: none)
+bool g_gbufActive = false;     // this main camera: cleared, takes the patched opaque draws
+bool g_gbufBound = false;      // bound as render target 1 right now
+bool g_gbufValid = false;      // holds the last main camera's normals
+bool g_gameMrt = false;        // the game binds a second target itself: hands off
+int g_mrtSupported = -1;       // two render targets at once: -1 not checked yet
+// The last main camera's opaque draws (depth writes, no blending), for the log.
+struct GBufferDraws {
+    unsigned opaque = 0, written = 0, otherShader = 0, noShader = 0, otherTarget = 0, binds = 0;
+} g_gbufDraws, g_gbufCounting;
 
 float seconds() {
     LARGE_INTEGER now;
@@ -347,8 +375,64 @@ float updateLut() {
             TMVS_LOG("lut: %s (%d^3)", loaded.c_str(), table.size);
         }
         g_pipeline.setLut(table.texels, table.size);
+        g_pipelineB.setLut(table.texels, table.size); // the compare split's preset side (also before it starts)
     }
     return loaded.empty() ? 0.0f : config.lutAmount;
+}
+
+// CasterShadows for the main pipeline: also notes the light (see castersSideB).
+bool castersSideA(IDirect3DDevice9* device, const float sunWorld[3], const float camera[3], casters::Maps& out) {
+    memcpy(g_casterSun, sunWorld, sizeof(g_casterSun));
+    g_casterSunSet = true;
+    return casters::update(device, sunWorld, camera, out);
+}
+
+// The compare split's preset side: the same maps when its light comes from where side A's does.
+// Another sun (a preset with its own) gets none, the height map's shadows stand in: the maps are
+// drawn for one light, a second one would redraw them twice a frame.
+bool castersSideB(IDirect3DDevice9* device, const float sunWorld[3], const float camera[3], casters::Maps& out) {
+    const float d = sunWorld[0] * g_casterSun[0] + sunWorld[1] * g_casterSun[1] + sunWorld[2] * g_casterSun[2];
+    if (!g_casterSunSet || d < 0.999999f) return false;
+    return casters::update(device, sunWorld, camera, out);
+}
+
+void releaseSideB() {
+    if (g_pipelineB.ready()) TMVS_LOG("photo: compare split with a preset off, its pipeline released");
+    g_pipelineB.release();
+    g_splitOut.destroy();
+    g_pipelineBFailed = false;
+}
+
+// The compare split's other side as a preset's look (photo::splitPreset()), from the same frame
+// and inputs as side A. Null: the game's image stays there (none chosen, or it failed).
+IDirect3DSurface9* renderSideB(IDirect3DDevice9* device, const Pipeline::Inputs& inputsA, const Settings& mine, const Settings& shownA) {
+    const std::string& name = photo::splitPreset();
+    // Kept while the split is on (a hi-res photo hides it for a while: its history stays).
+    if (!photo::splitOn() || !photo::active() || name.empty()) {
+        if (g_pipelineB.ready() || g_splitOut.texture) releaseSideB();
+        return nullptr;
+    }
+    if (!photo::splitShown()) return nullptr;
+    // Your machine settings (the game's own changes are made once, for both sides), the preset's look.
+    Settings b = mine;
+    if (!Config::get().presetSettings(name, b)) return nullptr;
+    b.enabled = true; // with the shaders off: the preset next to the game's image with photo mode's lens
+    b.debugView = shownA.debugView;
+    photo::adjust(b);
+    if (!g_pipelineB.ready()) {
+        if (g_pipelineBFailed || !g_pipelineB.init(device, g_dev.shaderDir)) {
+            if (!g_pipelineBFailed) TMVS_LOG("photo: compare split with %s: its pipeline failed (%s)", name.c_str(), g_pipelineB.lastError().c_str());
+            g_pipelineBFailed = true;
+            return nullptr;
+        }
+        TMVS_LOG("photo: compare split with the preset %s (a second pipeline)", name.c_str());
+    }
+    if (!g_splitOut.create(device, inputsA.width, inputsA.height, D3DFMT_A8R8G8B8)) return nullptr;
+    Pipeline::Inputs in = inputsA;
+    in.materialClasses = nullptr; // the F12 capture is side A's
+    if (in.casterMap) in.casterMap = castersSideB;
+    g_pipelineB.render(device, in, b, g_splitOut.surface);
+    return g_splitOut.surface;
 }
 
 float halfToFloat(uint16_t h) {
@@ -418,12 +502,118 @@ bool hdrSupported(IDirect3DDevice9* device) {
     return g_hdrSupported == 1;
 }
 
+bool mrtSupported(IDirect3DDevice9* device) {
+    if (g_mrtSupported < 0) {
+        D3DCAPS9 caps{};
+        g_mrtSupported = SUCCEEDED(device->GetDeviceCaps(&caps)) && caps.NumSimultaneousRTs >= 2 ? 1 : 0;
+        if (!g_mrtSupported) TMVS_LOG("gbuffer: the GPU draws into one target at a time: no normals from the game's shaders");
+    }
+    return g_mrtSupported == 1;
+}
+
+// GameGBuffer at the main camera's start (from beginHdr, which keeps the game's viewport): the
+// normals start empty. Needs the float scene: two targets must have the same bit depth.
+void beginGBuffer(IDirect3DDevice9* device, UINT width, UINT height) {
+    g_gbufActive = false;
+    g_gbufBound = false;
+    g_gbufCounting = GBufferDraws();
+    const Settings& s = Config::get().settings;
+    if (!s.enabled || !s.gameGBuffer || !gameshaders::patching() || g_gameMrt || !mrtSupported(device)) return;
+    if (!g_gbuf.create(device, width, height, D3DFMT_A16B16G16R16F) || FAILED(device->SetRenderTarget(0, g_gbuf.surface))) return;
+    DWORD scissorTest = FALSE;
+    device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    g_gbufActive = SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0));
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissorTest);
+    static bool s_logged = false;
+    if (g_gbufActive && !s_logged) {
+        s_logged = true;
+        TMVS_LOG("gbuffer: the patched shaders' normals go into a second target (%ux%u)", width, height);
+    }
+}
+
+void unbindGBuffer(IDirect3DDevice9* device) {
+    if (!g_gbufBound || !device) return;
+    hook::InternalScope internal;
+    device->SetRenderTarget(1, nullptr);
+    g_gbufBound = false;
+}
+
+// Before each of the game's draws in the main camera: the normal target is bound for an opaque
+// draw with a patched shader into the float scene, and for no other (unbound lazily: draws of
+// one kind come in runs). SetRenderTarget(1, ...) keeps the game's viewport and scissor rect.
+void onDrawGBuffer(IDirect3DDevice9* device) {
+    if (!g_gbufActive) return;
+    bool want = false;
+    if (g_scene.inMainCamera) {
+        DWORD ztest = FALSE, zwrite = FALSE, blend = TRUE;
+        device->GetRenderState(D3DRS_ZENABLE, &ztest);
+        device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+        device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+        if (ztest && zwrite && !blend) {
+            g_gbufCounting.opaque++;
+            IDirect3DPixelShader9* ps = nullptr;
+            device->GetPixelShader(&ps);
+            const bool patched = gameshaders::writesNormal(ps);
+            if (ps) ps->Release();
+            bool onScene = false;
+            if (patched) {
+                IDirect3DSurface9* rt = nullptr;
+                device->GetRenderTarget(0, &rt);
+                onScene = rt && rt == g_hdrScene.surface;
+                if (rt) rt->Release();
+            }
+            want = patched && onScene;
+            if (!ps) g_gbufCounting.noShader++;
+            else if (!patched) g_gbufCounting.otherShader++;
+            else if (!onScene) g_gbufCounting.otherTarget++;
+            else g_gbufCounting.written++;
+        }
+    }
+    if (want == g_gbufBound) return;
+    // F11 traces show where the normal target comes and goes (the mod's own calls aren't traced);
+    // the line follows the draw it applies to (the trace writes a draw before its callbacks run).
+    if (tracer::tracing()) tracer::event("  gbuffer: normal target %s from the draw above on", want ? "bound" : "unbound");
+    if (!want) {
+        unbindGBuffer(device);
+        return;
+    }
+    hook::InternalScope internal;
+    g_gbufBound = SUCCEEDED(device->SetRenderTarget(1, g_gbuf.surface));
+    if (g_gbufBound) g_gbufCounting.binds++;
+}
+
+// At the main camera's end, before the image is resolved and shaded.
+void endGBuffer(IDirect3DDevice9* device) {
+    unbindGBuffer(device);
+    g_gbufValid = g_gbufActive;
+    if (g_gbufActive) g_gbufDraws = g_gbufCounting;
+    g_gbufActive = false;
+    // Once per map, a few seconds into the driving: how many of the game's opaque draws wrote normals.
+    static int s_map = -1;
+    static DWORD s_since = 0;
+    if (g_gbufValid && g_scene.projection[14] > -1.0f && engine::mapLoads() != s_map) {
+        if (!s_since) {
+            s_since = GetTickCount();
+        } else if (GetTickCount() - s_since > 8000) {
+            s_map = engine::mapLoads();
+            s_since = 0;
+            const GBufferDraws& d = g_gbufDraws;
+            TMVS_LOG("gbuffer: %u opaque draws in the main camera, %u wrote normals, %u with shaders that have none, %u without a "
+                     "pixel shader, %u into another target; %u binds; %d shaders patched so far",
+                     d.opaque, d.written, d.otherShader, d.noShader, d.otherTarget, d.binds, gameshaders::patchedCount());
+        }
+    }
+}
+
 // At the main camera's start: the float target stands in for the game's.
 void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_hdrValid = false;
     g_hdrAddedValid = false;
     g_hdrAddedActive = false;
     g_hdrAddedBound = false;
+    g_gbufValid = false;
+    g_gbufActive = false;
     const Settings& s = Config::get().settings;
     if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
     D3DSURFACE_DESC desc{};
@@ -448,11 +638,13 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
         g_hdrAddedActive = SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0));
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissorTest);
     }
+    beginGBuffer(device, desc.Width, desc.Height);
     if (FAILED(device->SetRenderTarget(0, g_hdrScene.surface))) {
         device->SetRenderTarget(0, rt);
         device->SetViewport(&viewport);
         device->SetScissorRect(&scissor);
         g_hdrAddedActive = false;
+        g_gbufActive = false;
         return;
     }
     device->SetViewport(&viewport);
@@ -500,6 +692,13 @@ void endHdr(IDirect3DDevice9* device) {
 }
 
 IDirect3DSurface9* onSetRenderTarget(DWORD index, IDirect3DSurface9* surface) {
+    // GameGBuffer: the normal target never stays bound under a target the game picks.
+    unbindGBuffer(g_device);
+    if (index > 0 && surface && !g_gameMrt && gameshaders::patching()) {
+        g_gameMrt = true;
+        g_gbufActive = false;
+        TMVS_LOG("gbuffer: the game draws into a second target itself: no normals from its shaders");
+    }
     if (index != 0 || !surface) return surface;
     // The game binds its target again during the camera: the float one stays.
     if (g_hdrGame && surface == g_hdrGame) return g_hdrScene.surface;
@@ -591,6 +790,24 @@ void onDrawDone(IDirect3DDevice9* device) {
     g_hdrAddedBound = false;
 }
 
+// GameGBuffer: the normals next to the capture (capture_NNN.nrm16, the same format: world normal
+// xyz, distance from the eye in w, 0 where no patched shader drew).
+void writeGBufferCapture(IDirect3DDevice9* device, const std::wstring& path) {
+    std::vector<uint16_t> half;
+    if (!g_pipeline.readHalfColor(device, g_gbuf.surface, half)) {
+        TMVS_LOG("gbuffer: normals not read");
+        return;
+    }
+    const size_t count = half.size() / 4;
+    size_t written = 0;
+    for (size_t i = 0; i < count; i++) written += halfToFloat(half[i * 4 + 3]) > 0.0f;
+    const GBufferDraws& d = g_gbufDraws;
+    TMVS_LOG("gbuffer (capture): normals on %.1f%% of the image; %u of %u opaque draws wrote them (%u with shaders that have none, %u "
+             "without a pixel shader)",
+             count ? 100.0 * written / count : 0.0, d.written, d.opaque, d.otherShader, d.noShader);
+    writeHalfFile(path, g_gbuf.width, g_gbuf.height, half);
+}
+
 // The material ids next to the capture: "TMM1", width, height, count, then per id (1..count)
 // class (engine::Material), flags (1 depth writes, 2 one-one blending), draws, the length
 // and UTF-8 bytes of its shader file; then one id byte per pixel, rows top-down (0: none).
@@ -661,6 +878,12 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs, bool
         std::wstring added = log::dataDir() + name;
         added.replace(added.size() - 6, 6, L".add16");
         writeAddedCapture(device, added);
+    }
+    // GameGBuffer: the game's normals (capture_NNN.nrm16).
+    if (g_gbufValid && g_gbuf.width == inputs.width && g_gbuf.height == inputs.height) {
+        std::wstring normals = log::dataDir() + name;
+        normals.replace(normals.size() - 6, 6, L".nrm16");
+        writeGBufferCapture(device, normals);
     }
     // Which material drew each pixel (capture_NNN.mat).
     if (materialIds) {
@@ -746,6 +969,7 @@ void processScene(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
     if (!g_scene.haveView || !g_scene.haveProjection) return;
     if (!settings.enabled && !photo::active() && !g_captureRequested) {
+        if (g_pipelineB.ready()) releaseSideB(); // photo mode ended with the shaders off
         return;
     }
     if (g_sceneStart < 0.0f && g_scene.projection[14] > -1.0f) {
@@ -856,6 +1080,7 @@ void processScene(IDirect3DDevice9* device) {
     if (g_hdrValid && !part && g_hdrScene.width == width && g_hdrScene.height == height) {
         inputs.hdr = g_hdrScene.texture;
         if (g_hdrAddedValid) inputs.added = g_hdrAdded.texture;
+        if (g_gbufValid && g_gbuf.width == width && g_gbuf.height == height) inputs.gbuffer = g_gbuf.texture;
     }
     inputs.depth = sceneDepth;
     inputs.width = width;
@@ -929,7 +1154,8 @@ void processScene(IDirect3DDevice9* device) {
     inputs.freeze = photo::tiling();
     inputs.lut = updateLut();
     inputs.materials = materialsWanted();
-    if (g_castersOn) inputs.casterMap = casters::update;
+    g_casterSunSet = false;
+    if (g_castersOn) inputs.casterMap = castersSideA;
     g_frameWidth = width;
     g_frameHeight = height;
 
@@ -981,8 +1207,10 @@ void processScene(IDirect3DDevice9* device) {
             thumbnails::savePicture(device, shaded, Config::get().presetPicture(picture));
             Config::get().pictureTaken();
         }
-        // Photo mode's compare split: the game's image (copied before the pipeline) on one side.
-        photo::applySplit(device, g_sceneCopy.surface, shaded);
+        // Photo mode's compare split: the game's image (copied before the pipeline) on one side,
+        // or a preset's look.
+        IDirect3DSurface9* otherSide = renderSideB(device, inputs, settings, effective);
+        photo::applySplit(device, otherSide ? otherSide : g_sceneCopy.surface, shaded);
         if (part) {
             device->StretchRect(g_partOut.surface, nullptr, target, &area, D3DTEXF_NONE);
             fillMenuBars(device, target, desc, area, settings.shadeMenuBars);
@@ -1219,6 +1447,7 @@ DWORD materialId(const void* shader, bool depthWrite, bool additive) {
 // Every draw call (all four kinds: a draw without its own tag must not write the tag of the
 // draw before it, the stencil state stays set).
 void onDraw(IDirect3DDevice9* device) {
+    onDrawGBuffer(device); // first: an additive draw unbinds it before onDrawAdded switches the target
     onDrawAdded(device);
     if (!g_scene.inMainCamera || !materialsWanted()) {
         untagStencil(device);
@@ -1311,6 +1540,7 @@ void onCameraEnd(void* camera, const engine::CameraInfo&) {
         }
     }
     if (g_scene.inMainCamera && g_device) {
+        endGBuffer(g_device);
         endHdr(g_device);
         processScene(g_device);
     }
@@ -1354,6 +1584,7 @@ void onDeviceCreated(IDirect3DDevice9* device) {
 
 void onPreReset() {
     g_pipeline.release();
+    releaseSideB();
     g_sceneCopy.destroy();
     g_partDepth.destroy();
     g_partOut.destroy();
@@ -1364,6 +1595,9 @@ void onPreReset() {
     g_hdrScene.destroy();
     g_hdrAddedActive = g_hdrAddedBound = g_hdrAddedValid = false;
     g_hdrAdded.destroy();
+    unbindGBuffer(g_device);
+    g_gbufActive = g_gbufValid = false;
+    g_gbuf.destroy();
     casters::releaseDevice();
     depth::onPreReset();
     overlay::preReset();
@@ -1399,6 +1633,7 @@ void onSetTransform(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* m) {
 // Notes which game clears of this frame reached the top or bottom row of their target (the
 // viewport, or the rects inside it). Only for fillBars: those rows are the game's own then.
 void onClear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags) {
+    unbindGBuffer(device); // a Clear would wipe the normals too
     if (!(flags & D3DCLEAR_TARGET)) return;
     IDirect3DSurface9* target = nullptr;
     if (FAILED(device->GetRenderTarget(0, &target)) || !target) return;
@@ -1419,6 +1654,10 @@ void onClear(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD 
     }
     if (top <= 0) g_clearedTop = {target, g_frame};
     if (bottom >= static_cast<LONG>(desc.Height)) g_clearedBottom = {target, g_frame};
+}
+
+void onCreatePixelShader(IDirect3DPixelShader9* shader, const DWORD* code) {
+    gameshaders::notePixelShader(shader, code);
 }
 
 void onSetLight(DWORD, const D3DLIGHT9* light) {
@@ -1473,6 +1712,8 @@ void onPresent(IDirect3DDevice9* device) {
     }
     relightOnSwitch(settings);
     castersTick();
+    unbindGBuffer(device);
+    gameshaders::tick();
     g_shadedThisFrame = false;
     g_gameplayThisFrame = false;
 
@@ -1485,10 +1726,11 @@ void onPresent(IDirect3DDevice9* device) {
     status.shaderError = g_pipeline.lastError().empty() ? nullptr : g_pipeline.lastError().c_str();
     overlay::setStatus(status);
     overlay::draw(device);
-    const bool reload = overlay::consumeReloadRequest() | ((GetAsyncKeyState(VK_F9) & 1) != 0);
+    const bool reload = overlay::consumeReloadRequest() | keys::edge(keys::Action::Reload);
     if (reload) {
         g_pipelineFailed = false;
         g_pipeline.reloadShaders(device);
+        releaseSideB(); // starts again from the reloaded shaders
     }
 
     if (tracer::tracing() || g_screenshotRequested) {
@@ -1527,10 +1769,10 @@ void onPresent(IDirect3DDevice9* device) {
         }
     }
     Config::get().tick();
-    if (GetAsyncKeyState(VK_F11) & 1) tracer::arm();
-    if (GetAsyncKeyState(VK_F12) & 1) {
+    if (keys::edge(keys::Action::Trace)) tracer::arm();
+    if (keys::edge(keys::Action::Capture)) {
         // Photo mode: a photo without the HUD (Shift: hi-res) instead of a .tmcap capture.
-        if (photo::active()) photo::request(GetAsyncKeyState(VK_SHIFT) < 0);
+        if (photo::active()) photo::request(keys::shiftHeld());
         else g_captureRequested = true;
     }
 }
@@ -1677,6 +1919,7 @@ void bootOnce() {
     deviceCallbacks.setTransform = onSetTransform;
     deviceCallbacks.setLight = onSetLight;
     deviceCallbacks.clear = onClear;
+    deviceCallbacks.createPixelShader = onCreatePixelShader;
     deviceCallbacks.draw = onDraw;
     deviceCallbacks.drawDone = onDrawDone;
     deviceCallbacks.drawIndexed = onDrawIndexed;

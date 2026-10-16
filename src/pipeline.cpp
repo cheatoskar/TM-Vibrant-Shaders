@@ -21,7 +21,7 @@ const char* const kEntryPoints[] = {
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
-    "PS_LightGridInit", "PS_LightGridSweep",
+    "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -2135,14 +2135,21 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 0, in.depth, false);
     runPass(device, kLinearDepth, m_linearDepth);
     bind(device, 0, m_linearDepth.texture, false);
-    runPass(device, kPrepare, m_nd);
+    // GameGBuffer: the game's own normals where they belong to the surface seen (a pass of its
+    // own: without them PS_Prepare is as it was).
+    const bool gameNormals = in.gbuffer && s.gameGBuffer;
+    if (gameNormals) bind(device, 1, in.gbuffer, false);
+    runPass(device, gameNormals ? kPrepareGBuffer : kPrepare, m_nd);
     bind(device, 0, m_nd.texture, false);
     passConstants(device, 1.0f / in.width, 1.0f / in.height);
     runPass(device, kDownsampleND, m_ndHalf);
 
     if (!s.enabled && in.photo) {
         // Vanilla photo mode: only depth of field and sharpening on the game's original image (in.color).
-        const float dt = m_historyValid ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
+        // The time step from the last frame of this camera: m_historyValid belongs to the exposure,
+        // which never runs here. With it the focus froze where it was first measured (the shaders
+        // off from the start, or after a resize): clicks and the auto focus didn't move it.
+        const float dt = m_havePrevious ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
         if (temporal) m_lastTime = in.time;
         IDirect3DTexture9* current = in.color;
         const bool dof = s.depthOfField > 0.0f;
@@ -2280,6 +2287,14 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // 2b. Volumetric light: shadow heights from the height map, then the view rays through
     // the haze at half resolution (the light shaft target is free until later).
     const bool volume = heightMap && wantVolume;
+    // c37 before the march, which reads its range (u_Volume.y): set after it, the march took the
+    // value of whatever set c37 last (the game's own shaders in game, the compare split's other
+    // pipeline, the previous frame).
+    const bool gi = s.globalIllumination > 0.0f;
+    const float lensDrops = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f;
+    const float lensSnow = s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f;
+    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
+    device->SetPixelShaderConstantF(37, volumeConstants, 1);
     if (volume) {
         static const float kVolumeSteps[3] = {8.0f, 12.0f, 16.0f};
         const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
@@ -2306,7 +2321,6 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         }
     }
     // 2c. One-bounce global illumination, blurred like the AO.
-    const bool gi = s.globalIllumination > 0.0f;
     if (gi) {
         static const float kGISamples[3] = {4.0f, 6.0f, 8.0f};
         const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
@@ -2334,10 +2348,6 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     } else {
         m_giValid = false;
     }
-    const float lensDrops = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f;
-    const float lensSnow = s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f;
-    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
-    device->SetPixelShaderConstantF(37, volumeConstants, 1);
 
     // 3. Custom sky, the average sky colour (fog), volumetric clouds.
     if (s.skyMode > 0) {

@@ -4,6 +4,7 @@
 // is overlay.cpp for TMNF and maniaplanet/src/overlay.cpp for ManiaPlanet.
 #include "menu.h"
 #include "config.h"
+#include "keys.h"
 #include "log.h"
 #include "lut.h"
 #include "update.h"
@@ -209,7 +210,7 @@ bool isMachineSetting(const Field& f) {
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
-           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "ShadeMenuBars");
 }
 
@@ -418,6 +419,52 @@ void sameLineIfRoom(const char* nextLabel) {
 }
 
 // A switch with its label in front and a tooltip. Returns true when flipped.
+// A hotkey's current name for texts ("F8", "Shift+F6"), "no key" if the player turned it off.
+std::string keyText(keys::Action a) {
+    const keys::Binding b = keys::get(a);
+    return b.vk ? keys::name(b) : std::string("no key");
+}
+
+// Set while the Hotkeys panel is drawn: a key capture whose panel is gone (other page, menu
+// closed) is cancelled at the end of the frame, else the keyboard would stay captured.
+bool g_keysShown = false;
+
+// The Hotkeys panel: one row per action, Change waits for the next key press (Esc cancels).
+void drawHotkeys() {
+    g_keysShown = true;
+    ImGui::TextDisabled("Change: press the new key (Esc cancels). Letters need Ctrl or Alt.");
+    if (ImGui::BeginTable("hotkeys", 3, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("a", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+        ImGui::TableSetupColumn("b", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+        ImGui::TableSetupColumn("c", ImGuiTableColumnFlags_WidthFixed, 80.0f * g_scale);
+        for (int i = 0; i < static_cast<int>(keys::Action::Count); i++) {
+            const keys::Action a = static_cast<keys::Action>(i);
+            if (!keys::info(a).available) continue;
+            const bool mine = keys::capturing() && keys::captureTarget() == a;
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(keys::info(a).label);
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            if (mine) ImGui::TextColored(kAccent, "Press a key...");
+            else ImGui::TextUnformatted(keyText(a).c_str());
+            ImGui::TableNextColumn();
+            if (ImGui::Button(mine ? "Cancel" : "Change", ImVec2(-FLT_MIN, 0.0f))) {
+                if (mine) keys::cancelCapture();
+                else keys::beginCapture(a);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (!keys::note().empty()) ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1), "%s", keys::note().c_str());
+    ImGui::BeginDisabled(keys::capturing());
+    if (ImGui::Button("Reset to defaults")) keys::resetDefaults();
+    ImGui::EndDisabled();
+}
+
 bool switchRow(const char* label, bool* value, const char* tooltip) {
     ImGui::PushID(label);
     ImGui::AlignTextToFramePadding();
@@ -957,7 +1004,9 @@ PanelDef settingsPanel(const char* title, Settings& s, const Entries& entries) {
     float rows = 0.0f;
     for (const auto& e : entries) {
         const Field* f = findField(e.first);
-        if (f && isRelevant(*f, s)) rows += 1.0f;
+        // Only what this game can do (ManiaPlanet has no long shadows, FXAA, water ...): the
+        // panel's height had room for rows that were never drawn.
+        if (f && supported(*f) && isRelevant(*f, s)) rows += 1.0f;
     }
     return {title, rows, [&s, entries] {
                 bool l = false;
@@ -1063,6 +1112,8 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"Sharpen", "Sharpening"},
                                     {"Quality", "Effect quality"},
                                     {"AutoQuality", "Auto quality"}}));
+    // A panel with nothing this game can do (or nothing the current choices use) is left out.
+    panels.erase(std::remove_if(panels.begin(), panels.end(), [](const PanelDef& p) { return p.rows <= 0.0f; }), panels.end());
     for (PanelDef& p : panels) p.foldable = true; // closed at first, the title opens them
     const bool look = panelColumns(panels, 330.0f);
     if (config.preset == kCustomPreset) {
@@ -1118,8 +1169,9 @@ bool drawStudio(Config& config, Settings& s) {
         }
     }
     if (g_host->reloadShaders) {
-        sameLineIfRoom("Reload shaders (F9)");
-        if (ImGui::Button("Reload shaders (F9)")) g_reloadRequested = true;
+        const std::string reload = "Reload shaders (" + keyText(keys::Action::Reload) + ")";
+        sameLineIfRoom(reload.c_str());
+        if (ImGui::Button(reload.c_str())) g_reloadRequested = true;
     }
     ImGui::SameLine();
     if (ImGui::GetContentRegionAvail().x < 260.0f * g_scale) ImGui::NewLine();
@@ -1375,6 +1427,10 @@ bool drawSettings(Config& config, Settings& s) {
                           switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
                           return false;
                       }});
+    panels.push_back({"Hotkeys", 11.0f, [] {
+                          drawHotkeys();
+                          return false;
+                      }});
     // Its own panel: in the long Game panel the owner didn't find it.
     panels.push_back({"Video export", 3.0f, [&s] {
                           bool l = drawKey(s, "VideoCodec", "File the replay editor's Shoot video writes (MP4: the graphics card encodes, the game's codec dialog is skipped; the .mp4 lands next to where the game would put the .avi)");
@@ -1394,23 +1450,27 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "GameNight", "Real night under night skies: the game lights day maps at midnight");
                           l |= drawKey(s, "EngineMoon", "Under the black hole: the game's own moonlight (baked light and shadows, glints, the car) shines from the black hole, or is taken out. From the next map on");
                           l |= drawKey(s, "GameSkyClouds", "Keep the game's sunset clouds (and the sea mirroring them) under night skies");
-                          l |= drawKey(s, "GameHdr", "Game HDR: the game draws into a float target, bright light keeps its texture (F12 also saves it)");
+                          l |= drawKey(s, "GameHdr", "Game HDR: the game draws into a float target, bright light keeps its texture (the capture key also saves it)");
                           l |= drawKey(s, "CleanHighlights", "Clean highlights: floodlit white at night stays even (off = as in 1.4.0)");
                           l |= drawKey(s, "EngineLights", "Light sources from the game: lamps and glows as the game draws them glow, nothing is guessed (with Game HDR)");
                           l |= drawKey(s, "CasterShadows", "Long shadows from the game's own meshes drawn from the sun or black hole (needs Long-range shadows)");
                           l |= drawKey(s, "CleanWater", "Clean water: pools mirror only what they can see, sharp (off = blotches of the ramps over them)");
+                          l |= drawKey(s, "GameGBuffer", "Normals from the game's shaders: AO, shadows, reflections and light follow the blocks' bump maps and the car's real shape (with Game HDR; the first time, restart the game)");
                           l |= drawKey(s, "ShadeMenuBars", "Replay menu: the shaded image under its bars (off = leftovers of earlier frames)");
                           return l;
                       }});
-    panels.push_back({"Photo mode", g_host->splitOn ? 11.0f : 8.0f, [&config] {
+    panels.push_back({"Photo mode", g_host->splitOn ? (g_host->splitPreset ? 12.0f : 11.0f) : 8.0f, [&config] {
+                          const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
+                          const std::string splitKey = keyText(keys::Action::PhotoSplit);
                           switchRow("With the free camera (cam 7)", &config.photoAuto,
-                                    "Photo mode comes on by itself with the free camera: no HUD, full quality, effects that reach far.\nF6 turns it on or off anywhere.");
+                                    ("Photo mode comes on by itself with the free camera: no HUD, full quality, effects that reach far.\n" + photoKey +
+                                     " turns it on or off anywhere.").c_str());
                           switchRow("Hide the HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           char factor[48];
                           snprintf(factor, sizeof(factor), "%d x %d tiles = %.1fx", config.photoTiles, config.photoTiles, config.photoTiles * 0.84f);
                           if (ImGui::SliderInt("Hi-res photo", &config.photoTiles, 2, 4, factor)) config.markDirty();
-                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+F12: a photo this many times the screen size. Pause the replay while the tiles are taken.");
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+%s: a photo this many times the screen size. Pause the replay while the tiles are taken.", capKey.c_str());
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           char aperture[32];
                           snprintf(aperture, sizeof(aperture), "f/%.1f", (g_host->fNumber ? g_host->fNumber(config.photoDof) : 0.0f));
@@ -1419,20 +1479,35 @@ bool drawSettings(Config& config, Settings& s) {
                           if (g_host->splitOn) {
                               bool& split = *g_host->splitOn;
                               if (switchRow("Compare split", &split,
-                                            "One side of a line shows the game's image without the mod's effects, the other the mod's (Shift+F6).\n"
-                                            "In photos too, not in hi-res ones. The game's own changes stay on both sides (its bloom off, real night).")) {
+                                            ("One side of a line shows the game's image without the mod's effects (or another preset's look), the other yours (" + splitKey +
+                                             ").\nIn photos too, not in hi-res ones. The game's own changes stay on both sides (its bloom off, real night).").c_str())) {
                                   if (split && g_host->photoOn) g_host->photoOn();
                               }
                               ImGui::BeginDisabled(!split);
+                              if (std::string* other = g_host->splitPreset) {
+                                  // The other side: the game's image or a preset (your look stays on the mod's side;
+                                  // to compare two presets, pick one as your look and the other here).
+                                  ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                                  if (ImGui::BeginCombo("Other side", other->empty() ? "The game's image" : other->c_str())) {
+                                      if (ImGui::Selectable("The game's image", other->empty())) other->clear();
+                                      for (const std::string& name : config.presetNames()) {
+                                          if (ImGui::Selectable(name.c_str(), *other == name)) *other = name;
+                                      }
+                                      ImGui::EndCombo();
+                                  }
+                                  if (ImGui::IsItemHovered())
+                                      ImGui::SetTooltip("What the other side of the line shows: the game's own image, or a preset's look next to yours.\n"
+                                                        "A preset costs a second run of the effects every frame (photo mode only).");
+                              }
                               ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                               ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");
                               if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where the line sits, from the left (Ctrl+Shift+wheel in the game).");
                               ImGui::Checkbox("Game's image on the right", g_host->splitSwapped);
                               ImGui::EndDisabled();
                           }
-                          ImGui::TextDisabled("F12 photo  |  Shift+F12 hi-res  |  middle click: focus");
-                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  F6: on/off");
-                          if (g_host->splitOn) ImGui::TextDisabled("Shift+F6: compare split  |  Ctrl+Shift+wheel: move its line");
+                          ImGui::TextDisabled("%s photo  |  Shift+%s hi-res  |  middle click: focus", capKey.c_str(), capKey.c_str());
+                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  %s: on/off", photoKey.c_str());
+                          if (g_host->splitOn) ImGui::TextDisabled("%s: compare split  |  Ctrl+Shift+wheel: move its line", splitKey.c_str());
                           return false;
                       }});
     panels.push_back({"Files", 3.0f, [&config] {
@@ -1534,9 +1609,11 @@ void drawAbout(Config& config) {
                           }
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("Settings, presets, tmvs.log and F12 captures. Attach tmvs.log to bug reports.");
                           ImGui::Spacing();
-                          ImGui::TextDisabled("F8  menu      %s  effects on/off", g_host->toggleKey);
-                          if (g_host->reloadShaders) ImGui::TextDisabled("F9  reload shaders      F12  frame capture");
-                          else ImGui::TextDisabled("F12  frame capture");
+                          ImGui::TextDisabled("%s  menu      %s  effects on/off", keyText(keys::Action::Menu).c_str(), keyText(keys::Action::Effects).c_str());
+                          if (g_host->reloadShaders)
+                              ImGui::TextDisabled("%s  reload shaders      %s  frame capture", keyText(keys::Action::Reload).c_str(),
+                                                  keyText(keys::Action::Capture).c_str());
+                          else ImGui::TextDisabled("%s  frame capture", keyText(keys::Action::Capture).c_str());
                           return false;
                       }});
     panels.push_back({"Credits", 6.0f, [] {
@@ -1611,7 +1688,7 @@ void drawHeader(Config& config, Settings& s) {
     const float right = ImGui::GetContentRegionMax().x;
     const float switchW = h * 1.8f, buttonW = h;
     char effectsLabel[32];
-    snprintf(effectsLabel, sizeof(effectsLabel), "Effects (%s)", g_host->toggleKey);
+    snprintf(effectsLabel, sizeof(effectsLabel), "Effects (%s)", keyText(keys::Action::Effects).c_str());
     const float effectsW = ImGui::CalcTextSize(effectsLabel).x;
     ImGui::SameLine(right - buttonW * 2.0f - switchW - effectsW - ImGui::CalcTextSize(fps).x - 48.0f * g_scale);
     ImGui::TextDisabled("%s", fps);
@@ -1633,7 +1710,7 @@ void drawHeader(Config& config, Settings& s) {
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.15f, 0.15f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
     if (ImGui::Button("\xC3\x97", ImVec2(buttonW, h))) config.showOverlay = false; // U+00D7
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close (F8)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close (%s)", keyText(keys::Action::Menu).c_str());
     ImGui::PopStyleColor(4);
 
     if (!g_host->depthAvailable) {
@@ -1673,9 +1750,9 @@ void drawNavigation(Config& config) {
     const float lines = ImGui::GetTextLineHeightWithSpacing() * 4.0f;
     const float space = ImGui::GetContentRegionAvail().y - lines;
     if (space > 0.0f) ImGui::Dummy(ImVec2(0.0f, space));
-    ImGui::TextDisabled("F8  menu");
-    ImGui::TextDisabled("%s  effects on/off", g_host->toggleKey);
-    ImGui::TextDisabled("F12 frame capture");
+    ImGui::TextDisabled("%s  menu", keyText(keys::Action::Menu).c_str());
+    ImGui::TextDisabled("%s  effects on/off", keyText(keys::Action::Effects).c_str());
+    ImGui::TextDisabled("%s  frame capture", keyText(keys::Action::Capture).c_str());
     ImGui::TextDisabled("Changes save automatically");
 }
 
@@ -1803,7 +1880,9 @@ float scale() {
 
 void draw(const Host& host) {
     g_host = &host;
+    g_keysShown = false;
     drawMenu();
+    if (keys::capturing() && !g_keysShown) keys::cancelCapture();
     g_host = nullptr;
 }
 

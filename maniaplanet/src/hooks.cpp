@@ -9,6 +9,7 @@
 #include "hooks.h"
 #include "autoquality11.h"
 #include "capture.h"
+#include "engine_lights.h"
 #include "engine_frame.h"
 #include "log.h"
 #include "overlay.h"
@@ -181,6 +182,7 @@ struct Frame {
     const char* hudShader = nullptr;
     uint32_t draws = 0;
     uint32_t commandLists = 0;
+    lights::Draw light;                    // EngineLightDraws: the current draw's redraws (engine_lights.cpp)
 };
 Frame g_frame;
 // The look of the frame being drawn: your settings, or the preset the menu points at (prepareLook).
@@ -377,20 +379,23 @@ bool scenePRaster(ID3D11Buffer* buffer, float out[4]) {
 }
 
 // The cars of this frame (their G-buffer draws, VisualToCamera): resolved into the world once this
-// frame's camera is known (it is read later, at the lighting pass). The player's car is the one
-// that continues last frame's, else the one nearest the camera (the chase camera follows it).
+// frame's camera is known (it is read later, at the lighting pass). The player's car among them:
+// see CarTracker (engine_frame.h).
 EngineCar g_car;
-float g_carLast[3] = {};
-bool g_carLastValid = false;
+CarTracker g_carTracker;
 float g_carCandidates[8][12] = {};
 int g_carCount = 0;
-// The car of the last frames, for captures (car.txt): does it move evenly from frame to frame?
+// The car of the last frames, for captures (car.txt): does it move evenly from frame to frame,
+// and where are the other cars (ghosts) in the camera's view?
 struct CarLogEntry {
     double time;
     int candidates;
     bool valid;
     float position[3];
     float eye[3];
+    int picked;
+    unsigned track;
+    float view[8][3];
 };
 CarLogEntry g_carLog[240] = {};
 unsigned g_carLogNext = 0;
@@ -476,30 +481,40 @@ void resolveCar() {
     auto toWorld = [&](float x, float y, float z, float out[3]) {
         for (int i = 0; i < 3; i++) out[i] = x * w[i] + y * w[4 + i] + z * w[8 + i];
     };
-    float best = g_carLastValid ? 30.0f * 30.0f : 1e30f;
+    CarCandidate cars[8];
+    int index[8];
+    int usable = 0;
     for (int c = 0; c < count; c++) {
         const float* m = g_carCandidates[c];
-        float pos[3];
-        toWorld(m[3], m[7], m[11], pos);
-        for (int i = 0; i < 3; i++) pos[i] += g_camera.eye[i];
-        if (!std::isfinite(pos[0] + pos[1] + pos[2])) continue;
-        const float* ref = g_carLastValid ? g_carLast : g_camera.eye;
-        const float dx = pos[0] - ref[0], dy = pos[1] - ref[1], dz = pos[2] - ref[2];
-        const float score = dx * dx + dy * dy + dz * dz;
-        if (score >= best) continue;
-        best = score;
+        CarCandidate& car = cars[usable];
+        car.view[0] = m[3];
+        car.view[1] = m[7];
+        car.view[2] = m[11];
+        toWorld(m[3], m[7], m[11], car.world);
+        for (int i = 0; i < 3; i++) car.world[i] += g_camera.eye[i];
+        if (!std::isfinite(car.world[0] + car.world[1] + car.world[2])) continue;
+        index[usable++] = c;
+    }
+    const double now = nowSeconds();
+    const int pick = g_carTracker.pick(cars, usable, now);
+    if (pick >= 0) {
+        const float* m = g_carCandidates[index[pick]];
         g_car.valid = true;
-        memcpy(g_car.position, pos, sizeof(pos));
+        memcpy(g_car.position, cars[pick].world, sizeof(g_car.position));
         toWorld(m[0], m[4], m[8], g_car.right);
         toWorld(m[1], m[5], m[9], g_car.up);
         toWorld(m[2], m[6], m[10], g_car.forward);
+        g_car.track = g_carTracker.track();
     }
     CarLogEntry& e = g_carLog[g_carLogNext++ % 240];
-    e.time = nowSeconds();
-    e.candidates = g_carCount;
+    e.time = now;
+    e.candidates = usable;
     e.valid = g_car.valid;
     memcpy(e.position, g_car.position, sizeof(e.position));
     memcpy(e.eye, g_camera.eye, sizeof(e.eye));
+    e.picked = pick;
+    e.track = g_carTracker.track();
+    for (int c = 0; c < usable; c++) memcpy(e.view[c], cars[c].view, sizeof(e.view[c]));
     static bool logged = false;
     if (g_car.valid && !logged) {
         logged = true;
@@ -705,6 +720,7 @@ bool hideInterfaceDraw(ID3D11DeviceContext* ctx) {
 bool onDraw(ID3D11DeviceContext* ctx) {
     Frame& f = g_frame;
     f.draws++;
+    f.light = lights::Draw{};
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
     // Only the effects' tone maps are the tone map: the editor draws Engines/CopyColor0_ToneMapT3
     // into the HDR image in the middle of the scene (with depth), and the effects ran there, on
@@ -734,6 +750,8 @@ bool onDraw(ID3D11DeviceContext* ctx) {
             setTexture(i == 0 ? kTexHdr : kTexExposure, res);
             if (res) res->Release();
         }
+        // EngineLightDraws: the light the engine drew as light, when it was drawn into this HDR image.
+        setTexture(kTexLights, options::current().engineLightDraws ? lights::frameTexture(g_tex[kTexHdr]) : nullptr);
         f.phase = Phase::Post;
         f.postImage = f.rt;
         f.postRtv = f.rtv;
@@ -744,6 +762,12 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     if (f.phase == Phase::Scene) {
         // The scene's depth: the last screen-shaped depth buffer a scene draw used.
         if (role == Role::Scene && f.ds && screenSized(f.dsW, f.dsH)) setSceneDepth(f.ds);
+        // EngineLightDraws: what this draw adds to the light buffer (drawn again after it, below).
+        if (role == Role::Scene && options::current().engineLightDraws && g_lookSettings.enabled && g_rendererReady) {
+            Inside guard;
+            f.light = lights::classify(g_device, ctx, f.ps, f.rtv, f.rt, f.rt && screenSized(f.rtW, f.rtH));
+            if (f.light.kind != lights::Kind::None && capture::active()) capture::traceNote(lights::kindName(f.light.kind));
+        }
         // The lighting-read pass (it reads the normal and light buffers) runs with the main camera.
         const bool lightingRead = f.ps.reads(kSlotNormal) || f.ps.reads(kSlotDiffuse);
         if (lightingRead && !g_cameraThisFrame) takeCamera(ctx);
@@ -805,13 +829,27 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     return hideInterfaceDraw(ctx);
 }
 
+// EngineLightDraws: the engine's draw that was just made, again into the light buffer (once or
+// twice, engine_lights.cpp), with the same call. The engine's state is put back afterwards.
+template <typename F> void drawLights(ID3D11DeviceContext* ctx, F&& draw) {
+    const lights::Draw d = g_frame.light;
+    g_frame.light = lights::Draw{};
+    if (d.kind == lights::Kind::None) return;
+    Inside guard;
+    lights::Saved saved;
+    lights::save(ctx, saved);
+    for (int pass = 0; lights::setup(ctx, d, pass, saved); pass++) draw();
+    lights::restore(ctx, saved);
+}
+
 // ---- device ----
 
 HRESULT STDMETHODCALLTYPE createPixelShaderDetour(ID3D11Device* device, const void* code, SIZE_T size,
                                                   ID3D11ClassLinkage* linkage, ID3D11PixelShader** out) {
     const HRESULT hr = g_createPixelShader.get<CreatePixelShaderFn>(device)(device, code, size, linkage, out);
     if (SUCCEEDED(hr) && out && *out && !t_inside) {
-        const ShaderInfo info = shaderdb::identify(code, size);
+        ShaderInfo info = shaderdb::identify(code, size);
+        if (info.role == Role::Scene) info.lightSlot = shaderdb::lightTextureSlot(code, size);
         if (info.name && !strcmp(info.name, "Tech3/DeferredShadowPssm_p")) softshadow::noteEngineShader(*out, code, size);
         {
             std::unique_lock<std::shared_mutex> lock(g_shaderLock);
@@ -890,26 +928,42 @@ void afterDraw(ID3D11DeviceContext* ctx) {
 
 void STDMETHODCALLTYPE drawIndexedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, INT c) {
     if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
-    g_drawIndexed.get<DrawIndexedFn>(ctx)(ctx, a, b, c);
-    if (isMain(ctx)) afterDraw(ctx);
+    const DrawIndexedFn original = g_drawIndexed.get<DrawIndexedFn>(ctx);
+    original(ctx, a, b, c);
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c); });
+    }
 }
 
 void STDMETHODCALLTYPE drawDetour(ID3D11DeviceContext* ctx, UINT a, UINT b) {
     if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
-    g_draw.get<DrawFn>(ctx)(ctx, a, b);
-    if (isMain(ctx)) afterDraw(ctx);
+    const DrawFn original = g_draw.get<DrawFn>(ctx);
+    original(ctx, a, b);
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b); });
+    }
 }
 
 void STDMETHODCALLTYPE drawIndexedInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, INT d, UINT e) {
     if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
-    g_drawIndexedInstanced.get<DrawIndexedInstancedFn>(ctx)(ctx, a, b, c, d, e);
-    if (isMain(ctx)) afterDraw(ctx);
+    const DrawIndexedInstancedFn original = g_drawIndexedInstanced.get<DrawIndexedInstancedFn>(ctx);
+    original(ctx, a, b, c, d, e);
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c, d, e); });
+    }
 }
 
 void STDMETHODCALLTYPE drawInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, UINT d) {
     if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
-    g_drawInstanced.get<DrawInstancedFn>(ctx)(ctx, a, b, c, d);
-    if (isMain(ctx)) afterDraw(ctx);
+    const DrawInstancedFn original = g_drawInstanced.get<DrawInstancedFn>(ctx);
+    original(ctx, a, b, c, d);
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c, d); });
+    }
 }
 
 void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11CommandList* list, BOOL restore) {
@@ -1100,42 +1154,7 @@ void prepareLook() {
     photo::adjust(g_lookSettings);
     float lutAmount = config.lutAmount;
     if (!config.settings.enabled && photo::active()) {
-        // Vanilla photo mode: neutral look with only DoF and Sharpen on the game's image
-        g_lookSettings.aoStrength = 0.0f;
-        g_lookSettings.shadowStrength = 0.0f;
-        g_lookSettings.globalIllumination = 0.0f;
-        g_lookSettings.neonLight = 0.0f;
-        g_lookSettings.sunLight = 0.0f;
-        g_lookSettings.ambientTint = 0.0f;
-        g_lookSettings.fogDensity = 0.0f;
-        g_lookSettings.skyMode = 0;
-        g_lookSettings.skyEnhance = 0.0f;
-        g_lookSettings.volumetricClouds = 0.0f;
-        g_lookSettings.godRays = 0.0f;
-        g_lookSettings.volumetricLight = 0.0f;
-        g_lookSettings.bloom = 0.0f;
-        g_lookSettings.lensFlare = 0.0f;
-        g_lookSettings.wetness = 0.0f;
-        g_lookSettings.rain = 0.0f;
-        g_lookSettings.snow = 0.0f;
-        g_lookSettings.puddles = 0.0f;
-        g_lookSettings.reflections = 0.0f;
-        g_lookSettings.lightning = 0.0f;
-        g_lookSettings.neonTrail = 0.0f;
-        g_lookSettings.exposure = 0.0f;
-        g_lookSettings.contrast = 1.0f;
-        g_lookSettings.saturation = 1.0f;
-        g_lookSettings.vibrance = 0.0f;
-        g_lookSettings.temperature = 0.0f;
-        g_lookSettings.tint = 0.0f;
-        g_lookSettings.shadowTint = 0.0f;
-        g_lookSettings.lift = 0.0f;
-        g_lookSettings.gamma = 1.0f;
-        g_lookSettings.gain = 1.0f;
-        g_lookSettings.vignette = 0.0f;
-        g_lookSettings.filmGrain = 0.0f;
-        g_lookSettings.chromaticAberration = 0.0f;
-        g_lookSettings.toneCurve = 0; // game's curve
+        photo::vanillaLook(g_lookSettings);
         lutAmount = 0.0f;
     }
     g_look.settings = &g_lookSettings;
@@ -1215,7 +1234,8 @@ bool onPresent(IDXGISwapChain* sc) {
     if (capture::active()) {
         capture::onPresent(g_device, g_ctx, g_backBuffer);
         // The car in the last frames (neon trail: an even step from frame to frame?).
-        std::string text = "# time (s), dt (ms), car found, candidates, position, step (m), camera eye\n";
+        std::string text = "# time (s), dt (ms), car found, candidates, position, step (m), camera eye, track, picked, "
+                           "the candidates in camera space (x,y,z ...)\n";
         const unsigned n = std::min(g_carLogNext, 240u);
         const CarLogEntry* prev = nullptr;
         for (unsigned i = g_carLogNext - n; i < g_carLogNext; i++) {
@@ -1225,15 +1245,20 @@ bool onPresent(IDXGISwapChain* sc) {
                 const float dx = e.position[0] - prev->position[0], dy = e.position[1] - prev->position[1], dz = e.position[2] - prev->position[2];
                 step = sqrtf(dx * dx + dy * dy + dz * dz);
             }
-            char line[256];
-            snprintf(line, sizeof(line), "%.4f %.2f %d %d %.3f %.3f %.3f %.4f %.3f %.3f %.3f\n", e.time, prev ? (e.time - prev->time) * 1000.0 : 0.0,
-                     e.valid ? 1 : 0, e.candidates, e.position[0], e.position[1], e.position[2], step, e.eye[0], e.eye[1], e.eye[2]);
+            char line[512];
+            int used = snprintf(line, sizeof(line), "%.4f %.2f %d %d %.3f %.3f %.3f %.4f %.3f %.3f %.3f %u %d", e.time,
+                                prev ? (e.time - prev->time) * 1000.0 : 0.0, e.valid ? 1 : 0, e.candidates, e.position[0], e.position[1],
+                                e.position[2], step, e.eye[0], e.eye[1], e.eye[2], e.track, e.picked);
+            for (int c = 0; c < e.candidates && c < 8 && used < static_cast<int>(sizeof(line)) - 40; c++)
+                used += snprintf(line + used, sizeof(line) - used, " %.3f,%.3f,%.3f", e.view[c][0], e.view[c][1], e.view[c][2]);
             text += line;
+            text += "\n";
             prev = &e;
         }
         capture::writeText(L"car.txt", text);
     }
     capture::endFrame();
+    lights::endFrame();
 
     // The map's time of day from the engine's light (day, sunset, night presets, as in TMNF):
     // only in frames with a scene, and only once it holds for a second.
@@ -1255,9 +1280,6 @@ bool onPresent(IDXGISwapChain* sc) {
     g_shadowMissed = g_shadowSeen ? 0 : g_shadowMissed + 1;
     if (g_shadowMissed >= 4) g_shadow.valid = false;
     g_shadowSeen = false;
-    // The car: what this frame found is the one to continue next frame.
-    g_carLastValid = g_car.valid;
-    if (g_car.valid) memcpy(g_carLast, g_car.position, sizeof(g_carLast));
     g_car.valid = false;
     g_carCount = 0;
     const ShaderInfo ps = f.ps;
@@ -1308,6 +1330,7 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
         overlay::releaseTargets();
         releaseTextures();
         releaseShadow();
+        lights::release();
         g_isSceneV.clear();
         g_frame = Frame{};
         TMVS_LOG("hooks: ResizeBuffers %ux%u", w, h);

@@ -1,4 +1,5 @@
 #include "config.h"
+#include "keys.h"
 #include "log.h"
 #include <windows.h>
 #include <cstddef>
@@ -131,6 +132,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("EngineLights", "Light sources from the game (with Game HDR)", "Image", Bool, engineLights, 0.0f, 1.0f),
         TMVS_FIELD("CasterShadows", "Long shadows from the game's meshes", "Image", Bool, casterShadows, 0.0f, 1.0f),
         TMVS_FIELD("CleanWater", "Clean water (a clear mirror, no blotches)", "Image", Bool, cleanWater, 0.0f, 1.0f),
+        TMVS_FIELD("GameGBuffer", "Normals from the game's shaders (first time: restart)", "Image", Bool, gameGBuffer, 0.0f, 1.0f),
         TMVS_FIELD("ShadeMenuBars", "Shaded image under the replay menu's bars", "Image", Bool, shadeMenuBars, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
@@ -245,7 +247,7 @@ bool isSystemField(const Field& f) {
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
-           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "ShadeMenuBars");
 }
 
@@ -805,6 +807,7 @@ void Config::markDirty() {
 }
 
 void Config::tick() {
+    if (keys::takeChanged()) markDirty(); // a hotkey was rebound
     if (m_dirty && GetTickCount() - m_dirtySince > 1500) save();
 }
 
@@ -818,6 +821,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepSkyClouds = s.gameSkyClouds;
     const bool keepClean = s.cleanHighlights;
     const bool keepCleanWater = s.cleanWater;
+    const bool keepGBuffer = s.gameGBuffer;
     const bool keepMenuBars = s.shadeMenuBars;
     const bool keepHdr = s.gameHdr;
     const bool keepEngineLights = s.engineLights;
@@ -851,6 +855,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.gameSkyClouds = keepSkyClouds;
     s.cleanHighlights = keepClean;
     s.cleanWater = keepCleanWater;
+    s.gameGBuffer = keepGBuffer;
     s.shadeMenuBars = keepMenuBars;
     s.gameHdr = keepHdr;
     s.engineLights = keepEngineLights;
@@ -1273,6 +1278,7 @@ void Config::load() {
     settings.gameSkyClouds = GetPrivateProfileIntW(L"Settings", L"GameSkyClouds", 0, ini) != 0;
     settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
     settings.cleanWater = GetPrivateProfileIntW(L"Settings", L"CleanWater", 1, ini) != 0;
+    settings.gameGBuffer = GetPrivateProfileIntW(L"Settings", L"GameGBuffer", 0, ini) != 0;
     settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;
     settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 1, ini) != 0;
     settings.engineLights = GetPrivateProfileIntW(L"Settings", L"EngineLights", 1, ini) != 0;
@@ -1287,6 +1293,7 @@ void Config::load() {
     if (settings.videoCodec < 0 || settings.videoCodec > 2) settings.videoCodec = 1;
     if (GetPrivateProfileStringW(L"Settings", L"VideoBitrate", L"", target, 32, ini)) settings.videoBitrate = static_cast<float>(_wtof(target));
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
+    keys::load(ini);
     readFields(settings, ini, L"Settings", true, true);
     if (preset == kCustomPreset) {
         // Your changes, on top of the preset they started from.
@@ -1341,6 +1348,7 @@ void Config::save() {
     swprintf(value, 16, L"%d", static_cast<int>(mood));
     WritePrivateProfileStringW(L"General", L"LastMood", value, ini);
     writeFields(own, ini, L"Settings", true);
+    keys::save(ini);
     m_dirty = false;
 }
 

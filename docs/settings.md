@@ -17,7 +17,7 @@ The menu opens over most of the screen's height and the left part of its width: 
 - **Studio:** every setting, see below.
 - **Maps:** the preset per map mood (day, sunset, night) and the [Author's Shader](#authors-shader).
 - **Performance:** auto quality, target FPS, effect quality, and what each effect costs on your GPU.
-- **Settings:** options that are not part of a preset: *Preset per map type*, *Picked preset applies to all maps of this type* (off by default; on: picking a preset on a night map makes it the preset for all night maps, the same for day and sunset; off: only the Maps page sets them), *Author's Shaders*, live preview, full-screen menu, update check, motion blur only in replays, TAA, the game's MSAA, effects in replays, and the folders.
+- **Settings:** options that are not part of a preset: the *Hotkeys* ([below](#hotkeys)), *Preset per map type*, *Picked preset applies to all maps of this type* (off by default; on: picking a preset on a night map makes it the preset for all night maps, the same for day and sunset; off: only the Maps page sets them), *Author's Shaders*, live preview, full-screen menu, update check, motion blur only in replays, TAA, the game's MSAA, effects in replays, and the folders.
 - **About:** the version, updates (with the new version's notes and a link to its release page), links to the project page and the issue tracker, the folder with your settings and `tmvs.log`, and the credits.
 
 **Updates.** When the game starts, the mod asks GitHub once for the newest release (`api.github.com`, the public release list; nothing about you is sent). It never downloads or installs anything: a new version shows in the menu, you get it from the release page. Switch it off under *About → Check on startup* or *Settings* (`CheckForUpdates=0` in `settings.ini`).
@@ -58,6 +58,22 @@ A look stored in a map's comments: everyone with the mod sees the map that way, 
 
 A readable line typed into the comments works too: `[TMVS] Preset=Snowstorm Snow=1.5 SnowCover=0.8`, with the keys below. Preset names with spaces take an underscore (`Golden_Hour`). The settings that aren't part of a preset (see above) are never taken from a map.
 
+## Hotkeys
+
+The *Hotkeys* panel on the *Settings* page lists every key the mod uses, with *Change* and *Reset to defaults*. *Change* waits for the next key press (with its `Shift`, `Ctrl` or `Alt`); `Esc` cancels. The mod keeps that key press from the game's window (a key the game reads straight from the keyboard may still reach it). If the key already belongs to another action of the mod, the two swap keys and the panel says so.
+
+| Action | `settings.ini` key | Default |
+|---|---|---|
+| Menu | `Menu` | `F8` |
+| Effects on / off | `Effects` | `F7` (ManiaPlanet: `F5`, because `F7` is its friends list) |
+| Photo mode | `Photo` | `F6` |
+| Photo mode: compare split | `PhotoSplit` | `Shift+F6` |
+| Frame capture / photo (`Shift`: hi-res photo) | `Capture` | `F12` |
+| Reload shaders (TMNF only) | `Reload` | `F9` |
+| Trace (TMNF only) | `Trace` | `F11` |
+
+They are stored in the `[Keys]` section of `settings.ini` as readable names, for example `Menu=F8` or `PhotoSplit=Ctrl+Shift+F6` (`None` turns an action off; modifiers `Shift`, `Ctrl`, `Alt`; keys `A`-`Z`, `0`-`9`, `F1`-`F24`, `Num0`-`Num9`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Space`, `Enter`, `Tab`, `Up`, `Down`, `Left`, `Right`, `Pause`, `ScrollLock`, `Minus`, `Equals`, `Comma`, `Period`, `Slash`, `Backslash`, `Semicolon`, `Quote`, `Backquote`, `LBracket`, `RBracket`). A name the mod can't read, or two actions on one key, falls back to the default. Letters, digits and the game's own keys (arrows, `Space`, `Enter`, `Tab`) need `Ctrl` or `Alt`, else they would stop working in the game; `F` keys, the number pad and `Insert` / `Delete` / `Home` / `End` / `PageUp` / `PageDown` work alone. While a text field in the menu has the keyboard, only `F` key hotkeys react. The texts in this document name the default keys. Mouse controls (middle click, wheel) are fixed.
+
 ## Photo mode
 
 For screenshots of replays. It comes on by itself with the free camera (cam 7 in a replay or in the editor), and `F6` turns it on or off anywhere. While it is on:
@@ -69,6 +85,7 @@ For screenshots of replays. It comes on by itself with the free camera (cam 7 in
 - Middle click sets the focus at that point (depth of field), `Ctrl` + middle click removes it, and `Ctrl` + mouse wheel sets how strong the blur is.
 - `Shift` + mouse wheel zooms in (up to 8x, like a telephoto lens), `Shift` + middle click goes back to 1x. Only in: the game decides what to draw from its own view.
 - `Shift+F6` splits the screen to compare (*Compare split*; it turns photo mode on too): on one side of a line the game's image without the mod's effects, on the other the mod's. `Ctrl` + `Shift` + mouse wheel moves the line; the menu has a slider for it and a switch for the sides. Photos (`F12`) keep the split, hi-res photos don't (the line would sit in every tile). What the mod changes inside the game itself is on both sides: the game's own bloom stays off, real night stays night.
+- *Other side* (TrackMania Nations/United) puts a preset there instead of the game's image: your look against that preset's, on the same frame. To compare two presets, use one and pick the other there. The preset side is shaded a second time with its own history (TAA, exposure, bounce light, focus): it costs about as much again, only while the split shows a preset. The game's own changes (real night, the game's sky and sun halo hidden under night skies) follow your look on both sides, so a night-sky preset over a day map looks a little different there than when you use it.
 
 - The game's adaptive view distance (launcher *ZClip*) is off, so far blocks stay in the picture even when the frame rate drops.
 
@@ -226,5 +243,6 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Read the game's materials | `GameMaterials` | on / off (on) | While the game draws, the mod notes which material each pixel is (stencil buffer). Used for the TMUF sea (water by material, its height measured from it) and the debug view *Materials*. Not on Stadium (the engine reports its water). |
 | Keep the game's clouds under night skies | `GameSkyClouds` | on / off (off) | With a night sky over a sunset map, the game's sunset clouds still show through the stars and its sea still mirrors the sunset. Off: both go. |
 | Long shadows from the game's meshes | `CasterShadows` | on / off (on) | The mod keeps every static mesh the game draws (once it stood still for half a second) and draws them from the sun or the black hole into two shadow maps: a fine one around the camera (about 8 cm a texel, drawn again in the background as you drive on) and a coarse one over the whole track. The long shadows and the volumetric light's shafts then come from those maps instead of the height map: they don't pop with the camera, keep the meshes' real shape (overhangs, poles) and reach as far as the maps. Needs *Long-range shadows* (or *Volumetric light*). Where no map is complete yet (the first second of a map, after a light change), the height map's shadows stay. Fences and grids (see-through textures) cast no shadow from it. Removing blocks in the editor starts the maps over. About 192 MB of video memory. |
+| Normals from the game's shaders | `GameGBuffer` | on / off (off) | Experimental. The game's own material shaders also write the normal of every surface they draw (blocks with their bump maps, the car, decorations) into a second target, next to the image. Where it holds the surface that is really seen there, ambient occlusion, sun and long shadows, reflections and the relighting take that normal instead of one guessed from the depth buffer: no stair steps on curved surfaces, the bumps of the blocks catch the light. Roads and flat ground keep the guessed normal (their shaders have none). Needs *Game HDR*. The shaders are changed when the game compiles them, at its start: switch it on, then restart the game; from then on it can be switched off and on while playing (off, the game draws exactly as before). F12 also saves the normals (`capture_NNN.nrm16`, `tools/gbuffer.py` shows them). |
 | Clean water | `CleanWater` | on / off (on) | The game's water (pools, rivers, the sea) mirrors only what it can really see, sharp. Off: from above, the reflection came out from behind the ramps and bridges over the water and mirrored their tops in blotches, softened by the dry track's reflection blur. Needs the water's height from the engine (Stadium, TMUF sea). |
 | Shaded image under the replay menu's bars | `ShadeMenuBars` | on / off (on) | At the end of a race the replay shrinks into a band between the menu's half-transparent bars, and the game draws nothing under the bars any more: they showed a stepped, blocky strip of every frame of the shrinking (shaded each on its own). The shaded band, mirrored at its edges, fills them instead. Rows the game clears itself stay as they are. |

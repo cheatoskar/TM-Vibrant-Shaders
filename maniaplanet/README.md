@@ -50,6 +50,8 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 | F12 | Capture one frame (for bug reports and development); in photo mode: a photo (PNG) |
 | F6 | Photo mode: no interface, full quality, depth of field on a clicked point |
 | Shift+F6 / Ctrl+Shift+wheel | Photo mode: compare split (the game's own image on one side) / move its line |
+
+These are the defaults; the menu's *Settings* page (*Hotkeys*) rebinds them, and they are stored in the `[Keys]` section of settings.ini (see docs/settings.md).
 | Middle click / Ctrl+middle click / Ctrl+wheel | Photo mode: focus here / no focus / aperture |
 
 Otherwise the same keys as the TMNF mod. The night skies need *Real night under night skies*
@@ -66,6 +68,13 @@ Settings and your presets are in `Documents\ManiaPlanet\TMVS` (`settings.ini`, `
 the same format as in TMNF. ManiaPlanet's own options are in `maniaplanet.ini`, on the Settings
 page, panel "ManiaPlanet":
 - **HDR stage:** on = the look on the engine's HDR image, off = on its finished image.
+- **Light sources from the engine's draws** (`EngineLightDraws`, on by default since the owner's test: grass no longer glows, the road borders still do): the lamps, light
+  strips, screens, halos and the car's lights glow as the engine draws them, nothing is guessed
+  from colours (TMNF's EngineLights). The draws of self-illuminated materials (`TMapSelfIllum`,
+  `TMapAdvert`, `TMapIllum`) and the additive ones (`Tech3_Block_TAdd`: halos) are drawn a second
+  time into a float buffer of their own (a self-illuminated one twice: the second time with its
+  light texture black, subtracted, so only its own light stays); later draws over them take their
+  share away again. The debug view "Light sources" shows what counts as light.
 - **Placement**, and the **compare and check views**.
 - **Status lines.**
 - **Compare (split)** shows the game's image left and the mod's right.
@@ -206,11 +215,11 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 | `hdr_t*.dds` | What the engine's tone map reads |
 | `input.dds/.bmp`, `view.txt` | The image before the mod, and the format it was drawn with |
 | `output.dds/.bmp` | The finished frame |
-| `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion; the sun shadow pass's linear depth, static maps, split atlas and face normal |
+| `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion; the sun shadow pass's linear depth, static maps, split atlas and face normal; with EngineLightDraws `engine_lights.dds` (what its light draws added, before the exposure) |
 | `shadow_cb.bin`, `scenep.bin` | The sun shadow pass's constants (for `mp_shadowtest`) |
 | `camera.txt`, `scenev.bin` | The engine camera, decoded and raw |
 | `tonemap_cb.bin` | The engine's tone-map constants (for `mp_preview --hdr`) |
-| `car.txt` | The car per frame over the last 240 frames: time, frame time, found, position, step (is the neon trail's source even?) |
+| `car.txt` | The car per frame over the last 240 frames: time, frame time, found, position, step (is the neon trail's source even?), camera, which car was taken, and every car in the camera's view (ghosts) |
 
 `mp_preview` renders a capture through the same renderer as the game, without the game:
 
@@ -218,7 +227,8 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 build-mp/Release/mp_preview.exe <capture folder> out.bmp [--preset Punchy] [--view 6] [--set Exposure=0.5]
 build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr [--set ToneCurve=1] [--set Bloom=0.3] [--tonecb file]
 build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 40 --car x,y,z [--carfrom x,y,z]   # the neon trail of a car driving there
-build-mp/Release/mp_preview.exe --trailtest   # the trail's recording at 144 fps: how evenly its end follows the car
+build-mp/Release/mp_preview.exe --trailtest   # the trail's recording: how evenly its end and its start behind the car move
+build-mp/Release/mp_preview.exe --cartest     # which car the trail follows with a ghost around (chase, cockpit, respawn)
 ```
 
 ## Build and test
@@ -241,6 +251,8 @@ build-mp/Release/mp_harness.exe build-mp/Release/d3d11.dll tonemap.dxbc ui.dxbc 
 build-mp/Release/mp_harness.exe ... --grade in.bmp out.bmp "Punchy"   # a picture through a preset
 python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/DeferredDeCompFaceNormal_p decomp.dxbc
 build-mp/Release/mp_harness.exe ... defread.dxbc --decomp decomp.dxbc   # also: the light mask after a map change
+python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" "Tech3 Block DefReadP1 SelfIllum" selfillum.dxbc
+build-mp/Release/mp_harness.exe ... defread.dxbc --selfillum selfillum.dxbc   # also: EngineLightDraws' light buffer
 python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/DeferredShadowPssm_p pssm.dxbc 30a64492   # the five-split variant
 build-mp/Release/mp_harness.exe ... [--decomp decomp.dxbc] --shadow pssm.dxbc   # also: soft shadows
 ```
@@ -252,6 +264,8 @@ It checks that:
 - the camera is read from a SceneV upload (with multithread protection on, like the game);
 - the G-buffer and motion are found by name;
 - with `--decomp`: after a map change (new engine targets, the face-normal pass first) the light mask is the new one;
+- with `--selfillum`: with EngineLightDraws the engine's image stays the same and the light buffer holds the
+  material's own light, not its lit surface;
 - with `--shadow`: soft shadows off, the engine's sun shadow pass draws; on, the mod's shader draws a
   penumbra at a shadow's edge and the same light and shadow elsewhere, says so in the log, and the
   engine's shader and slots are bound again after the draw; off again, the engine's light mask to the bit;

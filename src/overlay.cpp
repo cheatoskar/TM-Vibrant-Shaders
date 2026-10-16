@@ -3,6 +3,7 @@
 #include "autoquality.h"
 #include "config.h"
 #include "engine.h"
+#include "keys.h"
 #include "pipeline.h"
 #include "log.h"
 #include "lut.h"
@@ -40,23 +41,35 @@ Status g_status;
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     Config& config = Config::get();
-    if (msg == WM_KEYDOWN && !(lparam & (1 << 30))) {
-        if (wparam == VK_F8) {
+    if (keys::capturing() && !config.showOverlay) keys::cancelCapture(); // the menu was closed meanwhile
+    // The menu's "Change" button waits for the next key: nothing else sees it (not the hotkeys,
+    // not the menu, not the game's window procedure). Esc cancels; the game's Esc is held back
+    // the way it is for closing the menu.
+    if (keys::capturing() && (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP || msg == WM_CHAR ||
+                              msg == WM_SYSCHAR || msg == WM_DEADCHAR)) {
+        if (wparam == VK_ESCAPE && (msg == WM_KEYDOWN || msg == WM_KEYUP)) engine::swallowEscape();
+        if (keys::feed(msg, wparam, lparam)) return 0;
+    }
+    if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lparam & (1 << 30))) {
+        // The hotkeys that need no per-frame look (Capture, Reload and Trace are polled in plugin.cpp).
+        // With a text field in the menu focused only F keys count, so typing can't trigger them.
+        const bool typing = config.showOverlay && ImGui::GetIO().WantTextInput;
+        switch (keys::resolve(static_cast<unsigned>(wparam), typing)) {
+        case keys::Action::Menu:
             config.showOverlay = !config.showOverlay;
             return 0;
-        }
-        if (wparam == VK_F7) {
+        case keys::Action::Effects:
             config.settings.enabled = !config.settings.enabled;
             config.markDirty();
             return 0;
-        }
-        if (wparam == VK_F6 && GetKeyState(VK_SHIFT) < 0) {
+        case keys::Action::PhotoSplit:
             photo::toggleSplit();
             return 0;
-        }
-        if (wparam == VK_F6) {
+        case keys::Action::Photo:
             photo::toggle();
             return 0;
+        default:
+            break;
         }
         // Esc closes the menu first, then leaves photo mode; only then does the game get it.
         if (wparam == VK_ESCAPE && (config.showOverlay || photo::active())) {
@@ -186,6 +199,7 @@ void draw(IDirect3DDevice9* device) {
         host.splitOn = &photo::splitOn();
         host.splitPosition = &photo::splitPosition();
         host.splitSwapped = &photo::splitSwapped();
+        host.splitPreset = &photo::splitPreset();
         host.photoOn = [] {
             if (!photo::active()) photo::toggle();
         };
@@ -207,8 +221,13 @@ void draw(IDirect3DDevice9* device) {
         ImDrawList* draw = ImGui::GetForegroundDrawList();
         const ImVec2 size = ImGui::GetIO().DisplaySize;
         const float x = photo::splitPosition() * size.x, y = size.y - 48.0f * menu::scale(), pad = 10.0f * menu::scale();
-        const char* left = photo::splitSwapped() ? "TMVS" : "Game";
-        const char* right = photo::splitSwapped() ? "Game" : "TMVS";
+        // With a preset on the other side: its name, and your preset's on the mod's side.
+        const std::string& preset = photo::splitPreset();
+        const Config& config = Config::get();
+        const char* other = preset.empty() ? "Game" : preset.c_str();
+        const char* mine = preset.empty() || config.preset.empty() ? "TMVS" : config.preset.c_str();
+        const char* left = photo::splitSwapped() ? mine : other;
+        const char* right = photo::splitSwapped() ? other : mine;
         const ImVec2 lw = ImGui::CalcTextSize(left);
         const auto label = [&](float at, const char* text) {
             const ImVec2 s = ImGui::CalcTextSize(text);

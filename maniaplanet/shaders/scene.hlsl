@@ -254,6 +254,16 @@ float4 PS_GITemporal(VSOut i) : SV_Target
     return float4(lerp(history.rgb, avg, weight), z);
 }
 
+// EngineLightDraws (u_Mat.x): what the engine drew as light (engine_lights.cpp: the own light of its
+// self-illuminated materials, what its additive draws added), in the HDR image's units. Nothing
+// is guessed: floodlit grass, white paint and the sky's reflections aren't in it.
+Texture2D t_engineLights : register(t17);
+
+float3 engineLightsAt(float2 uv, float e)
+{
+    return min(max(t_engineLights.SampleLevel(g_point, uv, 0).rgb, 0.0), 50000.0) * e;
+}
+
 // ---------------------------------------------------------------------------------
 // What the engine's light doesn't explain: lamps, neon, screens. Light maps can add ambient too:
 // up to `room` times the engine's ambient counts as lighting. The sun's glint (on chrome, glass,
@@ -302,18 +312,31 @@ float4 PS_SpillDown(VSOut i) : SV_Target
         float z = engineZ(suv);
         if (z >= SKY_Z) continue;
         float3 c = engineColour(suv);
-        float3 albedo = u_Engine.y > 0.5 ? engineAlbedo(suv) : c;
-        float3 n = surfaceNormal(suv, z);
-        float3 sunPart, ambPart;
-        float shadow;
-        engineLight(suv, n, albedo, sunPart, ambPart, shadow);
-        float3 rd = viewToWorldDir(normalize(viewPosition(suv, 1.0)));
-        float3 light = emissiveOf(max(c - sunPart - ambPart, 0.0), albedo, e, viewToWorldDir(n), rd);
-        // Coloured light lights its surroundings most; white lamps a little (white is also
-        // the sun's glint on chrome and glass).
-        float peak = max(light.r, max(light.g, light.b));
-        float sat = (peak - min(light.r, min(light.g, light.b))) / max(peak, 1e-4);
-        light *= lerp(0.35, 1.0, smoothstep(0.3, 0.7, sat));
+        float3 light;
+        if (u_Mat.x > 0.5)
+        {
+            // EngineLightDraws: the sources are what the engine drew as light, each in its own
+            // colour. White lamps light things too (white paint and glints are no source any
+            // more), a little less than coloured ones, as in TMNF's EngineLights.
+            light = min(engineLightsAt(suv, e), c);
+            float lp = max(light.r, max(light.g, light.b));
+            light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-4)));
+        }
+        else
+        {
+            float3 albedo = u_Engine.y > 0.5 ? engineAlbedo(suv) : c;
+            float3 n = surfaceNormal(suv, z);
+            float3 sunPart, ambPart;
+            float shadow;
+            engineLight(suv, n, albedo, sunPart, ambPart, shadow);
+            float3 rd = viewToWorldDir(normalize(viewPosition(suv, 1.0)));
+            light = emissiveOf(max(c - sunPart - ambPart, 0.0), albedo, e, viewToWorldDir(n), rd);
+            // Coloured light lights its surroundings most; white lamps a little (white is also
+            // the sun's glint on chrome and glass).
+            float peak = max(light.r, max(light.g, light.b));
+            float sat = (peak - min(light.r, min(light.g, light.b))) / max(peak, 1e-4);
+            light *= lerp(0.35, 1.0, smoothstep(0.3, 0.7, sat));
+        }
         light = min(light, 8.0);
         sum += light;
         strongest = max(strongest, light);
@@ -477,10 +500,23 @@ float4 PS_Lighting(VSOut i) : SV_Target
     // sun, the clouds' shadows). Cutting both by the same factor, or the sun's first, left less
     // ambient in sunlight than in the shade: with the sun taken out under a night sky, shadows
     // came out brighter than the ground around them.
-    ambPart = min(ambPart, c);
-    sunPart = min(sunPart, c - ambPart);
+    // EngineLightDraws: what the engine drew as light is light, not surface (no guess); the
+    // engine's sun and ambient take only what is left of the pixel.
+    const bool engineLit = u_Mat.x > 0.5;
+    float3 known = 0;
+    if (engineLit)
+    {
+        known = min(engineLightsAt(uv, e), c);
+        ambPart = min(ambPart, c - known);
+        sunPart = min(sunPart, c - known - ambPart);
+    }
+    else
+    {
+        ambPart = min(ambPart, c);
+        sunPart = min(sunPart, c - ambPart);
+    }
     float3 rest = c - sunPart - ambPart;
-    float3 emissive = emissiveOf(rest, albedo, e, nWorld, rd);
+    float3 emissive = engineLit ? known : emissiveOf(rest, albedo, e, nWorld, rd);
     float3 restLight = rest - emissive; // light maps, local lights, reflections
     // The sun's glint (its mirror image on metal and glass) is no light map: when a night sky takes
     // the sun out, it goes too. It stayed at full strength on the darkened surfaces: white spots
@@ -490,12 +526,14 @@ float4 PS_Lighting(VSOut i) : SV_Target
     // factor, so the colour stays and no edge shows where emissiveOf counts the light differently
     // (taking it out of one share left grey holes with hard edges in the gold). On night maps the
     // moon's glint the same (it stays, but blew out on metal: capture 025). Off with
-    // CleanHighlights (as in 1.4.0).
+    // CleanHighlights (as in 1.4.0). With EngineLightDraws the light sources are known: the glint
+    // is looked for in the rest only, and only the rest comes down.
     if ((u_SunOut.x > 0.0 || u_Engine2.x < -0.5) && abs(u_Engine2.x) > 0.5 && u_Engine2.w > 0.5)
     {
+        float3 glintRest = engineLit ? restLight : rest;
         float3 sunC = max(u_EngineSun.rgb, 1e-4);
         float level = max(luma(sunPart + ambPart), 1e-4);
-        float3 above = max(rest - sunPart - ambPart, 0.0);
+        float3 above = max(glintRest - sunPart - ambPart, 0.0);
         float mirror = smoothstep(0.55, 0.9, dot(reflect(rd, nWorld), u_SunOut.yzw));
         // The glint: the most of the sun's colour that fits in that light (none in the gold
         // floodlight light). Light purer than the sun (neon: blue neon under a blue moon) and
@@ -509,8 +547,8 @@ float4 PS_Lighting(VSOut i) : SV_Target
         float colour = lerp(1.0 - smoothstep(0.55, 0.85, sat), hue, saturate(sunSat * 5.0));
         float squeeze = 1.0 - 1.0 / (1.0 + luma(glint) / level);
         float cut = luma(glint) * squeeze * mirror * colour * (u_Engine2.x < -0.5 ? 1.0 : saturate(u_SunOut.x));
-        float keep = 1.0 - cut / max(luma(rest), 1e-4);
-        emissive *= keep;
+        float keep = 1.0 - cut / max(luma(glintRest), 1e-4);
+        if (!engineLit) emissive *= keep;
         restLight *= keep;
     }
 

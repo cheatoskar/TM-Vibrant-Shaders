@@ -6,6 +6,7 @@
 #include "config.h"
 #include "engine_frame.h"
 #include "hooks.h"
+#include "keys.h"
 #include "log.h"
 #include "menu.h"
 #include "options.h"
@@ -198,10 +199,12 @@ bool isKeyboard(UINT msg) {
 }
 
 bool isHotkey(WPARAM w) {
-    return w == VK_F5 || w == VK_F6 || w == VK_F8 || w == VK_F12;
+    return tmshaders::keys::used(static_cast<unsigned>(w));
 }
 
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    // The menu's "Change" button waits for the next key: only it sees the key (Esc cancels).
+    if (tmshaders::keys::capturing() && tmshaders::keys::feed(msg, w, l)) return 0;
     // Photo mode: focus click, aperture wheel and Esc, unless the menu has the mouse or keyboard
     // (the game may read the mouse directly too: it still sees them there).
     if (!(g_open && ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard))) && photo::handleMessage(hwnd, msg, w, l))
@@ -223,29 +226,27 @@ void toast(const std::string& text, ULONGLONG ms = 3000) {
     g_toastUntil = GetTickCount64() + ms;
 }
 
-bool pressed(int key, bool& was) {
-    const bool down = (GetAsyncKeyState(key) & 0x8000) != 0;
-    const bool edge = down && !was;
-    was = down;
-    return edge;
-}
-
-// TMNF's keys: F8 menu, F5 effects on/off (TMNF: F7, ManiaPlanet's friends list here), F6 photo mode, F12 capture (photo in
-// photo mode).
+// The keys come from tmshaders::keys (defaults: F8 menu, F5 effects on/off - ManiaPlanet's F7 is its friends list -, F6 photo
+// mode, Shift+F6 its compare split, F12 capture (photo in photo mode)); the player can rebind them in the menu.
 void hotkeys() {
-    static bool f5 = false, f6 = false, f8 = false, f12 = false;
+    namespace keys = tmshaders::keys;
+    // Polled every frame so the edge state stays current, also while another window has the focus.
+    const bool menuKey = keys::edge(keys::Action::Menu), effectsKey = keys::edge(keys::Action::Effects);
+    const bool photoKey = keys::edge(keys::Action::Photo), splitKey = keys::edge(keys::Action::PhotoSplit);
+    const bool captureKey = keys::edge(keys::Action::Capture);
     if (GetForegroundWindow() != g_window) return;
     Config& config = Config::get();
-    if (pressed(VK_F5, f5)) {
+    // A text field in the menu has the keyboard: only F keys count (typing must not trigger a hotkey).
+    const bool typing = g_open && ImGui::GetIO().WantTextInput;
+    auto allowed = [&](keys::Action a) { return !typing || (keys::get(a).vk >= VK_F1 && keys::get(a).vk <= VK_F24); };
+    if (effectsKey && allowed(keys::Action::Effects)) {
         config.settings.enabled = !config.settings.enabled;
         config.markDirty();
         toast(config.settings.enabled ? "TM Vibrant Shaders: on" : "TM Vibrant Shaders: off (the game's own image)");
     }
-    if (pressed(VK_F6, f6)) {
-        if (GetKeyState(VK_SHIFT) < 0) photo::toggleSplit();
-        else photo::toggle();
-    }
-    if (pressed(VK_F12, f12)) {
+    if (splitKey && allowed(keys::Action::PhotoSplit)) photo::toggleSplit();
+    if (photoKey && allowed(keys::Action::Photo)) photo::toggle();
+    if (captureKey && allowed(keys::Action::Capture)) {
         if (photo::active()) {
             photo::request();
         } else {
@@ -253,7 +254,7 @@ void hotkeys() {
             toast("Frame captured (Documents\\ManiaPlanet\\TMVS\\captures)");
         }
     }
-    if (pressed(VK_F8, f8)) config.showOverlay = !config.showOverlay;
+    if (menuKey && allowed(keys::Action::Menu)) config.showOverlay = !config.showOverlay;
 }
 
 // What the ManiaPlanet build can do so far; the menu shows only these.
@@ -285,6 +286,11 @@ void gamePanel() {
     changed |= ImGui::RadioButton("End of frame (interface too)", &placement, 1);
     o.placement = static_cast<Placement>(placement);
     changed |= ImGui::Checkbox("End of frame when the interface start isn't found", &o.fallbackAtEnd);
+    changed |= ImGui::Checkbox("Light sources from the engine's draws", &o.engineLightDraws);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("On: lamps, light strips, screens, halos and the car's lights glow as the engine draws them\n"
+                          "(drawn a second time into a buffer of their own); nothing is guessed from colours.\n"
+                          "Off: the light sources are guessed from the image (as before). F12 saves the buffer.");
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
     ImGui::SliderFloat("Soft sun shadows", &o.softShadows, 0.0f, 4.0f, o.softShadows > 0.0f ? "light %.2f degrees" : "off (the game's)");
     if (o.softShadows < 0.05f) o.softShadows = 0.0f;
@@ -306,7 +312,8 @@ void gamePanel() {
         ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
         ImGui::SliderFloat("Split", &o.split, 0.0f, 1.0f);
     }
-    if (ImGui::Button("Capture this frame (F12)")) capture::request();
+    if (ImGui::Button(("Capture this frame (" + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Capture)) + ")").c_str()))
+        capture::request();
     if (!capture::lastFolder().empty()) {
         ImGui::SameLine();
         if (ImGui::Button("Open capture")) ShellExecuteW(nullptr, L"open", capture::lastFolder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -350,7 +357,9 @@ void init(HWND window, ID3D11Device* device, ID3D11DeviceContext* ctx) {
     ImGui_ImplDX11_Init(device, ctx);
     g_originalProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&windowProc)));
     g_ready = true;
-    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - F8 menu, F5 on/off", 8000);
+    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - " + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Menu)) +
+              " menu, " + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Effects)) + " on/off",
+          8000);
     TMVS_LOG("overlay: ready on window %p", static_cast<void*>(window));
 }
 
@@ -360,6 +369,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     config.tick(); // saves settings.ini a moment after a change
     hotkeys();
     g_open = config.showOverlay;
+    if (!config.showOverlay) tmshaders::keys::cancelCapture(); // the menu was closed meanwhile
     const bool showToast = GetTickCount64() < g_toastUntil;
     const char* photoLine = photo::status();
     if (!config.showOverlay) config.previewPreset.clear();
@@ -400,7 +410,6 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             };
             h.supports = supports;
             h.timings = &timings;
-            h.toggleKey = "F5"; // ManiaPlanet's F7 opens the friends list
             h.reloadShaders = false;
             h.autoQualityReduced = [] { return hooks::autoQualityReduced(); };
             // The scene effects' debug views (scene.hlsl PS_Lighting; the stages use 20-49).

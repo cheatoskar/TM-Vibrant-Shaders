@@ -2,6 +2,7 @@
 #include "config.h"
 #include "hooks.h"
 #include "image.h"
+#include "keys.h"
 #include "log.h"
 #include "settings.h"
 #include <atomic>
@@ -164,7 +165,10 @@ void toggle() {
     g_active = on;
     TMVS_LOG("photo: mode %s", on ? "on" : "off");
     if (on) {
-        setStatus("Photo mode   F12 photo   middle click: focus   Ctrl+middle click: no focus   Ctrl+wheel: aperture   F6/Esc: off", 6);
+        namespace keys = tmshaders::keys;
+        setStatus("Photo mode   " + keys::name(keys::get(keys::Action::Capture)) + " photo   middle click: focus   Ctrl+middle click: no focus   Ctrl+wheel: aperture   " +
+                      keys::name(keys::get(keys::Action::Photo)) + "/Esc: off",
+                  6);
     } else {
         g_requested = false;
         g_focusU = g_focusV = -1.0f;
@@ -243,6 +247,44 @@ void adjust(tmshaders::Settings& s) {
     } else {
         s.depthOfField = 0.0f;
     }
+}
+
+void vanillaLook(tmshaders::Settings& s) {
+    s.aoStrength = 0.0f;
+    s.shadowStrength = 0.0f;
+    s.globalIllumination = 0.0f;
+    s.neonLight = 0.0f;
+    s.sunLight = 0.0f;
+    s.ambientTint = 0.0f;
+    s.fogDensity = 0.0f;
+    s.skyMode = 0;
+    s.skyEnhance = 0.0f;
+    s.volumetricClouds = 0.0f;
+    s.godRays = 0.0f;
+    s.volumetricLight = 0.0f;
+    s.bloom = 0.0f;
+    s.lensFlare = 0.0f;
+    s.wetness = 0.0f;
+    s.rain = 0.0f;
+    s.snow = 0.0f;
+    s.puddles = 0.0f;
+    s.reflections = 0.0f;
+    s.lightning = 0.0f;
+    s.neonTrail = 0.0f;
+    s.exposure = 0.0f;
+    s.contrast = 1.0f;
+    s.saturation = 1.0f;
+    s.vibrance = 0.0f;
+    s.temperature = 0.0f;
+    s.tint = 0.0f;
+    s.shadowTint = 0.0f;
+    s.lift = 0.0f;
+    s.gamma = 1.0f;
+    s.gain = 1.0f;
+    s.vignette = 0.0f;
+    s.filmGrain = 0.0f;
+    s.chromaticAberration = 0.0f;
+    s.toneCurve = 0; // the engine's curve
 }
 
 void focusPoint(float out[2]) {

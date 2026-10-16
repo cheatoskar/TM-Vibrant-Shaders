@@ -49,7 +49,40 @@ VSOut VS(uint id : SV_VertexID) {
     o.pos = float4(uv * float2(2, -2) + float2(-1, 1), 0.5, 1); return o;
 }
 float4 PS_Red(VSOut i) : SV_Target { return float4(1, 0, 0, 0.75); } // plain red is an engine shader too
+// What "Tech3 Block DefReadP1 SelfIllum" reads from its vertex shader: a vertex colour of 0.5 (its
+// ambient), an identity tangent frame, the view along +z, the textures' middle.
+struct SIOut {
+    float4 pos : SV_Position; float3 colour : COLOR0; float4 t0 : TEXCOORD0; float4 t1 : TEXCOORD1;
+    float4 t2 : TEXCOORD2; float4 t3 : TEXCOORD3; float4 t4 : TEXCOORD4; float2 t5 : TEXCOORD5;
+};
+SIOut VS_SI(uint id : SV_VertexID) {
+    SIOut o; float2 uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(uv * float2(2, -2) + float2(-1, 1), 0.5, 1);
+    o.colour = 0.5; o.t0 = float4(1, 0, 0, 0); o.t1 = float4(0, 1, 0, 0); o.t2 = float4(0, 0, 1, 1);
+    o.t3 = float4(0.5, 0.5, 0, 0); o.t4 = 0; o.t5 = 0.5;
+    return o;
+}
 )";
+
+float halfToFloat(uint16_t h) {
+    const uint32_t sign = (h >> 15) & 1, exponent = (h >> 10) & 31, mantissa = h & 1023;
+    float v = exponent == 0 ? mantissa / 1024.0f * std::ldexp(1.0f, -14)
+                            : (1.0f + mantissa / 1024.0f) * std::ldexp(1.0f, static_cast<int>(exponent) - 15);
+    return sign ? -v : v;
+}
+
+// The first texel (rgb) of a capture's RGBA16F DDS.
+bool firstTexel(const std::string& path, float rgb[3]) {
+    const std::vector<char> dds = readFile(path.c_str());
+    const size_t at = dds.size() > 88 && !memcmp(&dds[84], "DX10", 4) ? 148 : 128;
+    if (dds.size() < at + 8) return false;
+    for (int i = 0; i < 3; i++) {
+        uint16_t h = 0;
+        memcpy(&h, &dds[at + 2 * i], 2);
+        rgb[i] = halfToFloat(h);
+    }
+    return true;
+}
 
 ID3DBlob* compile(const char* entry, const char* profile) {
     ID3DBlob* code = nullptr;
@@ -145,6 +178,10 @@ int main(int argc, char** argv) {
     const char* shadowPath = nullptr;
     for (int i = 6; i + 1 < argc; i++)
         if (strcmp(argv[i], "--shadow") == 0) shadowPath = argv[i + 1];
+    // --selfillum: "Tech3 Block DefReadP1 SelfIllum" (gpucache.py --dump), for the check of
+    // EngineLightDraws: its own light goes into the light buffer, its lit surface doesn't, and the
+    // engine's image stays as it was.
+    const char* selfIllumPath = argc > 7 && strcmp(argv[6], "--selfillum") == 0 ? argv[7] : nullptr;
     std::vector<unsigned char> picture;
     UINT W = 640, H = 360;
     if (grade && !readBmp(argv[7], picture, W, H)) {
@@ -296,6 +333,15 @@ int main(int argc, char** argv) {
         }
     }
     bool withDecomp = false; // the frames draw DeferredDeCompFaceNormal_p before the light-read pass
+    ID3D11PixelShader* selfIllum = nullptr;
+    if (selfIllumPath) {
+        const std::vector<char> code = readFile(selfIllumPath);
+        if (code.empty() || FAILED(device->CreatePixelShader(code.data(), code.size(), nullptr, &selfIllum))) {
+            printf("cannot create engine shader %s\n", selfIllumPath);
+            return 2;
+        }
+    }
+    bool withSelfIllum = false; // the frames draw it after the light-read pass
 
     // The engine's sun shadow pass (--shadow) into a light mask of its own: a plane facing the light
     // 10 m from the camera, and in every split the left half of it under a caster 20 m nearer the
@@ -517,6 +563,52 @@ int main(int argc, char** argv) {
     const float grey = srgb ? 0.2158605f : 128.0f / 255.0f;
     const float clear[4] = {grey, grey, grey, 1};
 
+    // --selfillum: its own light texture (1x1: 0.25, 0.125, 0.0625), SelfIllumScale 2 (ShaderP),
+    // and SceneP with HDR scale 1, cloud factor 1 (the engine lights with 2 x it), identity
+    // camera rows, the sun from above (no sun or specular on a surface facing +z): its pixel is
+    // 2 x the light texture (0.5, 0.25, 0.125) on top of 2 x the ambient part (mask.w 0.5 x vertex
+    // colour 0.5 x diffuse 0.5^2 = 0.0625). Depth like the engine's: reversed, greater or equal.
+    ID3D11VertexShader* vsSelfIllum = nullptr;
+    ID3D11ShaderResourceView* selfIllumSrv = nullptr;
+    ID3D11Buffer* selfIllumCb[2] = {};
+    ID3D11DepthStencilState* greaterEqual = nullptr;
+    if (selfIllum) {
+        ID3DBlob* code = compile("VS_SI", "vs_4_0");
+        if (code) {
+            device->CreateVertexShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &vsSelfIllum);
+            code->Release();
+        }
+        const uint16_t texel[4] = {0x3400, 0x3000, 0x2C00, 0x3C00}; // 0.25, 0.125, 0.0625, 1
+        D3D11_TEXTURE2D_DESC sd1 = ed;
+        sd1.Width = sd1.Height = 1;
+        D3D11_SUBRESOURCE_DATA sdata = {texel, 8, 0};
+        ID3D11Texture2D* siTex = nullptr;
+        device->CreateTexture2D(&sd1, &sdata, &siTex);
+        device->CreateShaderResourceView(siTex, nullptr, &selfIllumSrv);
+        siTex->Release();
+        float shaderP[4] = {2.0f, 0, 0, 0};
+        float sceneP[168] = {}; // 672 bytes
+        for (int r = 0; r < 3; r++) sceneP[(1 + r) * 4 + r] = 1.0f; // WorldToCamera rows
+        sceneP[10 * 4 + 1] = 1.0f;                                   // LightDirDirInWorld0: from above
+        sceneP[18 * 4 + 3] = 1.0f;                                   // T3HdrScales.w (blocks)
+        for (int i = 0; i < 4; i++) sceneP[19 * 4 + i] = 1.0f;       // CloudsX2minRGB_Half
+        for (int i = 0; i < 3; i++) sceneP[20 * 4 + i] = 1.0f;       // CloudsX2maxRGB
+        D3D11_BUFFER_DESC b = {};
+        b.Usage = D3D11_USAGE_DEFAULT;
+        b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        b.ByteWidth = sizeof(shaderP);
+        D3D11_SUBRESOURCE_DATA d0 = {shaderP, 0, 0};
+        device->CreateBuffer(&b, &d0, &selfIllumCb[0]);
+        b.ByteWidth = sizeof(sceneP);
+        D3D11_SUBRESOURCE_DATA d1 = {sceneP, 0, 0};
+        device->CreateBuffer(&b, &d1, &selfIllumCb[1]);
+        D3D11_DEPTH_STENCIL_DESC dd = {};
+        dd.DepthEnable = TRUE;
+        dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+        dd.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
+        device->CreateDepthStencilState(&dd, &greaterEqual);
+    }
+
     auto frame = [&](bool withInterface, unsigned char* centre, unsigned char* hud) {
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(vs, nullptr, 0);
@@ -554,6 +646,22 @@ int main(int argc, char** argv) {
         ctx->PSSetShaderResources(1, 4, gbufferSrv);
         ctx->PSSetShader(lightRead, nullptr, 0);
         ctx->Draw(3, 0);
+        if (withSelfIllum) {
+            // A self-illuminated block of the lighting pass (G-buffer t1-t4, its light texture t5).
+            ctx->PSSetShaderResources(5, 1, &selfIllumSrv);
+            ctx->PSSetConstantBuffers(0, 1, &selfIllumCb[0]);
+            ctx->PSSetConstantBuffers(13, 1, &selfIllumCb[1]);
+            ctx->OMSetDepthStencilState(greaterEqual, 0);
+            ctx->VSSetShader(vsSelfIllum, nullptr, 0);
+            ctx->PSSetShader(selfIllum, nullptr, 0);
+            ctx->Draw(3, 0);
+            ctx->VSSetShader(vs, nullptr, 0);
+            ctx->OMSetDepthStencilState(nullptr, 0);
+            ID3D11ShaderResourceView* noSi = nullptr;
+            ctx->PSSetShaderResources(5, 1, &noSi);
+            ID3D11Buffer* noCb = nullptr;
+            ctx->PSSetConstantBuffers(13, 1, &noCb);
+        }
         ID3D11ShaderResourceView* noGbuffer[4] = {};
         ctx->PSSetShaderResources(1, 4, noGbuffer);
         // Tone map into the back buffer.
@@ -601,7 +709,7 @@ int main(int argc, char** argv) {
     stats(s);
     printf("  stats: placed %d, tone map %d, shaders %d/%d, depth %d, draws %d, camera %d, textures 0x%x; centre %u %u %u, "
            "hud %u %u %u\n", s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], centre[0], centre[1], centre[2], hud[0], hud[1], hud[2]);
-    check(s[2] == (decomp ? 5 : 4) + (shadowPs ? 1 : 0), "the engine shaders are recognised (and only those)");
+    check(s[2] == 4 + (decomp ? 1 : 0) + (selfIllum ? 1 : 0) + (shadowPs ? 1 : 0), "the engine shaders are recognised (and only those)");
     check(s[6] == 1, "the engine camera is read from its SceneV upload");
     check(s[8] == 1000 && s[9] == 2000 && s[10] == 3000, "the camera's eye is (10, 20, 30)");
     const int wanted = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7);
@@ -795,6 +903,59 @@ int main(int argc, char** argv) {
         check(same, "after a map change the light mask is the engine's new one (face-normal pass first)");
         newMaskRtv->Release();
         newMask->Release();
+    }
+
+    // EngineLightDraws: a self-illuminated draw of the lighting pass is drawn again into the light
+    // buffer, twice (as it is, then subtracted with its light texture black): the buffer holds its
+    // own light only. The engine's HDR image must be the same with it on and off.
+    if (selfIllum) {
+        withSelfIllum = true;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        const float gbufferClear[4][4] = {{0.5f, 0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f, 1}, {0, 0, 0, 0}, {0.5f, 0.5f, 1, 1}};
+        for (int i = 0; i < 4; i++) {
+            ID3D11RenderTargetView* rtv = nullptr;
+            device->CreateRenderTargetView(gbuffer[i], nullptr, &rtv);
+            if (rtv) {
+                ctx->ClearRenderTargetView(rtv, gbufferClear[i]);
+                rtv->Release();
+            }
+        }
+        auto newestCapture = [&] {
+            std::string newest;
+            find = FindFirstFileA(pattern.c_str(), &fd);
+            if (find != INVALID_HANDLE_VALUE) {
+                do newest = fd.cFileName;
+                while (FindNextFileA(find, &fd));
+                FindClose(find);
+            }
+            return std::string(data) + "\\captures\\" + newest;
+        };
+        float hdrOff[3] = {}, hdrOn[3] = {}, light[3] = {};
+        set("EngineLightDraws", "0");
+        requestCapture();
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        const std::string off = newestCapture();
+        const bool haveOff = firstTexel(off + "\\hdr_t0.dds", hdrOff);
+        const bool noLightsOff = GetFileAttributesA((off + "\\engine_lights.dds").c_str()) == INVALID_FILE_ATTRIBUTES;
+        set("EngineLightDraws", "1");
+        requestCapture();
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        const std::string on = newestCapture();
+        const bool haveOn = firstTexel(on + "\\hdr_t0.dds", hdrOn) && firstTexel(on + "\\engine_lights.dds", light);
+        set("EngineLightDraws", "0");
+        withSelfIllum = false;
+        printf("  self-illuminated: HDR off %.4f %.4f %.4f, on %.4f %.4f %.4f, light buffer %.4f %.4f %.4f\n", hdrOff[0], hdrOff[1],
+               hdrOff[2], hdrOn[0], hdrOn[1], hdrOn[2], light[0], light[1], light[2]);
+        check(haveOff && noLightsOff, "with EngineLightDraws off there is no light buffer");
+        check(haveOn && hdrOn[0] == hdrOff[0] && hdrOn[1] == hdrOff[1] && hdrOn[2] == hdrOff[2],
+              "with EngineLightDraws on the engine's HDR image is unchanged");
+        const float want[3] = {0.5f, 0.25f, 0.125f};
+        bool own = haveOn, lit = haveOn;
+        for (int i = 0; i < 3; i++) {
+            own = own && std::fabs(light[i] - want[i]) < 0.004f;
+            lit = lit && hdrOn[i] - light[i] > 0.1f; // its lit surface (about 0.126) stayed out
+        }
+        check(own && lit, "the light buffer holds the material's own light, not its lit surface");
     }
 
     // Resize like a resolution change.

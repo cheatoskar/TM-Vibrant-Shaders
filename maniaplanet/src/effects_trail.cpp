@@ -142,6 +142,13 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     m_lastTime = frame.time;
     const EngineCar* car = frame.car;
     const bool carSeen = car && car->valid;
+    // The car's origin lies on the road (capture 030: 2 mm under it, 2 cm under it to 3 cm over it
+    // as the car rides), and the road hides the line from 4.2 cm under it (the shader's depth test,
+    // seen from the chase camera): a car pressed into its springs took the line with it. 10 cm
+    // over the origin along the car's up it stays clear of the road.
+    float position[3] = {};
+    if (carSeen)
+        for (int i = 0; i < 3; i++) position[i] = car->position[i] + car->up[i] * kLift;
     // Another map (or the editor): start over. Without the car (a free camera far away, a menu on
     // top) the trail stays as it is.
     if (maplook::mapSerial() != m_mapSerial) {
@@ -151,9 +158,16 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     // The run starts again: the car jumps back to where the trail began (a respawn at a checkpoint
     // only breaks the line).
     if (carSeen && m_keptValid && m_startValid) {
-        const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
-        const float sx = car->position[0] - m_start[0], sy = car->position[1] - m_start[1], sz = car->position[2] - m_start[2];
+        const float dx = position[0] - m_kept[0], dy = position[1] - m_kept[1], dz = position[2] - m_kept[2];
+        const float sx = position[0] - m_start[0], sy = position[1] - m_start[1], sz = position[2] - m_start[2];
         if (dx * dx + dy * dy + dz * dz > 25.0f * 25.0f && sx * sx + sy * sy + sz * sz < 12.0f * 12.0f) clear();
+    }
+    // Another car taken up (the camera went to another, or the one followed was a ghost): a new
+    // line, none from the old car's place to the new one's.
+    if (carSeen && car->track != m_track) {
+        m_track = car->track;
+        m_break = true;
+        m_liveFrames = 0;
     }
     if (s.neonTrail <= 0.0f) {
         m_break = true;
@@ -162,7 +176,7 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     m_time += dt;
     m_clock += dt;
 
-    const bool live = record(dt, carSeen ? car->position : nullptr);
+    const bool live = record(dt, carSeen ? position : nullptr);
     const UINT points = live ? std::min(m_count + 1, kPoints) : m_count;
     const UINT next = live ? (m_head + 1) % kPoints : m_head;
     if (points < 2) return;

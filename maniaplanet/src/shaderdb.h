@@ -23,6 +23,9 @@ struct ShaderInfo {
     Role role = Role::Unknown;
     const char* name = nullptr; // null: not one of the engine's cached shaders
     uint8_t slots[kSlotCount] = {kNoSlot, kNoSlot, kNoSlot, kNoSlot, kNoSlot, kNoSlot};
+    // The texture slot of the material's own light (TMapSelfIllum, TMapAdvert: the screens,
+    // TMapIllum), kNoSlot if it has none (EngineLightDraws, engine_lights.cpp).
+    uint8_t lightSlot = kNoSlot;
     bool reads(Slot s) const { return slots[s] != kNoSlot; }
 };
 
@@ -30,6 +33,9 @@ namespace shaderdb {
 
 // Looks up DXBC bytecode by its checksum.
 ShaderInfo identify(const void* bytecode, size_t size);
+// The slot the bytecode binds a texture of the self-illumination's names at (its RDEF chunk), or
+// kNoSlot.
+uint8_t lightTextureSlot(const void* bytecode, size_t size);
 const char* roleName(Role role);
 size_t count();
 
