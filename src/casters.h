@@ -33,6 +33,10 @@ struct Maps {
     MapInfo farMap;  // the whole track, coarse
 };
 
+// Every indexed draw of the main camera asks first (before looking at its state): false, it isn't
+// checked this frame (a later frame checks it, see frameDone) or the recording is paused.
+bool takeTurn();
+
 // One indexed draw of the main camera, with the game's state bound. view / projection: the
 // camera's (SetTransform). Only opaque draws of static materials should come here.
 void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,

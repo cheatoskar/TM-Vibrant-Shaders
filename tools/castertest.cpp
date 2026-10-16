@@ -187,7 +187,7 @@ int main(int argc, char** argv) {
             device->SetIndices(ibs[in.mesh]);
             LARGE_INTEGER a, b;
             QueryPerformanceCounter(&a);
-            casters::recordDraw(device, D3DPT_TRIANGLELIST, 0, 0, 24, 0, 12, view, proj);
+            if (casters::takeTurn()) casters::recordDraw(device, D3DPT_TRIANGLELIST, 0, 0, 24, 0, 12, view, proj);
             QueryPerformanceCounter(&b);
             frameMs += static_cast<double>(b.QuadPart - a.QuadPart) * toMs;
         }

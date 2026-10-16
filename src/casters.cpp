@@ -454,8 +454,8 @@ void forgetMeshes() {
 void logStats(const char* when) {
     const Stats& s = g_stats;
     const double f = s.frames ? static_cast<double>(s.frames) : 1.0;
-    TMVS_LOG("casters (%s): %u meshes kept (%u new, %u copies merged, %u without readable bounds); per frame %.0f opaque draws, "
-             "%.0f checked (%.0f known, %.0f waiting, %.0f other shader, %.0f other projection, %.0f no float position, %.0f instanced, "
+    TMVS_LOG("casters (%s): %u meshes kept (%u new, %u copies merged, %u without readable bounds); per frame %.0f indexed draws, "
+             "%.0f opaque ones checked (%.0f known, %.0f waiting, %.0f other shader, %.0f other projection, %.0f no float position, %.0f instanced, "
              "%.0f not managed), %.0f while paused; CPU %.3f ms recording + %.3f ms drawing, %.0f meshes drawn into the maps; near map "
              "drawn %u times, whole-track map %u times; %u frames",
              when, static_cast<unsigned>(g_casters.size()), s.promoted, s.duplicates, s.unbounded, s.draws / f, s.checked / f, s.known / f,
@@ -646,15 +646,18 @@ void mapInfo(const LightMap& m, MapInfo& out) {
 
 } // namespace
 
-void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
-                const float view[16], const float projection[16]) {
+bool takeTurn() {
     g_stats.draws++;
     const unsigned drawIndex = g_frameDraws++;
     if (g_paused) {
         g_stats.paused++;
-        return;
+        return false;
     }
-    if ((drawIndex + g_phase) % g_stride != 0) return; // a later frame's turn
+    return (drawIndex + g_phase) % g_stride == 0; // else a later frame's turn
+}
+
+void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
+                const float view[16], const float projection[16]) {
     g_stats.checked++;
     LARGE_INTEGER t0;
     QueryPerformanceCounter(&t0);

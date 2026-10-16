@@ -1674,6 +1674,7 @@ void onDraw(IDirect3DDevice9* device) {
 // keeps the meshes that stay put). Not the car (it moves), glass or water (light passes).
 void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count) {
     if (!g_castersOn || !g_scene.inMainCamera || !g_scene.haveView || !g_scene.haveProjection) return;
+    if (!casters::takeTurn()) return; // most draws of a big map wait for a later frame
     DWORD z = FALSE, zwrite = FALSE, blend = FALSE, alphaTest = FALSE, colorWrite = 0;
     device->GetRenderState(D3DRS_ZENABLE, &z);
     device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
