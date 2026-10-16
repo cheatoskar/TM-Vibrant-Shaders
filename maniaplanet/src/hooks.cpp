@@ -175,6 +175,7 @@ struct Frame {
     ID3D11Resource* postImage = nullptr;   // where the tone map / post effects wrote last
     ID3D11RenderTargetView* postRtv = nullptr; // the view they wrote it through (not owned)
     bool toneMapped = false;               // the mod's HDR stage replaced the engine's tone map
+    bool sideB = false;                    // and the compare split's preset drew its side in it
     bool toneMapSeen = false;
     bool injected = false;
     unsigned texturesTaken = 0;            // the engine textures taken this frame (bit 1 << kTex*)
@@ -188,6 +189,18 @@ Frame g_frame;
 // The look of the frame being drawn: your settings, or the preset the menu points at (prepareLook).
 tmshaders::Settings g_lookSettings;
 Look g_look;
+// Photo mode's compare split with a preset on the other side (TMNF's renderSideB): that look
+// from a Renderer of its own, on the same engine inputs. Its TAA, exposure, bounce light, focus
+// and sky history stay its own: one renderer's history shared by two looks would blend each
+// into the other. Each draws only its side of the line. Only while shown (it doubles the
+// effects' cost and memory); with no preset chosen nothing of it runs.
+Renderer g_rendererB;
+bool g_rendererBReady = false;
+bool g_rendererBFailed = false;  // not retried every frame (another preset tries again)
+std::string g_sideBPreset;       // the preset g_rendererB's history belongs to
+tmshaders::Settings g_lookSettingsB;
+Look g_lookB;
+bool g_sideBWanted = false;      // this frame's split shows a preset (prepareLook)
 AutoQuality g_autoQuality;
 unsigned g_frameCounter = 0;
 tmshaders::Mood g_seenMood = tmshaders::Mood::Unknown;
@@ -639,11 +652,47 @@ bool readsResource(ID3D11DeviceContext* ctx, ID3D11Resource* res) {
     return found;
 }
 
+void releaseSideB() {
+    if (g_rendererBReady) TMVS_LOG("hooks: compare split with a preset off, its renderer released");
+    g_rendererB.release();
+    g_rendererBReady = false;
+    g_rendererBFailed = false;
+    g_sideBPreset.clear();
+}
+
+// The compare split's second renderer, made when the preset side is first shown.
+bool ensureSideB() {
+    if (g_rendererBReady) return true;
+    if (g_rendererBFailed || !g_device) return false;
+    Inside guard; // the mod's own shaders aren't the game's
+    g_rendererBReady = g_rendererB.init(g_device);
+    if (!g_rendererBReady) {
+        g_rendererB.release();
+        g_rendererBFailed = true;
+        TMVS_LOG("hooks: compare split with %s: its renderer failed, the game's image stays on that side", g_sideBPreset.c_str());
+        return false;
+    }
+    g_rendererB.effects().setSound(false); // the weather sound stays your look's
+    TMVS_LOG("hooks: compare split with the preset %s (a second renderer)", g_sideBPreset.c_str());
+    return true;
+}
+
+// One side of the compare split with a preset: the look draws only there, the line at its edge.
+// The other side (the preset's) is left of the line unless swapped, as the game's image is.
+Look sideLook(const Look& base, bool presetSide) {
+    return splitSide(base, photo::splitPosition(), presetSide != photo::splitSwapped());
+}
+
 void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed where) {
     if ((!g_lookSettings.enabled && !photo::active()) || !g_rendererReady) return;
     EngineView view{g_tex, cameraUsable() ? &g_camera : nullptr};
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
-    if (!g_renderer.apply(ctx, target, view, g_look, options::current(), g_frame.toneMapped)) return;
+    // The compare split's preset side: when it drew its half of the HDR stage, or without the HDR
+    // stage (the whole look on the finished image, each look on its side). Else the game's image
+    // stays there (g_look.split).
+    const bool sideB = g_sideBWanted && (g_frame.toneMapped ? g_frame.sideB : ensureSideB());
+    if (!g_renderer.apply(ctx, target, view, sideB ? sideLook(g_look, false) : g_look, options::current(), g_frame.toneMapped)) return;
+    if (sideB) g_rendererB.apply(ctx, target, view, sideLook(g_lookB, true), options::current(), g_frame.toneMapped);
     g_frame.placed = where;
     if (capture::active()) capture::onGraded(g_device, ctx, g_renderer.lastInput(), g_renderer.lastViewFormat(), view);
     // A picture for a preset you saved: the finished frame without the interface.
@@ -672,7 +721,14 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     view.time = nowSeconds();
     view.photo = photo::active();
     photo::focusPoint(view.focus);
-    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, g_look, view);
+    // Compare split with a preset: its side first (only its half of the target), then yours on
+    // the other half. If the preset's renderer can't run, yours draws all of it with the game's
+    // image on that side, as without a preset.
+    bool sideB = false;
+    if (g_sideBWanted && ensureSideB())
+        sideB = g_rendererB.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, sideLook(g_lookB, true), view);
+    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, sideB ? sideLook(g_look, false) : g_look, view);
+    g_frame.sideB = sideB && done;
     for (auto* v : in)
         if (v) v->Release();
     if (constants) constants->Release();
@@ -1170,6 +1226,30 @@ void prepareLook() {
     g_look.frame = ++g_frameCounter;
     const Options& o = options::current();
     g_look.split = o.view == View::Split ? o.split : photo::splitForLook();
+
+    // The compare split's other side as a preset's look: your machine settings with the
+    // preset's look and photo mode's lens (as TMNF's renderSideB). Released when the split,
+    // photo mode or the preset goes; another preset starts with a fresh history.
+    g_sideBWanted = false;
+    const std::string& name = photo::splitPreset();
+    if (!photo::splitShown() || name.empty() || o.view == View::Split || !g_rendererReady) {
+        if (g_rendererBReady || g_rendererBFailed) releaseSideB();
+        return;
+    }
+    if (name != g_sideBPreset) {
+        if (g_rendererBReady || g_rendererBFailed) releaseSideB();
+        g_sideBPreset = name;
+    }
+    tmshaders::Settings b = config.settings;
+    if (!config.presetSettings(name, b)) return; // a preset deleted meanwhile: the game's image
+    b.enabled = true; // with the shaders off (F5): the preset next to the game's image
+    b.debugView = g_lookSettings.debugView;
+    photo::adjust(b);
+    g_lookSettingsB = b;
+    g_lookB = g_look;
+    g_lookB.settings = &g_lookSettingsB;
+    g_lookB.lutAmount = config.lutAmount;
+    g_sideBWanted = true;
 }
 
 // True: the frame isn't shown (its draws went past the mod: the engine's own look, a flash).
@@ -1327,6 +1407,7 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
     if (sc == g_swapChain) {
         releaseBackBuffer();
         g_renderer.releaseTargets();
+        g_rendererB.releaseTargets(); // the compare split's preset side
         overlay::releaseTargets();
         releaseTextures();
         releaseShadow();

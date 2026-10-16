@@ -391,6 +391,11 @@ const char* tooltipFor(const char* key) {
         {"SharePaste", "Reads a share code from the clipboard and makes it your look: unsaved, on top of the built-in preset it is closest to, so Save as preset keeps it. Nothing saved is replaced. Settings this version doesn't know are ignored and counted; values out of range are moved into range."},
         // Photo mode (General, not a look setting).
         {"SplitPhotoLabels", "Photos of the compare split get both sides' names burnt in at the bottom, at the line (the list on the screen is never in them)."},
+        // TrackMania 2 (maniaplanet.ini, the host's own panel).
+        {"BlackHoleMoon", "Night maps under the black hole: the game's moon (its blue glint on chrome and the sculptures, its light) is taken out\n"
+                          "of the picture and the black hole lights the scene instead, warm, with the game's own shine on each material.\n"
+                          "1 = as bright as the moon was, 0 = off. Shadows: the game's moon shadows where the black hole stands near the moon,\n"
+                          "else only short contact shadows. Only the mod's shaders change, nothing in the game."},
     };
     for (const auto& t : kTips)
         if (!strcmp(t.key, key)) return t.tip;
@@ -1628,10 +1633,11 @@ bool drawSettings(Config& config, Settings& s) {
                               if (switchRow("Compare split", &split,
                                             ("One side of a line shows the game's image without the mod's effects (or another preset's look), the other yours (" + splitKey +
                                              ").\n" +
-                                             // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
-                                             (g_host->splitPreset ? "In photos too, hi-res ones included; the aperture blurs both sides alike."
-                                                                  : "In photos too, not in hi-res ones.") +
-                                             " The game's own changes stay on both sides (its bloom off, real night).").c_str())) {
+                                             (g_host->splitNote ? std::string(g_host->splitNote)
+                                                                // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
+                                                                : std::string(g_host->splitPreset ? "In photos too, hi-res ones included; the aperture blurs both sides alike."
+                                                                                                  : "In photos too, not in hi-res ones.") +
+                                                                      " The game's own changes stay on both sides (its bloom off, real night).")).c_str())) {
                                   if (split && g_host->photoOn) g_host->photoOn();
                               }
                               ImGui::BeginDisabled(!split);
@@ -1975,6 +1981,10 @@ void drawMenu() {
 }
 
 } // namespace
+
+const char* tooltip(const char* key) {
+    return tooltipFor(key);
+}
 
 void setupStyle(HWND window) {
     ImGuiIO& io = ImGui::GetIO();

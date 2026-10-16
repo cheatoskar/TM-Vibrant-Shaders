@@ -8,7 +8,7 @@
 //   PS_DownsampleND (half, 2 targets) -> PS_OcclusionShadow (half) -> PS_BilateralBlur x2
 //   -> PS_GI (quarter) -> PS_GITemporal -> PS_SpillDown (quarter) -> PS_SpillBlur x2
 //   -> [sky, clouds: sky.hlsl] -> PS_Lighting (full, the result) -> [weather, cinema]
-// entries: PS_DownsampleND:ps_5_0 PS_OcclusionShadow:ps_5_0 PS_BilateralBlur:ps_5_0 PS_GI:ps_5_0 PS_GITemporal:ps_5_0 PS_SpillDown:ps_5_0 PS_SpillBlur:ps_5_0 PS_Lighting:ps_5_0
+// entries: PS_DownsampleND:ps_5_0 PS_OcclusionShadow:ps_5_0 PS_BilateralBlur:ps_5_0 PS_GI:ps_5_0 PS_GITemporal:ps_5_0 PS_SpillDown:ps_5_0 PS_SpillBlur:ps_5_0 PS_Lighting:ps_5_0 PS_LightingMoon:ps_5_0
 #include "common.hlsli"
 #include "sky.hlsli"
 #include "weather.hlsli"
@@ -457,7 +457,9 @@ float4 volumetricLight(float2 uv, float3 rd, float daylight)
     return r;
 }
 
-float4 PS_Lighting(VSOut i) : SV_Target
+// blackHoleMoon: the BlackHoleMoon variant (PS_LightingMoon, effects.cpp picks it while the
+// option acts); PS_Lighting is compiled without it, so with the option off nothing changes.
+float4 lightingPass(VSOut i, bool blackHoleMoon)
 {
     float2 uv = i.uv;
     float3 c = engineColour(uv);
@@ -591,6 +593,54 @@ float4 PS_Lighting(VSOut i) : SV_Target
     float3 sun = sunPart * sunVis * lerp(float3(1, 1, 1), sunTint, u_SunColor.w * 0.35);
     float3 moon = sunPart * sunVis * float3(0.35, 0.5, 0.85) * 0.05;
     sun = lerp(sun, moon, saturate(u_SunOut.x));
+    // BlackHoleMoon (u_Moon.x: strength): on a night map under the black hole the engine's moon
+    // makes way for the black hole's light. Its glint (blue on chrome and the ring sculptures) is
+    // rebuilt with the engine's own formula (Block_DefReadP1_p: light x N.L x shadow x (N.H)^n x n
+    // x MSpecular.x^2 x SpecScale x the light's w, n = MSpecular.w x SpecMaxExp + 1, all x 2 x its
+    // cloud factor) and taken out of the rest; its diffuse light (sunPart) goes. The black hole then
+    // lights with the same formulas from its own direction, in its warm colour, as bright as the
+    // moon was. Its shadows: the contact shadows toward it; the engine's shadow map is the moon's
+    // and counts only as far as the two directions agree (no long shadows from the black hole).
+    float3 moonGlint = 0;
+    if (blackHoleMoon && u_Moon.x > 0.0)
+    {
+        float4 spec = t_specular.SampleLevel(g_point, uv, 0);
+        float gloss = spec.w * u_Moon.y + 1.0;
+        float specAmount = spec.x * spec.x * u_Moon.z;
+        float3 toEye = -rd;
+        float3 L = u_SunOut.yzw;
+        float cloud = u_Moon.w;
+        float nl = saturate(dot(nWorld, L));
+        float nh = saturate(dot(nWorld, normalize(toEye + L)));
+        moonGlint = 2.0 * e * cloud * u_EngineSun.rgb * (nl * engineShadow * pow(max(nh, 1e-6), gloss) * gloss * specAmount);
+        // Out of the rest as a whole colour, as much of it as fits: clamping each channel took the
+        // warm light-map light along where the estimate was too big (red gone under a blue glint).
+        float3 restPos = max(restLight, 0.0);
+        float3 g = max(moonGlint, 1e-6);
+        float fit = saturate(min(restPos.r / g.r, min(restPos.g / g.g, restPos.b / g.b)));
+        restLight -= moonGlint * fit;
+        if (!engineLit)
+        {
+            float3 left = moonGlint * (1.0 - fit);
+            float3 em = max(emissive, 0.0);
+            emissive -= left * saturate(min(em.r / max(left.r, 1e-6), min(em.g / max(left.g, 1e-6), em.b / max(left.b, 1e-6))));
+        }
+        // The moon's diffuse light goes whole (sun = the black hole's below). Unlike the day sun
+        // under a night sky (only the darkest cloud factor's part, see above), on the night maps
+        // the estimate is the moon's light: with only that part out the car's moon shadow stayed
+        // at half strength on the road, with all of it out the road is even, no light silhouette
+        // (capture 030); the white ring sculpture shows its own red and gold again (capture 025).
+
+        float3 H = u_SunWorld.xyz; // the black hole (effects.cpp: the effects' light)
+        float rise = smoothstep(-0.05, 0.08, H.y);
+        float agree = smoothstep(0.75, 0.97, dot(H, L));
+        float vis = sunVis * lerp(1.0, engineShadow, agree);
+        float3 holeLight = u_SunColor.rgb / max(luma(u_SunColor.rgb), 1e-3) * luma(u_EngineSun.rgb) * (u_Moon.x * rise);
+        float hl = saturate(dot(nWorld, H)) * vis;
+        float hh = saturate(dot(nWorld, normalize(toEye + H)));
+        sun = 2.0 * e * holeLight * hl * (albedo + cloud * pow(max(hh, 1e-6), gloss) * gloss * specAmount);
+        surf.sunShadow = vis;
+    }
     // Ambient, light maps and reflections: occlusion, the sky's tint (more in shadow).
     float shade = 1.0 - saturate(engineShadow);
     float3 ambient = (ambPart + restLight) * ao * lerp(float3(1, 1, 1), skyTint, u_SkyColor.w * (0.15 + 0.25 * shade));
@@ -641,6 +691,17 @@ float4 PS_Lighting(VSOut i) : SV_Target
     if (debug == 10) return float4(ambPart, 1);
     if (debug == 11) return float4(rest, 1);
     if (debug == 12) return float4(emissive, 1);
+    if (blackHoleMoon && debug == 13) return float4(moonGlint, 1); // BlackHoleMoon: the engine's moon glint as rebuilt
     if (debug == 25) return float4(u_Pass1.x > 0.5 ? g_volume.SampleLevel(g_linear, uv, 0).rgg : float3(0.5, 0, 0.5), 1);
     return float4(result, 1);
+}
+
+float4 PS_Lighting(VSOut i) : SV_Target
+{
+    return lightingPass(i, false);
+}
+
+float4 PS_LightingMoon(VSOut i) : SV_Target
+{
+    return lightingPass(i, true);
 }

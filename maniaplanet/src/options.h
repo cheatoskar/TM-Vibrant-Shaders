@@ -30,6 +30,10 @@ struct Options {
     // light, not guessed from the image's colours (engine_lights.cpp). On since the owner's test
     // (2026-10-16, captures 031/032): grass no longer glows, the road borders still do.
     bool engineLightDraws = true;
+    // Night maps under the black hole: the engine's moon (its diffuse light and its blue glint) is
+    // taken out of the image and the black hole lights the scene instead, at this strength (1 = as
+    // bright as the game's moon; 0 = off, the default). Shader side only (scene.hlsl).
+    float blackHoleMoon = 0.0f;
 };
 
 namespace options {

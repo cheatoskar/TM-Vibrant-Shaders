@@ -172,6 +172,8 @@ public:
     // the sky stage from the engine's tone-map constants: in effect from the next frame's constants.
     void setTmnfScale(float scale) { m_tmnfScale = scale; }
     float tmnfScale() const { return m_tmnfScale; }
+    // Off for the compare split's second look: one weather sound, the one of your look.
+    void setSound(bool on) { m_sound = on; }
 
 private:
     bool ensureTargets(UINT w, UINT h);
@@ -188,6 +190,7 @@ private:
     ID3D11PixelShader* m_spillDown = nullptr;
     ID3D11PixelShader* m_spillBlur = nullptr;
     ID3D11PixelShader* m_lighting = nullptr;
+    ID3D11PixelShader* m_lightingMoon = nullptr; // with BlackHoleMoon's relight (scene.hlsl)
     ID3D11PixelShader* m_volumetric = nullptr;
     ID3D11Buffer* m_frameCb = nullptr;
     ID3D11Buffer* m_passCb = nullptr;
@@ -216,7 +219,7 @@ private:
     CinemaStage m_cinema;
     TrailStage m_trail;
 
-    float m_c[48][4] = {};
+    float m_c[49][4] = {};
     float m_prevW2C[12] = {};
     float m_prevProj[4] = {};
     bool m_havePrevious = false;
@@ -225,6 +228,7 @@ private:
     double m_lastTime = 0.0;
     // About what the engine's usual tone map gives (a sunset capture: 1.82) until it is read back.
     float m_tmnfScale = 1.8f;
+    bool m_sound = true;
     int m_boltSlot = -1000000; // lightning strike the bolt direction belongs to
     float m_boltAzimuth = 0.0f;
 };

@@ -304,6 +304,12 @@ void gamePanel() {
                           "Off: the game's own shadows.\n"
                           "The mod draws the game's shadow pass with its own shader (nothing in the game's memory changes).\n"
                           "Whether ManiaPlanet's anti-cheat minds that is not known.");
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+    ImGui::SliderFloat("Black hole moon", &o.blackHoleMoon, 0.0f, 2.0f, o.blackHoleMoon > 0.0f ? "%.2f" : "Off");
+    if (o.blackHoleMoon < 0.05f) o.blackHoleMoon = 0.0f;
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    if (ImGui::IsItemHovered())
+        if (const char* tip = tmshaders::menu::tooltip("BlackHoleMoon")) ImGui::SetTooltip("%s", tip);
     if (changed) options::save();
     int view = static_cast<int>(o.view);
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
@@ -426,6 +432,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {10, "Engine light: ambient"},
                             {11, "Engine light: the rest"},
                             {12, "Light sources (lamps, neon)"},
+                            {13, "The moon's glint (with Black hole moon)"},
                             {20, "Light shafts"},
                             {21, "Volumetric clouds"},
                             {22, "Sky"},
@@ -438,6 +445,9 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             h.splitOn = &photo::splitOn();
             h.splitPosition = &photo::splitPosition();
             h.splitSwapped = &photo::splitSwapped();
+            h.splitPreset = &photo::splitPreset();
+            h.splitNote = "In photos too. A preset side gets the aperture too; the game's image stays sharp. "
+                          "Soft shadows and the light draws are the game's, the same on both sides.";
             h.photoOn = [] {
                 if (!photo::active()) photo::toggle();
             };
@@ -464,8 +474,12 @@ void frame(ID3D11RenderTargetView* backBuffer) {
         const float sc = tmshaders::menu::scale();
         ImDrawList* draw = ImGui::GetForegroundDrawList();
         const float x = photo::splitPosition() * io.DisplaySize.x, y = io.DisplaySize.y - 48.0f * sc, pad = 10.0f * sc;
-        const char* left = photo::splitSwapped() ? "TMVS" : "Game";
-        const char* right = photo::splitSwapped() ? "Game" : "TMVS";
+        // With a preset on the other side: its name and your preset's (as in photos).
+        const bool named = !photo::splitPreset().empty();
+        const std::string leftName = named ? photo::splitName(false) : std::string(photo::splitSwapped() ? "TMVS" : "Game");
+        const std::string rightName = named ? photo::splitName(true) : std::string(photo::splitSwapped() ? "Game" : "TMVS");
+        const char* left = leftName.c_str();
+        const char* right = rightName.c_str();
         const auto label = [&](float at, const char* text) {
             const ImVec2 s = ImGui::CalcTextSize(text);
             draw->AddRectFilled(ImVec2(at - 4.0f * sc, y - 2.0f * sc), ImVec2(at + s.x + 4.0f * sc, y + s.y + 2.0f * sc),

@@ -49,10 +49,18 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 | F5 | Effects off/on (compare with the game's own image; TMNF: F7, which is ManiaPlanet's friends list) |
 | F12 | Capture one frame (for bug reports and development); in photo mode: a photo (PNG) |
 | F6 | Photo mode: no interface, full quality, depth of field on a clicked point |
-| Shift+F6 / Ctrl+Shift+wheel | Photo mode: compare split (the game's own image on one side) / move its line |
+| Shift+F6 / Ctrl+Shift+wheel | Photo mode: compare split (the game's own image or a preset on one side) / move its line |
 
 These are the defaults; the menu's *Settings* page (*Hotkeys*) rebinds them, and they are stored in the `[Keys]` section of settings.ini (see docs/settings.md).
 | Middle click / Ctrl+middle click / Ctrl+wheel | Photo mode: focus here / no focus / aperture |
+
+**Compare split with a preset:** menu, *Settings* page, *Photo mode* panel, *Other side*: the game's
+image (as before) or any preset. With a preset, a second renderer (`hooks.cpp`, `g_rendererB`) runs
+that preset's effects and HDR stage on the same engine inputs with its own history, and each look
+draws only its side of the line (a scissor on the final passes). Photo mode only; it costs about
+one more run of the effects while shown and is released when the split, photo mode or the preset
+goes. Photos (F12) get both names at the line (`SplitPhotoLabels`). Offline:
+`mp_preview <capture> out.bmp --hdr --compare Horizon [--split 0.4] [--swap] [--labels "Horizon|Vibrant"]`.
 
 Otherwise the same keys as the TMNF mod. The night skies need *Real night under night skies*
 (Settings page) for their dark nights: ManiaPlanet's time of day can't be changed, so the mod
@@ -75,6 +83,21 @@ page, panel "ManiaPlanet":
   time into a float buffer of their own (a self-illuminated one twice: the second time with its
   light texture black, subtracted, so only its own light stays); later draws over them take their
   share away again. The debug view "Light sources" shows what counts as light.
+- **Black hole moon** (`BlackHoleMoon`, 0 – 2, **off by default**; TMNF's `EngineMoon` *from the
+  black hole*, done in the shaders): on night maps under a sky with the black hole, the game's moon
+  (its blue glint on chrome, glass and the ring sculptures, and its light) is taken out of the
+  picture and the black hole lights the scene instead, warm, as bright as the moon was (1) or
+  brighter. The engine's lighting pass (`Block_DefReadP1_p`) lights with light x N.L x shadow
+  for the diffuse and light x N.L x shadow x (N.H)^n x n x MSpecular.x² x SpecScale x the light's w
+  for the glint, n = MSpecular.w x SpecMaxExp + 1, all x 2 x its cloud factor; the constants are
+  in SceneP (read from its upload, as the camera), the material's specular in the G-buffer. So
+  the moon's glint is rebuilt exactly (up to the cloud factor, taken halfway between its darkest
+  and brightest), taken out, and drawn again from the black hole's direction with the same
+  formula. Shadows: the engine's shadow map is the moon's; it counts as the black hole's as far
+  as the two directions agree (Horizon: 18° apart, almost fully), else only the contact shadows
+  toward the black hole. Nothing in the game's memory changes; EngineMoon doesn't matter on those
+  maps while it is on. Debug view "The moon's glint" shows the rebuilt glint. Not on day or
+  sunset maps, not under other skies.
 - **Placement**, and the **compare and check views**.
 - **Status lines.**
 - **Compare (split)** shows the game's image left and the mod's right.

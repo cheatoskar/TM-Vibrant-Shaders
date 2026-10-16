@@ -35,6 +35,9 @@ void load() {
     const float soft = static_cast<float>(_wtof(text));
     o.softShadows = soft > 0.0f && soft <= 10.0f ? soft : 0.0f;
     o.engineLightDraws = GetPrivateProfileIntW(L"ManiaPlanet", L"EngineLightDraws", 1, ini.c_str()) != 0;
+    GetPrivateProfileStringW(L"ManiaPlanet", L"BlackHoleMoon", L"0", text, 32, ini.c_str());
+    const float moon = static_cast<float>(_wtof(text));
+    o.blackHoleMoon = moon > 0.0f && moon <= 4.0f ? moon : 0.0f;
 }
 
 void save() {
@@ -47,6 +50,8 @@ void save() {
     swprintf(text, 32, L"%.2f", o.softShadows);
     WritePrivateProfileStringW(L"ManiaPlanet", L"SoftShadows", text, ini.c_str());
     WritePrivateProfileStringW(L"ManiaPlanet", L"EngineLightDraws", o.engineLightDraws ? L"1" : L"0", ini.c_str());
+    swprintf(text, 32, L"%.2f", o.blackHoleMoon);
+    WritePrivateProfileStringW(L"ManiaPlanet", L"BlackHoleMoon", text, ini.c_str());
 }
 
 } // namespace options
@@ -64,6 +69,7 @@ bool setValue(const std::string& key, const std::string& value) {
     else if (!_stricmp(k, "View")) o.view = static_cast<View>(atoi(value.c_str()));
     else if (!_stricmp(k, "Split")) o.split = static_cast<float>(atof(value.c_str()));
     else if (!_stricmp(k, "SoftShadows")) o.softShadows = static_cast<float>(atof(value.c_str()));
+    else if (!_stricmp(k, "BlackHoleMoon")) o.blackHoleMoon = static_cast<float>(atof(value.c_str()));
     else if (!_stricmp(k, "Enabled")) s.enabled = atoi(value.c_str()) != 0;
     else if (!_stricmp(k, "ShowMenu")) config.showOverlay = atoi(value.c_str()) != 0; // F8, for the test
     else if (!_stricmp(k, "MenuPage")) config.menuPage = atoi(value.c_str());
@@ -71,6 +77,9 @@ bool setValue(const std::string& key, const std::string& value) {
         if ((atoi(value.c_str()) != 0) != photo::active()) photo::toggle();
     }
     else if (!_stricmp(k, "PhotoShot")) photo::request(); // F12 in photo mode, for the test
+    else if (!_stricmp(k, "PhotoSplit")) photo::splitOn() = atoi(value.c_str()) != 0; // Shift+F6, for the test
+    else if (!_stricmp(k, "PhotoSplitAt")) photo::splitPosition() = static_cast<float>(atof(value.c_str()));
+    else if (!_stricmp(k, "PhotoSplitPreset")) photo::splitPreset() = value; // "" = the game's image
     else if (!_stricmp(k, "Preset")) return config.selectPreset(value);
     else if (!_stricmp(k, "Lut")) config.lutFile = value;
     else if (!_stricmp(k, "LutAmount")) config.lutAmount = static_cast<float>(atof(value.c_str()));

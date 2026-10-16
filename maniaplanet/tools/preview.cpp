@@ -15,7 +15,13 @@
 // The capture holds the image the mod graded (input.dds and the view format it was drawn with),
 // the engine's textures (engine_*.dds) and its camera (scenev.bin). --view takes the menu's views:
 // 0 normal, 1 split, 2 depth, 3 normals, 4 motion, 5 light buffer, 6 world grid.
+//
+// --compare <preset> renders photo mode's compare split with that preset on the other side, as
+// in the game (hooks.cpp: a second Renderer, each look on its side): --split <0..1> moves the
+// line (default 0.5), --swap puts the preset on the right, --labels "left|right" burns the names
+// in as a photo of the split gets them (SplitPhotoLabels).
 #include "effects_trail.h"
+#include "image.h"
 #include "engine_frame.h"
 #include "log.h"
 #include "renderer.h"
@@ -523,6 +529,10 @@ int main(int argc, char** argv) {
     bool haveTrailFrom = false;
     float trailUp[3] = {0.0f, 1.0f, 0.0f}; // --carup x,y,z: the car's up (a banked curve: the line tilts with it)
     float focus[2] = {-1.0f, -1.0f}; // --focus u,v: the photo mode's focus point
+    std::string compare;              // --compare: the preset on the split's other side
+    float splitAt = 0.5f;             // --split
+    bool swapSides = false;           // --swap: the preset on the right
+    std::string labels;               // --labels "left|right"
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
     // The look: a built-in or your preset (default Vibrant), then --set values on top.
@@ -539,6 +549,10 @@ int main(int argc, char** argv) {
             photo = true;
             continue;
         }
+        if (opt == "--swap") {
+            swapSides = true;
+            continue;
+        }
         if (i + 1 >= argc) {
             printf("%s needs a value\n", opt.c_str());
             return 2;
@@ -551,6 +565,9 @@ int main(int argc, char** argv) {
             }
         }
         else if (opt == "--tonecb") toneCbPath = value;
+        else if (opt == "--compare") compare = value;
+        else if (opt == "--split") splitAt = static_cast<float>(atof(value.c_str()));
+        else if (opt == "--labels") labels = value;
         else if (opt == "--time") time = atof(value.c_str());
         else if (opt == "--frames") frames = std::max(1, atoi(value.c_str()));
         else if (opt == "--car") haveTrailCar = sscanf(value.c_str(), "%f,%f,%f", &trailCar[0], &trailCar[1], &trailCar[2]) == 3;
@@ -696,6 +713,26 @@ int main(int argc, char** argv) {
 
     Renderer renderer;
     if (!renderer.init(device)) return 2;
+    // --compare: the preset's look as hooks.cpp prepareLook makes it (your machine settings with
+    // the preset's look), from a renderer of its own; each look draws its side of the line.
+    const bool comparing = !compare.empty();
+    tmshaders::Settings settingsB = config.settings;
+    Look lookB = look;
+    Renderer rendererB;
+    if (comparing) {
+        if (!config.presetSettings(compare, settingsB)) {
+            printf("unknown preset %s\n", compare.c_str());
+            return 2;
+        }
+        settingsB.enabled = true;
+        settingsB.debugView = look.settings->debugView;
+        lookB.settings = &settingsB;
+        lookB.lutAmount = config.lutAmount;
+        if (!rendererB.init(device)) return 2;
+        rendererB.effects().setSound(false);
+    }
+    const Look mineSide = comparing ? splitSide(look, splitAt, swapSides) : look;
+    const Look presetSide = splitSide(lookB, splitAt, !swapSides);
     if (hdrStage) {
         std::vector<char> cb;
         if (FILE* f = fopen(toneCbPath.c_str(), "rb")) {
@@ -744,7 +781,11 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < 3; i++) car.up[i] = trailUp[i];
                 engine.car = &car;
             }
-            if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look, engine)) {
+            if (comparing && !rendererB.toneMap(ctx, rtv, in[0], in[1], engineConstants, presetSide, engine)) {
+                printf("the compare split's HDR stage failed\n");
+                return 1;
+            }
+            if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, mineSide, engine)) {
                 printf("the HDR stage failed\n");
                 return 1;
             }
@@ -753,10 +794,11 @@ int main(int argc, char** argv) {
                config.settings.toneCurve, config.settings.bloom, renderer.effectsRan() ? "ran" : "off");
     }
     const EngineView view{tex, haveCamera ? &camera : nullptr};
-    if (!renderer.apply(ctx, rtv, view, look, opts, hdrStage)) {
+    if (!renderer.apply(ctx, rtv, view, mineSide, opts, hdrStage) || (comparing && !rendererB.apply(ctx, rtv, view, presetSide, opts, hdrStage))) {
         printf("the renderer refused the image\n");
         return 1;
     }
+    if (comparing) printf("  compare split: %s %s of the line at %.2f\n", compare.c_str(), swapSides ? "right" : "left", presetSide.line);
 
     D3D11_TEXTURE2D_DESC sd;
     image->GetDesc(&sd);
@@ -769,7 +811,19 @@ int main(int argc, char** argv) {
     D3D11_MAPPED_SUBRESOURCE m;
     if (!staging || FAILED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &m))) return 1;
     const bool bgra = sd.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS;
-    const bool ok = writeBmp(argv[2], m, sd.Width, sd.Height, bgra);
+    // --labels: the names as photo mode burns them into a photo of the split (only greys: any
+    // channel order).
+    std::vector<unsigned char> pixels;
+    D3D11_MAPPED_SUBRESOURCE out = m;
+    if (!labels.empty()) {
+        pixels.assign(static_cast<const unsigned char*>(m.pData), static_cast<const unsigned char*>(m.pData) + static_cast<size_t>(m.RowPitch) * sd.Height);
+        const size_t bar = labels.find('|');
+        const std::string left = labels.substr(0, bar), right = bar == std::string::npos ? std::string() : labels.substr(bar + 1);
+        tmshaders::image::drawSplitLabels(pixels.data(), static_cast<int>(sd.Width), static_cast<int>(sd.Height), 4, m.RowPitch,
+                                          presetSide.line, left, right);
+        out.pData = pixels.data();
+    }
+    const bool ok = writeBmp(argv[2], out, sd.Width, sd.Height, bgra);
     ctx->Unmap(staging, 0);
     printf("%s %s\n", ok ? "wrote" : "cannot write", argv[2]);
     return ok ? 0 : 1;

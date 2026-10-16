@@ -28,6 +28,9 @@ constexpr UINT kScenePFog = 0;
 constexpr UINT kScenePLightAmbientLinear = 128;
 constexpr UINT kScenePLightDirRgbLinear0 = 144;
 constexpr UINT kScenePLightDirInWorld0 = 160;
+// GbxP_LightGenPHdrScale_SelfIllumScale_SpecMaxExp_SpecScale: z = the specular exponent's range
+// (n = MSpecular.w * z + 1), w = the specular's scale (Block_DefReadP1_p, BlackHoleMoon).
+constexpr UINT kScenePLightGenSpec = 176;
 constexpr UINT kScenePCloudsMin = 304;
 constexpr UINT kScenePCloudsMax = 320;
 constexpr UINT kScenePDayTime = 464; // GbxP_DayTime: x = the map's time of day (0..1, 0.5 noon)
