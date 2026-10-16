@@ -24,9 +24,9 @@ struct Options {
     View view = View::Normal;
     float split = 0.5f; // Split: the game's own image left of this
     // The light sources (lamps, screens, halos, the car's lights) from what the engine draws as
-    // light, not guessed from the image's colours (engine_lights.cpp). Off until the owner's
-    // captures with engine_lights.dds confirm it.
-    bool engineLightDraws = false;
+    // light, not guessed from the image's colours (engine_lights.cpp). On since the owner's test
+    // (2026-10-16, captures 031/032): grass no longer glows, the road borders still do.
+    bool engineLightDraws = true;
 };
 
 namespace options {

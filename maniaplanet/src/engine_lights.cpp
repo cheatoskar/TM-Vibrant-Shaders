@@ -158,10 +158,12 @@ Draw classify(ID3D11Device* device, ID3D11DeviceContext* ctx, const ShaderInfo& 
     const bool add = !d.blend || b.BlendOp == D3D11_BLEND_OP_ADD;
     const bool additive = d.blend && b.BlendOp == D3D11_BLEND_OP_ADD && b.DestBlend == D3D11_BLEND_ONE &&
                           (b.SrcBlend == D3D11_BLEND_ONE || b.SrcBlend == D3D11_BLEND_SRC_ALPHA);
-    if (ps.lightSlot != kNoSlot && add && !scalesByDest(d.src)) {
-        d.kind = Kind::Light;
-    } else if (additive) {
+    // An additive draw adds light, whatever it reads: once is enough (Tech3_Block_TAdd has a
+    // TMapSelfIllum too; its second, black draw added nothing: captures 031/032).
+    if (additive) {
         d.kind = Kind::Added;
+    } else if (ps.lightSlot != kNoSlot && add && !scalesByDest(d.src)) {
+        d.kind = Kind::Light;
     } else if (!g.written || !add) {
         return d;
     } else if (d.blend) {

@@ -30,7 +30,7 @@ void load() {
                                                                                           : Placement::BeforeHud;
     o.fallbackAtEnd = GetPrivateProfileIntW(L"ManiaPlanet", L"FallbackAtEnd", 1, ini.c_str()) != 0;
     o.hdrStage = GetPrivateProfileIntW(L"ManiaPlanet", L"HdrStage", 1, ini.c_str()) != 0;
-    o.engineLightDraws = GetPrivateProfileIntW(L"ManiaPlanet", L"EngineLightDraws", 0, ini.c_str()) != 0;
+    o.engineLightDraws = GetPrivateProfileIntW(L"ManiaPlanet", L"EngineLightDraws", 1, ini.c_str()) != 0;
 }
 
 void save() {
