@@ -468,6 +468,22 @@ bool Writer::remux(const std::wstring& video, std::string& error) {
     return true;
 }
 
+void Writer::discard() {
+    release(m_writer);
+    DeleteFileW(m_path.c_str());
+    if (m_pcm != INVALID_HANDLE_VALUE) {
+        CloseHandle(m_pcm);
+        m_pcm = INVALID_HANDLE_VALUE;
+        DeleteFileW(m_pcmPath.c_str());
+    }
+    m_audio = false;
+    m_pcmBytes = 0;
+    if (m_comInit) {
+        CoUninitialize();
+        m_comInit = false;
+    }
+}
+
 bool Writer::close(std::string& report) {
     bool ok = true;
     char text[256];

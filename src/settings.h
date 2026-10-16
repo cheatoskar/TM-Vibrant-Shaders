@@ -44,6 +44,8 @@ struct Settings {
     bool taaJitter = false;         // TAA samples a different sub-pixel spot every frame (sharper, smoother)
     bool cinematicOnlyInReplays = true; // motion blur and DOF only in replays, intros and the video export
     bool videoExportBest = true;   // the game's video export: full quality, effects on the video's clock, every supersample shaded
+    int videoCodec = 1;            // the export's file: 0 the game's AVI (its codec dialog), 1 MP4 H.264, 2 MP4 HEVC (Media Foundation)
+    float videoBitrate = 0.0f;     // MP4: Mbit/s, 0 = from the size and frame rate (4K 30 fps: 50 H.264, 30 HEVC)
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;
 

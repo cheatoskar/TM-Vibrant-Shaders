@@ -150,6 +150,7 @@ add_library(tm_vibrant_shaders SHARED
   src/autoquality.cpp
   src/audio.cpp
   src/proxy.cpp
+  src/videofile.cpp
   src/exports.def
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
   sounds/sounds.rc

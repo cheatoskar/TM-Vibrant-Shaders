@@ -177,6 +177,21 @@ struct VideoExport {
     double step = 0.0;         // seconds the game's clock advances per rendered frame, 0 = real time
     double gameClock = 0.0;    // the game's clock (s), for the log
 };
+// The video export's file (the game's AVI writer, CVisionVideoAvi): the mod can write the
+// frames and the sound into a file of its own. `file` identifies one export.
+struct VideoFileHooks {
+    void (*opened)(void* file, const wchar_t* path, bool ok) = nullptr; // the game made its .avi
+    // The video starts (size already rounded up to 8, bottom-up BGR frames of bytesPerPixel):
+    // true = the mod takes the frames; the game then opens no video stream (no codec dialog).
+    bool (*videoOpen)(void* file, int width, int height, float fps, int bytesPerPixel) = nullptr;
+    bool (*videoFrame)(void* file, const void* pixels) = nullptr; // true = taken
+    void (*audioOpen)(void* file, const void* waveFormat) = nullptr; // WAVEFORMATEX without cbSize (16 bytes)
+    void (*audioData)(void* file, const void* data, unsigned long blocks) = nullptr;
+    void (*closed)(void* file) = nullptr; // the game is done with it (its .avi closed)
+};
+void setVideoFileHooks(const VideoFileHooks& hooks);
+bool videoFileHooked(); // false: another build, the game's AVI as always
+
 // True while the export runs (its fiber ran this frame or the one before), with its settings.
 // False without the hook or when the game's memory doesn't look as expected.
 bool videoExport(VideoExport& out);

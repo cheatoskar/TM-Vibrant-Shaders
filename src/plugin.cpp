@@ -17,6 +17,7 @@
 #include "photo.h"
 #include "thumbnails.h"
 #include "tracer.h"
+#include "videofile.h"
 #include "tm_shaders_version.h"
 #include <d3d9.h>
 #include <algorithm>
@@ -1639,6 +1640,7 @@ void bootOnce() {
     engineCallbacks.frameEnd = onFrameEnd;
     engine::install(engineCallbacks);
     engine::setNightAtLoad(nightAtLoad);
+    videofile::install();
     engine::setMoonAtLoad(moonAtLoad);
 
     hook::DeviceCallbacks deviceCallbacks;

@@ -48,6 +48,8 @@ public:
     // Finishes the file. `report` says what was written (or went wrong). True: the MP4 holds
     // everything that came (the video and, if there was sound, the sound).
     bool close(std::string& report);
+    // Gives up: nothing stays behind (no MP4, no .wav, no temporary file).
+    void discard();
 
     const std::string& encoderName() const { return m_encoder; }
     int framesWritten() const { return m_frames; }
