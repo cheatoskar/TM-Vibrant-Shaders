@@ -2,7 +2,9 @@
 //
 //   tmvs_preview <capture.tmcap> <out.bmp> [options]
 //     --preset <name|index>   Vibrant, Realistic, Golden Hour, Competition, Performance, ...
-//     --set Key=Value         override a setting (keys as in settings.ini), repeatable
+//     --set Key=Value         override a setting (keys as in settings.ini), repeatable;
+//                             RenderScale=0.67: the capture point sampled to that size (what the
+//                             game would draw there), shaded at it and brought up with FSR 1
 //     --debug <n>             debug view (1 depth, 2 normals, 3 AO, 4 shadows, 5 shafts, 6 bloom)
 //     --shaders <dir>         load tmvs.hlsl from <dir> instead of the embedded copy
 //     --before <file.bmp>     also write the unprocessed frame
@@ -673,6 +675,30 @@ int main(int argc, char** argv) {
             in.water[0] = in.water[1] = waterHeight;
             in.water[2] = waterKind;
         }
+        // RenderScale (--set RenderScale=0.67): what the game would have drawn at that size, point
+        // sampled from the capture (the game draws it at that size itself: one sample a pixel, no
+        // detail averaged in), shaded at that size and brought up to the capture's with FSR 1 as
+        // in game. Not with --photo or --video: the game keeps those at full resolution.
+        gfx::Target scaledInputs[7];
+        const float renderScale = job.settings.renderScale;
+        if (renderScale < 0.99f && !photoMode && !videoMode) {
+            const UINT sw = static_cast<UINT>(cap.width * renderScale + 0.5f), sh = static_cast<UINT>(cap.height * renderScale + 0.5f);
+            IDirect3DTexture9** const sources[7] = {&in.color, &in.depth, &in.hdr, &in.added, &in.gbuffer, &in.gameLight, &in.materialMask};
+            const D3DFORMAT formats[7] = {D3DFMT_A8R8G8B8, D3DFMT_R32F, D3DFMT_A16B16G16R16F, D3DFMT_A16B16G16R16F, D3DFMT_A16B16G16R16F,
+                                          D3DFMT_A16B16G16R16F, D3DFMT_A8R8G8B8};
+            device->BeginScene();
+            for (int k = 0; k < 7; k++) {
+                if (!*sources[k]) continue;
+                if (!pipeline.downscale(device, *sources[k], scaledInputs[k], sw, sh, formats[k], k == 1)) return 1;
+                *sources[k] = scaledInputs[k].texture;
+            }
+            device->EndScene();
+            in.width = sw;
+            in.height = sh;
+            in.outputWidth = cap.width;
+            in.outputHeight = cap.height;
+            printf("%s: render scale %.2f, the scene at %ux%u\n", job.output.c_str(), renderScale, sw, sh);
+        }
         Pipeline::Inputs moved = in;
         for (int j = 0; j < 3; j++) {
             moved.view[12 + j] -= job.move[0] * in.view[0 * 4 + j] + job.move[1] * in.view[1 * 4 + j] + job.move[2] * in.view[2 * 4 + j];
@@ -802,6 +828,7 @@ int main(int argc, char** argv) {
             }
         }
         device->EndScene();
+        for (auto& t : scaledInputs) t.destroy();
         if (bench) {
             printf("GPU time per pass (ms, %ux%u):\n", cap.width, cap.height);
             for (int p = 0; p < pipeline.passCount(); p++) {

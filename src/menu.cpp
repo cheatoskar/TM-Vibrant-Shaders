@@ -211,7 +211,8 @@ bool isMachineSetting(const Field& f) {
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
-           !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars");
+           !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
+           !strcmp(f.key, "FsrSharpness");
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -242,6 +243,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it
     if (is("TargetFPS")) return s.autoQuality;
+    if (is("FsrSharpness")) return s.renderScale < 0.99f;
     if (is("TAAJitter")) return s.taa;
     if (!strncmp(f.key, "Trail", 5)) return s.neonTrail > 0.0f;
     if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f || s.snow > 0.0f;
@@ -368,6 +370,8 @@ const char* tooltipFor(const char* key) {
         {"Sharpen", "Contrast-adaptive sharpening (CAS)."},
         {"AutoQuality", "Below the target FPS it switches off the effects that cost most for least look, and back on when there is room. Your settings stay as they are."},
         {"TargetFPS", "The frame rate auto quality aims for."},
+        {"RenderScale", "Draws the game's 3D image and every effect at this fraction of your screen's resolution and scales it back up with AMD FSR 1 before the HUD, which stays sharp. 1.00 is off. 0.77 costs a little sharpness, 0.67 more, for clearly more FPS when the graphics card is the limit. Photo mode, captures and the video export always use the full resolution. Needs Game HDR."},
+        {"FsrSharpness", "How much FSR sharpens the scaled-up image. 1 is AMD's strongest, 0 none. Takes the place of Sharpening while the render scale is below 1."},
         {"DisableGameMSAA", "Turns off the game's own MSAA, which the mod's effects do not need. (restart)"},
         {"ReadableGameDepth", "Lets the effects work in replays and video export. (restart)"},
         {"GameMaterials", "Reads the game's material ids. Used for the TMUF sea and the debug view."},
@@ -1528,10 +1532,12 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
 bool drawPerformancePage(Settings& s) {
     pageTitle("Performance", "Frame rate target and the cost of each effect on your GPU.");
     std::vector<PanelDef> panels;
-    panels.push_back({"Performance", 5.0f, [&s] {
+    panels.push_back({"Performance", 6.0f, [&s] {
                           bool l = drawKey(s, "AutoQuality");
                           l |= drawKey(s, "TargetFPS");
                           l |= drawKey(s, "Quality");
+                          l |= drawKey(s, "RenderScale");
+                          l |= drawKey(s, "FsrSharpness");
                           if (s.autoQuality && g_host->autoQualityReduced) {
                               if (const char* reduced = g_host->autoQualityReduced()) {
                                   ImGui::TextWrapped("Turned off by auto quality: %s", reduced);

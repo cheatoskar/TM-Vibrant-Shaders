@@ -125,6 +125,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Quality", "Effect quality", "Image", Int, quality, 0.0f, 2.0f),
         TMVS_FIELD("AutoQuality", "Auto quality", "Image", Bool, autoQuality, 0.0f, 1.0f),
         TMVS_FIELD("TargetFPS", "Target FPS", "Image", Float, targetFps, 30.0f, 240.0f),
+        TMVS_FIELD("RenderScale", "Render scale", "Image", Float, renderScale, 0.5f, 1.0f),
+        TMVS_FIELD("FsrSharpness", "FSR sharpening", "Image", Float, fsrSharpness, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameMSAA", "Turn off game MSAA", "Image", Bool, disableGameMSAA, 0.0f, 1.0f),
         TMVS_FIELD("ReadableGameDepth", "Effects in replays", "Image", Bool, readableGameDepth, 0.0f, 1.0f),
         TMVS_FIELD("GameMaterials", "Game materials", "Image", Bool, gameMaterials, 0.0f, 1.0f),
@@ -256,7 +258,8 @@ bool isSystemField(const Field& f) {
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
-           !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars");
+           !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
+           !strcmp(f.key, "FsrSharpness");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {

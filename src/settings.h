@@ -52,6 +52,12 @@ struct Settings {
     float videoBitrate = 0.0f;     // MP4: Mbit/s, 0 = from the size and frame rate (4K 30 fps: 50 H.264, 30 HEVC)
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;
+    // The game's 3D image and every effect at this fraction of the screen's resolution, brought back
+    // up with AMD FSR 1 before the HUD (needs GameHdr). 1 = off: the full resolution, as before.
+    float renderScale = 1.0f;
+    // FSR 1's sharpening (RCAS) after the upscale: 1 = AMD's strongest, 0 = none. It replaces the
+    // look's Sharpen while the image is scaled (sharpened before the upscale, its halos grow).
+    float fsrSharpness = 0.8f;
 
     // Lighting (screen-space, reconstructed from depth)
     float aoStrength = 1.0f;

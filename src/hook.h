@@ -29,6 +29,17 @@ struct DeviceCallbacks {
     void (*clear)(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color) = nullptr;
     // Every pixel shader created, the plugin's own too (GameGBuffer: which ones write the normal).
     void (*createPixelShader)(IDirect3DPixelShader9* shader, const DWORD* code) = nullptr;
+    // RenderScale: the game's viewport and scissor rect, in its own (full-size) numbers. Set: returns
+    // what to set instead (scaled into a smaller target) or the given one. Get: after the device
+    // filled in its values, may give the game back its own numbers.
+    const D3DVIEWPORT9* (*setViewport)(IDirect3DDevice9* device, const D3DVIEWPORT9* viewport) = nullptr;
+    void (*getViewport)(IDirect3DDevice9* device, D3DVIEWPORT9* viewport) = nullptr;
+    const RECT* (*setScissorRect)(IDirect3DDevice9* device, const RECT* rect) = nullptr;
+    void (*getScissorRect)(IDirect3DDevice9* device, RECT* rect) = nullptr;
+    // RenderScale: the game's Clear rects and StretchRect rects (null = the whole surface); returns the
+    // rects to use instead, or the given ones.
+    const D3DRECT* (*clearRects)(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects) = nullptr;
+    void (*stretchRects)(IDirect3DSurface9* src, const RECT** srcRect, IDirect3DSurface9* dst, const RECT** dstRect) = nullptr;
 };
 
 bool install(const DeviceCallbacks& callbacks);

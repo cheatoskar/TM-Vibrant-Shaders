@@ -81,6 +81,30 @@ CPU: CasterShadows looked at every draw of the main camera every frame, 1–11 m
 (10.7 ms on a big Stadium map with 8000 draws a frame). Since 1.4.0 it checks at most ~700 draws a frame and
 nothing while long shadows and volumetric light are off: ≤ 0.5 ms.
 
+## Render scale (FSR 1)
+
+*Render scale* (`RenderScale`, Performance page, off by default) draws the game's 3D image smaller and every effect
+with it, then AMD FSR 1 brings the shaded image back up to the screen before the HUD. It helps where the graphics card is
+the limit (the *rest of the GPU frame* in the perf line near 0); where the CPU is, it changes nothing.
+
+GPU time of the mod's passes at 2560×1440 with the scale (GTX 1080 Ti, previewer, 200 frames, median of 3; FSR's own two
+passes included: 0.24 ms to upscale, 0.08 ms to sharpen):
+
+| Render scale | Scene size | Golden Hour (day) | Horizon (night) | The owner's settings (night) |
+|---|---|---|---|---|
+| 1 (off) | 2560×1440 | 6.24 ms | 6.68 ms | 3.95 ms |
+| 0.77 | 1971×1109 | 4.04 ms | 4.13 ms | 2.54 ms |
+| 0.67 | 1715×965 | 3.13 ms | 3.23 ms | 2.00 ms |
+| 0.5 | 1280×720 | 1.98 ms | 2.03 ms | 1.31 ms |
+
+The game's own drawing gets cheaper too, but less than in proportion: its pixels shrink with the scale (0.67: 45 % of
+them), its draw calls, vertices and shadow maps don't. Not measured yet; at 0.67 expect its ~4 ms (the perf line's
+*game 3D*) to drop to about 2 – 3 ms. On the GTX 1080 Ti at 1440p that would take the frame from ~12.8 ms (~78 FPS) to
+roughly 8 – 9 ms at 0.77 and 7 – 8 ms at 0.67, until the CPU becomes the limit.
+
+What it costs in the picture: fine detail, text on signs and thin lines get softer (0.77 little, 0.5 clearly); small
+lights far away can lose some of their glow. *FSR sharpening* (`FsrSharpness`) sets how much is sharpened back.
+
 ## The perf line in the log
 
 Every 2000 frames in a race `tmvs.log` gets a line like
@@ -109,6 +133,8 @@ When there's room again it steps back up. It never changes your settings or pres
 ## Getting FPS back
 
 - Pick the **Performance** preset, or set **Effect quality** to Low.
+- Set **Render scale** below 1 (0.77, 0.67): the game and the effects at a lower resolution, FSR 1 up to the screen
+  (see above). Costs some sharpness, keeps every effect.
 - Switch off volumetric clouds and light shafts first, then long-range shadows and TAA.
 - In the game's own options: antialiasing off (the mod does it anyway), FX post-processing off.
 - Keep the **target FPS** of auto quality at a rate your PC reaches with the shaders (e.g. 75 on a GTX 1080 Ti

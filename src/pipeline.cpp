@@ -22,7 +22,7 @@ const char* const kEntryPoints[] = {
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
     "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer", "PS_LampSource", "PS_LampDown", "PS_LampUp",
-    "PS_LightingGameLight",
+    "PS_LightingGameLight", "PS_FsrEasu", "PS_FsrRcas",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -209,7 +209,10 @@ bool Pipeline::compileAll(IDirect3DDevice9* device) {
 
 bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) {
     if (m_width == width && m_height == height && m_hdr.valid()) return true;
-    destroyTargets();
+    // RenderScale: a resize between the scaled and the full image keeps the world's state (the
+    // 1x1 targets below are kept as they are by create()).
+    const bool keep = m_keepWorld && m_hdr.valid();
+    destroyTargets(keep);
     const UINT hw = (width + 1) / 2, hh = (height + 1) / 2;
     bool ok = true;
     ok &= m_linearDepth.create(device, width, height, D3DFMT_R32F);
@@ -218,9 +221,9 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_occlusion.create(device, hw, hh, D3DFMT_A8R8G8B8);
     ok &= m_occlusionTmp.create(device, hw, hh, D3DFMT_A8R8G8B8);
     for (auto& t : m_skyAverage) ok &= t.create(device, 1, 1, D3DFMT_A16B16G16R16F);
-    m_skyValid = false;
+    if (!keep) m_skyValid = false;
     for (auto& t : m_shelter) ok &= t.create(device, 1, 1, D3DFMT_A16B16G16R16F);
-    m_shelterValid = false;
+    if (!keep) m_shelterValid = false;
     ok &= m_sky.create(device, width, height, D3DFMT_A16B16G16R16F);
     ok &= m_gi[0].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
     ok &= m_gi[1].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
@@ -255,21 +258,20 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     }
     m_width = width;
     m_height = height;
-    m_historyValid = false;
+    if (!keep) m_historyValid = false; // the exposure (its 1x1 targets kept)
     m_taaValid = false;
-    m_heightValid = false;
-    TMVS_LOG("pipeline: render targets created for %ux%u", width, height);
+    if (!keep) m_heightValid = false;
+    TMVS_LOG("pipeline: render targets created for %ux%u%s", width, height, keep ? " (height map, trail and exposure kept)" : "");
     return true;
 }
 
-void Pipeline::destroyTargets() {
+void Pipeline::destroyTargets(bool keepWorld) {
+    // The screen's size: these follow the image.
     m_linearDepth.destroy();
     m_nd.destroy();
     m_ndHalf.destroy();
     m_occlusion.destroy();
     m_occlusionTmp.destroy();
-    for (auto& t : m_skyAverage) t.destroy();
-    for (auto& t : m_shelter) t.destroy();
     m_sky.destroy();
     for (auto& t : m_gi) t.destroy();
     for (auto& t : m_giHistory) t.destroy();
@@ -280,34 +282,42 @@ void Pipeline::destroyTargets() {
     m_lampSource.destroy();
     for (auto& t : m_lampDown) t.destroy();
     for (auto& t : m_lampUp) t.destroy();
-    m_luminance.destroy();
-    for (auto& t : m_adapted) t.destroy();
     m_ldr.destroy();
     m_ldr2.destroy();
     m_materials.destroy();
     m_materialIds.destroy();
-    for (auto& t : m_waterLevel) t.destroy();
-    gfx::release(m_waterRead);
-    gfx::release(m_waterDone);
-    m_waterPending = -1;
     m_depthCopy.destroy();
     m_clouds.destroy();
     m_reflect.destroy();
     for (auto& t : m_spill) t.destroy();
-    for (auto& t : m_focus) t.destroy();
     m_dof.destroy();
     m_dofFull.destroy();
     m_dofFull2.destroy();
     m_dof2.destroy();
     m_hdr2.destroy();
     for (auto& t : m_taa) t.destroy();
+    m_scaled.destroy();
+    m_fsr.destroy();
+    gfx::release(m_splatPoints); // one point per 5 pixels of the depth
+    m_taaValid = false;
+    m_width = m_height = 0;
+    if (keepWorld) return;
+    // The world's (or no size at all): RenderScale's resizes keep these.
+    for (auto& t : m_skyAverage) t.destroy();
+    for (auto& t : m_shelter) t.destroy();
+    m_luminance.destroy();
+    for (auto& t : m_adapted) t.destroy();
+    for (auto& t : m_waterLevel) t.destroy();
+    gfx::release(m_waterRead);
+    gfx::release(m_waterDone);
+    m_waterPending = -1;
+    for (auto& t : m_focus) t.destroy();
     m_heightFrame.destroy();
     for (auto& t : m_heightMap) t.destroy();
     for (auto& t : m_ceilingMap) t.destroy();
     m_shadowHeight.destroy();
     for (auto& t : m_lightGrid) t.destroy();
     gfx::release(m_heightDepth);
-    gfx::release(m_splatPoints);
     gfx::release(m_cloudNoise);
     gfx::release(m_lut);
     gfx::release(m_rainVB);
@@ -316,9 +326,7 @@ void Pipeline::destroyTargets() {
     gfx::release(m_trailIB);
     m_trailPoints.destroy();
     m_trailReset = true;
-    m_taaValid = false;
     m_heightValid = false;
-    m_width = m_height = 0;
 }
 
 void Pipeline::beginStateSave(IDirect3DDevice9*) {
@@ -763,6 +771,8 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
             return false;
         }
     }
+    // Only the splat points went with a resize (keepWorldOnResize): the maps hold on.
+    const bool mapsKept = m_heightFrame.valid() && m_heightMap[0].valid() && m_heightMap[1].valid() && m_heightDepth;
     bool ok = m_heightFrame.create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
     ok &= m_heightMap[0].create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
     ok &= m_heightMap[1].create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
@@ -794,7 +804,7 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
         TMVS_LOG("pipeline: height map resources failed - long-range shadows disabled");
         m_heightSupported = false;
     }
-    m_heightValid = false;
+    if (!mapsKept || !ok) m_heightValid = false;
     m_shadowHeightStale = true;
     return ok;
 }
@@ -1041,8 +1051,10 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     // again for a stencil test per class (no texture of ours may be bound meanwhile). Not in
     // the previewer: its depth is a plain R32F texture.
     if (in.materials && in.materialMask) return true; // the previewer: from capture_NNN.mat
+    // RenderScale: the depth is a copy of the scene's corner, the stencil is the game's own.
+    IDirect3DTexture9* const stencil = in.stencil ? in.stencil : in.depth;
     D3DSURFACE_DESC desc{};
-    if (!in.materials || FAILED(in.depth->GetLevelDesc(0, &desc)) || desc.Format != static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z')))
+    if (!in.materials || FAILED(stencil->GetLevelDesc(0, &desc)) || desc.Format != static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z')))
         return false;
     if (in.materialClasses) return buildMaterialIds(device, in);
     if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
@@ -1050,7 +1062,7 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     if (!m_solidPS) return false;
     for (int i = 0; i < 16; i++) device->SetTexture(i, nullptr);
     IDirect3DSurface9* ds = nullptr;
-    if (FAILED(in.depth->GetSurfaceLevel(0, &ds)) || !ds) return false;
+    if (FAILED(stencil->GetSurfaceLevel(0, &ds)) || !ds) return false;
     device->SetRenderTarget(0, m_materials.surface);
     device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
     device->SetDepthStencilSurface(ds);
@@ -1116,7 +1128,7 @@ bool Pipeline::buildMaterialIds(IDirect3DDevice9* device, const Inputs& in) {
     }
     for (int i = 0; i < 16; i++) device->SetTexture(i, nullptr);
     IDirect3DSurface9* ds = nullptr;
-    if (FAILED(in.depth->GetSurfaceLevel(0, &ds)) || !ds) {
+    if (FAILED((in.stencil ? in.stencil : in.depth)->GetSurfaceLevel(0, &ds)) || !ds) {
         palette->Release();
         return false;
     }
@@ -2266,9 +2278,18 @@ BOOL setPassStates(IDirect3DDevice9* device) {
 
 } // namespace
 
-void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output) {
-    if (!m_ready || !in.color || !in.depth) return;
-    if (!ensureTargets(device, in.width, in.height)) return;
+bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output) {
+    if (!m_ready || !in.color || !in.depth) return false;
+    if (!ensureTargets(device, in.width, in.height)) return false;
+    // RenderScale: every pass at the scene's size into m_scaled, then up to `output` at the end
+    // (upscaleOutput). The look's sharpening is skipped then, FSR's own (RCAS) takes its place:
+    // sharpened before EASU, its halos would be scaled up with the image.
+    const bool upscale = in.outputWidth > 0 && in.outputHeight > 0 && (in.outputWidth != in.width || in.outputHeight != in.height);
+    IDirect3DSurface9* const screen = output;
+    if (upscale) {
+        if (!m_scaled.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
+        output = m_scaled.surface;
+    }
     m_frame++;
 
     const BOOL softwareVP = setPassStates(device);
@@ -2392,11 +2413,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             runPass(device, kCinematic, m_hdr2);
             current = m_hdr2.texture;
         }
-        const bool sharpen = s.sharpen > 0.001f;
+        const bool sharpen = s.sharpen > 0.001f && !upscale;
         bind(device, 0, current, false);
         bind(device, 1, nullptr, false);
         passConstants(device, 1.0f / in.width, 1.0f / in.height);
         runPass(device, sharpen ? kSharpen : kCopy, output, in.width, in.height);
+        if (upscale) upscaleOutput(device, in, s, screen);
         profileEnd();
         if (in.repeat) swapRepeatCamera();
         if (temporal) {
@@ -2407,7 +2429,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         }
         for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
         if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
-        return;
+        return true;
     }
     // 1a. The sea the game reports no height for (TMUF Island), from its water material.
     if (materials && s.waterSurfaces > 0.0f && ((in.water[2] >= 0.0f && in.water[2] < 0.5f) || in.water[2] > 1.5f)) measureSeaLevel(device);
@@ -2898,8 +2920,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool fxaa = s.fxaa && post;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
                      m_taa[1].create(device, in.width, in.height, D3DFMT_A16B16G16R16F);
-    const bool sharpen = s.sharpen > 0.001f && post;
-    // Chain: Final -> [FXAA] -> [TAA] -> [Sharpen | Copy] -> output.
+    const bool sharpen = s.sharpen > 0.001f && post && !upscale;
+    // Chain: Final -> [FXAA] -> [TAA] -> [Sharpen | Copy] -> output (RenderScale: -> EASU -> RCAS).
     IDirect3DTexture9* current = nullptr;
     if (!fxaa && !taa && !sharpen && !drops) {
         runPass(device, kFinal, output, in.width, in.height);
@@ -2948,6 +2970,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // flicker, and keeping them out of its history avoids trails.
     if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && post && ensureRain(device))
         drawRain(device, in, s, dt, heightMap && m_heightValid, output);
+    if (upscale) upscaleOutput(device, in, s, screen);
     profileEnd();
 
     if (in.repeat) swapRepeatCamera();
@@ -2960,6 +2983,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
     for (int i = 12; i < 16; i++) device->SetTexture(i, nullptr); // the LUT, the materials: nothing of ours stays bound (Reset)
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
 }
 
 // Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back once
@@ -3050,6 +3074,62 @@ bool Pipeline::copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth,
 
 bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area) {
     return copyScene(device, scene, target, area, false);
+}
+
+// RenderScale: m_scaled (the finished image at the scene's size) up to `output` with FSR 1. RCAS
+// by FsrSharpness, AMD's sharpness as a factor, 2^-stops: 1 is its strongest (0 stops), its
+// default of 0.2 stops is 0.87, ours of 0.8 is 0.32 stops. Debug views get EASU only.
+void Pipeline::upscaleOutput(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output) {
+    const UINT ow = in.outputWidth, oh = in.outputHeight;
+    const float amount = s.debugView == 0 ? fminf(s.fsrSharpness, 1.0f) : 0.0f;
+    const bool rcas = amount > 0.001f && m_fsr.create(device, ow, oh, D3DFMT_A8R8G8B8);
+    bind(device, 0, m_scaled.texture, false);
+    passConstants(device, static_cast<float>(in.width), static_cast<float>(in.height), 1.0f / in.width, 1.0f / in.height);
+    runPass(device, kFsrEasu, rcas ? m_fsr.surface : output, ow, oh);
+    if (rcas) {
+        bind(device, 0, m_fsr.texture, false);
+        passConstants(device, 1.0f / ow, 1.0f / oh, amount);
+        runPass(device, kFsrRcas, output, ow, oh);
+    }
+    device->SetTexture(0, nullptr);
+}
+
+bool Pipeline::stretchScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, const RECT& from, IDirect3DSurface9* target, const RECT& to) {
+    if (!m_ready || !scene || !target || to.right <= to.left || to.bottom <= to.top) return false;
+    D3DSURFACE_DESC sceneDesc{}, desc{};
+    scene->GetLevelDesc(0, &sceneDesc);
+    target->GetDesc(&desc);
+    // PS_Resolve reads u_Pass0.xy + uv * u_Pass0.zw, uv over the whole target: `to` maps onto `from`.
+    const float sx = static_cast<float>(from.right - from.left) / sceneDesc.Width * desc.Width / (to.right - to.left);
+    const float sy = static_cast<float>(from.bottom - from.top) / sceneDesc.Height * desc.Height / (to.bottom - to.top);
+    const float ox = static_cast<float>(from.left) / sceneDesc.Width - static_cast<float>(to.left) / desc.Width * sx;
+    const float oy = static_cast<float>(from.top) / sceneDesc.Height - static_cast<float>(to.top) / desc.Height * sy;
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target); // resets the scissor rect: set it after
+    device->SetScissorRect(&to);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    bind(device, 0, scene, true);
+    passConstants(device, ox, oy, sx, sy);
+    const float mode[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // c33.x 0: cut to 0..1
+    device->SetPixelShaderConstantF(33, mode, 1);
+    runPass(device, kResolve, target, desc.Width, desc.Height);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+bool Pipeline::downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth) {
+    if (!m_ready || !source || !out.create(device, w, h, depth ? D3DFMT_R32F : format)) return false;
+    const BOOL softwareVP = setPassStates(device);
+    bind(device, 0, source, false);
+    passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
+    const float mode[4] = {1.0f, 1.0f, 0.0f, 0.0f}; // c33 xy 1: as it is, alpha too (PS_Resolve)
+    device->SetPixelShaderConstantF(33, mode, 1);
+    runPass(device, depth ? kCopyDepth : kResolve, out);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
 }
 
 bool Pipeline::addScene(IDirect3DDevice9* device, IDirect3DTexture9* added, IDirect3DSurface9* target, const RECT& area) {
