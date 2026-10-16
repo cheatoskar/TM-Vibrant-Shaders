@@ -186,6 +186,7 @@ void draw(IDirect3DDevice9* device) {
         host.splitOn = &photo::splitOn();
         host.splitPosition = &photo::splitPosition();
         host.splitSwapped = &photo::splitSwapped();
+        host.splitPreset = &photo::splitPreset();
         host.photoOn = [] {
             if (!photo::active()) photo::toggle();
         };
@@ -207,8 +208,13 @@ void draw(IDirect3DDevice9* device) {
         ImDrawList* draw = ImGui::GetForegroundDrawList();
         const ImVec2 size = ImGui::GetIO().DisplaySize;
         const float x = photo::splitPosition() * size.x, y = size.y - 48.0f * menu::scale(), pad = 10.0f * menu::scale();
-        const char* left = photo::splitSwapped() ? "TMVS" : "Game";
-        const char* right = photo::splitSwapped() ? "Game" : "TMVS";
+        // With a preset on the other side: its name, and your preset's on the mod's side.
+        const std::string& preset = photo::splitPreset();
+        const Config& config = Config::get();
+        const char* other = preset.empty() ? "Game" : preset.c_str();
+        const char* mine = preset.empty() || config.preset.empty() ? "TMVS" : config.preset.c_str();
+        const char* left = photo::splitSwapped() ? mine : other;
+        const char* right = photo::splitSwapped() ? other : mine;
         const ImVec2 lw = ImGui::CalcTextSize(left);
         const auto label = [&](float at, const char* text) {
             const ImVec2 s = ImGui::CalcTextSize(text);

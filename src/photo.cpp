@@ -22,6 +22,7 @@ float g_zoom = 1.0f;        // Shift+wheel, 1..8
 bool g_split = false;       // Shift+F6: the game's image on one side of a line
 float g_splitAt = 0.5f;     // the line, 0..1 from the left
 bool g_splitSwap = false;   // the game's image on the right
+std::string g_splitPreset;  // the other side: "" the game's image, else this preset's look
 
 enum class Job { None, Single, Tiles };
 Job g_job = Job::None;
@@ -361,7 +362,8 @@ void toggleSplit() {
     g_split = !g_split;
     if (g_split && !g_active) g_manual = 1; // comparing is a photo mode thing: it comes on too
     TMVS_LOG("photo: compare split %s", g_split ? "on" : "off");
-    setStatus(g_split ? "Compare: the game's image | the mod's   Ctrl+Shift+wheel: move the line" : "Compare off", 3);
+    const std::string other = g_splitPreset.empty() ? std::string("the game's image") : g_splitPreset;
+    setStatus(g_split ? "Compare: " + other + " | your look   Ctrl+Shift+wheel: move the line" : std::string("Compare off"), 3);
 }
 
 bool splitShown() {
@@ -378,6 +380,10 @@ float& splitPosition() {
 
 bool& splitSwapped() {
     return g_splitSwap;
+}
+
+std::string& splitPreset() {
+    return g_splitPreset;
 }
 
 void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3DSurface9* shaded) {
@@ -417,9 +423,9 @@ const char* status() {
         const float dof = Config::get().photoDof;
         char aperture[32] = "Depth of field off";
         if (dof > 0.0f) snprintf(aperture, sizeof(aperture), "f/%.1f", fNumber(dof));
-        char line[96];
-        snprintf(line, sizeof(line), "%s   Zoom %.1fx   Focus %s%s", aperture, g_zoom, g_focus[0] >= 0.0f ? "point" : "auto",
-                 g_split ? "   Compare" : "");
+        char line[160];
+        snprintf(line, sizeof(line), "%s   Zoom %.1fx   Focus %s%s%s", aperture, g_zoom, g_focus[0] >= 0.0f ? "point" : "auto",
+                 g_split ? "   Compare" : "", g_split && !g_splitPreset.empty() ? (" with " + g_splitPreset).c_str() : "");
         std::string text = line;
         if (!g_status.empty()) text += "\n" + g_status;
         strncpy_s(g_statusCopy, text.c_str(), _TRUNCATE);

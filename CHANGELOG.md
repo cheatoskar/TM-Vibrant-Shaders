@@ -2,6 +2,9 @@
 
 ### Unreleased
 
+- Photo mode's *Compare split* can put a preset on the other side instead of the game's image (*Photo mode* panel, *Other side*): your look on one side of the line, the chosen preset's on the other, on the same frame. To compare two presets, use one and pick the other there. The preset side runs the effects a second time with their own history (TAA, exposure, bounce light, focus), so it costs about as much again, only while it is shown (TrackMania Nations/United; not in TrackMania 2 yet).
+- Photo mode with the shaders off (`F7`): the focus follows a middle click and the auto focus again. It stayed where it was first measured when the game started with the shaders off.
+- The volumetric light's march range is set before the march (it read the value left over from before: in game whatever the game's own shaders had put there).
 - Video export as MP4: *Shoot video* in the replay editor now writes an MP4 with H.264 (or HEVC, `VideoCodec` 2) and the sound as AAC, next to the game's file in `Documents\TrackMania\Video`. The graphics card encodes (NVIDIA, AMD, Intel; else Windows' own encoder), no codec dialog, nothing to install, 4K and any frame rate. Bitrate automatic or set (`VideoBitrate`). `VideoCodec` 0 keeps the game's AVI with its codec list; if Windows can't encode, that is what you get.
 - A preset you pick in the menu holds on every map, also on maps of another type: picking Horizon and then exporting a replay of a day map no longer switched to the day preset and left the map without its real night. *Maps* page: choosing a preset for a map type (or *Use the presets per map type again*) brings the automatic presets back. With *Picked preset applies to all maps of this type* on, nothing changes.
 - Video export log: its settings are logged when it starts shooting (they were read while its dialog was still open: the dialog's defaults and an unstepped clock).
