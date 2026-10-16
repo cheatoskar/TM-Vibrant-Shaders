@@ -1424,29 +1424,51 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     if (fade <= 0.0) return o;
     // It comes out behind the car: under and in it the line would flicker through the body
     // and the rear wheels (it runs through their centres, almost at the depth of the tread).
-    // The distance to the car goes to the pixels (data.w): at speed the points lie 15 m apart,
-    // a fade per vertex would stretch over the whole first piece. Only the fresh part: an
-    // older line the car drives back over stays.
-    float3 car = trailPoint(c_Trail.y - 1.0).xyz;
-    float fromCar = lerp(distance(s, car), 100.0, saturate((age - 0.6) / 0.3));
+    // The way back to the car along the line goes to the pixels (data.w), the fade-in lies 1.6 to
+    // 2.6 m behind the car at any speed. Farther back along the line it stays, also where the car
+    // drives over its old line again. (It was the points' age: driving slowly the line next to the
+    // car popped in and out, at speed the points lie metres apart.)
+    float fromCar = 100.0;
+    float newest = c_Trail.y - 1.0;
+    if (newest - j < 24.0) {
+        float path = 0.0;
+        float3 q = trailPoint(newest).xyz;
+        [loop] for (int i = 1; i <= 24; i++) {
+            if (newest - i < j - 0.5) break;
+            float3 r = trailPoint(newest - i).xyz;
+            path += distance(q, r);
+            q = r;
+        }
+        fromCar = path;
+    }
     float3 dir = d / len;
     float3 right = cross(float3(0, 1, 0), dir);
     float rl = length(right);
-    right = rl > 0.1 ? right / rl : float3(1, 0, 0);
-    float3 p = s + right * c_Trail2.x;
+    float3 across = rl > 1e-3 ? right / rl : float3(1, 0, 0);
+    float3 p = s + across * c_Trail2.x;
     float3 v = toView(p);
-    if (v.z < 0.3) return o;
     // Right in front of the lens (a camera on the ground after a crash) it would fill the screen.
+    // Behind the camera the hardware clips the piece (dropping the corner dropped the whole piece:
+    // at speed the one from the car back past the camera).
     fade *= smoothstep(0.5, 2.5, v.z);
     float3 dv = toView(p + dir) - v;
     float3 side = cross(dv, v);
     float sl = length(side);
-    if (sl < 1e-5) return o;
-    // At least a pixel wide (no flicker far away); thinner lines are dimmed instead.
-    float pixel = v.z * c_Proj2.z / c_Proj.x;
-    float halfWidth = max(c_Trail2.y, pixel * 1.2);
-    fade *= c_Trail2.y / halfWidth;
-    o.pos = toClip(v + side / sl * halfWidth * corner.x);
+    side = sl > 1e-6 ? side / sl : float3(1, 0, 0);
+    // Flat across the line, lying on the road: turned to the camera it flapped with every swing of
+    // the chase camera and stood up like a wall where the line passes beside or above the camera
+    // (downhill). Where the line runs steeply (loops) "across" has no horizontal: turned to the
+    // camera there.
+    float flatness = saturate((rl - 0.15) / 0.35);
+    float3 wide = normalize(lerp(side, normalize(toView(p + across) - v), flatness));
+    float facing = dot(wide, side);
+    // At least a pixel wide as seen (far away, or seen edge-on), widened towards the camera;
+    // thinner lines are dimmed instead.
+    float pixel = abs(v.z) * c_Proj2.z / c_Proj.x;
+    float seen = c_Trail2.y * abs(facing);
+    float more = max(pixel * 1.2 - seen, 0.0);
+    fade *= c_Trail2.y / max(c_Trail2.y, pixel * 1.2);
+    o.pos = toClip(v + (wide * c_Trail2.y + side * (facing < 0.0 ? -more : more)) * corner.x);
     o.data = float4(corner.x, fade, v.z, fromCar);
     return o;
 }

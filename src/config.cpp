@@ -64,7 +64,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Bloom", "Bloom", "Bloom & Lens", Float, bloom, 0.0f, 0.4f),
         TMVS_FIELD("BloomRadius", "Bloom radius", "Bloom & Lens", Float, bloomRadius, 0.3f, 1.2f),
         TMVS_FIELD("HighlightBoost", "Light source intensity", "Bloom & Lens", Float, highlightBoost, 0.0f, 8.0f),
-        TMVS_FIELD("BorderGlow", "Neon strips glow (with light sources from the game)", "Bloom & Lens", Float, borderGlow, 0.0f, 3.0f),
+        TMVS_FIELD("BorderGlow", "Neon strips glow (with light sources from the game)", "Bloom & Lens", Float, borderGlow, 0.0f, 5.0f),
         TMVS_FIELD("LensFlare", "Lens flare", "Bloom & Lens", Float, lensFlare, 0.0f, 1.5f),
         TMVS_FIELD("ChromaticAberration", "Chromatic aberration", "Bloom & Lens", Float, chromaticAberration, 0.0f, 1.0f),
         TMVS_FIELD("Vignette", "Vignette", "Bloom & Lens", Float, vignette, 0.0f, 1.0f),
@@ -918,6 +918,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Neon:
             s.skyMode = 2;
+            s.borderGlow = 3.0f;    // night presets: the borders' neon shines (owner's pick)
             s.starAmount = 3.0f;    // night presets: every star
             s.skyColor[0] = 0.35f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.3f;
@@ -944,6 +945,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Horizon:
             s.skyMode = 3;      // black hole sky: the hole lights the stadium, Saturn next to it
+            s.borderGlow = 3.0f;
             s.reflections = 0.8f;
             s.planetType = 0;
             s.planetView = 1;
@@ -978,6 +980,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Aurora:
             s.skyMode = 4;
+            s.borderGlow = 3.0f;
             s.skyRotation = 150.0f;
             s.reflections = 0.8f;
             s.starAmount = 3.0f;

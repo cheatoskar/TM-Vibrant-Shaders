@@ -142,7 +142,7 @@ struct Settings {
 
     // Anti-aliasing & sharpening
     bool fxaa = true;
-    bool taa = false;              // temporal anti-aliasing / stabilisation
+    bool taa = true;               // temporal anti-aliasing / stabilisation (smooths the long shadows' steps; jitter stays off)
     float sharpen = 0.35f;
 };
 

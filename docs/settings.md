@@ -182,7 +182,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Bloom | `Bloom` | 0 – 0.4 | Soft glow around bright parts. |
 | Bloom radius | `BloomRadius` | 0.3 – 1.2 | Wider or tighter glow. |
 | Light source intensity | `HighlightBoost` | 0 – 8 | How bright lamps and neon become in HDR. |
-| Neon strips glow | `BorderGlow` | 0 – 3 | With *Light sources from the game*: how much the blue neon of the road borders glows, on top of the light source intensity (1 = as before, 0 = as the game draws it). |
+| Neon strips glow | `BorderGlow` | 0 – 5 | With *Light sources from the game*: how much the blue neon of the road borders glows, on top of the light source intensity (1 = as before, 0 = as the game draws it; the night presets Neon, Horizon and Aurora use 3). |
 | Lens flare | `LensFlare` | 0 – 1.5 | Ghost reflections from the sun. |
 | Chromatic aberration | `ChromaticAberration` | 0 – 1 | Colour fringes towards the screen edges. |
 | Vignette | `Vignette` | 0 – 1 | Darker corners. |
@@ -206,7 +206,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Setting | Key | Range | What it does |
 |---|---|---|---|
 | FXAA | `FXAA` | on / off | Smooths edges within one frame. |
-| Temporal anti-aliasing | `TAA` | on / off | Smooths edges and flicker over several frames. A little softness on fast movement. |
+| Temporal anti-aliasing | `TAA` | on / off | Smooths edges and flicker over several frames, and the steps of long shadows under a low light. On by default (not in *Performance*). A little softness on fast movement. |
 | TAA: sub-pixel jitter | `TAAJitter` | on / off | Samples a different spot inside each pixel every frame, so TAA supersamples the edges. Off by default: fine grates can shimmer with it. |
 | Sharpening (CAS) | `Sharpen` | 0 – 1 | Brings back detail after anti-aliasing. |
 | Effect quality | `Quality` | Low, Medium, High | Samples for AO, shadows, long shadows, clouds, volumetric light, bounce light and the aurora. Low is clearly faster. |

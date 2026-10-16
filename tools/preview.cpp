@@ -142,6 +142,7 @@ struct Job {
     float move[3] = {}; // previous frame's camera offset (world), for motion blur tests
     float drive[3] = {}; // camera motion per frame (camera axes), for trail tests
     float time = -1.0f; // scene time of the last frame (s), -1 = the capture's
+    float trail = 0.0f; // > 0: the neon trail of a car driving at this speed (m/s) to where the car is in the capture
 };
 
 struct LoadedCapture {
@@ -176,6 +177,7 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
             } else if (!_strnicmp(w.c_str(), "move=", 5)) sscanf(w.c_str() + 5, "%f,%f,%f", &job.move[0], &job.move[1], &job.move[2]);
             else if (!_strnicmp(w.c_str(), "drive=", 6)) sscanf(w.c_str() + 6, "%f,%f,%f", &job.drive[0], &job.drive[1], &job.drive[2]);
             else if (!_strnicmp(w.c_str(), "time=", 5)) job.time = static_cast<float>(atof(w.c_str() + 5));
+            else if (!_strnicmp(w.c_str(), "trail=", 6)) job.trail = static_cast<float>(atof(w.c_str() + 6));
             else setByKey(job.settings, w.c_str());
         }
         jobs.push_back(job);
@@ -295,6 +297,8 @@ int main(int argc, char** argv) {
             lutFile = argv[++i];
         } else if (!strcmp(argv[i], "--lutmix") && i + 1 < argc) {
             lutMix = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--trail") && i + 1 < argc) {
+            defaults.trail = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             defaults.time = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--drive") && i + 1 < argc) {
@@ -480,12 +484,43 @@ int main(int argc, char** argv) {
             moved.view[12 + j] -= job.move[0] * in.view[0 * 4 + j] + job.move[1] * in.view[1 * 4 + j] + job.move[2] * in.view[2 * 4 + j];
         }
         const bool moving = job.move[0] != 0.0f || job.move[1] != 0.0f || job.move[2] != 0.0f;
+        // Trail test: the car where the pipeline's depth finder would see it (below the screen's
+        // centre, lowered to the wheel centres), driving there along the line from 1.6 m below
+        // the camera (the road it came along).
+        float carEnd[3] = {}, carDir[3] = {};
+        bool trail = false;
+        if (job.trail > 0.0f && cap.depth.size() == static_cast<size_t>(cap.width) * cap.height) {
+            const float* V = cap.view;
+            const float* P = cap.projection;
+            float best = 1e9f, bestV = 0.6f;
+            for (float v : {0.6f, 0.65f, 0.7f}) {
+                const float d = cap.depth[static_cast<size_t>(v * cap.height) * cap.width + cap.width / 2];
+                const float z = P[14] / (d - P[10]);
+                if (z > 1.5f && z < 16.0f && z < best) best = z, bestV = v;
+            }
+            if (best < 16.0f) {
+                const float pv[3] = {(0.0f - P[8]) * best / P[0], ((1.0f - 2.0f * bestV) - P[9]) * best / P[5], best};
+                float camera[3];
+                for (int j = 0; j < 3; j++) {
+                    camera[j] = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
+                    carEnd[j] = camera[j] + pv[0] * V[j * 4 + 0] + pv[1] * V[j * 4 + 1] + pv[2] * V[j * 4 + 2] - 0.5f * V[j * 4 + 1] -
+                                0.25f * V[j * 4 + 2];
+                }
+                const float anchor[3] = {camera[0], camera[1] - 1.6f, camera[2]};
+                float len = 0.0f;
+                for (int j = 0; j < 3; j++) len += (anchor[j] - carEnd[j]) * (anchor[j] - carEnd[j]);
+                len = sqrtf(len);
+                for (int j = 0; j < 3; j++) carDir[j] = (anchor[j] - carEnd[j]) / len;
+                trail = true;
+                printf("%s: trail test, car at %.1f %.1f %.1f, %.1f m/s\n", job.output.c_str(), carEnd[0], carEnd[1], carEnd[2], job.trail);
+            }
+        }
 
         // Several frames so auto exposure and TAA settle like they would in game.
         LARGE_INTEGER t0{}, t1{}, freq{};
         QueryPerformanceFrequency(&freq);
         pipeline.resetHistory();
-        const int frames = bench ? 200 : 40;
+        const int frames = bench ? 200 : (trail ? 150 : 40);
         device->BeginScene();
         for (int frame = 0; frame < frames; frame++) {
             const bool previousFrame = moving && frame == frames - 2;
@@ -496,6 +531,12 @@ int main(int argc, char** argv) {
             // the distance still to drive.
             for (int j = 0; j < 3; j++) driven.view[12 + j] += back * job.drive[j];
             driven.time = job.time >= 0.0f ? job.time - (frames - 1 - frame) * 0.02f : cap.time + frame * 0.1f;
+            if (trail) {
+                driven.driving = driven.carKnown = driven.carFromEngine = true;
+                // Per frame as far as the frame's time step (time=: 0.02 s, else 0.1 s).
+                const float step = job.trail * (job.time >= 0.0f ? 0.02f : 0.1f);
+                for (int j = 0; j < 3; j++) driven.carPosition[j] = carEnd[j] + carDir[j] * back * step;
+            }
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
             pipeline.render(device, driven, job.settings, output.surface);
             if (bench) pipeline.collectProfile(true);
