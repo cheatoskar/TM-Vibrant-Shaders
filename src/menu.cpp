@@ -207,7 +207,7 @@ const Field* findField(const char* key) {
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") ||
            !strcmp(f.key, "ShadeMenuBars");
@@ -337,6 +337,9 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             } else if (!strcmp(f.key, "ToneCurve")) {
                 static const char* kCurves[] = {"The game's", "TMVS (colours keep their hue)", "ACES (film)"};
                 changed |= ImGui::Combo(label, value, kCurves, IM_ARRAYSIZE(kCurves));
+            } else if (!strcmp(f.key, "VideoCodec")) {
+                static const char* kCodecs[] = {"The game's AVI (its codec list)", "MP4, H.264", "MP4, HEVC (H.265)"};
+                changed |= ImGui::Combo(label, value, kCodecs, IM_ARRAYSIZE(kCodecs));
             } else if (!strcmp(f.key, "EngineMoon")) {
                 static const char* kMoons[] = {"As the game has it", "From the black hole", "Off (ambient and lamps only)"};
                 changed |= ImGui::Combo(label, value, kMoons, IM_ARRAYSIZE(kMoons));
@@ -652,6 +655,7 @@ bool presetCard(const std::string& name, bool active, float width) {
                 config.moodPreset[m] = name;
                 config.autoMood = true;
                 if (static_cast<int>(config.mood) == m) config.selectPreset(name);
+                config.resumeMoodPresets();
                 config.markDirty();
             }
         }
@@ -1174,9 +1178,16 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Preset per map type");
     ImGui::SameLine();
-    if (toggle("mood", &config.autoMood)) config.markDirty();
+    if (toggle("mood", &config.autoMood)) {
+        if (config.autoMood) config.resumeMoodPresets();
+        config.markDirty();
+    }
     ImGui::SameLine();
     ImGui::TextDisabled("this map: %s", moodName(config.mood));
+    if (config.autoMood && config.manualPick) {
+        ImGui::TextWrapped("Your pick (%s) holds on every map until you choose a preset for a map type below.", config.preset.c_str());
+        if (ImGui::Button("Use the presets per map type again")) config.resumeMoodPresets();
+    }
     ImGui::Spacing();
 
     // The three moods as big cards side by side (one under the other when narrow).
@@ -1218,12 +1229,14 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
             if (ImGui::BeginCombo("##preset", mp.empty() ? "Keep current" : mp.c_str())) {
                 if (ImGui::Selectable("Keep current", mp.empty())) {
                     mp.clear();
+                    config.resumeMoodPresets();
                     config.markDirty();
                 }
                 for (const auto& name : names) {
                     if (ImGui::Selectable(name.c_str(), mp == name)) {
                         mp = name;
                         if (static_cast<int>(config.mood) == m) config.selectPreset(name);
+                        config.resumeMoodPresets();
                         config.markDirty();
                     }
                 }
@@ -1310,8 +1323,11 @@ bool drawSettings(Config& config, Settings& s) {
                           }});
     }
     panels.push_back({"Presets and maps", 4.0f, [&config] {
-                          switchRow("Preset per map type", &config.autoMood,
-                                    "Day, sunset and night maps each use their own preset (see Maps). Off: the same preset everywhere.");
+                          if (switchRow("Preset per map type", &config.autoMood,
+                                        "Day, sunset and night maps each use their own preset (see Maps). Off: the same preset everywhere.\n"
+                                        "A preset you pick holds on every map until you choose one for a map type again.") &&
+                              config.autoMood)
+                              config.resumeMoodPresets();
                           ImGui::BeginDisabled(!config.autoMood);
                           switchRow("Picked preset applies to all maps of this type", &config.rememberMoodPick,
                                     "On: picking a preset on a night map makes it the preset for all night maps (same for day and sunset).\nOff: only the Maps page sets these.");
@@ -1331,6 +1347,8 @@ bool drawSettings(Config& config, Settings& s) {
     panels.push_back({"Game", 8.0f, [&s] {
                           bool l = drawKey(s, "CinematicOnlyInReplays", "Motion blur, depth of field only in replays");
                           l |= drawKey(s, "VideoExportBest", "Video export: full quality, effects on the video's clock");
+                          l |= drawKey(s, "VideoCodec", "Video export file (MP4: the graphics card encodes, no codec dialog)");
+                          l |= drawKey(s, "VideoBitrate", "Video export bitrate, Mbit/s (0 = auto: 4K 30 fps 50 H.264, 30 HEVC)");
                           l |= drawKey(s, "WeatherSound", "Rain and thunder volume");
                           l |= drawKey(s, "TAA", "Temporal anti-aliasing");
                           l |= drawKey(s, "TAAJitter", "TAA sub-pixel jitter");

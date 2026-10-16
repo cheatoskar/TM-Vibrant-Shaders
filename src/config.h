@@ -119,6 +119,12 @@ public:
     bool autoMood = true;
     std::string moodPreset[static_cast<int>(Mood::Count)] = {"Vibrant", "Golden Hour", "Horizon"};
     Mood mood = Mood::Unknown;
+    // You picked a preset in the menu (with "Picked preset applies to all maps of this type"
+    // off): it holds on every map, also on ones of another type, until you choose a preset for
+    // a map type again (Maps page) or resumeMoodPresets(). Before, the next map of another type
+    // switched to its preset: Horizon picked, the replay's video export loaded Golden Hour.
+    bool manualPick = false;
+    void resumeMoodPresets();
     void onMoodDetected(Mood m);
     // The look a map of this mood gets once loaded (its mood preset, or the current look).
     Settings lookForMood(Mood m) const;

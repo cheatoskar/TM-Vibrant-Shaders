@@ -107,6 +107,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("DepthOfField", "Depth of field", "Cinematic", Float, depthOfField, 0.0f, 1.0f),
         TMVS_FIELD("CinematicOnlyInReplays", "Only in replays and video export", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
         TMVS_FIELD("VideoExportBest", "Best quality in the video export", "Cinematic", Bool, videoExportBest, 0.0f, 1.0f),
+        TMVS_FIELD("VideoCodec", "Video export file", "Cinematic", Int, videoCodec, 0.0f, 2.0f),
+        TMVS_FIELD("VideoBitrate", "Video export bitrate (Mbit/s, 0 = auto)", "Cinematic", Float, videoBitrate, 0.0f, 200.0f),
         TMVS_FIELD("FocusDistance", "Focus distance (m, 0 = auto)", "Cinematic", Float, focusDistance, 0.0f, 200.0f),
         TMVS_FIELD("BokehSize", "Max blur (px)", "Cinematic", Float, bokehSize, 2.0f, 24.0f),
 
@@ -191,7 +193,7 @@ Mood moodOfDayTime(float t) {
 
 Settings Config::lookForMood(Mood m) const {
     Settings look = settings;
-    if (m_mapLook || preset == kCustomPreset || !autoMood || m == Mood::Unknown) return look;
+    if (m_mapLook || preset == kCustomPreset || !autoMood || manualPick || m == Mood::Unknown) return look;
     const std::string& p = moodPreset[static_cast<int>(m)];
     if (!p.empty()) namedSettings(p, look);
     return look;
@@ -241,7 +243,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") ||
            !strcmp(f.key, "ShadeMenuBars");
@@ -585,8 +587,20 @@ bool Config::selectPreset(const std::string& name) {
     m_mapLook = false; // your choice: it is your look from now on
     preset = name;
     if (autoMood && rememberMoodPick && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
+    else if (autoMood) manualPick = true;
     markDirty();
     return true;
+}
+
+void Config::resumeMoodPresets() {
+    if (!manualPick) return;
+    manualPick = false;
+    markDirty();
+    TMVS_LOG("config: presets per map type again");
+    // This map's own preset now (real night follows it, see relightOnSwitch).
+    if (m_mapLook || preset == kCustomPreset || !autoMood || mood == Mood::Unknown) return;
+    const std::string& p = moodPreset[static_cast<int>(mood)];
+    if (!p.empty() && p != preset && applyNamed(p)) preset = p;
 }
 
 bool Config::saveUserPreset(const std::string& requested, const std::string& description) {
@@ -608,6 +622,7 @@ bool Config::saveUserPreset(const std::string& requested, const std::string& des
     m_baseline = settings;
     m_basePreset = name;
     if (autoMood && rememberMoodPick && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
+    else if (autoMood) manualPick = true;
     markDirty();
     return true;
 }
@@ -667,6 +682,10 @@ void Config::onMoodDetected(Mood m) {
     // The map's own look wins, and your own unsaved tweaks win over the mood presets: a map
     // change must not throw them away.
     if (m_mapLook || preset == kCustomPreset) return;
+    if (manualPick) {
+        TMVS_LOG("config: map mood %s: your pick %s stays", moodName(m), preset.c_str());
+        return;
+    }
     const std::string& p = moodPreset[static_cast<int>(m)];
     if (!autoMood || p.empty() || p == preset) return;
     if (applyNamed(p)) {
@@ -809,6 +828,8 @@ void applyPreset(Settings& s, Preset preset) {
     const float keepSound = s.weatherSound;
     const bool keepReplayOnly = s.cinematicOnlyInReplays;
     const bool keepVideoBest = s.videoExportBest;
+    const int keepVideoCodec = s.videoCodec;
+    const float keepVideoBitrate = s.videoBitrate;
     const bool keepJitter = s.taaJitter;
     const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
     const bool keepTrailTyres = s.trailTyres;
@@ -840,6 +861,8 @@ void applyPreset(Settings& s, Preset preset) {
     s.weatherSound = keepSound;
     s.cinematicOnlyInReplays = keepReplayOnly;
     s.videoExportBest = keepVideoBest;
+    s.videoCodec = keepVideoCodec;
+    s.videoBitrate = keepVideoBitrate;
     s.taaJitter = keepJitter;
     switch (preset) {
         case Preset::Vibrant:
@@ -1230,6 +1253,7 @@ void Config::load() {
     if (GetPrivateProfileStringW(L"General", L"LutAmount", L"", text, 128, ini)) lutAmount = static_cast<float>(_wtof(text));
     lutAmount = lutAmount < 0.0f ? 0.0f : (lutAmount > 1.0f ? 1.0f : lutAmount);
     rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 0, ini) != 0;
+    manualPick = GetPrivateProfileIntW(L"General", L"ManualPick", 0, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         if (GetPrivateProfileStringW(L"General", kMoodKeys[i], L"", text, 128, ini)) moodPreset[i] = presetFromText(text, moodPreset[i]);
@@ -1259,6 +1283,9 @@ void Config::load() {
     if (GetPrivateProfileStringW(L"Settings", L"WeatherSound", L"", target, 32, ini)) settings.weatherSound = static_cast<float>(_wtof(target));
     settings.cinematicOnlyInReplays = GetPrivateProfileIntW(L"Settings", L"CinematicOnlyInReplays", 1, ini) != 0;
     settings.videoExportBest = GetPrivateProfileIntW(L"Settings", L"VideoExportBest", 1, ini) != 0;
+    settings.videoCodec = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoCodec", 1, ini));
+    if (settings.videoCodec < 0 || settings.videoCodec > 2) settings.videoCodec = 1;
+    if (GetPrivateProfileStringW(L"Settings", L"VideoBitrate", L"", target, 32, ini)) settings.videoBitrate = static_cast<float>(_wtof(target));
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
     readFields(settings, ini, L"Settings", true, true);
     if (preset == kCustomPreset) {
@@ -1303,6 +1330,7 @@ void Config::save() {
     swprintf(photo, 32, L"%.2f", lutAmount);
     WritePrivateProfileStringW(L"General", L"LutAmount", photo, ini);
     WritePrivateProfileStringW(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"ManualPick", manualPick ? L"1" : L"0", ini);
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);
     WritePrivateProfileStringW(L"General", L"MenuSections", sections, ini);

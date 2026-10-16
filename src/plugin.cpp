@@ -17,6 +17,7 @@
 #include "photo.h"
 #include "thumbnails.h"
 #include "tracer.h"
+#include "videofile.h"
 #include "tm_shaders_version.h"
 #include <d3d9.h>
 #include <algorithm>
@@ -154,6 +155,7 @@ struct ExportStats {
     unsigned stepped = 0;     // of them on the video's clock
     double clockStart = 0.0;  // the effects' clock at its start
     double gameStart = 0.0;   // the game's clock at its start
+    double clockEnd = 0.0, gameEnd = 0.0; // both at its last stepped frame
     int samplesSeen = 0;      // most main cameras shaded in one frame
 } g_exportStats;
 
@@ -1012,12 +1014,23 @@ void updateVideoExport() {
     const bool on = Config::get().settings.videoExportBest && engine::videoExport(v);
     ExportStats& stats = g_exportStats;
     if (g_exporting && g_scene.processedCount > stats.samplesSeen) stats.samplesSeen = g_scene.processedCount;
+    // DoShoot runs from the moment its dialog opens: the dialog's numbers are its defaults
+    // (512x384, 24 fps) until OK, and the game's clock only steps once it shoots. The settings
+    // are logged when the stepping starts (and again if they change).
     if (on && !g_exporting) {
         stats = ExportStats();
-        stats.clockStart = effectTime();
-        stats.gameStart = v.gameClock;
-        g_pipeline.resetHistory();
-        TMVS_LOG("video export: %dx%d at %.0f fps%s, %s; game step %.3f ms. Full quality, the effects on the video's clock%s", v.width,
+        TMVS_LOG("video export: started (its dialog; the settings follow when it shoots)");
+    }
+    const bool shooting = on && v.step > 0.0;
+    if (shooting && (g_videoClock < 0.0 || v.width != g_export.width || v.height != g_export.height || v.fps != g_export.fps ||
+                     v.samplesPerFrame != g_export.samplesPerFrame || v.subFrames != g_export.subFrames)) {
+        if (g_videoClock < 0.0) {
+            // The video's first frame: a clean start (no fade-in from the editor's view).
+            stats.clockStart = effectTime();
+            stats.gameStart = v.gameClock;
+            g_pipeline.resetHistory();
+        }
+        TMVS_LOG("video export: %dx%d at %.3g fps%s, %s; game step %.3f ms. Full quality, the effects on the video's clock%s", v.width,
                  v.height, v.fps, v.writesVideo ? "" : " (a run without video output)",
                  v.samplesPerFrame > 1 ? "supersampling, every sample shaded"
                  : v.subFrames         ? "supersampling over sub-frames (the game's motion blur)"
@@ -1026,11 +1039,11 @@ void updateVideoExport() {
         if (v.samplesPerFrame > 1 || v.subFrames)
             TMVS_LOG("video export: %d x %d samples (%d each frame, %d per video frame), stereo %d", v.hqSamples, v.hqSamples,
                      v.samplesPerFrame, v.samplesPerVideoFrame, v.stereo);
-        if (v.step <= 0.0) TMVS_LOG("video export: the game's clock is not stepped (unexpected): the effects stay on the real clock");
-    } else if (!on && g_exporting) {
-        TMVS_LOG("video export ended: %u frames (%u on the video's clock), the effects' clock advanced %.2f s, the game's %.2f s; "
+    }
+    if (!on && g_exporting) {
+        TMVS_LOG("video export ended: %u frames (%u on the video's clock), while it shot the effects' clock advanced %.2f s, the game's %.2f s; "
                  "at most %d main cameras shaded in a frame (expected %d)",
-                 stats.frames, stats.stepped, effectTime() - stats.clockStart, g_export.gameClock - stats.gameStart, stats.samplesSeen,
+                 stats.frames, stats.stepped, stats.clockEnd - stats.clockStart, stats.gameEnd - stats.gameStart, stats.samplesSeen,
                  g_export.samplesPerFrame);
     }
     g_exporting = on;
@@ -1041,6 +1054,8 @@ void updateVideoExport() {
     if (on && v.step > 0.0) {
         g_videoClock = g_videoClock < 0.0 ? static_cast<double>(effectTime()) : g_videoClock + v.step;
         stats.stepped++;
+        stats.clockEnd = g_videoClock;
+        stats.gameEnd = v.gameClock;
     } else if (g_videoClock >= 0.0) {
         g_clockOffset = static_cast<float>(g_videoClock - static_cast<double>(seconds()));
         g_videoClock = -1.0;
@@ -1639,6 +1654,7 @@ void bootOnce() {
     engineCallbacks.frameEnd = onFrameEnd;
     engine::install(engineCallbacks);
     engine::setNightAtLoad(nightAtLoad);
+    videofile::install();
     engine::setMoonAtLoad(moonAtLoad);
 
     hook::DeviceCallbacks deviceCallbacks;

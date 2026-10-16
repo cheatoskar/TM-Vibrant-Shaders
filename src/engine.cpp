@@ -20,7 +20,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -53,14 +53,16 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0,
+      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
      0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
+      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
      0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0},
 };
@@ -203,6 +205,21 @@ constexpr size_t kDecorationMood = 0x60; // CGameCtnDecorationMood*
 // game's moon would come back without the change, and a changed one would stay when it is off.
 constexpr InlineSite kCacheUpToDateSite = {kCacheUpToDate, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CHmsPackLightMap::CacheIsUpToDate"};
 constexpr InlineSite kCacheSaveSite = {kCacheSave, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CHmsPackLightMap::CacheSaveLightMap"};
+// The video export's file (CVisionVideoAvi, VfW; the same code in both builds, 0x70 lower in
+// TMUF). DoShoot creates it and OpenToWrite makes the .avi (Documents\TrackMania\Video). The
+// viewport's RenderFrameEnd opens the video stream at the first frame (VideoStreamOpen: the
+// size rounded up to 8 and written back, AVISaveOptions - the codec dialog -, a BI_RGB header
+// at +0x0c of its data [this+4], the image size at +0x20 for GetImageByteSize, the frame
+// counter at +0x40) and writes every finished frame (VideoStreamWrite: bottom-up BGR, 3 bytes
+// a pixel, with supersampling only the averaged frame). DoShoot opens the sound
+// (AudioStreamOpen, an SWaveFormat = WAVEFORMATEX without cbSize) and writes it in pieces
+// between the frames (AudioStreamWrite, a count of blocks). Close and the destructor end it.
+constexpr InlineSite kAviOpenSite = {kAviOpen, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04}, 6, -1, "CVisionVideoAvi::OpenToWrite"};
+constexpr InlineSite kAviVideoOpenSite = {kAviVideoOpen, {0x81, 0xec, 0x0c, 0x01, 0x00, 0x00}, 6, -1, "CVisionVideoAvi::VideoStreamOpen"};
+constexpr InlineSite kAviVideoWriteSite = {kAviVideoWrite, {0x8b, 0x41, 0x04, 0x83, 0x78, 0x08, 0x00}, 7, -1, "CVisionVideoAvi::VideoStreamWrite"};
+constexpr InlineSite kAviAudioOpenSite = {kAviAudioOpen, {0x81, 0xec, 0xd0, 0x00, 0x00, 0x00}, 6, -1, "CVisionVideoAvi::AudioStreamOpen"};
+constexpr InlineSite kAviAudioWriteSite = {kAviAudioWrite, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04}, 6, -1, "CVisionVideoAvi::AudioStreamWrite"};
+constexpr InlineSite kAviDestroySite = {kAviDestroy, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04}, 6, -1, "CVisionVideoAvi::~CVisionVideoAvi"};
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
 
@@ -298,6 +315,19 @@ float g_moonGameTravel[3] = {};    // the direction the game wanted (for the log
 using CacheFn = int(__fastcall*)(void*, void*);
 CacheFn g_cacheUpToDate = nullptr;
 CacheFn g_cacheSave = nullptr;
+using AviOpenFn = int(__fastcall*)(void*, void*, const void*);
+using AviVideoOpenFn = int(__fastcall*)(void*, void*, DWORD*, DWORD*, float, int);
+using AviVideoWriteFn = int(__fastcall*)(void*, void*, void*);
+using AviAudioOpenFn = int(__fastcall*)(void*, void*, const void*);
+using AviAudioWriteFn = int(__fastcall*)(void*, void*, void*, DWORD);
+using AviDestroyFn = void(__fastcall*)(void*, void*);
+AviOpenFn g_aviOpen = nullptr;
+AviVideoOpenFn g_aviVideoOpen = nullptr;
+AviVideoWriteFn g_aviVideoWrite = nullptr;
+AviAudioOpenFn g_aviAudioOpen = nullptr;
+AviAudioWriteFn g_aviAudioWrite = nullptr;
+AviDestroyFn g_aviDestroy = nullptr;
+VideoFileHooks g_videoFile;
 bool g_cacheLogged = false;
 using JumpTimeFn = void(__fastcall*)(void*, void*, float);
 JumpTimeFn g_jumpTime = nullptr;
@@ -367,15 +397,21 @@ void patch(const Slot& slot, void* detour, Fn& original) {
 
 // Jumps from the function's start to the detour; the trampoline runs the copied prologue
 // and jumps back behind it. Returns the trampoline (the "original" to call), or null.
-void* inlineHook(const InlineSite& site, void* detour) {
-    BYTE* target = reinterpret_cast<BYTE*>(rebase(g_build->sites[site.id]));
+// The function at the site starts with the expected bytes (this executable has it there).
+bool prologueMatches(const InlineSite& site) {
+    const BYTE* target = reinterpret_cast<const BYTE*>(rebase(g_build->sites[site.id]));
     unsigned char expected[12];
     memcpy(expected, site.prologue, sizeof(expected));
     if (site.handlerAt >= 0) {
         const uint32_t handler = static_cast<uint32_t>(rebase(g_build->handlers[site.id]));
         memcpy(expected + site.handlerAt, &handler, sizeof(handler));
     }
-    if (!readable(target, site.length) || memcmp(target, expected, site.length) != 0) {
+    return readable(target, site.length) && memcmp(target, expected, site.length) == 0;
+}
+
+void* inlineHook(const InlineSite& site, void* detour) {
+    BYTE* target = reinterpret_cast<BYTE*>(rebase(g_build->sites[site.id]));
+    if (!prologueMatches(site)) {
         TMVS_LOG("engine: %s does not match this executable, not hooked", site.name);
         return nullptr;
     }
@@ -434,6 +470,71 @@ void __fastcall doShootDetour(void* self, void* edx, void* fiber) {
     g_shooter = self;
     g_shootFrame = g_engineFrames;
     g_doShoot(self, edx, fiber);
+}
+
+// --- The video export's file ------------------------------------------------
+
+BYTE* aviData(void* self) {
+    BYTE* const* data = reinterpret_cast<BYTE* const*>(static_cast<BYTE*>(self) + 4);
+    return readable(data, sizeof(void*)) && *data && readable(*data, 0x64) ? *data : nullptr;
+}
+
+int __fastcall aviOpenDetour(void* self, void* edx, const void* name) {
+    const int ok = g_aviOpen(self, edx, name);
+    // CFastStringInt: +0 length, +4 the text.
+    const wchar_t* const* text = reinterpret_cast<const wchar_t* const*>(static_cast<const BYTE*>(name) + 4);
+    if (g_videoFile.opened && readable(text, sizeof(void*)) && *text && readable(*text, sizeof(wchar_t))) g_videoFile.opened(self, *text, ok != 0);
+    return ok;
+}
+
+// The mod writes the video itself: the game's stream stays closed (no codec dialog), but its
+// data looks as after a successful open (the frame buffer is sized from the image size).
+int __fastcall aviVideoOpenDetour(void* self, void* edx, DWORD* width, DWORD* height, float fps, int alpha) {
+    BYTE* data = aviData(self);
+    if (g_videoFile.videoOpen && data && width && height) {
+        const DWORD w = (*width + 7) / 8 * 8, h = (*height + 7) / 8 * 8, bpp = alpha ? 4 : 3;
+        if (g_videoFile.videoOpen(self, static_cast<int>(w), static_cast<int>(h), fps, static_cast<int>(bpp))) {
+            *width = w;
+            *height = h;
+            BITMAPINFOHEADER header{};
+            header.biSize = sizeof(header);
+            header.biWidth = static_cast<LONG>(w);
+            header.biHeight = static_cast<LONG>(h);
+            header.biPlanes = 1;
+            header.biBitCount = static_cast<WORD>(bpp * 8);
+            header.biCompression = BI_RGB;
+            header.biSizeImage = w * h * bpp;
+            memcpy(data + 0x0c, &header, sizeof(header));
+            *reinterpret_cast<DWORD*>(data + 0x40) = 0;
+            return 1;
+        }
+    }
+    return g_aviVideoOpen(self, edx, width, height, fps, alpha);
+}
+
+int __fastcall aviVideoWriteDetour(void* self, void* edx, void* image) {
+    if (g_videoFile.videoFrame && image && g_videoFile.videoFrame(self, image)) {
+        if (BYTE* data = aviData(self)) ++*reinterpret_cast<DWORD*>(data + 0x40);
+        return 1;
+    }
+    return g_aviVideoWrite(self, edx, image);
+}
+
+int __fastcall aviAudioOpenDetour(void* self, void* edx, const void* format) {
+    const int ok = g_aviAudioOpen(self, edx, format);
+    if (g_videoFile.audioOpen && format && readable(format, 16)) g_videoFile.audioOpen(self, format);
+    return ok;
+}
+
+int __fastcall aviAudioWriteDetour(void* self, void* edx, void* data, DWORD blocks) {
+    const int ok = g_aviAudioWrite(self, edx, data, blocks);
+    if (g_videoFile.audioData && data) g_videoFile.audioData(self, data, blocks);
+    return ok;
+}
+
+void __fastcall aviDestroyDetour(void* self, void* edx) {
+    g_aviDestroy(self, edx); // closes the .avi if it is still open
+    if (g_videoFile.closed) g_videoFile.closed(self);
 }
 
 // The game draws the reflection of each visible water plane: that plane is where its water is.
@@ -1070,6 +1171,26 @@ bool install(const Callbacks& callbacks) {
     g_raceTriggers = reinterpret_cast<RaceTriggersFn>(inlineHook(kRaceTriggersSite, reinterpret_cast<void*>(&raceTriggersDetour)));
     g_cacheUpToDate = reinterpret_cast<CacheFn>(inlineHook(kCacheUpToDateSite, reinterpret_cast<void*>(&cacheUpToDateDetour)));
     g_cacheSave = reinterpret_cast<CacheFn>(inlineHook(kCacheSaveSite, reinterpret_cast<void*>(&cacheSaveDetour)));
+    // The export's file: all six or none (a frame written without the open would go nowhere).
+    {
+        const struct {
+            const InlineSite* site;
+            void* detour;
+            void** original;
+        } avi[] = {{&kAviOpenSite, reinterpret_cast<void*>(&aviOpenDetour), reinterpret_cast<void**>(&g_aviOpen)},
+                   {&kAviVideoOpenSite, reinterpret_cast<void*>(&aviVideoOpenDetour), reinterpret_cast<void**>(&g_aviVideoOpen)},
+                   {&kAviVideoWriteSite, reinterpret_cast<void*>(&aviVideoWriteDetour), reinterpret_cast<void**>(&g_aviVideoWrite)},
+                   {&kAviAudioOpenSite, reinterpret_cast<void*>(&aviAudioOpenDetour), reinterpret_cast<void**>(&g_aviAudioOpen)},
+                   {&kAviAudioWriteSite, reinterpret_cast<void*>(&aviAudioWriteDetour), reinterpret_cast<void**>(&g_aviAudioWrite)},
+                   {&kAviDestroySite, reinterpret_cast<void*>(&aviDestroyDetour), reinterpret_cast<void**>(&g_aviDestroy)}};
+        bool all = true;
+        for (const auto& a : avi) all = all && prologueMatches(*a.site);
+        if (all) {
+            for (const auto& a : avi) *a.original = inlineHook(*a.site, a.detour);
+        } else {
+            TMVS_LOG("engine: the video export's file writer does not match this executable: MP4 export off");
+        }
+    }
     g_setDov = reinterpret_cast<SetDovFn>(patchCall(g_build->moonDirectionCall, g_build->setDov, reinterpret_cast<void*>(&moonDirectionDetour),
                                                     "CMotionManagerWeathers::UpdateAsync (moon direction)"));
     g_setBaseRgb = reinterpret_cast<SetBaseRgbFn>(patchCall(g_build->moonColorCall, g_build->setBaseRgb, reinterpret_cast<void*>(&moonColorDetour),
@@ -1311,6 +1432,14 @@ unsigned cinematicSources() {
     const unsigned s = g_cinematicSources;
     g_cinematicSources = 0;
     return s;
+}
+
+void setVideoFileHooks(const VideoFileHooks& hooks) {
+    g_videoFile = hooks;
+}
+
+bool videoFileHooked() {
+    return g_aviOpen && g_aviVideoOpen && g_aviVideoWrite && g_aviAudioOpen && g_aviAudioWrite && g_aviDestroy;
 }
 
 bool videoExport(VideoExport& out) {

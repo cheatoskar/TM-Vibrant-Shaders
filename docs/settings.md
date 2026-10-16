@@ -36,7 +36,7 @@ A small arrow appears next to every value you changed: click it to set that valu
 
 ## Presets per map mood
 
-The mod reads the colour of the game's sun when a map loads and sorts the map into day, sunset (and sunrise) or night. With *Preset per map type* on, it switches to the preset you chose for that kind of map. The defaults are **Vibrant** for day, **Golden Hour** for sunset and **Horizon** for night. Change them on the *Maps* page, With *Picked preset applies to all maps of this type* on (off by default), a preset picked on a map also becomes the preset for that kind of map.
+The mod reads the colour of the game's sun when a map loads and sorts the map into day, sunset (and sunrise) or night. With *Preset per map type* on, it switches to the preset you chose for that kind of map. The defaults are **Vibrant** for day, **Golden Hour** for sunset and **Horizon** for night. Change them on the *Maps* page, With *Picked preset applies to all maps of this type* on (off by default), a preset picked on a map also becomes the preset for that kind of map. With it off, a preset you pick in the menu holds on every map, also on maps of another type (and real night follows it), until you choose a preset for a map type on the *Maps* page or press *Use the presets per map type again* there.
 
 While your preset is *Custom* (you changed a value and didn't save it), a map change never replaces your tweaks. A map with an [Author's Shader](#authors-shader) wins over the mood preset.
 
@@ -164,6 +164,8 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Depth of field | `DepthOfField` | 0 – 1 | Background and foreground blur. |
 | Only in replays and video export | `CinematicOnlyInReplays` | on / off | Motion blur and depth of field switch off while you drive. On by default. |
 | Best quality in the video export | `VideoExportBest` | on / off | The replay editor's video export: full effect quality (no auto quality), photo mode's depth of field, and the effects run on the video's own clock (exposure, focus, rain, lightning and clouds move as in the finished video, however slowly its frames render). With the export's *high quality* (supersampling) every sample gets the effects and TAA is off. Off: as before. On by default. |
+| Video export file | `VideoCodec` | 0 – 2 | 1 (default): the replay editor's *Shoot video* writes an MP4 with H.264, 2: HEVC (H.265), both with the sound as AAC, next to the game's file (same name, `.mp4`, in `Documents\TrackMania\Video`). The graphics card encodes when its driver offers it (NVIDIA, AMD, Intel), else Windows' own encoder; no codec dialog, nothing to install. 0: the game's AVI with its codec list, as before. If Windows can't encode, the game's AVI is written instead (the log says why). |
+| Video export bitrate | `VideoBitrate` | 0 – 200 Mbit/s | 0 = from the size and frame rate (4K at 30 fps: 50 Mbit/s H.264, 30 HEVC; twice that at 60 fps). |
 | Focus distance (m) | `FocusDistance` | 0 – 200 | 0 = auto focus on the middle of the screen. |
 | Max blur (px) | `BokehSize` | 2 – 24 | Largest blur size, at 1080p. |
 
