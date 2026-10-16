@@ -136,6 +136,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("CleanHighlights", "Clean highlights", "Image", Bool, cleanHighlights, 0.0f, 1.0f),
         TMVS_FIELD("EngineLights", "Game light sources", "Image", Bool, engineLights, 0.0f, 1.0f),
         TMVS_FIELD("CasterShadows", "Long mesh shadows", "Image", Bool, casterShadows, 0.0f, 1.0f),
+        TMVS_FIELD("CasterAlphaTest", "Fence shadows", "Image", Bool, casterAlphaTest, 0.0f, 1.0f),
         TMVS_FIELD("CleanWater", "Clean water", "Image", Bool, cleanWater, 0.0f, 1.0f),
         TMVS_FIELD("GameGBuffer", "Game normals", "Image", Bool, gameGBuffer, 0.0f, 1.0f),
         TMVS_FIELD("ShadeMenuBars", "Replay menu shading", "Image", Bool, shadeMenuBars, 0.0f, 1.0f),
@@ -253,7 +254,7 @@ bool isSystemField(const Field& f) {
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
-           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "ShadeMenuBars");
 }
 
@@ -1190,6 +1191,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepHdr = s.gameHdr;
     const bool keepEngineLights = s.engineLights;
     const bool keepCasters = s.casterShadows;
+    const bool keepCasterAlpha = s.casterAlphaTest;
     const bool keepEnabled = s.enabled;
     const bool keepAuto = s.autoQuality;
     const float keepTarget = s.targetFps;
@@ -1226,6 +1228,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.gameHdr = keepHdr;
     s.engineLights = keepEngineLights;
     s.casterShadows = keepCasters;
+    s.casterAlphaTest = keepCasterAlpha;
     s.enabled = keepEnabled;
     s.autoQuality = keepAuto;
     s.targetFps = keepTarget;
@@ -1650,6 +1653,7 @@ void Config::load() {
     settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 1, ini) != 0;
     settings.engineLights = GetPrivateProfileIntW(L"Settings", L"EngineLights", 1, ini) != 0;
     settings.casterShadows = GetPrivateProfileIntW(L"Settings", L"CasterShadows", 1, ini) != 0;
+    settings.casterAlphaTest = GetPrivateProfileIntW(L"Settings", L"CasterAlphaTest", 1, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
     wchar_t target[32] = {};
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));

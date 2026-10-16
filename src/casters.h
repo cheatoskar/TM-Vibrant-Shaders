@@ -16,6 +16,8 @@
 // until the light turns or the track grows past it) and one around the camera (fine, drawn
 // again in the background when the camera has moved on). Shadows don't pop with the camera,
 // keep the meshes' real shape (overhangs, thin poles) and reach as far as the maps.
+// Alpha-tested meshes (fences, grids; CasterAlphaTest) are drawn with the game's own shaders and
+// alpha test instead of ours, so their holes stay holes in the maps.
 namespace tmshaders {
 namespace casters {
 
@@ -38,9 +40,12 @@ struct Maps {
 bool takeTurn();
 
 // One indexed draw of the main camera, with the game's state bound. view / projection: the
-// camera's (SetTransform). Only opaque draws of static materials should come here.
+// camera's (SetTransform). Only opaque draws of static materials should come here, and with
+// CasterAlphaTest the alpha-tested ones (fences, grids: `alphaTested`), which are kept with
+// the game's shaders, constants and textures and drawn into the maps with its alpha test, so
+// their holes let the light through.
 void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
-                const float view[16], const float projection[16]);
+                const float view[16], const float projection[16], bool alphaTested = false);
 
 // Once a frame (Present): the next frame's share of the draws to check (recordDraw spreads its
 // work over frames on maps with many draws).
@@ -66,8 +71,9 @@ void releaseDevice();
 // The caster maps' shaders, for gfx::precompile (compiled ahead, off the render thread).
 void runtimeShaders(std::vector<gfx::ShaderSource>& out);
 
-// How many meshes are kept now (tests, the log).
+// How many meshes are kept now (tests, the log), and how many of them are alpha-tested.
 unsigned keptMeshes();
+unsigned keptAlphaMeshes();
 
 } // namespace casters
 } // namespace tmshaders

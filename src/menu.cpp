@@ -210,7 +210,7 @@ bool isMachineSetting(const Field& f) {
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
-           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "ShadeMenuBars");
 }
 
@@ -379,6 +379,7 @@ const char* tooltipFor(const char* key) {
         {"CleanHighlights", "Floodlit white at night stays even. Off is the 1.4.0 look."},
         {"EngineLights", "Lamps and glows glow as the game draws them instead of being guessed from the image. Needs Game HDR."},
         {"CasterShadows", "Long shadows from the game's own meshes, cast from the sun or black hole. Needs Long shadows."},
+        {"CasterAlphaTest", "Fences, grids and lattice towers cast their pattern into the long mesh shadows, holes included. Off: they cast none."},
         {"CleanWater", "Pools mirror only what they can see, sharp. Off shows blotches of the ramps over them."},
         {"GameGBuffer", "Surface normals from the game's shaders, so AO, shadows, reflections and light follow bump maps and the car's real shape. Needs Game HDR. (restart the first time)"},
         {"ShadeMenuBars", "Shades the image under the replay menu's bars. Off shows leftovers of earlier frames."},
@@ -1601,6 +1602,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "CleanHighlights");
                           l |= drawKey(s, "EngineLights");
                           l |= drawKey(s, "CasterShadows");
+                          l |= drawKey(s, "CasterAlphaTest");
                           l |= drawKey(s, "CleanWater");
                           l |= drawKey(s, "GameGBuffer");
                           l |= drawKey(s, "ShadeMenuBars");

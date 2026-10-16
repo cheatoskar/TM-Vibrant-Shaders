@@ -32,7 +32,8 @@ static bool isMachine(const Field& f) {
                                            "DisableGameMSAA", "ReadableGameDepth", "AutoQuality", "DisableGameFX", "GameMaterials",
                                            "TargetFPS", "WeatherSound", "CinematicOnlyInReplays", "VideoExportBest", "VideoCodec",
                                            "VideoBitrate", "TAAJitter", "GameNight", "EngineMoon", "GameSkyClouds", "CleanHighlights",
-                                           "GameHdr", "EngineLights", "CasterShadows", "CleanWater", "GameGBuffer", "ShadeMenuBars"};
+                                           "GameHdr", "EngineLights", "CasterShadows", "CasterAlphaTest", "CleanWater", "GameGBuffer",
+                                           "ShadeMenuBars"};
     for (const char* key : kMachine) {
         if (!strcmp(key, f.key)) return true;
     }
