@@ -126,6 +126,8 @@ bool freeCamActive();
 // Counters of race (re)starts / map loads and of respawns (for the neon trail).
 int raceResets();
 int respawns();
+// Counts the blocks the editor took out of the map (CasterShadows forgets the meshes it saw).
+int blocksRemoved();
 
 // The map is a Stadium map (always in Nations Forever; United Forever has six more
 // environments).

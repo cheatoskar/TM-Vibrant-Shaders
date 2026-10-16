@@ -20,7 +20,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kRemoveBlock, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -53,14 +53,14 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0, 0x005a5ff0},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
      0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60, 0x005a6190},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
      0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0},
 };
@@ -203,6 +203,10 @@ constexpr size_t kDecorationMood = 0x60; // CGameCtnDecorationMood*
 // game's moon would come back without the change, and a changed one would stay when it is off.
 constexpr InlineSite kCacheUpToDateSite = {kCacheUpToDate, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CHmsPackLightMap::CacheIsUpToDate"};
 constexpr InlineSite kCacheSaveSite = {kCacheSave, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CHmsPackLightMap::CacheSaveLightMap"};
+// The editor takes a block out of the map (every way of removing one ends here: the block and
+// puzzle editors, undo, replacing a block; only the editor and the map's clip update call it).
+// CasterShadows keeps the meshes it saw: a removed block would keep casting its shadow.
+constexpr InlineSite kRemoveBlockSite = {kRemoveBlock, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnChallenge::RemoveBlock"};
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
 
@@ -239,6 +243,7 @@ DWORD g_lastWater = 0;          // GetTickCount of the last water reflection ren
 using TileHeightFn = void(__fastcall*)(void*, void*, float);
 using RaceResetFn = void(__fastcall*)(void*, void*);
 using RespawnFn = void(__fastcall*)(void*, void*, void*, int);
+using RemoveBlockFn = int(__fastcall*)(void*, void*, void*);
 RaceResetFn g_raceReset = nullptr;
 using LoadDecorationFn = void(__fastcall*)(void*, void*, const void*);
 using IdGetStringFn = const char*(__fastcall*)(const void*, void*);
@@ -251,8 +256,10 @@ using SetChallengeFn = void(__fastcall*)(void*, void*, void*);
 SetChallengeFn g_setChallenge = nullptr;
 void* g_app = nullptr;          // CGameCtnApp (holds the current map)
 RespawnFn g_respawn = nullptr;
+RemoveBlockFn g_removeBlock = nullptr;
 volatile LONG g_raceResets = 0; // counters: the plugin compares them every frame
 volatile LONG g_respawns = 0;
+volatile LONG g_blocksRemoved = 0;
 TileHeightFn g_tileHeight = nullptr;
 bool g_mapLoaded = false;       // a map load was seen, so its sea level is known
 float g_seaLevel = -1.0f;       // -1 = no sea
@@ -652,6 +659,11 @@ void applyInterfaceVisibility() {
 void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
     InterlockedIncrement(&g_respawns);
     g_respawn(self, edx, player, flag);
+}
+
+int __fastcall removeBlockDetour(void* self, void* edx, void* block) {
+    InterlockedIncrement(&g_blocksRemoved);
+    return g_removeBlock(self, edx, block);
 }
 
 // The file a loaded map came from, through the engine's file system: the map's file node
@@ -1055,6 +1067,7 @@ bool install(const Callbacks& callbacks) {
     g_tileHeight = reinterpret_cast<TileHeightFn>(inlineHook(kWaterTileHeight, reinterpret_cast<void*>(&tileHeightDetour)));
     g_raceReset = reinterpret_cast<RaceResetFn>(inlineHook(kRaceResetSite, reinterpret_cast<void*>(&raceResetDetour)));
     g_respawn = reinterpret_cast<RespawnFn>(inlineHook(kRespawnSite, reinterpret_cast<void*>(&respawnDetour)));
+    g_removeBlock = reinterpret_cast<RemoveBlockFn>(inlineHook(kRemoveBlockSite, reinterpret_cast<void*>(&removeBlockDetour)));
     g_loadDecoration = reinterpret_cast<LoadDecorationFn>(inlineHook(kLoadDecorationSite, reinterpret_cast<void*>(&loadDecorationDetour)));
     g_setChallenge = reinterpret_cast<SetChallengeFn>(inlineHook(kSetChallengeSite, reinterpret_cast<void*>(&setChallengeDetour)));
     g_freeCamSet = reinterpret_cast<FreeCamFn>(inlineHook(kFreeCamSite, reinterpret_cast<void*>(&freeCamDetour)));
@@ -1221,6 +1234,10 @@ int raceResets() {
 
 int respawns() {
     return static_cast<int>(g_respawns);
+}
+
+int blocksRemoved() {
+    return static_cast<int>(g_blocksRemoved);
 }
 
 void setProjectionJitter(float x, float y) {

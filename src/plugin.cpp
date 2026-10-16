@@ -1268,11 +1268,19 @@ void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UI
 void castersTick() {
     const Settings& s = Config::get().settings;
     const bool on = s.enabled && s.casterShadows && engine::active();
-    static int s_loads = -1, s_closes = -1;
+    static int s_loads = -1, s_closes = -1, s_removed = -1;
     if (engine::mapLoads() != s_loads || engine::mapCloses() != s_closes) {
         s_loads = engine::mapLoads();
         s_closes = engine::mapCloses();
         casters::reset("map changed");
+    }
+    // The editor took blocks out: their shadows go (what is still there comes back once seen).
+    if (engine::blocksRemoved() != s_removed) {
+        static DWORD s_logged = 0;
+        const bool log = GetTickCount() - s_logged > 60000;
+        if (log) s_logged = GetTickCount();
+        if (s_removed >= 0) casters::reset("blocks removed in the editor", log);
+        s_removed = engine::blocksRemoved();
     }
     if (g_castersOn && !on) casters::reset("CasterShadows off");
     g_castersOn = on;
