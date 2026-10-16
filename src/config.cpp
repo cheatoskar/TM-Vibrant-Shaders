@@ -535,6 +535,364 @@ bool lookFromComments(const std::string& comments, Settings& look, std::string& 
 
 } // namespace
 
+// --- Share codes: "TMVS1:<base64url>" --------------------------------------------------------
+// A look as one line of text for Discord and the like. The text inside is "V=1;Key=Value;..." with
+// every setting of a preset (the machine settings are not part of one) that differs from the
+// Settings defaults. The defaults, not a preset, are the base: presets are tuned per game and per
+// version, so a code based on one would look different on the other side. A change of a Settings
+// default must therefore bump the version (TMVS2) and keep reading TMVS1 against the old default:
+// tools/keystest.cpp carries a golden code that fails when that happens by accident.
+namespace {
+
+constexpr size_t kShareMaxBody = 12000;      // characters of base64 we read (a full code is ~3000)
+constexpr size_t kShareMaxText = 1u << 20;   // anything longer is not a share code, don't even scan it
+
+// The shortest text that reads back as exactly this float.
+std::string shortestFloat(float v) {
+    char text[40];
+    for (int digits = 1; digits <= 9; digits++) {
+        snprintf(text, sizeof(text), "%.*g", digits, static_cast<double>(v));
+        if (strtof(text, nullptr) == v) break;
+    }
+    return text;
+}
+
+bool sameExactly(const Field& f, const Settings& a, const Settings& b) {
+    const size_t size = f.kind == Field::Bool ? sizeof(bool) : (f.kind == Field::Color ? sizeof(float) * 3 : sizeof(float));
+    return memcmp(reinterpret_cast<const char*>(&a) + f.offset, reinterpret_cast<const char*>(&b) + f.offset, size) == 0;
+}
+
+bool finiteFloats(const Field& f, const Settings& s) {
+    if (f.kind == Field::Bool || f.kind == Field::Int) return true;
+    const float* p = reinterpret_cast<const float*>(reinterpret_cast<const char*>(&s) + f.offset);
+    for (int i = 0; i < (f.kind == Field::Color ? 3 : 1); i++) {
+        if (!std::isfinite(p[i])) return false;
+    }
+    return true;
+}
+
+// The whole of `text` as a finite number.
+bool wholeFloat(const std::string& text, float& out) {
+    if (text.empty() || text.size() > 24) return false;
+    char* end = nullptr;
+    const double v = strtod(text.c_str(), &end);
+    if (end != text.c_str() + text.size() || !std::isfinite(v) || fabs(v) > 1e9) return false;
+    out = static_cast<float>(v);
+    return true;
+}
+
+// A value from a share code into `s`: false = not a valid value for this setting (nothing is
+// written). Out of range is clamped (someone else's text), `clamped` says so.
+bool shareValue(const Field& f, const std::string& value, Settings& s, bool& clamped) {
+    char* p = reinterpret_cast<char*>(&s) + f.offset;
+    clamped = false;
+    switch (f.kind) {
+        case Field::Bool:
+            if (value != "0" && value != "1") return false;
+            *reinterpret_cast<bool*>(p) = value == "1";
+            return true;
+        case Field::Int: {
+            float v;
+            if (!wholeFloat(value, v) || v != floorf(v)) return false;
+            const float c = clampTo(f, v);
+            clamped = c != v;
+            *reinterpret_cast<int*>(p) = static_cast<int>(c);
+            return true;
+        }
+        case Field::Color: {
+            float c[3];
+            size_t from = 0;
+            for (int i = 0; i < 3; i++) {
+                const size_t comma = value.find(',', from);
+                if ((i < 2) != (comma != std::string::npos)) return false;
+                if (!wholeFloat(value.substr(from, comma == std::string::npos ? std::string::npos : comma - from), c[i])) return false;
+                from = comma + 1;
+            }
+            for (int i = 0; i < 3; i++) {
+                const float v = c[i] < f.min ? f.min : (c[i] > f.max ? f.max : c[i]);
+                clamped |= v != c[i];
+                reinterpret_cast<float*>(p)[i] = v;
+            }
+            return true;
+        }
+        default: {
+            float v;
+            if (!wholeFloat(value, v)) return false;
+            const float c = clampTo(f, v);
+            clamped = c != v;
+            *reinterpret_cast<float*>(p) = c;
+            return true;
+        }
+    }
+}
+
+// The Settings defaults for the look's fields: what a share code does not mention.
+void resetLookFields(Settings& s) {
+    const Settings defaults;
+    for (const Field& f : fields()) {
+        if (isSystemField(f)) continue;
+        const size_t size = f.kind == Field::Bool ? sizeof(bool) : (f.kind == Field::Color ? sizeof(float) * 3 : sizeof(float));
+        memcpy(reinterpret_cast<char*>(&s) + f.offset, reinterpret_cast<const char*>(&defaults) + f.offset, size);
+    }
+}
+
+} // namespace
+
+std::string shareCodeFor(const Settings& s) {
+    const Settings defaults;
+    std::string text = "V=1";
+    for (const Field& f : fields()) {
+        if (isSystemField(f) || sameExactly(f, s, defaults) || !finiteFloats(f, s)) continue;
+        const char* p = reinterpret_cast<const char*>(&s) + f.offset;
+        text += ';';
+        text += f.key;
+        text += '=';
+        switch (f.kind) {
+            case Field::Bool: text += *reinterpret_cast<const bool*>(p) ? "1" : "0"; break;
+            case Field::Int: text += std::to_string(*reinterpret_cast<const int*>(p)); break;
+            case Field::Color:
+                for (int i = 0; i < 3; i++) text += (i ? "," : "") + shortestFloat(reinterpret_cast<const float*>(p)[i]);
+                break;
+            default: text += shortestFloat(*reinterpret_cast<const float*>(p)); break;
+        }
+    }
+    return "TMVS1:" + encodeBase64(std::vector<unsigned char>(text.begin(), text.end()));
+}
+
+bool decodeShareCode(const std::string& text, Settings& look, ShareStats& stats, std::string& error) {
+    stats = ShareStats();
+    error.clear();
+    if (text.empty()) {
+        error = "The clipboard is empty.";
+        return false;
+    }
+    if (text.size() > kShareMaxText) {
+        error = "The clipboard text is far too long for a share code.";
+        return false;
+    }
+    // "TMVS<version>:" anywhere in the text (a chat message around the code is fine). A map's
+    // "[TMVS:" has no version and is another thing.
+    std::string lower = text;
+    for (char& ch : lower) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+    size_t body = std::string::npos;
+    int version = 0;
+    for (size_t at = lower.find("tmvs"); at != std::string::npos; at = lower.find("tmvs", at + 1)) {
+        size_t i = at + 4;
+        int v = 0;
+        int digits = 0;
+        for (; i < lower.size() && isdigit(static_cast<unsigned char>(lower[i])) && digits < 4; i++, digits++) v = v * 10 + (lower[i] - '0');
+        if (digits && i < lower.size() && lower[i] == ':') {
+            version = v;
+            body = i + 1;
+            break;
+        }
+    }
+    if (body == std::string::npos) {
+        error = "That is not a share code (it starts with TMVS1:).";
+        return false;
+    }
+    if (version != 1) {
+        error = "This code is from another version of the mod (TMVS" + std::to_string(version) + ", this one reads TMVS1).";
+        return false;
+    }
+    // The code: base64 letters, a chat may have broken it over lines; a space, quote or
+    // backtick ends it.
+    std::string code;
+    for (size_t i = body; i < text.size() && code.size() <= kShareMaxBody; i++) {
+        const char ch = text[i];
+        if (ch == '\r' || ch == '\n') continue;
+        if (!ch || !strchr(kBase64, ch)) break;
+        code += ch;
+    }
+    if (code.empty()) {
+        error = "The code is empty.";
+        return false;
+    }
+    if (code.size() > kShareMaxBody) {
+        error = "The code is too long to be a share code.";
+        return false;
+    }
+    std::vector<unsigned char> bytes;
+    if (!decodeBase64(code, bytes) || bytes.empty()) {
+        error = "The code is damaged (not valid Base64). Copy it again, all of it.";
+        return false;
+    }
+    std::string data;
+    for (unsigned char b : bytes) {
+        if (b < 0x20 || b > 0x7e) {
+            error = "The code is damaged (unreadable content). Copy it again, all of it.";
+            return false;
+        }
+        data += static_cast<char>(b);
+    }
+
+    Settings work = look;
+    resetLookFields(work);
+    const std::vector<Field>& table = fields();
+    std::vector<bool> seen(table.size(), false);
+    bool marker = false;
+    for (size_t i = 0; i <= data.size();) {
+        size_t end = data.find(';', i);
+        if (end == std::string::npos) end = data.size();
+        const std::string token = data.substr(i, end - i);
+        i = end + 1;
+        if (token.empty()) continue;
+        const size_t eq = token.find('=');
+        const std::string key = token.substr(0, eq == std::string::npos ? token.size() : eq);
+        const std::string value = eq == std::string::npos ? std::string() : token.substr(eq + 1);
+        if (eq == std::string::npos || key.empty()) {
+            stats.unknown++;
+            continue;
+        }
+        if (!_stricmp(key.c_str(), "V")) {
+            marker = true; // the format marker the encoder writes first
+            continue;
+        }
+        const Field* f = fieldByKey(key.c_str());
+        // Machine settings are never taken from a code, whoever wrote it.
+        if (!f || isSystemField(*f)) {
+            stats.unknown++;
+            continue;
+        }
+        bool clamped = false;
+        if (!shareValue(*f, value, work, clamped)) {
+            stats.invalid++;
+            continue;
+        }
+        const size_t index = static_cast<size_t>(f - table.data());
+        if (!seen[index]) {
+            seen[index] = true;
+            stats.applied++;
+        }
+        if (clamped) stats.clamped++;
+    }
+    if (!marker && stats.applied == 0) {
+        error = "No setting I know in that code (" + std::to_string(stats.unknown + stats.invalid) + " unreadable). Copy it again, all of it.";
+        return false;
+    }
+    look = work;
+    return true;
+}
+
+std::string shareStatusLine(const ShareStats& stats) {
+    std::string line = "Loaded " + std::to_string(stats.applied) + " settings";
+    if (stats.unknown) line += ", " + std::to_string(stats.unknown) + " unknown ignored";
+    if (stats.invalid) line += ", " + std::to_string(stats.invalid) + " unreadable ignored";
+    if (stats.clamped) line += ", " + std::to_string(stats.clamped) + " out of range";
+    return line;
+}
+
+bool copyTextToClipboard(const std::string& ascii) {
+    const std::wstring wide = widen(ascii);
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, (wide.size() + 1) * sizeof(wchar_t));
+    if (!mem) return false;
+    wchar_t* dst = static_cast<wchar_t*>(GlobalLock(mem));
+    if (!dst) {
+        GlobalFree(mem);
+        return false;
+    }
+    memcpy(dst, wide.c_str(), (wide.size() + 1) * sizeof(wchar_t));
+    GlobalUnlock(mem);
+    // Another program may hold the clipboard for a moment.
+    HWND owner = GetActiveWindow();
+    if (!owner) owner = GetForegroundWindow();
+    bool opened = false;
+    for (int tries = 0; tries < 10 && !opened; tries++) {
+        opened = OpenClipboard(owner) != 0;
+        if (!opened) Sleep(10);
+    }
+    if (!opened) {
+        GlobalFree(mem);
+        return false;
+    }
+    EmptyClipboard();
+    const bool ok = SetClipboardData(CF_UNICODETEXT, mem) != nullptr;
+    if (!ok) GlobalFree(mem); // the clipboard owns the memory only after a successful SetClipboardData
+    CloseClipboard();
+    return ok;
+}
+
+bool textFromClipboard(std::string& text, std::string& error) {
+    text.clear();
+    error.clear();
+    HWND owner = GetActiveWindow();
+    if (!owner) owner = GetForegroundWindow();
+    bool opened = false;
+    for (int tries = 0; tries < 10 && !opened; tries++) {
+        opened = OpenClipboard(owner) != 0;
+        if (!opened) Sleep(10);
+    }
+    if (!opened) {
+        error = "The clipboard is busy. Try again.";
+        return false;
+    }
+    bool ok = false;
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT)) {
+        error = "The clipboard holds no text.";
+    } else if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+        const size_t capacity = GlobalSize(data) / sizeof(wchar_t);
+        const wchar_t* src = static_cast<const wchar_t*>(GlobalLock(data));
+        if (src) {
+            if (capacity > kShareMaxText) {
+                error = "The clipboard text is far too long for a share code.";
+            } else {
+                size_t length = 0;
+                while (length < capacity && src[length]) length++;
+                text = narrow(std::wstring(src, length));
+                ok = true;
+            }
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    if (!ok && error.empty()) error = "The clipboard text can't be read.";
+    return ok;
+}
+
+std::string Config::shareCode() const {
+    return shareCodeFor(ownSettings());
+}
+
+bool Config::applyShareCode(const std::string& text, std::string& message) {
+    Settings look = settings; // brings your machine settings
+    ShareStats stats;
+    if (!decodeShareCode(text, look, stats, message)) return false;
+    // The built-in preset it is closest to is what "Unsaved changes to ..." and the reset arrows
+    // refer to (as with a map's code). An exact copy of one simply is that preset.
+    int best = 0;
+    size_t fewest = SIZE_MAX;
+    for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
+        Settings base = look;
+        applyPreset(base, static_cast<Preset>(i));
+        size_t differing = 0;
+        for (const Field& f : fields()) {
+            if (!isSystemField(f) && !sameExactly(f, base, look)) differing++;
+        }
+        if (differing < fewest) {
+            fewest = differing;
+            best = i;
+        }
+    }
+    const std::string base = presetName(static_cast<Preset>(best));
+    if (fewest == 0) {
+        selectPreset(base);
+    } else {
+        Settings baseline = look;
+        applyPreset(baseline, static_cast<Preset>(best));
+        look.enabled = settings.enabled;
+        look.debugView = settings.debugView;
+        settings = look;
+        m_baseline = baseline;
+        m_basePreset = base;
+        preset = kCustomPreset; // yours, unsaved: "Save as preset" keeps it, no built-in or saved preset is touched
+        m_mapLook = false;
+        markDirty();
+    }
+    message = shareStatusLine(stats);
+    TMVS_LOG("config: share code loaded (%s), closest preset %s", message.c_str(), base.c_str());
+    return true;
+}
+
 std::vector<std::string> Config::presetNames() const {
     std::vector<std::string> names;
     for (int i = 0; i < static_cast<int>(Preset::Custom); i++) names.push_back(presetName(static_cast<Preset>(i)));

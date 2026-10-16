@@ -45,6 +45,24 @@ struct Field {
 };
 const std::vector<Field>& fields();
 
+// Share codes: a look as one line of text ("TMVS1:..."), for Discord and the like. All of the
+// look's settings (not the machine's) that differ from the Settings defaults, so a code reads the
+// same in TrackMania Nations/United and TrackMania 2.
+struct ShareStats {
+    int applied = 0; // settings taken from the code
+    int unknown = 0; // keys this version doesn't have (or machine settings): ignored
+    int invalid = 0; // known keys with a value that can't be read: ignored
+    int clamped = 0; // values outside the setting's range, moved into it
+};
+std::string shareCodeFor(const Settings& settings);
+// `look` comes in with your machine settings and leaves with the code's look on success; on
+// failure it is untouched and `error` says why in a sentence for the menu.
+bool decodeShareCode(const std::string& text, Settings& look, ShareStats& stats, std::string& error);
+std::string shareStatusLine(const ShareStats& stats); // "Loaded 37 settings, 2 unknown ignored"
+// The Windows clipboard as Unicode text. Reading refuses text of more than 1 MB.
+bool copyTextToClipboard(const std::string& ascii);
+bool textFromClipboard(std::string& text, std::string& error);
+
 // Name of the state after the user changed a value by hand.
 constexpr const char* kCustomPreset = "Custom";
 // Name of the state while the look comes from the map's comments.
@@ -88,6 +106,12 @@ public:
     bool previewSettings(Settings& s) const { return !previewPreset.empty() && namedSettings(previewPreset, s); }
     // Any preset's values (for the menu's cost estimate); false = unknown name.
     bool presetSettings(const std::string& name, Settings& s) const { return namedSettings(name, s); }
+
+    // The current look as a share code, and a code applied as your unsaved look ("Custom" on top of
+    // the built-in preset it is closest to; an exact copy of a built-in preset selects it). Nothing
+    // saved is touched. false = `message` is the reason, else the status line.
+    std::string shareCode() const;
+    bool applyShareCode(const std::string& text, std::string& message);
 
     // Presets: the built-in ones, then the user's own (Documents\TrackMania\TMVS\presets\*.ini).
     std::vector<std::string> presetNames() const;
