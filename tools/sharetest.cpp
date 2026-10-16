@@ -39,6 +39,17 @@ static bool isMachine(const Field& f) {
     return false;
 }
 
+// Look fields added after share code version 1. A new field is safe: a code that doesn't name it gets its
+// default, and the default is the look from before the field. Add it here once you've checked that; a
+// changed default of an older field still fails the fingerprint below.
+static bool isAddedSinceV1(const Field& f) {
+    static const char* const kAdded[] = {"LampGlare", "LampHaze", "LampSkyHalos", "Floodlights"};
+    for (const char* key : kAdded) {
+        if (!strcmp(key, f.key)) return true;
+    }
+    return false;
+}
+
 static size_t sizeOf(const Field& f) {
     return f.kind == Field::Bool ? sizeof(bool) : (f.kind == Field::Color ? sizeof(float) * 3 : sizeof(float));
 }
@@ -142,7 +153,7 @@ int main(int argc, char** argv) {
     {
         uint64_t hash = 1469598103934665603ull;
         for (const Field& f : fields()) {
-            if (isMachine(f)) continue;
+            if (isMachine(f) || isAddedSinceV1(f)) continue;
             const char* p = reinterpret_cast<const char*>(&defaults) + f.offset;
             for (const char* k = f.key; *k; k++) hash = (hash ^ static_cast<unsigned char>(*k)) * 1099511628211ull;
             for (size_t i = 0; i < sizeOf(f); i++) hash = (hash ^ static_cast<unsigned char>(p[i])) * 1099511628211ull;
