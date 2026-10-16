@@ -25,6 +25,11 @@ public:
         // distance from the eye in w, 0 = none). Used with the setting on, where they belong to the
         // surface the depth shows; elsewhere the normal comes from the depth. Null = none.
         IDirect3DTexture9* gbuffer = nullptr;
+        // GameLight: the light the game's patched shaders lit each surface with (A16B16G16R16F: rgb,
+        // distance from the eye in w, 0 = none). With the setting on (and EngineLights) the night
+        // sky's darkening and tint step back where it says the game's lamps light the surface,
+        // where it belongs to the surface the depth shows. Null = none.
+        IDirect3DTexture9* gameLight = nullptr;
         UINT width = 0;
         UINT height = 0;
         float view[16] = {};
@@ -241,6 +246,7 @@ private:
         kLightGridInit,
         kLightGridSweep,
         kPrepareGBuffer,
+        kLightingGameLight,
         kPassCount
     };
 

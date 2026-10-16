@@ -133,6 +133,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("CasterShadows", "Long mesh shadows", "Image", Bool, casterShadows, 0.0f, 1.0f),
         TMVS_FIELD("CleanWater", "Clean water", "Image", Bool, cleanWater, 0.0f, 1.0f),
         TMVS_FIELD("GameGBuffer", "Game normals", "Image", Bool, gameGBuffer, 0.0f, 1.0f),
+        TMVS_FIELD("GameLight", "Night on game light", "Image", Bool, gameLight, 0.0f, 1.0f),
         TMVS_FIELD("ShadeMenuBars", "Replay menu shading", "Image", Bool, shadeMenuBars, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
@@ -249,7 +250,7 @@ bool isSystemField(const Field& f) {
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
-           !strcmp(f.key, "ShadeMenuBars");
+           !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {
@@ -823,6 +824,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepClean = s.cleanHighlights;
     const bool keepCleanWater = s.cleanWater;
     const bool keepGBuffer = s.gameGBuffer;
+    const bool keepGameLight = s.gameLight;
     const bool keepMenuBars = s.shadeMenuBars;
     const bool keepHdr = s.gameHdr;
     const bool keepEngineLights = s.engineLights;
@@ -859,6 +861,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.cleanHighlights = keepClean;
     s.cleanWater = keepCleanWater;
     s.gameGBuffer = keepGBuffer;
+    s.gameLight = keepGameLight;
     s.shadeMenuBars = keepMenuBars;
     s.gameHdr = keepHdr;
     s.engineLights = keepEngineLights;
@@ -1283,6 +1286,7 @@ void Config::load() {
     settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
     settings.cleanWater = GetPrivateProfileIntW(L"Settings", L"CleanWater", 1, ini) != 0;
     settings.gameGBuffer = GetPrivateProfileIntW(L"Settings", L"GameGBuffer", 0, ini) != 0;
+    settings.gameLight = GetPrivateProfileIntW(L"Settings", L"GameLight", 0, ini) != 0;
     settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;
     settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 1, ini) != 0;
     settings.engineLights = GetPrivateProfileIntW(L"Settings", L"EngineLights", 1, ini) != 0;
