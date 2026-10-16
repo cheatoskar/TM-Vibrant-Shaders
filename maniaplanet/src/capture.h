@@ -26,6 +26,8 @@ void onGraded(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Texture2D* i
               const EngineView& engine);
 void onPresent(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* backBuffer);
 void endFrame();
+// A text file into the capture being written (car.txt, ...).
+void writeText(const wchar_t* name, const std::string& text);
 
 } // namespace capture
 } // namespace tmvs_mp

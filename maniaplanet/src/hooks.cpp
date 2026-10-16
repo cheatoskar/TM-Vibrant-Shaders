@@ -364,6 +364,16 @@ float g_carLast[3] = {};
 bool g_carLastValid = false;
 float g_carCandidates[8][12] = {};
 int g_carCount = 0;
+// The car of the last frames, for captures (car.txt): does it move evenly from frame to frame?
+struct CarLogEntry {
+    double time;
+    int candidates;
+    bool valid;
+    float position[3];
+    float eye[3];
+};
+CarLogEntry g_carLog[240] = {};
+unsigned g_carLogNext = 0;
 
 // A 3x4 matrix (rows) that places an object near the camera: its 3x3 a rotation (unit, orthogonal
 // rows), its origin within 400 m (replay cameras can be far).
@@ -441,13 +451,13 @@ void takeCar(ID3D11DeviceContext* ctx) {
 
 void resolveCar() {
     g_car.valid = false;
-    if (!cameraUsable() || !g_carCount) return;
+    const int count = cameraUsable() ? g_carCount : 0; // frames without the car are logged too
     const float* w = g_camera.worldToCamera; // camera space -> world: its rows are the camera's axes
     auto toWorld = [&](float x, float y, float z, float out[3]) {
         for (int i = 0; i < 3; i++) out[i] = x * w[i] + y * w[4 + i] + z * w[8 + i];
     };
     float best = g_carLastValid ? 30.0f * 30.0f : 1e30f;
-    for (int c = 0; c < g_carCount; c++) {
+    for (int c = 0; c < count; c++) {
         const float* m = g_carCandidates[c];
         float pos[3];
         toWorld(m[3], m[7], m[11], pos);
@@ -464,6 +474,12 @@ void resolveCar() {
         toWorld(m[1], m[5], m[9], g_car.up);
         toWorld(m[2], m[6], m[10], g_car.forward);
     }
+    CarLogEntry& e = g_carLog[g_carLogNext++ % 240];
+    e.time = nowSeconds();
+    e.candidates = g_carCount;
+    e.valid = g_car.valid;
+    memcpy(e.position, g_car.position, sizeof(e.position));
+    memcpy(e.eye, g_camera.eye, sizeof(e.eye));
     static bool logged = false;
     if (g_car.valid && !logged) {
         logged = true;
@@ -1157,7 +1173,27 @@ bool onPresent(IDXGISwapChain* sc) {
         overlay::frame(g_backBufferRtv);
     }
     // The frame as it is shown (with the menu when it's open).
-    if (capture::active()) capture::onPresent(g_device, g_ctx, g_backBuffer);
+    if (capture::active()) {
+        capture::onPresent(g_device, g_ctx, g_backBuffer);
+        // The car in the last frames (neon trail: an even step from frame to frame?).
+        std::string text = "# time (s), dt (ms), car found, candidates, position, step (m), camera eye\n";
+        const unsigned n = std::min(g_carLogNext, 240u);
+        const CarLogEntry* prev = nullptr;
+        for (unsigned i = g_carLogNext - n; i < g_carLogNext; i++) {
+            const CarLogEntry& e = g_carLog[i % 240];
+            float step = 0.0f;
+            if (prev && prev->valid && e.valid) {
+                const float dx = e.position[0] - prev->position[0], dy = e.position[1] - prev->position[1], dz = e.position[2] - prev->position[2];
+                step = sqrtf(dx * dx + dy * dy + dz * dz);
+            }
+            char line[256];
+            snprintf(line, sizeof(line), "%.4f %.2f %d %d %.3f %.3f %.3f %.4f %.3f %.3f %.3f\n", e.time, prev ? (e.time - prev->time) * 1000.0 : 0.0,
+                     e.valid ? 1 : 0, e.candidates, e.position[0], e.position[1], e.position[2], step, e.eye[0], e.eye[1], e.eye[2]);
+            text += line;
+            prev = &e;
+        }
+        capture::writeText(L"car.txt", text);
+    }
     capture::endFrame();
 
     // The map's time of day from the engine's light (day, sunset, night presets, as in TMNF):

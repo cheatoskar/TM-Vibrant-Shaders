@@ -445,6 +445,14 @@ void onPresent(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* b
     save(device, ctx, backBuffer, L"output");
 }
 
+void writeText(const wchar_t* name, const std::string& text) {
+    if (!g_active || g_folder.empty()) return;
+    if (FILE* f = _wfopen((g_folder + L"\\" + name).c_str(), L"w")) {
+        fwrite(text.data(), 1, text.size(), f);
+        fclose(f);
+    }
+}
+
 void endFrame() {
     if (g_active) {
         if (g_trace) {
