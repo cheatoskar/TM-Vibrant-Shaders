@@ -1593,10 +1593,11 @@ bool drawSettings(Config& config, Settings& s) {
                               if (switchRow("Compare split", &split,
                                             ("One side of a line shows the game's image without the mod's effects (or another preset's look), the other yours (" + splitKey +
                                              ").\n" +
-                                             // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
-                                             (g_host->splitPreset ? "In photos too, hi-res ones included; the aperture blurs both sides alike."
-                                                                  : "In photos too, not in hi-res ones.") +
-                                             " The game's own changes stay on both sides (its bloom off, real night).").c_str())) {
+                                             (g_host->splitNote ? std::string(g_host->splitNote)
+                                                                // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
+                                                                : std::string(g_host->splitPreset ? "In photos too, hi-res ones included; the aperture blurs both sides alike."
+                                                                                                  : "In photos too, not in hi-res ones.") +
+                                                                      " The game's own changes stay on both sides (its bloom off, real night).")).c_str())) {
                                   if (split && g_host->photoOn) g_host->photoOn();
                               }
                               ImGui::BeginDisabled(!split);

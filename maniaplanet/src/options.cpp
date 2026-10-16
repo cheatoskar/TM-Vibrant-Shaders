@@ -71,6 +71,9 @@ bool setValue(const std::string& key, const std::string& value) {
         if ((atoi(value.c_str()) != 0) != photo::active()) photo::toggle();
     }
     else if (!_stricmp(k, "PhotoShot")) photo::request(); // F12 in photo mode, for the test
+    else if (!_stricmp(k, "PhotoSplit")) photo::splitOn() = atoi(value.c_str()) != 0; // Shift+F6, for the test
+    else if (!_stricmp(k, "PhotoSplitAt")) photo::splitPosition() = static_cast<float>(atof(value.c_str()));
+    else if (!_stricmp(k, "PhotoSplitPreset")) photo::splitPreset() = value; // "" = the game's image
     else if (!_stricmp(k, "Preset")) return config.selectPreset(value);
     else if (!_stricmp(k, "Lut")) config.lutFile = value;
     else if (!_stricmp(k, "LutAmount")) config.lutAmount = static_cast<float>(atof(value.c_str()));

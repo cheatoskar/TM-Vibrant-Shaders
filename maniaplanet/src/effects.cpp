@@ -796,7 +796,7 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     bindFrame(ctx);
     ctx->PSSetConstantBuffers(2, 1, &engineTone);
     ctx->PSSetShaderResources(8, 8, engine);
-    m_weather.tick(s, frame.time);
+    if (m_sound) m_weather.tick(s, frame.time);
     m_weather.draw(ctx, *this, frame, s);
     bindFrame(ctx);
     m_trail.draw(ctx, *this, frame, s);

@@ -49,10 +49,18 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 | F5 | Effects off/on (compare with the game's own image; TMNF: F7, which is ManiaPlanet's friends list) |
 | F12 | Capture one frame (for bug reports and development); in photo mode: a photo (PNG) |
 | F6 | Photo mode: no interface, full quality, depth of field on a clicked point |
-| Shift+F6 / Ctrl+Shift+wheel | Photo mode: compare split (the game's own image on one side) / move its line |
+| Shift+F6 / Ctrl+Shift+wheel | Photo mode: compare split (the game's own image or a preset on one side) / move its line |
 
 These are the defaults; the menu's *Settings* page (*Hotkeys*) rebinds them, and they are stored in the `[Keys]` section of settings.ini (see docs/settings.md).
 | Middle click / Ctrl+middle click / Ctrl+wheel | Photo mode: focus here / no focus / aperture |
+
+**Compare split with a preset:** menu, *Settings* page, *Photo mode* panel, *Other side*: the game's
+image (as before) or any preset. With a preset, a second renderer (`hooks.cpp`, `g_rendererB`) runs
+that preset's effects and HDR stage on the same engine inputs with its own history, and each look
+draws only its side of the line (a scissor on the final passes). Photo mode only; it costs about
+one more run of the effects while shown and is released when the split, photo mode or the preset
+goes. Photos (F12) get both names at the line (`SplitPhotoLabels`). Offline:
+`mp_preview <capture> out.bmp --hdr --compare Horizon [--split 0.4] [--swap] [--labels "Horizon|Vibrant"]`.
 
 Otherwise the same keys as the TMNF mod. The night skies need *Real night under night skies*
 (Settings page) for their dark nights: ManiaPlanet's time of day can't be changed, so the mod

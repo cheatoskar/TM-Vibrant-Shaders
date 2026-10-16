@@ -814,6 +814,34 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 50 && count() == before; i++) Sleep(100);
         check(count() == before + 1, "F12 in photo mode saves a photo");
     }
+    {
+        // The compare split with a preset on the other side (left of the line): a second renderer
+        // draws that side, yours the other, each with its own look. On the grey HDR scene the
+        // centre shows your side with the line right of it, the preset's with the line left of it.
+        set("HdrStage", "1");
+        hdrClear = 0.18f;
+        for (int i = 0; i < 6; i++) frame(true, centre, hud);
+        const unsigned mine = centre[0];
+        set("PhotoSplit", "1");
+        set("PhotoSplitPreset", "Neon");
+        set("PhotoSplitAt", "0.75");
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        const unsigned presetSide = centre[0];
+        set("PhotoSplitAt", "0.25");
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        const unsigned mineSide = centre[0];
+        stats(s);
+        printf("  compare split with a preset: your look %u, your side %u, the preset's side %u, hud %u %u %u\n", mine, mineSide, presetSide,
+               hud[0], hud[1], hud[2]);
+        // Within one level: the exposure still eases between the frames (real time).
+        check(s[11] == 1 && std::abs(static_cast<int>(mineSide) - static_cast<int>(mine)) <= 1, "compare split with a preset: your side is your look");
+        check(presetSide != mine, "compare split with a preset: the other side has the preset's look");
+        check(!(hud[0] == 255 && hud[1] == 0 && hud[2] == 0), "compare split with a preset: the interface stays hidden");
+        set("PhotoSplitPreset", "");
+        set("PhotoSplit", "0");
+        set("HdrStage", "0");
+        hdrClear = 0.0f;
+    }
     set("PhotoMode", "0");
     for (int i = 0; i < 2; i++) frame(true, centre, hud);
     check(hud[0] == 255 && hud[1] == 0 && hud[2] == 0, "the interface is back after photo mode");

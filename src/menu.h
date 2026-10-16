@@ -44,6 +44,8 @@ struct Host {
     bool* splitSwapped = nullptr;
     // What the other side shows: "" the game's image, else a preset (null: only the game's image).
     std::string* splitPreset = nullptr;
+    // The compare split switch's second line: what photos and the game's side get (null: TMNF's).
+    const char* splitNote = nullptr;
     std::function<void()> photoOn;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
