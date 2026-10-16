@@ -322,6 +322,11 @@ void traceDraw(ID3D11DeviceContext* ctx, const char* shader, Role role, unsigned
         if (v) v->Release();
 }
 
+void traceNote(const char* text) {
+    if (!g_trace || !text || !*text) return;
+    fprintf(g_trace, "      ^ %s\n", text);
+}
+
 void onToneMap(ID3D11Device* device, ID3D11DeviceContext* ctx) {
     ID3D11ShaderResourceView* srv[4] = {};
     ctx->PSGetShaderResources(0, 4, srv);

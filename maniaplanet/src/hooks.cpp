@@ -9,6 +9,7 @@
 #include "hooks.h"
 #include "autoquality11.h"
 #include "capture.h"
+#include "engine_lights.h"
 #include "engine_frame.h"
 #include "log.h"
 #include "overlay.h"
@@ -180,6 +181,7 @@ struct Frame {
     const char* hudShader = nullptr;
     uint32_t draws = 0;
     uint32_t commandLists = 0;
+    lights::Draw light;                    // EngineLightDraws: the current draw's redraws (engine_lights.cpp)
 };
 Frame g_frame;
 // The look of the frame being drawn: your settings, or the preset the menu points at (prepareLook).
@@ -685,6 +687,7 @@ bool hideInterfaceDraw(ID3D11DeviceContext* ctx) {
 bool onDraw(ID3D11DeviceContext* ctx) {
     Frame& f = g_frame;
     f.draws++;
+    f.light = lights::Draw{};
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
     // Only the effects' tone maps are the tone map: the editor draws Engines/CopyColor0_ToneMapT3
     // into the HDR image in the middle of the scene (with depth), and the effects ran there, on
@@ -708,6 +711,8 @@ bool onDraw(ID3D11DeviceContext* ctx) {
             setTexture(i == 0 ? kTexHdr : kTexExposure, res);
             if (res) res->Release();
         }
+        // EngineLightDraws: the light the engine drew as light, when it was drawn into this HDR image.
+        setTexture(kTexLights, options::current().engineLightDraws ? lights::frameTexture(g_tex[kTexHdr]) : nullptr);
         f.phase = Phase::Post;
         f.postImage = f.rt;
         f.postRtv = f.rtv;
@@ -718,6 +723,12 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     if (f.phase == Phase::Scene) {
         // The scene's depth: the last screen-shaped depth buffer a scene draw used.
         if (role == Role::Scene && f.ds && screenSized(f.dsW, f.dsH)) setSceneDepth(f.ds);
+        // EngineLightDraws: what this draw adds to the light buffer (drawn again after it, below).
+        if (role == Role::Scene && options::current().engineLightDraws && g_lookSettings.enabled && g_rendererReady) {
+            Inside guard;
+            f.light = lights::classify(g_device, ctx, f.ps, f.rtv, f.rt, f.rt && screenSized(f.rtW, f.rtH));
+            if (f.light.kind != lights::Kind::None && capture::active()) capture::traceNote(lights::kindName(f.light.kind));
+        }
         // The lighting-read pass (it reads the normal and light buffers) runs with the main camera.
         const bool lightingRead = f.ps.reads(kSlotNormal) || f.ps.reads(kSlotDiffuse);
         if (lightingRead && !g_cameraThisFrame) takeCamera(ctx);
@@ -779,13 +790,27 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     return hideInterfaceDraw(ctx);
 }
 
+// EngineLightDraws: the engine's draw that was just made, again into the light buffer (once or
+// twice, engine_lights.cpp), with the same call. The engine's state is put back afterwards.
+template <typename F> void drawLights(ID3D11DeviceContext* ctx, F&& draw) {
+    const lights::Draw d = g_frame.light;
+    g_frame.light = lights::Draw{};
+    if (d.kind == lights::Kind::None) return;
+    Inside guard;
+    lights::Saved saved;
+    lights::save(ctx, saved);
+    for (int pass = 0; lights::setup(ctx, d, pass, saved); pass++) draw();
+    lights::restore(ctx, saved);
+}
+
 // ---- device ----
 
 HRESULT STDMETHODCALLTYPE createPixelShaderDetour(ID3D11Device* device, const void* code, SIZE_T size,
                                                   ID3D11ClassLinkage* linkage, ID3D11PixelShader** out) {
     const HRESULT hr = g_createPixelShader.get<CreatePixelShaderFn>(device)(device, code, size, linkage, out);
     if (SUCCEEDED(hr) && out && *out && !t_inside) {
-        const ShaderInfo info = shaderdb::identify(code, size);
+        ShaderInfo info = shaderdb::identify(code, size);
+        if (info.role == Role::Scene) info.lightSlot = shaderdb::lightTextureSlot(code, size);
         {
             std::unique_lock<std::shared_mutex> lock(g_shaderLock);
             g_shaders[*out] = info;
@@ -856,22 +881,30 @@ void STDMETHODCALLTYPE omSetRenderTargetsAndUAVsDetour(ID3D11DeviceContext* ctx,
 
 void STDMETHODCALLTYPE drawIndexedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, INT c) {
     if (isMain(ctx) && onDraw(ctx)) return;
-    g_drawIndexed.get<DrawIndexedFn>(ctx)(ctx, a, b, c);
+    const DrawIndexedFn original = g_drawIndexed.get<DrawIndexedFn>(ctx);
+    original(ctx, a, b, c);
+    if (isMain(ctx)) drawLights(ctx, [&] { original(ctx, a, b, c); });
 }
 
 void STDMETHODCALLTYPE drawDetour(ID3D11DeviceContext* ctx, UINT a, UINT b) {
     if (isMain(ctx) && onDraw(ctx)) return;
-    g_draw.get<DrawFn>(ctx)(ctx, a, b);
+    const DrawFn original = g_draw.get<DrawFn>(ctx);
+    original(ctx, a, b);
+    if (isMain(ctx)) drawLights(ctx, [&] { original(ctx, a, b); });
 }
 
 void STDMETHODCALLTYPE drawIndexedInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, INT d, UINT e) {
     if (isMain(ctx) && onDraw(ctx)) return;
-    g_drawIndexedInstanced.get<DrawIndexedInstancedFn>(ctx)(ctx, a, b, c, d, e);
+    const DrawIndexedInstancedFn original = g_drawIndexedInstanced.get<DrawIndexedInstancedFn>(ctx);
+    original(ctx, a, b, c, d, e);
+    if (isMain(ctx)) drawLights(ctx, [&] { original(ctx, a, b, c, d, e); });
 }
 
 void STDMETHODCALLTYPE drawInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, UINT d) {
     if (isMain(ctx) && onDraw(ctx)) return;
-    g_drawInstanced.get<DrawInstancedFn>(ctx)(ctx, a, b, c, d);
+    const DrawInstancedFn original = g_drawInstanced.get<DrawInstancedFn>(ctx);
+    original(ctx, a, b, c, d);
+    if (isMain(ctx)) drawLights(ctx, [&] { original(ctx, a, b, c, d); });
 }
 
 void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11CommandList* list, BOOL restore) {
@@ -1195,6 +1228,7 @@ bool onPresent(IDXGISwapChain* sc) {
         capture::writeText(L"car.txt", text);
     }
     capture::endFrame();
+    lights::endFrame();
 
     // The map's time of day from the engine's light (day, sunset, night presets, as in TMNF):
     // only in frames with a scene, and only once it holds for a second.
@@ -1269,6 +1303,7 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
         overlay::releaseTargets();
         releaseTextures();
         releaseShadow();
+        lights::release();
         g_isSceneV.clear();
         g_frame = Frame{};
         TMVS_LOG("hooks: ResizeBuffers %ux%u", w, h);

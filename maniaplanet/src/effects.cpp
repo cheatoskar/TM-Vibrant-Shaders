@@ -2,6 +2,7 @@
 #include "config.h"
 #include "hooks.h"
 #include "log.h"
+#include "options.h"
 #include "settings.h"
 #include "weather.h"
 #include "shaders/PS_BilateralBlur.h"
@@ -621,6 +622,8 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[43][0] = nightSky && (!mapNight || s.engineMoon == 2) ? 1.0f : 0.0f;
     const float glen = sqrtf(gameSun[0] * gameSun[0] + gameSun[1] * gameSun[1] + gameSun[2] * gameSun[2]);
     for (int i = 0; i < 3; i++) c[43][1 + i] = glen > 1e-5f ? cam.sunDirection[i] / glen : 0.0f;
+    // EngineLightDraws: t17 holds the light the engine drew as light (engine_lights.cpp).
+    c[44][0] = options::current().engineLightDraws && has(kTexLights) > 0.5f ? 1.0f : 0.0f;
     c[44][1] = s.gameNight ? 1.0f : 0.0f;
     c[44][2] = nightSky ? 1.0f : 0.0f;
     c[44][3] = s.toneKnee;
@@ -680,6 +683,8 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     memcpy(m_engineViews, engine, sizeof(engine));
     ctx->PSSetShaderResources(8, 8, engine);
     ctx->VSSetShaderResources(8, 8, engine);
+    ID3D11ShaderResourceView* engineLights = m_c[44][0] > 0.5f ? frame.engine[kTexLights] : nullptr;
+    ctx->PSSetShaderResources(17, 1, &engineLights);
 
     const float hx = 1.0f / m_ndHalf_.w, hy = 1.0f / m_ndHalf_.h;
     const float qx = 1.0f / m_gi_[0].w, qy = 1.0f / m_gi_[0].h;
@@ -778,10 +783,11 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     const float p0[4] = {sky.sky ? 1.0f : 0.0f, sky.average ? 1.0f : 0.0f, sky.clouds ? 1.0f : 0.0f, reflections ? 1.0f : 0.0f};
     m_currentHdr = 0;
     ctx->PSSetShaderResources(16, 1, &volume);
+    ctx->PSSetShaderResources(17, 1, &engineLights);
     const float p1[4] = {volume ? 1.0f : 0.0f, 0, 0, 0};
     run(ctx, kLighting, m_lighting, m_hdr[0], in, 8, p0, p1);
-    ID3D11ShaderResourceView* noVolume = nullptr;
-    ctx->PSSetShaderResources(16, 1, &noVolume);
+    ID3D11ShaderResourceView* noVolume[2] = {};
+    ctx->PSSetShaderResources(16, 2, noVolume);
 
     // On the HDR image: cinema (depth of field, motion blur, TAA), then the weather's particles and
     // lens drops (after TAA as in TMNF: it would smear the streaks), then the sun's light shafts and

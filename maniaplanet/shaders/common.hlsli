@@ -64,7 +64,7 @@ cbuffer Frame : register(b0)
     float4 u_Sky3;      // c41: aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
     float4 u_EngineClouds; // c42: the engine's cloud factor at its darkest (SceneP CloudsX2minRGB), 1 = known
     float4 u_SunOut;    // c43: how much of the engine's sun comes out (night skies), engine sun direction (world)
-    float4 u_Mat;       // c44: 0, real night (GameNight), a night sky replaces the game's, tone knee
+    float4 u_Mat;       // c44: EngineLightDraws (1: t17 holds the engine's light draws), real night (GameNight), a night sky replaces the game's, tone knee
     float4 u_EngineSun; // c45: the engine's sun colour (rgb, linear, as it lights with it), 1 = known
     float4 u_Fog;       // c46: the engine's fog colour (rgb, linear), 0
     float4 u_Misc;      // c47: engine exposure is applied in the input (1) or read here (0), photo mode,

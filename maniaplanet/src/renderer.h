@@ -157,7 +157,7 @@ private:
     };
     static constexpr int kViewsPerTexture = 4;
     TexView m_tex[kTexCount][kViewsPerTexture] = {};
-    int m_texCurrent[kTexCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+    int m_texCurrent[kTexCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     int m_texNext[kTexCount] = {};
     int m_texLogged[kTexCount] = {};
 

@@ -30,6 +30,41 @@ ShaderInfo identify(const void* bytecode, size_t size) {
     return info;
 }
 
+uint8_t lightTextureSlot(const void* bytecode, size_t size) {
+    // DXBC: "DXBC", checksum, 1, total size, chunk count, chunk offsets; RDEF: constant buffer
+    // count and offset, binding count and offset, then 32-byte bindings (name offset, type, return
+    // type, dimension, samples, bind point, bind count, flags). Offsets are from the chunk's data.
+    static const char* const kNames[] = {"TMapSelfIllum", "TMapAdvert", "TMapIllum"};
+    const auto* b = static_cast<const unsigned char*>(bytecode);
+    auto u32 = [&](size_t at) {
+        uint32_t v = 0;
+        memcpy(&v, b + at, 4);
+        return v;
+    };
+    if (!b || size < 32 || memcmp(b, "DXBC", 4) != 0) return kNoSlot;
+    const uint32_t chunks = u32(28);
+    for (uint32_t k = 0; k < chunks && 32 + 4 * k + 4 <= size; k++) {
+        const uint32_t at = u32(32 + 4 * k);
+        if (static_cast<size_t>(at) + 8 > size || memcmp(b + at, "RDEF", 4) != 0) continue;
+        const size_t data = at + 8, length = u32(at + 4);
+        if (data + length > size || length < 16) return kNoSlot;
+        const uint32_t count = u32(data + 8), offset = u32(data + 12);
+        for (uint32_t i = 0; i < count && offset + 32 * (i + 1) <= length; i++) {
+            const size_t bind = data + offset + 32 * i;
+            const uint32_t name = u32(bind), type = u32(bind + 4), point = u32(bind + 20);
+            if (type != 2 || name >= length || point > 127) continue; // textures only
+            const char* s = reinterpret_cast<const char*>(b + data + name);
+            const size_t room = length - name;
+            for (const char* n : kNames) {
+                const size_t len = strlen(n);
+                if (room > len && !memcmp(s, n, len + 1)) return static_cast<uint8_t>(point);
+            }
+        }
+        return kNoSlot;
+    }
+    return kNoSlot;
+}
+
 const char* roleName(Role role) {
     switch (role) {
     case Role::Scene: return "scene";
