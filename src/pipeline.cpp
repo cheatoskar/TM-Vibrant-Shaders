@@ -2161,14 +2161,20 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // of the ramps over the pools) and takes no dry-track blur. Only where the engine tells the
     // water's height (or it was measured): the colour guess also takes blue kerbs for water.
     const bool waterKnown = in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown);
-    // c51 y (LampGlare, LampHaze): the part of the lamps' added light taken out of their core, to
-    // be spread around them in the final pass (0 = as before). z (LampSkyHalos): the part of it
-    // added over the sky as well, at night only (by day the game's sun glow is an added light too).
-    const bool lampLight = engineLights && in.added && (s.lampGlare > 0.0f || s.lampHaze > 0.0f);
-    const float lampTaken = lampLight ? fminf(fmaxf(s.lampGlare, 0.0f), 1.0f) : 0.0f;
+    // c51 (EngineLights, the lamps: what the game's additive draws added). Floodlights: their own
+    // strength, apart from the neon borders (BorderGlow) and HighlightBoost (1 = as before). y: the
+    // part taken out of their core, 1 - Floodlights x (1 - LampGlare): LampGlare's part is spread
+    // around them in the final pass (0 = as before; below 0 the core gets brighter). z (LampSkyHalos):
+    // the part added over the sky as well, at night only (by day the game's sun glow is an added
+    // light too). w: Floodlights for the light they spill onto their surroundings (NeonLight).
+    const bool lampMask = engineLights && in.added;
+    const bool lampLight = lampMask && (s.lampGlare > 0.0f || s.lampHaze > 0.0f);
+    const float floodlights = lampMask ? fmaxf(s.floodlights, 0.0f) : 1.0f;
+    const float lampGlareTaken = lampLight ? fminf(fmaxf(s.lampGlare, 0.0f), 1.0f) : 0.0f;
+    const float lampCore = floodlights * (1.0f - lampGlareTaken);
     const bool lampNight = skyReplacesSun(s) || (in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night);
-    const float lampSky = s.lampSkyHalos && engineLights && in.added && lampNight ? 1.0f - lampTaken : 0.0f;
-    const float waterConstants[4] = {s.cleanWater && waterKnown ? 1.0f : 0.0f, lampTaken, lampSky, 0.0f};
+    const float lampSky = s.lampSkyHalos && lampMask && lampNight ? lampCore : 0.0f;
+    const float waterConstants[4] = {s.cleanWater && waterKnown ? 1.0f : 0.0f, 1.0f - lampCore, lampSky, floodlights};
     device->SetPixelShaderConstantF(51, waterConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
@@ -2666,8 +2672,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         // Of the light taken from the core, 40% comes back as glare. All of it was too much: the
         // lamps carry as much light as the rest of the night scene (A01's start: 0.05 a pixel), and
         // spread out it washed the scene grey. The rest was clipped to white in the core anyway.
-        lampScale[0] = lampTaken * 0.4f / glareNorm;
-        lampScale[1] = fmaxf(s.lampHaze, 0.0f) / hazeNorm;
+        // The source holds the lamps' light at Floodlights 1.
+        lampScale[0] = floodlights * lampGlareTaken * 0.4f / glareNorm;
+        lampScale[1] = floodlights * fmaxf(s.lampHaze, 0.0f) / hazeNorm;
     }
 
     // 8. Exposure (extra cameras reuse the adapted value).

@@ -59,7 +59,7 @@ float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, o
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
 float4 u_Water2    : register(c51); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
-                                    // y (EngineLights): the part of the added light taken from the lamp's core (LampGlare; 0 = as before); z: the part added over the sky (LampSkyHalos: 1 - LampGlare; 0 = dropped, as before)
+                                    // y (EngineLights): the part of the added light taken from the lamp's core, 1 - Floodlights x (1 - LampGlare) (0 = as before, below 0 brighter); z: the part added over the sky (LampSkyHalos: Floodlights x (1 - LampGlare); 0 = dropped, as before); w: Floodlights for the light they spill (1 = as before)
 float4 u_LightGrid : register(c52); // LongShadowQuality 1: horizontal light direction (world x, z), the light grid's corner along it and across it (m)
 float4 u_LightGrid2 : register(c53); // 1 / light grid size (m), horizontal length of the light direction, margin growth per m of ray, range (m; 0 = s2 is the height map)
 float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
@@ -2683,9 +2683,10 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     c += glow * (1.0 - 0.6 * saturate(fogAmount)); // lights shine through the haze
     // The game's glows, brighter by the highlight boost (light source intensity).
     if (engine) c += added * (1.0 + u_Rays.w * u_Engine.y) * (1.0 - 0.6 * saturate(fogAmount));
-    // LampGlare: this part of them is spread around the lamp in the final pass instead (a branch:
-    // without it the line above came out a bit different, 1 in 255 on a few pixels).
-    [branch] if (engine && u_Water2.y > 0.0) c -= added * (1.0 + u_Rays.w * u_Engine.y) * (1.0 - 0.6 * saturate(fogAmount)) * u_Water2.y;
+    // Floodlights (their own strength) and LampGlare (this part of them is spread around the lamp
+    // in the final pass instead): taken off or added on. A branch: without it the line above came
+    // out a bit different, 1 in 255 on a few pixels.
+    [branch] if (engine && u_Water2.y != 0.0) c -= added * (1.0 + u_Rays.w * u_Engine.y) * (1.0 - 0.6 * saturate(fogAmount)) * u_Water2.y;
     // Light the game added on top (headlight pools) is no darker than the game drew it: the
     // night darkening turned the pools grey and flat. Only the part the game added (above
     // the night-darkened surface), a little below its brightness so it keeps a falloff.
@@ -2758,7 +2759,8 @@ float4 PS_SpillDownEngine(float2 uv : TEXCOORD0) : COLOR0 {
             float lamp = mat.r * saturate(peak * u_Clean.z + u_Clean.w);
             float neon = neonStrip(c, length(viewPosition(suv, nd.w)), mat) * u_Engine.w;
             // On the 0..1 range the guess had: the float image's 2..3 would burn the road white.
-            float3 light = max(min(added, 1.0), min(c, 1.0) * max(lamp, neon)) * (nd.w < SKY_Z ? 1.0 : 0.0);
+            // Floodlights (u_Water2.w): the lamps light their surroundings by their own strength.
+            float3 light = max(min(added * u_Water2.w, 1.0), min(c, 1.0) * max(lamp, neon)) * (nd.w < SKY_Z ? 1.0 : 0.0);
             // White lamps light less than coloured ones, as they glow less: the stadium's rows of
             // floodlights washed the roof around them out to a white haze.
             float lp = max(light.r, max(light.g, light.b));

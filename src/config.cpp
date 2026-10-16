@@ -70,6 +70,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("LampGlare", "Lamp glare", "Bloom & Lens", Float, lampGlare, 0.0f, 1.0f),
         TMVS_FIELD("LampHaze", "Lamp haze glow", "Bloom & Lens", Float, lampHaze, 0.0f, 4.0f),
         TMVS_FIELD("LampSkyHalos", "Lamp halos over the sky", "Bloom & Lens", Bool, lampSkyHalos, 0.0f, 1.0f),
+        TMVS_FIELD("Floodlights", "Floodlights", "Bloom & Lens", Float, floodlights, 0.0f, 3.0f),
         TMVS_FIELD("LensFlare", "Lens flare", "Bloom & Lens", Float, lensFlare, 0.0f, 1.5f),
         TMVS_FIELD("ChromaticAberration", "Chromatic aberration", "Bloom & Lens", Float, chromaticAberration, 0.0f, 1.0f),
         TMVS_FIELD("Vignette", "Vignette", "Bloom & Lens", Float, vignette, 0.0f, 1.0f),
