@@ -1004,7 +1004,9 @@ PanelDef settingsPanel(const char* title, Settings& s, const Entries& entries) {
     float rows = 0.0f;
     for (const auto& e : entries) {
         const Field* f = findField(e.first);
-        if (f && isRelevant(*f, s)) rows += 1.0f;
+        // Only what this game can do (ManiaPlanet has no long shadows, FXAA, water ...): the
+        // panel's height had room for rows that were never drawn.
+        if (f && supported(*f) && isRelevant(*f, s)) rows += 1.0f;
     }
     return {title, rows, [&s, entries] {
                 bool l = false;
@@ -1110,6 +1112,8 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"Sharpen", "Sharpening"},
                                     {"Quality", "Effect quality"},
                                     {"AutoQuality", "Auto quality"}}));
+    // A panel with nothing this game can do (or nothing the current choices use) is left out.
+    panels.erase(std::remove_if(panels.begin(), panels.end(), [](const PanelDef& p) { return p.rows <= 0.0f; }), panels.end());
     for (PanelDef& p : panels) p.foldable = true; // closed at first, the title opens them
     const bool look = panelColumns(panels, 330.0f);
     if (config.preset == kCustomPreset) {
