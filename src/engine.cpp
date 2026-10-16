@@ -1446,11 +1446,20 @@ bool carLocation(float position[3], float up[3]) {
         }
         if (up) {
             // The car's up is one column of the 3x3 (the model's y, column 1, if TMNF is like
-            // ManiaPlanet). Which one is taken from the first car seen standing level (at the
-            // start: one column within 18 degrees of the world's up), its sign with it, and
-            // logged once; until then the world's up.
-            static int s_axis = -1;
+            // ManiaPlanet). Which one is taken from the car standing level (at the start: one
+            // column within 18 degrees of the world's up), its sign with it; until then the world's
+            // up. Picked again on every map, and only once the same column and sign held for 30
+            // frames: a car on its roof the moment it was first seen made it upside down for the
+            // whole session. Logged when it differs from the last pick.
+            static int s_axis = -1, s_logged = -1;
             static float s_sign = 1.0f;
+            static LONG s_loads = -1;
+            static int s_candidate = -1, s_frames = 0;
+            if (s_loads != g_mapLoads) {
+                s_loads = g_mapLoads;
+                s_axis = s_candidate = -1;
+                s_frames = 0;
+            }
             float column[3][3];
             float length[3];
             for (int c = 0; c < 3; c++) {
@@ -1458,14 +1467,21 @@ bool carLocation(float position[3], float up[3]) {
                 length[c] = sqrtf(column[c][0] * column[c][0] + column[c][1] * column[c][1] + column[c][2] * column[c][2]);
             }
             if (s_axis < 0) {
-                for (int c = 0; c < 3; c++) {
-                    if (length[c] > 1e-3f && fabsf(column[c][1]) > 0.95f * length[c]) {
-                        s_axis = c;
-                        s_sign = column[c][1] > 0.0f ? 1.0f : -1.0f;
+                int level = -1; // column * 2 + (negated)
+                for (int c = 0; c < 3 && level < 0; c++) {
+                    if (length[c] > 1e-3f && fabsf(column[c][1]) > 0.95f * length[c]) level = c * 2 + (column[c][1] < 0.0f ? 1 : 0);
+                }
+                s_frames = level >= 0 && level == s_candidate ? s_frames + 1 : (level >= 0 ? 1 : 0);
+                s_candidate = level;
+                if (s_frames >= 30) {
+                    s_axis = level / 2;
+                    s_sign = (level & 1) ? -1.0f : 1.0f;
+                    if (level != s_logged) {
+                        s_logged = level;
+                        const int c = s_axis;
                         TMVS_LOG("engine: the car's up is column %d of its matrix%s (columns %.2f %.2f %.2f / %.2f %.2f %.2f / %.2f %.2f %.2f)",
                                  c, s_sign < 0.0f ? ", negated" : "", column[0][0], column[0][1], column[0][2], column[1][0], column[1][1],
                                  column[1][2], column[2][0], column[2][1], column[2][2]);
-                        break;
                     }
                 }
             }
