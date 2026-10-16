@@ -1948,6 +1948,21 @@ bool Pipeline::detectCameraCut(const Inputs& in) const {
     return fabsf(in.projection[5] - m_prevProjection[5]) > 0.1f * fabsf(m_prevProjection[5]);
 }
 
+// Before a temporal frame moves the previous camera on: what its repeats need.
+void Pipeline::keepRepeatCamera() {
+    memcpy(m_repeatPrevView, m_prevView, sizeof(m_prevView));
+    memcpy(m_repeatPrevProjection, m_prevProjection, sizeof(m_prevProjection));
+    m_repeatHavePrevious = m_havePrevious;
+    m_repeatTemporalValid = m_temporalValid;
+}
+
+// A repeat sees the camera before its frame as the previous one (twice: back again).
+void Pipeline::swapRepeatCamera() {
+    std::swap(m_prevView, m_repeatPrevView);
+    std::swap(m_prevProjection, m_repeatPrevProjection);
+    std::swap(m_havePrevious, m_repeatHavePrevious);
+}
+
 namespace {
 
 // Full-screen passes with none of the game's leftover state (alpha test, stencil, scissor and
@@ -2005,7 +2020,8 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool temporal = in.temporal;
     // 640 m around the camera (0.625 m a texel): at speed the shadows ahead were only known
     // 120..160 m out, the next blocks' shadows popped up in front of the car. Photo mode: 960 m,
-    // far views get long shadows.
+    // far views get long shadows. (Not the video export: with photo mode's reach and map its
+    // frames looked different from the replay, water reflections noisier, lit walls darker.)
     const UINT heightSize = 1024;
     const float heightWorld = in.photo ? 960.0f : 640.0f;
     if (heightSize != m_heightSize || heightWorld != m_heightWorld) {
@@ -2018,6 +2034,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool cut = temporal && detectCameraCut(in);
     m_temporalValid = temporal && !cut;
     if (cut) m_taaValid = false;
+    // A repeat of the last frame: its motion (the camera before it), swapped back at the end.
+    if (in.repeat) {
+        m_temporalValid = m_repeatTemporalValid;
+        swapRepeatCamera();
+    }
 
     profileBegin(device);
     setFrameConstants(device, in, s);
@@ -2074,7 +2095,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         passConstants(device, 1.0f / in.width, 1.0f / in.height);
         runPass(device, sharpen ? kSharpen : kCopy, output, in.width, in.height);
         profileEnd();
+        if (in.repeat) swapRepeatCamera();
         if (temporal) {
+            keepRepeatCamera();
             memcpy(m_prevView, in.view, sizeof(m_prevView));
             memcpy(m_prevProjection, in.projection, sizeof(m_prevProjection));
             m_havePrevious = true;
@@ -2292,9 +2315,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool dof = s.depthOfField > 0.0f;
     if ((motionBlur || dof) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
         // Photo mode: the blur at full resolution (half resolution showed as coarse, blocky
-        // edges once the image stands still and gets looked at).
+        // edges once the image stands still and gets looked at). The video export too: it has
+        // the time, and its frames get looked at one by one.
+        const bool best = in.photo || in.video;
         gfx::Target* dofTarget = &m_dof;
-        if (dof && in.photo && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
+        if (dof && best && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
         if (dof) {
             int focus = m_focusIndex;
             if (temporal && !in.freeze) {
@@ -2310,15 +2335,15 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             bind(device, 2, m_focus[focus].texture, false);
             dofFocus = m_focus[focus].texture;
             // Photo mode: four times the samples and no per-pixel noise (nothing averages it
-            // out over frames: TAA is off by default, tiles freeze it).
-            passConstants(device, in.photo ? 64.0f : 16.0f, in.photo ? 0.0f : 1.0f, 1.0f);
+            // out over frames: TAA is off by default, tiles freeze it). The video export too.
+            passConstants(device, best ? 64.0f : 16.0f, best ? 0.0f : 1.0f, 1.0f);
             runPass(device, kDofBlur, *dofTarget);
             // A second, smaller pass over the first smooths the grain of the 16 samples and the
             // rings the spiral leaves on bright lights.
             gfx::Target& second = dofTarget == &m_dofFull ? m_dofFull2 : m_dof2;
             if (second.create(device, dofTarget->width, dofTarget->height, D3DFMT_A16B16G16R16F)) {
                 bind(device, 0, dofTarget->texture, true);
-                passConstants(device, in.photo ? 32.0f : 12.0f, in.photo ? 0.0f : 1.0f, 0.3f);
+                passConstants(device, best ? 32.0f : 12.0f, best ? 0.0f : 1.0f, 0.3f);
                 runPass(device, kDofBlur, second);
                 dofTarget = &second;
             }
@@ -2497,7 +2522,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         drawRain(device, in, s, dt, heightMap && m_heightValid, output);
     profileEnd();
 
+    if (in.repeat) swapRepeatCamera();
     if (temporal) {
+        keepRepeatCamera();
         memcpy(m_prevView, in.view, sizeof(m_prevView));
         memcpy(m_prevProjection, in.projection, sizeof(m_prevProjection));
         m_havePrevious = true;

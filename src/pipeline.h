@@ -50,6 +50,13 @@ public:
         // Photo mode: effects reach 3x farther, a larger height map, no car assumed in the
         // middle of the screen.
         bool photo = false;
+        // The game's video export: photo mode's depth of field (full resolution, many samples,
+        // no noise) for a moving camera.
+        bool video = false;
+        // Another sub-pixel sample of the frame just shaded (the export's supersampling, into
+        // the same target): looks like that frame, reads its history (motion blur, focus,
+        // exposure) but advances none of it. temporal is false.
+        bool repeat = false;
         // Focus on this point of the screen (uv), -1 = the usual spot (the car, the road ahead).
         float focusPoint[2] = {-1.0f, -1.0f};
         // Hi-res photo tiles: exposure, focus and the haze colour keep their values (each tile
@@ -228,6 +235,8 @@ private:
     void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool splashes,
                   IDirect3DSurface9* target);
     bool detectCameraCut(const Inputs& inputs) const;
+    void keepRepeatCamera();
+    void swapRepeatCamera();
 
     struct ProfileFrame {
         static constexpr int kMaxStamps = 72;
@@ -318,6 +327,12 @@ private:
     float m_prevView[16] = {};
     float m_prevProjection[16] = {};
     bool m_havePrevious = false;
+    // The camera before the last temporal frame and whether that frame continued the one before:
+    // repeats of that frame (Inputs::repeat) blur with the same motion.
+    float m_repeatPrevView[16] = {};
+    float m_repeatPrevProjection[16] = {};
+    bool m_repeatHavePrevious = false;
+    bool m_repeatTemporalValid = false;
 
     // Long-range shadows: world-space height map built from the depth buffer.
     UINT m_heightSize = 1024;
