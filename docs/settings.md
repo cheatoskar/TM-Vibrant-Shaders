@@ -205,6 +205,9 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Bloom radius | `BloomRadius` | 0.3 – 1.2 | Wider or tighter glow. |
 | Light source intensity | `HighlightBoost` | 0 – 8 | How bright lamps and neon become in HDR. |
 | Neon strips glow | `BorderGlow` | 0 – 5 | With *Light sources from the game*: how much the blue neon of the road borders glows, on top of the light source intensity (1 = as before, 0 = as the game draws it; the night presets Neon, Horizon and Aurora use 3). |
+| Lamp glare | `LampGlare` | 0 – 1 (0) | Prototype, with *Light sources from the game*: this part of the lamps' light (the game's glows: floodlight heads and their halos, start lights, car lights) leaves the bright core, and some of it spreads wide and soft around the lamp. The bulbs of a floodlight panel stay apart instead of merging into a white slab, and the light reaches the air and the frame around it. The neon borders are not touched. 0 = off (as before). |
+| Lamp haze glow | `LampHaze` | 0 – 4 (0) | Prototype, with *Light sources from the game*: the light the haze takes from the lamps on its way to the camera glows in the air around them; more with more haze (*Haze density*) and for far lamps (stadium floodlights). 1 = all of that light, 0 = off (as before). |
+| Lamp halos over the sky | `LampSkyHalos` | on / off (off) | Prototype, with *Light sources from the game*, at night: a lamp's halo also shines where the sky is behind it instead of ending at the edge of the frame the lamp sits on. Off = as before. |
 | Lens flare | `LensFlare` | 0 – 1.5 | Ghost reflections from the sun. |
 | Chromatic aberration | `ChromaticAberration` | 0 – 1 | Colour fringes towards the screen edges. |
 | Vignette | `Vignette` | 0 – 1 | Darker corners. |

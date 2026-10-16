@@ -241,10 +241,14 @@ private:
         kLightGridInit,
         kLightGridSweep,
         kPrepareGBuffer,
+        kLampSource,
+        kLampDown,
+        kLampUp,
         kPassCount
     };
 
     static constexpr int kBloomLevels = 6;
+    static constexpr int kLampLevels = 5; // lamp glare: an eighth down to 1/128 of the resolution
 
     bool compileAll(IDirect3DDevice9* device);
     bool ensureTargets(IDirect3DDevice9* device, UINT width, UINT height);
@@ -318,6 +322,9 @@ private:
     gfx::Target m_rays[2];      // half
     gfx::Target m_bloomDown[kBloomLevels];
     gfx::Target m_bloomUp[kBloomLevels];
+    gfx::Target m_lampSource;              // quarter: the lamps' light (LampGlare, LampHaze), created when used
+    gfx::Target m_lampDown[kLampLevels];   // its pyramid, an eighth down
+    gfx::Target m_lampUp[kLampLevels - 1];
     gfx::Target m_luminance;    // 1x1
     gfx::Target m_adapted[2];   // 1x1 ping-pong
     gfx::Target m_waterLevel[2];          // 1x1: the water material on screen (sum of heights, count, lowest, highest)
