@@ -121,6 +121,7 @@ add_library(tmvs_core STATIC
   src/image.cpp
   src/lut.cpp
   src/mp4writer.cpp
+  src/gbufpatch.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
@@ -190,6 +191,12 @@ target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_mp4test tools/mp4test.cpp)
 target_link_libraries(tmvs_mp4test PRIVATE tmvs_core)
 target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
+
+# GameGBuffer test: the game's dumped pixel shaders through the compile patch with the game's own
+# compiler, and (--device) drawn next to the game's on a D3D9 device (development tool).
+add_executable(tmvs_gbuftest tools/gbuftest.cpp)
+target_link_libraries(tmvs_gbuftest PRIVATE tmvs_core)
+target_compile_options(tmvs_gbuftest PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an
