@@ -559,6 +559,191 @@ void logHdrStats(IDirect3DDevice9* device, const char* when, std::vector<uint16_
     if (keep) keep->swap(half);
 }
 
+// RenderScale: the main camera draws into GameHdr's float target made smaller, through a viewport
+// and scissor rect scaled to it. The game's projection stays as it is, so its whole 3D image lands
+// in the smaller target at the lower resolution; the depth buffer stays the game's (a larger one
+// is allowed), the image in its top left corner. The effects run at that size and FSR 1 brings the
+// shaded image up into the game's target before the HUD, which the game then draws at full size.
+// The game reads back its own numbers (GetViewport, GetScissorRect). What the scaling can't
+// follow falls back to the full size: draws in screen pixels (pre-transformed, no viewport applies)
+// for the rest of the map, a camera into part of the screen (the MediaTracker editor, the replay
+// menu's band) for a few seconds, and photo mode, captures and the video export always.
+struct RenderScaleState {
+    bool active = false;      // the main camera being drawn is scaled (beginHdr .. endHdr)
+    bool pending = false;     // the last one was and nothing has filled the game's target yet
+    bool sceneScaled = false; // g_hdrScene has the scaled size (its rects scale in StretchRect)
+    UINT fullWidth = 0, fullHeight = 0; // the game's target
+    UINT width = 0, height = 0;         // the scaled float target
+    D3DVIEWPORT9 logical{};   // the game's viewport in its own numbers
+    D3DVIEWPORT9 device{};    // ... and what was set for it
+    RECT logicalScissor{};
+    RECT deviceScissor{};
+    RECT area{};              // the camera's viewport in the scaled target (at its end)
+    int offMap = -1;          // engine::mapLoads() of a map it was turned off for
+    DWORD partUntil = 0;      // a camera into part of the screen was seen: full size until then
+    float biasSaved[16] = {}; // the samplers' mip bias before the camera (DWORDs as floats)
+    // What the game did with the scaled target (this map; the log tells once, a few seconds in).
+    struct Counts {
+        unsigned cameras = 0, viewports = 0, scissors = 0, readBacks = 0, rectClears = 0, rectStretches = 0, sized = 0,
+                 pretransformed = 0, fallbacks = 0;
+    } counts;
+    unsigned cameraPretransformed = 0; // in the camera being drawn
+} g_rs;
+
+// The scale for the main camera starting now: 1 = the full size.
+float renderScaleNow(const Settings& s, const char** why) {
+    *why = nullptr;
+    if (s.renderScale >= 0.99f) return 1.0f;
+    if (photo::active()) *why = "photo mode";
+    else if (g_exporting) *why = "the video export";
+    else if (g_captureRequested) *why = "a capture (F12)";
+    else if (g_rs.offMap == engine::mapLoads()) *why = "off for this map (see above)";
+    else if (g_rs.partUntil && static_cast<LONG>(GetTickCount() - g_rs.partUntil) < 0) *why = "a camera into part of the screen";
+    if (*why) return 1.0f;
+    return s.renderScale < 0.5f ? 0.5f : s.renderScale;
+}
+
+// From the game's numbers to the scaled target's: the edges are scaled, so the full size maps to
+// exactly the scaled one.
+LONG scaleX(LONG x) {
+    const LONG v = static_cast<LONG>(static_cast<double>(x) * g_rs.width / g_rs.fullWidth + 0.5);
+    return v < 0 ? 0 : (v > static_cast<LONG>(g_rs.width) ? static_cast<LONG>(g_rs.width) : v);
+}
+LONG scaleY(LONG y) {
+    const LONG v = static_cast<LONG>(static_cast<double>(y) * g_rs.height / g_rs.fullHeight + 0.5);
+    return v < 0 ? 0 : (v > static_cast<LONG>(g_rs.height) ? static_cast<LONG>(g_rs.height) : v);
+}
+LONG unscaleX(LONG x) { return static_cast<LONG>(static_cast<double>(x) * g_rs.fullWidth / g_rs.width + 0.5); }
+LONG unscaleY(LONG y) { return static_cast<LONG>(static_cast<double>(y) * g_rs.fullHeight / g_rs.height + 0.5); }
+
+D3DVIEWPORT9 scaledViewport(const D3DVIEWPORT9& v) {
+    const LONG x0 = scaleX(static_cast<LONG>(v.X)), y0 = scaleY(static_cast<LONG>(v.Y));
+    LONG x1 = scaleX(static_cast<LONG>(v.X + v.Width)), y1 = scaleY(static_cast<LONG>(v.Y + v.Height));
+    if (x1 <= x0) x1 = x0 + 1;
+    if (y1 <= y0) y1 = y0 + 1;
+    return {static_cast<DWORD>(x0), static_cast<DWORD>(y0), static_cast<DWORD>(x1 - x0), static_cast<DWORD>(y1 - y0), v.MinZ, v.MaxZ};
+}
+
+RECT scaledRect(const RECT& r) {
+    return {scaleX(r.left), scaleY(r.top), scaleX(r.right), scaleY(r.bottom)};
+}
+
+bool sameViewport(const D3DVIEWPORT9& a, const D3DVIEWPORT9& b) {
+    return a.X == b.X && a.Y == b.Y && a.Width == b.Width && a.Height == b.Height;
+}
+
+// The game draws into the scaled target right now.
+bool onScaledTarget(IDirect3DDevice9* device) {
+    if (!g_rs.active || !g_hdrScene.surface) return false;
+    IDirect3DSurface9* rt = nullptr;
+    device->GetRenderTarget(0, &rt);
+    if (rt) rt->Release();
+    return rt == g_hdrScene.surface;
+}
+
+const D3DVIEWPORT9* onSetViewport(IDirect3DDevice9* device, const D3DVIEWPORT9* vp) {
+    if (!onScaledTarget(device)) return vp;
+    g_rs.logical = *vp;
+    // The scaled target's own size: the game sized it from the target it was handed (GetDesc).
+    // Scaled again, its image would shrink into a corner.
+    if (vp->X == 0 && vp->Y == 0 && vp->Width == g_rs.width && vp->Height == g_rs.height) {
+        g_rs.counts.sized++;
+        g_rs.device = *vp;
+        return vp;
+    }
+    g_rs.counts.viewports++;
+    g_rs.device = scaledViewport(*vp);
+    return &g_rs.device;
+}
+
+void onGetViewport(IDirect3DDevice9* device, D3DVIEWPORT9* vp) {
+    if (!onScaledTarget(device)) return;
+    g_rs.counts.readBacks++;
+    if (sameViewport(*vp, g_rs.device)) {
+        *vp = g_rs.logical;
+        return;
+    }
+    // Set by the device itself (SetRenderTarget resets it to the whole target).
+    const LONG x0 = unscaleX(static_cast<LONG>(vp->X)), y0 = unscaleY(static_cast<LONG>(vp->Y));
+    const LONG x1 = unscaleX(static_cast<LONG>(vp->X + vp->Width)), y1 = unscaleY(static_cast<LONG>(vp->Y + vp->Height));
+    vp->X = static_cast<DWORD>(x0);
+    vp->Y = static_cast<DWORD>(y0);
+    vp->Width = static_cast<DWORD>(x1 - x0);
+    vp->Height = static_cast<DWORD>(y1 - y0);
+}
+
+const RECT* onSetScissorRect(IDirect3DDevice9* device, const RECT* rect) {
+    if (!onScaledTarget(device)) return rect;
+    g_rs.counts.scissors++;
+    g_rs.logicalScissor = *rect;
+    g_rs.deviceScissor = scaledRect(*rect);
+    return &g_rs.deviceScissor;
+}
+
+void onGetScissorRect(IDirect3DDevice9* device, RECT* rect) {
+    if (!onScaledTarget(device)) return;
+    g_rs.counts.readBacks++;
+    if (EqualRect(rect, &g_rs.deviceScissor)) {
+        *rect = g_rs.logicalScissor;
+        return;
+    }
+    *rect = {unscaleX(rect->left), unscaleY(rect->top), unscaleX(rect->right), unscaleY(rect->bottom)};
+}
+
+const D3DRECT* onClearRects(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects) {
+    if (!count || !rects || !onScaledTarget(device)) return rects;
+    static std::vector<D3DRECT> s_scaled;
+    s_scaled.assign(rects, rects + count);
+    for (D3DRECT& r : s_scaled) r = {scaleX(r.x1), scaleY(r.y1), scaleX(r.x2), scaleY(r.y2)};
+    g_rs.counts.rectClears++;
+    return s_scaled.data();
+}
+
+// A copy from or into the scaled target with rects in the game's numbers (a whole-surface copy
+// stretches by itself).
+void onStretchRects(IDirect3DSurface9* src, const RECT** srcRect, IDirect3DSurface9* dst, const RECT** dstRect) {
+    if (!g_rs.sceneScaled || !g_hdrScene.surface || (src != g_hdrScene.surface && dst != g_hdrScene.surface)) return;
+    static RECT s_src, s_dst;
+    if (src == g_hdrScene.surface && *srcRect) {
+        s_src = scaledRect(**srcRect);
+        *srcRect = &s_src;
+        g_rs.counts.rectStretches++;
+    }
+    if (dst == g_hdrScene.surface && *dstRect) {
+        s_dst = scaledRect(**dstRect);
+        *dstRect = &s_dst;
+        g_rs.counts.rectStretches++;
+    }
+}
+
+// A draw of the scaled camera in screen pixels: pre-transformed vertices (XYZRHW, or a declaration
+// with POSITIONT) take no viewport, they land at the full-size spot in the smaller target.
+void onDrawScaled(IDirect3DDevice9* device) {
+    if (!g_rs.active || !g_scene.inMainCamera) return;
+    IDirect3DVertexShader9* vs = nullptr;
+    device->GetVertexShader(&vs);
+    if (vs) {
+        vs->Release();
+        return;
+    }
+    DWORD fvf = 0;
+    device->GetFVF(&fvf);
+    bool screen = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
+    if (!fvf) {
+        IDirect3DVertexDeclaration9* decl = nullptr;
+        device->GetVertexDeclaration(&decl);
+        if (decl) {
+            D3DVERTEXELEMENT9 elements[MAXD3DDECLLENGTH + 1] = {};
+            UINT n = MAXD3DDECLLENGTH + 1;
+            if (SUCCEEDED(decl->GetDeclaration(elements, &n))) {
+                for (UINT i = 0; i < n && elements[i].Stream != 0xFF; i++) screen = screen || elements[i].Usage == D3DDECLUSAGE_POSITIONT;
+            }
+            decl->Release();
+        }
+    }
+    if (screen) g_rs.cameraPretransformed++;
+}
+
 // Float targets with blending: the game blends glows and particles into the scene.
 bool hdrSupported(IDirect3DDevice9* device) {
     if (g_hdrSupported < 0) {
@@ -722,15 +907,43 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_gbufActive = false;
     g_gbufLightValid = false;
     g_gbufLightActive = false;
+    g_rs.active = false;
     const Settings& s = Config::get().settings;
     if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
     D3DSURFACE_DESC desc{};
     rt->GetDesc(&desc);
-    if (!g_hdrScene.create(device, desc.Width, desc.Height, D3DFMT_A16B16G16R16F)) return;
+    // RenderScale: the float target at the scaled size (at least 320 x 200, as a main camera).
+    const char* fullWhy = nullptr;
+    const float scale = renderScaleNow(s, &fullWhy);
+    UINT width = desc.Width, height = desc.Height;
+    if (scale < 1.0f) {
+        width = static_cast<UINT>(desc.Width * scale + 0.5f);
+        height = static_cast<UINT>(desc.Height * scale + 0.5f);
+        width = width < 320 ? 320 : (width > desc.Width ? desc.Width : width);
+        height = height < 200 ? 200 : (height > desc.Height ? desc.Height : height);
+    }
+    const bool scaled = width != desc.Width || height != desc.Height;
+    {
+        // Each change of the size, and why it is the full size (a limited number of lines; nothing
+        // while the render scale stays 1).
+        static UINT s_lastWidth = 0;
+        static const char* s_lastWhy = nullptr;
+        static int s_lines = 0;
+        const bool changed = scaled ? width != s_lastWidth : (fullWhy != s_lastWhy || s_lastWidth != 0);
+        if (changed && s_lines < 40) {
+            s_lines++;
+            if (scaled) TMVS_LOG("render scale: the 3D image at %ux%u (%.2f of %ux%u), FSR 1 up to the screen", width, height, scale, desc.Width, desc.Height);
+            else TMVS_LOG("render scale: full size (%s)", fullWhy ? fullWhy : "render scale 1");
+        }
+        s_lastWidth = scaled ? width : 0;
+        s_lastWhy = scaled ? nullptr : fullWhy;
+    }
+    if (!g_hdrScene.create(device, width, height, D3DFMT_A16B16G16R16F)) return;
+    g_rs.sceneScaled = scaled;
     static bool s_logged = false;
     if (!s_logged) {
         s_logged = true;
-        TMVS_LOG("hdr: the main camera draws into a float target (%ux%u)", desc.Width, desc.Height);
+        TMVS_LOG("hdr: the main camera draws into a float target (%ux%u)", width, height);
     }
     hook::InternalScope internal;
     // SetRenderTarget resets the viewport and the scissor rect: the game's stay.
@@ -739,14 +952,14 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     device->GetViewport(&viewport);
     device->GetScissorRect(&scissor);
     // The added light starts at 0 (the whole target: no scissor test for the Clear).
-    if (g_hdrAdded.create(device, desc.Width, desc.Height, D3DFMT_A16B16G16R16F) && SUCCEEDED(device->SetRenderTarget(0, g_hdrAdded.surface))) {
+    if (g_hdrAdded.create(device, width, height, D3DFMT_A16B16G16R16F) && SUCCEEDED(device->SetRenderTarget(0, g_hdrAdded.surface))) {
         DWORD scissorTest = FALSE;
         device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
         g_hdrAddedActive = SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0));
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissorTest);
     }
-    beginGBuffer(device, desc.Width, desc.Height);
+    beginGBuffer(device, width, height);
     if (FAILED(device->SetRenderTarget(0, g_hdrScene.surface))) {
         device->SetRenderTarget(0, rt);
         device->SetViewport(&viewport);
@@ -756,11 +969,105 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
         g_gbufLightActive = false;
         return;
     }
-    device->SetViewport(&viewport);
-    device->SetScissorRect(&scissor);
+    if (scaled) {
+        g_rs.active = true;
+        g_rs.fullWidth = desc.Width;
+        g_rs.fullHeight = desc.Height;
+        g_rs.width = width;
+        g_rs.height = height;
+        g_rs.logical = viewport;
+        g_rs.device = scaledViewport(viewport);
+        g_rs.logicalScissor = scissor;
+        g_rs.deviceScissor = scaledRect(scissor);
+        g_rs.cameraPretransformed = 0;
+        g_rs.counts.cameras++;
+        device->SetViewport(&g_rs.device);
+        device->SetScissorRect(&g_rs.deviceScissor);
+        // Textures as sharp as at the full size: the GPU picks mip levels by the pixels' size on
+        // screen, which grew by 1 / scale (AMD's advice for FSR 1: a bias of log2(scale)).
+        const float bias = log2f(static_cast<float>(width) / desc.Width);
+        for (DWORD i = 0; i < 16; i++) {
+            DWORD saved = 0;
+            device->GetSamplerState(i, D3DSAMP_MIPMAPLODBIAS, &saved);
+            memcpy(&g_rs.biasSaved[i], &saved, sizeof(saved));
+            DWORD value = 0;
+            memcpy(&value, &bias, sizeof(value));
+            device->SetSamplerState(i, D3DSAMP_MIPMAPLODBIAS, value);
+        }
+    } else {
+        device->SetViewport(&viewport);
+        device->SetScissorRect(&scissor);
+    }
     rt->AddRef();
     g_hdrGame = rt;
     g_hdrLastGame = rt;
+}
+
+// RenderScale's fallback: the scaled camera's image stretched into the game's target where the
+// camera's viewport is (bilinear, unshaded, cut to 0..1 as GameHdr's resolve). The effects then run
+// on it at the full size (a camera into part of the screen), or nothing does (the shaders off, the
+// same target twice in a frame, a failure): the screen is never left without the camera's image.
+void fillFromScaled(IDirect3DDevice9* device, IDirect3DSurface9* target) {
+    if (!g_rs.pending || !target || !g_hdrScene.texture) return;
+    g_rs.pending = false;
+    g_rs.counts.fallbacks++;
+    hook::InternalScope internal;
+    const D3DVIEWPORT9& v = g_rs.logical;
+    const RECT to = {static_cast<LONG>(v.X), static_cast<LONG>(v.Y), static_cast<LONG>(v.X + v.Width), static_cast<LONG>(v.Y + v.Height)};
+    g_pipeline.beginStateSave(device);
+    g_pipeline.stretchScene(device, g_hdrScene.texture, g_rs.area, target, to);
+    g_pipeline.endStateSave(device);
+    device->SetRenderTarget(0, target);
+    device->SetViewport(&g_rs.logical);
+    device->SetScissorRect(&g_rs.logicalScissor);
+}
+
+// RenderScale, at a scaled camera's end (its image in g_hdrScene, the game's target bound): what it
+// couldn't follow, and the log.
+void endScaledCamera(IDirect3DDevice9* device) {
+    static int s_map = -1;
+    static DWORD s_since = 0;
+    static bool s_summed = false;
+    if (engine::mapLoads() != s_map) {
+        s_map = engine::mapLoads();
+        g_rs.counts = RenderScaleState::Counts();
+        s_since = GetTickCount();
+        s_summed = false;
+    }
+    static int s_lines = 0;
+    if (g_rs.cameraPretransformed > 0) {
+        g_rs.counts.pretransformed += g_rs.cameraPretransformed;
+        g_rs.offMap = engine::mapLoads();
+        if (s_lines < 20) {
+            s_lines++;
+            TMVS_LOG("render scale: the game drew %u draws in screen pixels in the main camera (pre-transformed, no viewport applies): "
+                     "they don't scale, full size for the rest of this map",
+                     g_rs.cameraPretransformed);
+        }
+    }
+    // A camera into part of the screen: as processScene's test, a part is under 95% of the target.
+    const D3DVIEWPORT9& v = g_rs.logical;
+    if (v.Width < g_rs.fullWidth * 0.95f || v.Height < g_rs.fullHeight * 0.95f) {
+        if (!g_rs.partUntil && s_lines < 20) {
+            s_lines++;
+            TMVS_LOG("render scale: a camera into part of the screen (%lux%lu at %lu,%lu): full size while there are such", v.Width, v.Height, v.X, v.Y);
+        }
+        g_rs.partUntil = GetTickCount() + 3000;
+        IDirect3DSurface9* target = nullptr;
+        device->GetRenderTarget(0, &target);
+        fillFromScaled(device, target);
+        if (target) target->Release();
+    } else if (g_rs.partUntil && static_cast<LONG>(GetTickCount() - g_rs.partUntil) >= 0) {
+        g_rs.partUntil = 0;
+    }
+    // Once per map, a few seconds in: what the game did with the scaled target (the owner's log).
+    if (!s_summed && GetTickCount() - s_since > 8000) {
+        s_summed = true;
+        const RenderScaleState::Counts& c = g_rs.counts;
+        TMVS_LOG("render scale: %u scaled cameras on this map; the game set %u viewports, %u scissor rects (scaled), read them back %u times, "
+                 "%u viewports of the scaled target's own size; %u clears and %u copies with rects; %u draws in screen pixels; %u fallbacks",
+                 c.cameras, c.viewports, c.scissors, c.readBacks, c.sized, c.rectClears, c.rectStretches, c.pretransformed, c.fallbacks);
+    }
 }
 
 // At the main camera's end, before the pipeline: the image goes into the game's target
@@ -776,14 +1083,28 @@ void endHdr(IDirect3DDevice9* device) {
                        static_cast<LONG>(viewport.Y + viewport.Height)};
     g_pipeline.beginStateSave(device);
     // The added light back into the scene (the image is the game's again), then the scene
-    // into the game's target.
+    // into the game's target. RenderScale: processScene brings it up there (or fillFromScaled).
     g_hdrAddedValid = g_hdrAddedActive && g_pipeline.addScene(device, g_hdrAdded.texture, g_hdrScene.surface, area);
     g_hdrAddedActive = false;
-    g_hdrValid = g_pipeline.resolveScene(device, g_hdrScene.texture, g_hdrGame, area);
+    const bool scaled = g_rs.active;
+    g_hdrValid = scaled || g_pipeline.resolveScene(device, g_hdrScene.texture, g_hdrGame, area);
     g_pipeline.endStateSave(device);
     device->SetRenderTarget(0, g_hdrGame);
-    device->SetViewport(&viewport);
-    device->SetScissorRect(&scissor);
+    // RenderScale: the game's own viewport and scissor rect on its target again, the samplers' mip
+    // bias as it was.
+    device->SetViewport(scaled ? &g_rs.logical : &viewport);
+    device->SetScissorRect(scaled ? &g_rs.logicalScissor : &scissor);
+    if (scaled) {
+        for (DWORD i = 0; i < 16; i++) {
+            DWORD saved = 0;
+            memcpy(&saved, &g_rs.biasSaved[i], sizeof(saved));
+            device->SetSamplerState(i, D3DSAMP_MIPMAPLODBIAS, saved);
+        }
+        g_rs.active = false;
+        g_rs.pending = true;
+        g_rs.area = area;
+        endScaledCamera(device);
+    }
     g_hdrGame->Release();
     g_hdrGame = nullptr;
     // Once per map, a few seconds into the driving: how much light the float target kept.
@@ -1229,7 +1550,14 @@ void processScene(IDirect3DDevice9* device) {
                       (viewport.Width < desc.Width * 0.95f || viewport.Height < desc.Height * 0.95f);
     const RECT area = {static_cast<LONG>(viewport.X), static_cast<LONG>(viewport.Y), static_cast<LONG>(viewport.X + viewport.Width),
                        static_cast<LONG>(viewport.Y + viewport.Height)};
-    const UINT width = part ? viewport.Width : desc.Width, height = part ? viewport.Height : desc.Height;
+    // RenderScale: the camera was drawn scaled, its image is in g_hdrScene and not yet in the game's
+    // target: the effects run at that size and FSR brings the result up to the target. Anything else
+    // gets the scaled image stretched into the target first and is shaded as before.
+    const bool scaledPath = g_rs.pending && !part && g_hdrValid;
+    if (g_rs.pending && !scaledPath) fillFromScaled(device, target);
+    if (part && settings.renderScale < 0.99f) g_rs.partUntil = GetTickCount() + 3000; // see endScaledCamera
+    const UINT width = scaledPath ? g_rs.width : (part ? viewport.Width : desc.Width);
+    const UINT height = scaledPath ? g_rs.height : (part ? viewport.Height : desc.Height);
     {
         // Each time it starts (a limited number of lines): the replay menu after every race.
         static bool s_wasPart = false;
@@ -1263,10 +1591,17 @@ void processScene(IDirect3DDevice9* device) {
     }
 
     g_pipeline.beginStateSave(device);
-    device->StretchRect(target, part ? &area : nullptr, g_sceneCopy.surface, nullptr, D3DTEXF_NONE);
+    // The 8-bit copy of the scene (RenderScale: GameHdr's resolve at the scaled size, from the float
+    // target; the game's target doesn't have the image).
+    const RECT scaledArea = {0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    if (scaledPath) g_pipeline.resolveScene(device, g_hdrScene.texture, g_sceneCopy.surface, scaledArea);
+    else device->StretchRect(target, part ? &area : nullptr, g_sceneCopy.surface, nullptr, D3DTEXF_NONE);
     device->SetDepthStencilSurface(nullptr);
-    if (part) {
-        if (!g_pipeline.copyDepthArea(device, sceneDepth, area, g_partDepth)) {
+    // RenderScale: the depth of the scaled camera is the depth buffer's top left corner; the stencil
+    // (the materials) stays the game's buffer, read there by targets of the scaled size.
+    IDirect3DTexture9* const stencil = sceneDepth;
+    if (part || scaledPath) {
+        if (!g_pipeline.copyDepthArea(device, sceneDepth, part ? area : scaledArea, g_partDepth)) {
             device->SetRenderTarget(0, target);
             device->SetDepthStencilSurface(savedDepth);
             g_pipeline.endStateSave(device);
@@ -1290,6 +1625,11 @@ void processScene(IDirect3DDevice9* device) {
     inputs.depth = sceneDepth;
     inputs.width = width;
     inputs.height = height;
+    if (scaledPath) {
+        inputs.stencil = stencil;
+        inputs.outputWidth = desc.Width;
+        inputs.outputHeight = desc.Height;
+    }
     memcpy(inputs.view, g_scene.view, sizeof(inputs.view));
     memcpy(inputs.projection, g_scene.projection, sizeof(inputs.projection));
     inputs.sunKnown = sunDirection(settings, inputs.sunDirection);
@@ -1405,7 +1745,7 @@ void processScene(IDirect3DDevice9* device) {
 
     // F12: with the material masks on, the capture is the next frame whose draws carried their
     // material ids (the mask is built from them); not of a camera into part of the screen.
-    const bool idFrame = g_idFrame && inputs.materials && !part;
+    const bool idFrame = g_idFrame && inputs.materials && !part && !scaledPath;
     unsigned char idClasses[256] = {};
     if (idFrame) {
         for (size_t i = 0; i < g_idMaterials.size(); i++) idClasses[i + 1] = static_cast<unsigned char>(engine::materialClass(g_idMaterials[i].shader));
@@ -1413,7 +1753,8 @@ void processScene(IDirect3DDevice9* device) {
     }
     if (g_idFrame && !idFrame) inputs.materials = false; // ids in the stencil, but no capture of them
     g_idFrame = false;
-    const bool capture = g_captureRequested && (idFrame || !inputs.materials || part);
+    // RenderScale: a capture is taken at the full size (the next camera is drawn so).
+    const bool capture = g_captureRequested && (idFrame || !inputs.materials || part) && !scaledPath;
     if (capture) g_captureRequested = false;
     if (capture && !settings.enabled && !inputs.photo) writeCapture(device, inputs, false);
     if (settings.enabled || inputs.photo) {
@@ -1439,7 +1780,10 @@ void processScene(IDirect3DDevice9* device) {
         photo::adjust(effective);
         LARGE_INTEGER renderStart, renderEnd;
         QueryPerformanceCounter(&renderStart);
-        g_pipeline.render(device, inputs, effective, shaded);
+        // RenderScale: switching between the scaled and the full size (photo mode, captures) keeps
+        // the height map, the neon trail and the exposure.
+        g_pipeline.keepWorldOnResize(settings.renderScale < 0.99f);
+        if (g_pipeline.render(device, inputs, effective, shaded) && scaledPath) g_rs.pending = false;
         LARGE_INTEGER captureStart, captureEnd;
         QueryPerformanceCounter(&captureStart);
         if (capture) writeCapture(device, inputs, idFrame);
@@ -1729,6 +2073,7 @@ DWORD materialId(const void* shader, bool depthWrite, bool additive) {
 void onDraw(IDirect3DDevice9* device) {
     onDrawGBuffer(device); // first: an additive draw unbinds it before onDrawAdded switches the target
     onDrawAdded(device);
+    onDrawScaled(device);
     if (!g_scene.inMainCamera || !materialsWanted()) {
         untagStencil(device);
         return;
@@ -1832,6 +2177,13 @@ void onCameraEnd(void* camera, const engine::CameraInfo&) {
         endGBuffer(g_device);
         endHdr(g_device);
         processScene(g_device);
+        // RenderScale: a scaled camera processScene didn't shade still fills the screen.
+        if (g_rs.pending) {
+            IDirect3DSurface9* target = nullptr;
+            g_device->GetRenderTarget(0, &target);
+            fillFromScaled(g_device, target);
+            if (target) target->Release();
+        }
         perflog::mark(g_device, perflog::Mark::ModEnd);
     }
     g_scene.inMainCamera = false;
@@ -1891,6 +2243,7 @@ void onPreReset() {
     g_gbuf.destroy();
     g_gbufLightActive = g_gbufLightValid = false;
     g_gbufLight.destroy();
+    g_rs.active = g_rs.pending = g_rs.sceneScaled = false;
     casters::releaseDevice();
     depth::onPreReset();
     overlay::preReset();
@@ -2236,6 +2589,12 @@ void bootOnce() {
     deviceCallbacks.draw = onDraw;
     deviceCallbacks.drawDone = onDrawDone;
     deviceCallbacks.drawIndexed = onDrawIndexed;
+    deviceCallbacks.setViewport = onSetViewport;
+    deviceCallbacks.getViewport = onGetViewport;
+    deviceCallbacks.setScissorRect = onSetScissorRect;
+    deviceCallbacks.getScissorRect = onGetScissorRect;
+    deviceCallbacks.clearRects = onClearRects;
+    deviceCallbacks.stretchRects = onStretchRects;
     g_deviceCallbacks = deviceCallbacks;
     // Never block the caller (possibly the game's main thread) on retries.
     if (!hook::install(deviceCallbacks)) {

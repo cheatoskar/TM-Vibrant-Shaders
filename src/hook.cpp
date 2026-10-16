@@ -33,9 +33,12 @@ enum Slot : int {
     kClear = 43,
     kSetTransform = 44,
     kSetViewport = 47,
+    kGetViewport = 48,
     kSetLight = 51,
     kLightEnable = 53,
     kSetTexture = 65,
+    kSetScissorRect = 75,
+    kGetScissorRect = 76,
     kDrawPrimitive = 81,
     kDrawIndexedPrimitive = 82,
     kDrawPrimitiveUP = 83,
@@ -311,6 +314,7 @@ HRESULT APIENTRY createDepthStencilDetour(IDirect3DDevice9* device, UINT w, UINT
 HRESULT APIENTRY stretchRectDetour(IDirect3DDevice9* device, IDirect3DSurface9* src, const RECT* srcRect, IDirect3DSurface9* dst,
                                    const RECT* dstRect, D3DTEXTUREFILTERTYPE filter) {
     if (tracingGame()) tracer::event("StretchRect %s -> %s", tracer::describe(src), tracer::describe(dst));
+    if (g_internal == 0 && g_callbacks.stretchRects) g_callbacks.stretchRects(src, &srcRect, dst, &dstRect);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*,
                                        D3DTEXTUREFILTERTYPE)>(kStretchRect)(device, src, srcRect, dst, dstRect, filter);
 }
@@ -341,6 +345,7 @@ HRESULT APIENTRY clearDetour(IDirect3DDevice9* device, DWORD count, const D3DREC
                              DWORD stencil) {
     if (tracingGame()) tracer::event("Clear rects=%lu flags=%lx color=%08lx z=%.3f s=%lu", count, flags, color, z, stencil);
     if (g_internal == 0 && g_callbacks.clear) g_callbacks.clear(device, count, rects, flags, color);
+    if (g_internal == 0 && g_callbacks.clearRects) rects = g_callbacks.clearRects(device, count, rects);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD)>(kClear)(
         device, count, rects, flags, color, z, stencil);
 }
@@ -375,7 +380,25 @@ HRESULT APIENTRY setViewportDetour(IDirect3DDevice9* device, const D3DVIEWPORT9*
     if (tracingGame() && vp) {
         tracer::event("SetViewport %lu,%lu %lux%lu z=%.2f..%.2f", vp->X, vp->Y, vp->Width, vp->Height, vp->MinZ, vp->MaxZ);
     }
+    if (g_internal == 0 && vp && g_callbacks.setViewport) vp = g_callbacks.setViewport(device, vp);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const D3DVIEWPORT9*)>(kSetViewport)(device, vp);
+}
+
+HRESULT APIENTRY getViewportDetour(IDirect3DDevice9* device, D3DVIEWPORT9* vp) {
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DVIEWPORT9*)>(kGetViewport)(device, vp);
+    if (SUCCEEDED(hr) && g_internal == 0 && vp && g_callbacks.getViewport) g_callbacks.getViewport(device, vp);
+    return hr;
+}
+
+HRESULT APIENTRY setScissorRectDetour(IDirect3DDevice9* device, const RECT* rect) {
+    if (g_internal == 0 && rect && g_callbacks.setScissorRect) rect = g_callbacks.setScissorRect(device, rect);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*)>(kSetScissorRect)(device, rect);
+}
+
+HRESULT APIENTRY getScissorRectDetour(IDirect3DDevice9* device, RECT* rect) {
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, RECT*)>(kGetScissorRect)(device, rect);
+    if (SUCCEEDED(hr) && g_internal == 0 && rect && g_callbacks.getScissorRect) g_callbacks.getScissorRect(device, rect);
+    return hr;
 }
 
 HRESULT APIENTRY setTextureDetour(IDirect3DDevice9* device, DWORD stage, IDirect3DBaseTexture9* texture) {
@@ -496,9 +519,12 @@ const Detour kDetours[] = {
     {kClear, reinterpret_cast<void*>(&clearDetour)},
     {kSetTransform, reinterpret_cast<void*>(&setTransformDetour)},
     {kSetViewport, reinterpret_cast<void*>(&setViewportDetour)},
+    {kGetViewport, reinterpret_cast<void*>(&getViewportDetour)},
     {kSetLight, reinterpret_cast<void*>(&setLightDetour)},
     {kLightEnable, reinterpret_cast<void*>(&lightEnableDetour)},
     {kSetTexture, reinterpret_cast<void*>(&setTextureDetour)},
+    {kSetScissorRect, reinterpret_cast<void*>(&setScissorRectDetour)},
+    {kGetScissorRect, reinterpret_cast<void*>(&getScissorRectDetour)},
     {kDrawPrimitive, reinterpret_cast<void*>(&drawPrimitiveDetour)},
     {kDrawIndexedPrimitive, reinterpret_cast<void*>(&drawIndexedPrimitiveDetour)},
     {kDrawPrimitiveUP, reinterpret_cast<void*>(&drawPrimitiveUPDetour)},
