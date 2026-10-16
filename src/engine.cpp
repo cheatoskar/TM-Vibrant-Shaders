@@ -328,6 +328,7 @@ SetBaseRgbFn g_setBaseRgb = nullptr;
 int g_moonMode = 0;                // this map: 0 the game's moon, 1 along g_moonTravel, 2 off
 float g_moonTravel[3] = {};        // the light's travel direction (away from the black hole)
 bool g_moonApplied = false;        // the weather reached the moon's code since the load
+bool g_moonBaked = false;          // this load decided a changed moon: its lightmap is never saved
 bool g_moonLogged = false;
 float g_moonGameTravel[3] = {};    // the direction the game wanted (for the log)
 using CacheFn = int(__fastcall*)(void*, void*);
@@ -1014,7 +1015,9 @@ int __fastcall cacheUpToDateDetour(void* self, void* edx) {
 }
 
 int __fastcall cacheSaveDetour(void* self, void* edx) {
-    return g_moonMode == 0 ? g_cacheSave(self, edx) : 0;
+    // Not g_moonMode: real night switched off during the map clears it (relightNight), and a save
+    // after that would store the changed moon's bake as the map's own.
+    return g_moonBaked ? 0 : g_cacheSave(self, edx);
 }
 
 // EngineMoon, once per map load, before the scene (and with it the lightmap) is made: the
@@ -1022,6 +1025,7 @@ int __fastcall cacheSaveDetour(void* self, void* edx) {
 void decideMoon(float dayTime, bool litAtNight) {
     g_moonMode = 0;
     g_moonApplied = false;
+    g_moonBaked = false;
     g_moonLogged = false;
     g_cacheLogged = false;
     MoonLight moon;
@@ -1034,6 +1038,7 @@ void decideMoon(float dayTime, bool litAtNight) {
     if (!(len > 1e-4f && len < 1e4f)) return;
     for (int i = 0; i < 3; i++) g_moonTravel[i] = -moon.toward[i] / len;
     g_moonMode = moon.mode;
+    g_moonBaked = true;
     if (moon.mode == 1)
         TMVS_LOG("engine: this map's moon shines from the black hole (towards %.3f %.3f %.3f)", -g_moonTravel[0], -g_moonTravel[1], -g_moonTravel[2]);
     else
