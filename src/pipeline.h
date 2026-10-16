@@ -1,4 +1,5 @@
 #pragma once
+#include "casters.h"
 #include "gfx.h"
 #include "settings.h"
 #include <d3d9.h>
@@ -67,6 +68,10 @@ public:
         // The previewer: the mask itself (from capture_NNN.mat; r light, g car 1 / glass .5 /
         // grass .25, b water), instead of the stencil. Needs `materials`.
         IDirect3DTexture9* materialMask = nullptr;
+        // CasterShadows: draws the game's static meshes into a depth map seen from this light
+        // (towards it, world space), inside the pipeline's state save; false while there is no
+        // complete map. Null: no such map (the previewer replays no draw calls).
+        bool (*casterMap)(IDirect3DDevice9* device, const float sunWorld[3], casters::MapInfo& out) = nullptr;
     };
 
     // A 3D colour look-up table (A8R8G8B8, x = red, y = green, z = blue; size 0 = none).

@@ -59,6 +59,10 @@ float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, o
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
 float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
+float4 u_CasterU   : register(c47); // CasterShadows (occlusion pass): world -> shadow map u
+float4 u_CasterV   : register(c48); // world -> shadow map v
+float4 u_CasterD   : register(c49); // world -> depth along the light, 0..1 as stored
+float4 u_Casters   : register(c50); // x: 1 = the map in s3 is complete; yz: texel size (uv); w: depth bias (map units)
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -301,6 +305,27 @@ float longShadow(float3 pView, float3 nView, float noise, float2 jitter) {
     return occlusion;
 }
 
+// CasterShadows: the game's own static meshes drawn from the light into s3 (INTZ, depth
+// along the light). Returns -1 where the point is outside the map (the height map decides),
+// else 0 (lit) .. 1 (shadowed). Four taps, bilinear weights, moved by `jitter` within a texel:
+// the blur after this pass and TAA turn the texel steps into a soft edge.
+float casterShadow(float3 pView, float3 nView, float2 jitter) {
+    // Off the surface a little along its normal: grazing light must not find the surface itself.
+    float4 w = float4(worldPosition(pView) + viewToWorldDir(nView) * (0.1 + 0.002 * pView.z), 1.0);
+    float2 uv = float2(dot(w, u_CasterU), dot(w, u_CasterV));
+    if (any(uv < 0.0) || any(uv > 1.0)) return -1.0;
+    float d = dot(w, u_CasterD) - u_Casters.w;
+    float2 t = u_Casters.yz;
+    float2 cell = uv / t - 0.5 + (jitter - 0.5);
+    float2 f = frac(cell);
+    float2 c = (floor(cell) + 0.5) * t;
+    float s00 = tex2Dlod(s3, float4(c, 0, 0)).r < d ? 1.0 : 0.0;
+    float s10 = tex2Dlod(s3, float4(c + float2(t.x, 0), 0, 0)).r < d ? 1.0 : 0.0;
+    float s01 = tex2Dlod(s3, float4(c + float2(0, t.y), 0, 0)).r < d ? 1.0 : 0.0;
+    float s11 = tex2Dlod(s3, float4(c + t, 0, 0)).r < d ? 1.0 : 0.0;
+    return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
 // ---------------------------------------------------------------------------------
 // Volumetric light: sun shafts with real shadows in the haze, also with the sun off screen.
 // 1. Shadow height map (256^2 over the height map's area): for every column, the height
@@ -443,7 +468,11 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // raw normal that faces away here would leave a lit dot in the middle of a shadow.
     if (u_Temporal.w > 0.0 && u_SunView.w > 0.5 && ndl > -0.25) {
         // Interleaved gradient noise: even, so the blur below removes it (no blotches).
-        longVis = 1.0 - longShadow(p, n, frac(noise + 0.5), float2(noise2, frac(noise2 * 13.71 + noise))) * u_Temporal.w;
+        float2 jitter = float2(noise2, frac(noise2 * 13.71 + noise));
+        // CasterShadows: the map of the game's meshes where it reaches, the height map beyond.
+        float casters = u_Casters.x > 0.5 ? casterShadow(p, n, jitter) : -1.0;
+        float occluded = casters >= 0.0 ? casters : longShadow(p, n, frac(noise + 0.5), jitter);
+        longVis = 1.0 - occluded * u_Temporal.w;
         sunVis = min(sunVis, longVis);
     }
     return float4(ao, sunVis, longVis, 1);

@@ -401,6 +401,7 @@ HRESULT APIENTRY drawIndexedPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITI
     if (tracingGame()) traceDrawState(device, "DIP", count);
     countDraw(device, count);
     if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
+    if (g_internal == 0 && g_callbacks.drawIndexed) g_callbacks.drawIndexed(device, type, base, minIndex, vertices, start, count);
     const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT)>(kDrawIndexedPrimitive)(
         device, type, base, minIndex, vertices, start, count);
     if (g_internal == 0 && g_callbacks.drawDone) g_callbacks.drawDone(device);

@@ -134,6 +134,7 @@ target_compile_options(tmvs_core PRIVATE ${TMVS_OPTIONS})
 add_library(tm_vibrant_shaders SHARED
   src/dllmain.cpp
   src/plugin.cpp
+  src/casters.cpp
   src/engine.cpp
   src/hook.cpp
   src/depth.cpp
