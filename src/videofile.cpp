@@ -38,9 +38,18 @@ std::string narrow(const std::wstring& text) {
     return out;
 }
 
-// The MP4 beside the game's .avi (same name); without one, TMVS\videos.
+// The MP4 beside the game's .avi (same name); without one, TMVS\videos. Never over an earlier
+// one: the game picks its next free .avi name, and the empty .avi is deleted after each export,
+// so the next export got the same name and replaced the last video (owner, 2026-10-16).
 std::wstring mp4Path(const std::wstring& avi) {
-    if (avi.size() > 4 && _wcsicmp(avi.c_str() + avi.size() - 4, L".avi") == 0) return avi.substr(0, avi.size() - 4) + L".mp4";
+    if (avi.size() > 4 && _wcsicmp(avi.c_str() + avi.size() - 4, L".avi") == 0) {
+        const std::wstring stem = avi.substr(0, avi.size() - 4);
+        std::wstring path = stem + L".mp4";
+        for (int i = 2; GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES && i < 1000; i++) {
+            path = stem + L"_" + std::to_wstring(i) + L".mp4";
+        }
+        return path;
+    }
     const std::wstring dir = log::dataDir() + L"\\videos";
     CreateDirectoryW(dir.c_str(), nullptr);
     SYSTEMTIME t;
