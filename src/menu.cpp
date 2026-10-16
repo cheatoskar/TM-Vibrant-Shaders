@@ -376,7 +376,7 @@ const char* tooltipFor(const char* key) {
         {"EngineMoon", "Under the black hole: the game's moonlight (baked light and shadows, glints, the car) comes from the black hole, stays as the game has it, or is left out. (next map)"},
         {"GameSkyClouds", "Keeps the game's sunset clouds, and the sea mirroring them, under night skies."},
         {"GameHdr", "The game draws into a float image, so bright light keeps its texture. The capture key saves it too."},
-        {"CleanHighlights", "Floodlit white at night stays even. Off is the 1.4.0 look."},
+        {"CleanHighlights", "Floodlit white at night stays even. Off is the 1.4.0-preview look."},
         {"EngineLights", "Lamps and glows glow as the game draws them instead of being guessed from the image. Needs Game HDR."},
         {"CasterShadows", "Long shadows from the game's own meshes, cast from the sun or black hole. Needs Long shadows."},
         {"CasterAlphaTest", "Fences, grids and lattice towers cast their pattern into the long mesh shadows, holes included. Off: they cast none."},

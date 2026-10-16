@@ -384,7 +384,7 @@ const char* const kTagKeys[] = {
     "Wetness", "Rain", "Snow", "SnowCover", "Puddles", "Lightning", "LensDrops", "WaterSurfaces", "Reflections",
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
-    "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus",
+    "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus", "LampGlare", "LampHaze", "LampSkyHalos", "Floodlights",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
