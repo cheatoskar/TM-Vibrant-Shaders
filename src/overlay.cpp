@@ -3,6 +3,7 @@
 #include "autoquality.h"
 #include "config.h"
 #include "engine.h"
+#include "keys.h"
 #include "pipeline.h"
 #include "log.h"
 #include "lut.h"
@@ -40,23 +41,35 @@ Status g_status;
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     Config& config = Config::get();
-    if (msg == WM_KEYDOWN && !(lparam & (1 << 30))) {
-        if (wparam == VK_F8) {
+    if (keys::capturing() && !config.showOverlay) keys::cancelCapture(); // the menu was closed meanwhile
+    // The menu's "Change" button waits for the next key: nothing else sees it (not the hotkeys,
+    // not the menu, not the game's window procedure). Esc cancels; the game's Esc is held back
+    // the way it is for closing the menu.
+    if (keys::capturing() && (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP || msg == WM_CHAR ||
+                              msg == WM_SYSCHAR || msg == WM_DEADCHAR)) {
+        if (wparam == VK_ESCAPE && (msg == WM_KEYDOWN || msg == WM_KEYUP)) engine::swallowEscape();
+        if (keys::feed(msg, wparam, lparam)) return 0;
+    }
+    if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lparam & (1 << 30))) {
+        // The hotkeys that need no per-frame look (Capture, Reload and Trace are polled in plugin.cpp).
+        // With a text field in the menu focused only F keys count, so typing can't trigger them.
+        const bool typing = config.showOverlay && ImGui::GetIO().WantTextInput;
+        switch (keys::resolve(static_cast<unsigned>(wparam), typing)) {
+        case keys::Action::Menu:
             config.showOverlay = !config.showOverlay;
             return 0;
-        }
-        if (wparam == VK_F7) {
+        case keys::Action::Effects:
             config.settings.enabled = !config.settings.enabled;
             config.markDirty();
             return 0;
-        }
-        if (wparam == VK_F6 && GetKeyState(VK_SHIFT) < 0) {
+        case keys::Action::PhotoSplit:
             photo::toggleSplit();
             return 0;
-        }
-        if (wparam == VK_F6) {
+        case keys::Action::Photo:
             photo::toggle();
             return 0;
+        default:
+            break;
         }
         // Esc closes the menu first, then leaves photo mode; only then does the game get it.
         if (wparam == VK_ESCAPE && (config.showOverlay || photo::active())) {

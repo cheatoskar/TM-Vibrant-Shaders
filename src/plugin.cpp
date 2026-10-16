@@ -9,6 +9,7 @@
 #include "gameshaders.h"
 #include "gfx.h"
 #include "hook.h"
+#include "keys.h"
 #include "log.h"
 #include "lut.h"
 #include "overlay.h"
@@ -1485,7 +1486,7 @@ void onPresent(IDirect3DDevice9* device) {
     status.shaderError = g_pipeline.lastError().empty() ? nullptr : g_pipeline.lastError().c_str();
     overlay::setStatus(status);
     overlay::draw(device);
-    const bool reload = overlay::consumeReloadRequest() | ((GetAsyncKeyState(VK_F9) & 1) != 0);
+    const bool reload = overlay::consumeReloadRequest() | keys::edge(keys::Action::Reload);
     if (reload) {
         g_pipelineFailed = false;
         g_pipeline.reloadShaders(device);
@@ -1527,10 +1528,10 @@ void onPresent(IDirect3DDevice9* device) {
         }
     }
     Config::get().tick();
-    if (GetAsyncKeyState(VK_F11) & 1) tracer::arm();
-    if (GetAsyncKeyState(VK_F12) & 1) {
+    if (keys::edge(keys::Action::Trace)) tracer::arm();
+    if (keys::edge(keys::Action::Capture)) {
         // Photo mode: a photo without the HUD (Shift: hi-res) instead of a .tmcap capture.
-        if (photo::active()) photo::request(GetAsyncKeyState(VK_SHIFT) < 0);
+        if (photo::active()) photo::request(keys::shiftHeld());
         else g_captureRequested = true;
     }
 }

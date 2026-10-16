@@ -17,7 +17,7 @@ The menu opens over most of the screen's height and the left part of its width: 
 - **Studio:** every setting, see below.
 - **Maps:** the preset per map mood (day, sunset, night) and the [Author's Shader](#authors-shader).
 - **Performance:** auto quality, target FPS, effect quality, and what each effect costs on your GPU.
-- **Settings:** options that are not part of a preset: *Preset per map type*, *Picked preset applies to all maps of this type* (off by default; on: picking a preset on a night map makes it the preset for all night maps, the same for day and sunset; off: only the Maps page sets them), *Author's Shaders*, live preview, full-screen menu, update check, motion blur only in replays, TAA, the game's MSAA, effects in replays, and the folders.
+- **Settings:** options that are not part of a preset: the *Hotkeys* ([below](#hotkeys)), *Preset per map type*, *Picked preset applies to all maps of this type* (off by default; on: picking a preset on a night map makes it the preset for all night maps, the same for day and sunset; off: only the Maps page sets them), *Author's Shaders*, live preview, full-screen menu, update check, motion blur only in replays, TAA, the game's MSAA, effects in replays, and the folders.
 - **About:** the version, updates (with the new version's notes and a link to its release page), links to the project page and the issue tracker, the folder with your settings and `tmvs.log`, and the credits.
 
 **Updates.** When the game starts, the mod asks GitHub once for the newest release (`api.github.com`, the public release list; nothing about you is sent). It never downloads or installs anything: a new version shows in the menu, you get it from the release page. Switch it off under *About → Check on startup* or *Settings* (`CheckForUpdates=0` in `settings.ini`).
@@ -57,6 +57,22 @@ A look stored in a map's comments: everyone with the mod sees the map that way, 
 - **Copy code**: puts the code (`[TMVS:...]`) on the clipboard, to paste into the comments yourself.
 
 A readable line typed into the comments works too: `[TMVS] Preset=Snowstorm Snow=1.5 SnowCover=0.8`, with the keys below. Preset names with spaces take an underscore (`Golden_Hour`). The settings that aren't part of a preset (see above) are never taken from a map.
+
+## Hotkeys
+
+The *Hotkeys* panel on the *Settings* page lists every key the mod uses, with *Change* and *Reset to defaults*. *Change* waits for the next key press (with its `Shift`, `Ctrl` or `Alt`); `Esc` cancels. The mod keeps that key press from the game's window (a key the game reads straight from the keyboard may still reach it). If the key already belongs to another action of the mod, the two swap keys and the panel says so.
+
+| Action | `settings.ini` key | Default |
+|---|---|---|
+| Menu | `Menu` | `F8` |
+| Effects on / off | `Effects` | `F7` (ManiaPlanet: `F5`, because `F7` is its friends list) |
+| Photo mode | `Photo` | `F6` |
+| Photo mode: compare split | `PhotoSplit` | `Shift+F6` |
+| Frame capture / photo (`Shift`: hi-res photo) | `Capture` | `F12` |
+| Reload shaders (TMNF only) | `Reload` | `F9` |
+| Trace (TMNF only) | `Trace` | `F11` |
+
+They are stored in the `[Keys]` section of `settings.ini` as readable names, for example `Menu=F8` or `PhotoSplit=Ctrl+Shift+F6` (`None` turns an action off; modifiers `Shift`, `Ctrl`, `Alt`; keys `A`-`Z`, `0`-`9`, `F1`-`F24`, `Num0`-`Num9`, `Insert`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Space`, `Enter`, `Tab`, `Up`, `Down`, `Left`, `Right`, `Pause`, `ScrollLock`, `Minus`, `Equals`, `Comma`, `Period`, `Slash`, `Backslash`, `Semicolon`, `Quote`, `Backquote`, `LBracket`, `RBracket`). A name the mod can't read, or two actions on one key, falls back to the default. Letters, digits and the game's own keys (arrows, `Space`, `Enter`, `Tab`) need `Ctrl` or `Alt`, else they would stop working in the game; `F` keys, the number pad and `Insert` / `Delete` / `Home` / `End` / `PageUp` / `PageDown` work alone. While a text field in the menu has the keyboard, only `F` key hotkeys react. The texts in this document name the default keys. Mouse controls (middle click, wheel) are fixed.
 
 ## Photo mode
 

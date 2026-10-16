@@ -120,6 +120,7 @@ add_library(tmvs_mp_core STATIC
   ${TMVS_ROOT}/src/lut.cpp
   # The TMNF mod's settings, presets and menu, shared.
   ${TMVS_ROOT}/src/config.cpp
+  ${TMVS_ROOT}/src/keys.cpp
   ${TMVS_ROOT}/src/menu.cpp
   ${TMVS_ROOT}/src/image.cpp
   ${TMVS_ROOT}/src/update.cpp
@@ -165,7 +166,7 @@ set_property(SOURCE ${TMVS_ROOT}/sounds/sounds.rc APPEND PROPERTY INCLUDE_DIRECT
 file(GLOB MP_SOUND_FILES "${TMVS_ROOT}/sounds/*.mp3")
 set_source_files_properties(${TMVS_ROOT}/sounds/sounds.rc PROPERTIES OBJECT_DEPENDS "${MP_SOUND_FILES}")
 # ManiaPlanet's own preset values (src/config.cpp).
-set_source_files_properties(${TMVS_ROOT}/src/config.cpp PROPERTIES COMPILE_DEFINITIONS TMVS_MANIAPLANET)
+set_source_files_properties(${TMVS_ROOT}/src/config.cpp ${TMVS_ROOT}/src/keys.cpp PROPERTIES COMPILE_DEFINITIONS TMVS_MANIAPLANET)
 # The game loads it as d3d11.dll from its own folder.
 set_target_properties(tmvs_mp PROPERTIES OUTPUT_NAME d3d11)
 target_compile_options(tmvs_mp PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)

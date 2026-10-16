@@ -2,6 +2,7 @@
 #include "config.h"
 #include "hooks.h"
 #include "image.h"
+#include "keys.h"
 #include "log.h"
 #include "settings.h"
 #include <atomic>
@@ -164,7 +165,10 @@ void toggle() {
     g_active = on;
     TMVS_LOG("photo: mode %s", on ? "on" : "off");
     if (on) {
-        setStatus("Photo mode   F12 photo   middle click: focus   Ctrl+middle click: no focus   Ctrl+wheel: aperture   F6/Esc: off", 6);
+        namespace keys = tmshaders::keys;
+        setStatus("Photo mode   " + keys::name(keys::get(keys::Action::Capture)) + " photo   middle click: focus   Ctrl+middle click: no focus   Ctrl+wheel: aperture   " +
+                      keys::name(keys::get(keys::Action::Photo)) + "/Esc: off",
+                  6);
     } else {
         g_requested = false;
         g_focusU = g_focusV = -1.0f;
