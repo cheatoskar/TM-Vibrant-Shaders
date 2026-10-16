@@ -193,7 +193,7 @@ Mood moodOfDayTime(float t) {
 
 Settings Config::lookForMood(Mood m) const {
     Settings look = settings;
-    if (m_mapLook || preset == kCustomPreset || !autoMood || m == Mood::Unknown) return look;
+    if (m_mapLook || preset == kCustomPreset || !autoMood || manualPick || m == Mood::Unknown) return look;
     const std::string& p = moodPreset[static_cast<int>(m)];
     if (!p.empty()) namedSettings(p, look);
     return look;
@@ -587,8 +587,20 @@ bool Config::selectPreset(const std::string& name) {
     m_mapLook = false; // your choice: it is your look from now on
     preset = name;
     if (autoMood && rememberMoodPick && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
+    else if (autoMood) manualPick = true;
     markDirty();
     return true;
+}
+
+void Config::resumeMoodPresets() {
+    if (!manualPick) return;
+    manualPick = false;
+    markDirty();
+    TMVS_LOG("config: presets per map type again");
+    // This map's own preset now (real night follows it, see relightOnSwitch).
+    if (m_mapLook || preset == kCustomPreset || !autoMood || mood == Mood::Unknown) return;
+    const std::string& p = moodPreset[static_cast<int>(mood)];
+    if (!p.empty() && p != preset && applyNamed(p)) preset = p;
 }
 
 bool Config::saveUserPreset(const std::string& requested, const std::string& description) {
@@ -610,6 +622,7 @@ bool Config::saveUserPreset(const std::string& requested, const std::string& des
     m_baseline = settings;
     m_basePreset = name;
     if (autoMood && rememberMoodPick && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
+    else if (autoMood) manualPick = true;
     markDirty();
     return true;
 }
@@ -669,6 +682,10 @@ void Config::onMoodDetected(Mood m) {
     // The map's own look wins, and your own unsaved tweaks win over the mood presets: a map
     // change must not throw them away.
     if (m_mapLook || preset == kCustomPreset) return;
+    if (manualPick) {
+        TMVS_LOG("config: map mood %s: your pick %s stays", moodName(m), preset.c_str());
+        return;
+    }
     const std::string& p = moodPreset[static_cast<int>(m)];
     if (!autoMood || p.empty() || p == preset) return;
     if (applyNamed(p)) {
@@ -1236,6 +1253,7 @@ void Config::load() {
     if (GetPrivateProfileStringW(L"General", L"LutAmount", L"", text, 128, ini)) lutAmount = static_cast<float>(_wtof(text));
     lutAmount = lutAmount < 0.0f ? 0.0f : (lutAmount > 1.0f ? 1.0f : lutAmount);
     rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 0, ini) != 0;
+    manualPick = GetPrivateProfileIntW(L"General", L"ManualPick", 0, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         if (GetPrivateProfileStringW(L"General", kMoodKeys[i], L"", text, 128, ini)) moodPreset[i] = presetFromText(text, moodPreset[i]);
@@ -1312,6 +1330,7 @@ void Config::save() {
     swprintf(photo, 32, L"%.2f", lutAmount);
     WritePrivateProfileStringW(L"General", L"LutAmount", photo, ini);
     WritePrivateProfileStringW(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0", ini);
+    WritePrivateProfileStringW(L"General", L"ManualPick", manualPick ? L"1" : L"0", ini);
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);
     WritePrivateProfileStringW(L"General", L"MenuSections", sections, ini);

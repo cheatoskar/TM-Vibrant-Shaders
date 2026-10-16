@@ -36,7 +36,7 @@ A small arrow appears next to every value you changed: click it to set that valu
 
 ## Presets per map mood
 
-The mod reads the colour of the game's sun when a map loads and sorts the map into day, sunset (and sunrise) or night. With *Preset per map type* on, it switches to the preset you chose for that kind of map. The defaults are **Vibrant** for day, **Golden Hour** for sunset and **Horizon** for night. Change them on the *Maps* page, With *Picked preset applies to all maps of this type* on (off by default), a preset picked on a map also becomes the preset for that kind of map.
+The mod reads the colour of the game's sun when a map loads and sorts the map into day, sunset (and sunrise) or night. With *Preset per map type* on, it switches to the preset you chose for that kind of map. The defaults are **Vibrant** for day, **Golden Hour** for sunset and **Horizon** for night. Change them on the *Maps* page, With *Picked preset applies to all maps of this type* on (off by default), a preset picked on a map also becomes the preset for that kind of map. With it off, a preset you pick in the menu holds on every map, also on maps of another type (and real night follows it), until you choose a preset for a map type on the *Maps* page or press *Use the presets per map type again* there.
 
 While your preset is *Custom* (you changed a value and didn't save it), a map change never replaces your tweaks. A map with an [Author's Shader](#authors-shader) wins over the mood preset.
 

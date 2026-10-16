@@ -655,6 +655,7 @@ bool presetCard(const std::string& name, bool active, float width) {
                 config.moodPreset[m] = name;
                 config.autoMood = true;
                 if (static_cast<int>(config.mood) == m) config.selectPreset(name);
+                config.resumeMoodPresets();
                 config.markDirty();
             }
         }
@@ -1177,9 +1178,16 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Preset per map type");
     ImGui::SameLine();
-    if (toggle("mood", &config.autoMood)) config.markDirty();
+    if (toggle("mood", &config.autoMood)) {
+        if (config.autoMood) config.resumeMoodPresets();
+        config.markDirty();
+    }
     ImGui::SameLine();
     ImGui::TextDisabled("this map: %s", moodName(config.mood));
+    if (config.autoMood && config.manualPick) {
+        ImGui::TextWrapped("Your pick (%s) holds on every map until you choose a preset for a map type below.", config.preset.c_str());
+        if (ImGui::Button("Use the presets per map type again")) config.resumeMoodPresets();
+    }
     ImGui::Spacing();
 
     // The three moods as big cards side by side (one under the other when narrow).
@@ -1221,12 +1229,14 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
             if (ImGui::BeginCombo("##preset", mp.empty() ? "Keep current" : mp.c_str())) {
                 if (ImGui::Selectable("Keep current", mp.empty())) {
                     mp.clear();
+                    config.resumeMoodPresets();
                     config.markDirty();
                 }
                 for (const auto& name : names) {
                     if (ImGui::Selectable(name.c_str(), mp == name)) {
                         mp = name;
                         if (static_cast<int>(config.mood) == m) config.selectPreset(name);
+                        config.resumeMoodPresets();
                         config.markDirty();
                     }
                 }
@@ -1313,8 +1323,11 @@ bool drawSettings(Config& config, Settings& s) {
                           }});
     }
     panels.push_back({"Presets and maps", 4.0f, [&config] {
-                          switchRow("Preset per map type", &config.autoMood,
-                                    "Day, sunset and night maps each use their own preset (see Maps). Off: the same preset everywhere.");
+                          if (switchRow("Preset per map type", &config.autoMood,
+                                        "Day, sunset and night maps each use their own preset (see Maps). Off: the same preset everywhere.\n"
+                                        "A preset you pick holds on every map until you choose one for a map type again.") &&
+                              config.autoMood)
+                              config.resumeMoodPresets();
                           ImGui::BeginDisabled(!config.autoMood);
                           switchRow("Picked preset applies to all maps of this type", &config.rememberMoodPick,
                                     "On: picking a preset on a night map makes it the preset for all night maps (same for day and sunset).\nOff: only the Maps page sets these.");
