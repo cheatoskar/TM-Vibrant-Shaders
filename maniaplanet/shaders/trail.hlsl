@@ -31,8 +31,12 @@ float4 trailPoint(float i)
 }
 
 // Each point averaged with its neighbours on the same line (weights 1 2 3 4 3 2 1), symmetric so
-// the newest end stays on the car.
-float3 smoothPoint(float i, float4 centre)
+// the newest end stays on the car. A pair of neighbours joins in as the one ahead moves from 2.6 to
+// 5.6 m away from the car (near: metres from the car to points i + 1..3): near the car the points
+// stay where they were kept. (Smoothed there, they moved along the line with every frame, by the
+// car's live end and each point kept, while the fade-in behind the car is placed by the way back
+// along the points as kept: the fade-in jumped up to 120 px from frame to frame at 400 km/h.)
+float3 smoothPoint(float i, float4 centre, float3 near)
 {
     float first = g_trail.y - g_trail.x, last = g_trail.y - 1.0;
     float4 back[3], ahead[3];
@@ -59,8 +63,9 @@ float3 smoothPoint(float i, float4 centre)
     {
         if (k3 <= n)
         {
-            sum += (back[k3 - 1].xyz + ahead[k3 - 1].xyz) * (4.0 - k3);
-            weight += 2.0 * (4.0 - k3);
+            float pair = (4.0 - k3) * saturate((near[k3 - 1] - 2.6) / 3.0);
+            sum += (back[k3 - 1].xyz + ahead[k3 - 1].xyz) * pair;
+            weight += 2.0 * pair;
         }
     }
     return sum / weight;
@@ -68,16 +73,49 @@ float3 smoothPoint(float i, float4 centre)
 
 // The direction of the line at point j: from its neighbours on the same line (smoothed). The
 // pieces on both sides of a point then share its corners (no gaps or overlaps at the joints), and
-// a car shaking in place doesn't swing the tyre lines around.
-float3 trailTangent(float j, float4 pj, float3 sj)
+// a car shaking in place doesn't swing the tyre lines around. near: metres from the car to points
+// j .. j + 4.
+float3 trailTangent(float j, float4 pj, float3 sj, float near0, float4 near)
 {
     float first = g_trail.y - g_trail.x, last = g_trail.y - 1.0;
     float4 pm = trailPoint(j - 1.0), pp = trailPoint(j + 1.0);
     bool hasPrev = pj.w > 0.0 && j - 1.0 >= first && pm.w != 0.0 && distance(pm.xyz, pj.xyz) < 25.0;
     bool hasNext = j + 1.0 <= last && pp.w > 0.0 && distance(pp.xyz, pj.xyz) < 25.0;
-    float3 m = hasPrev ? smoothPoint(j - 1.0, pm) : sj;
-    float3 n = hasNext ? smoothPoint(j + 1.0, pp) : sj;
+    float3 m = hasPrev ? smoothPoint(j - 1.0, pm, float3(near0, near.xy)) : sj;
+    float3 n = hasNext ? smoothPoint(j + 1.0, pp, near.yzw) : sj;
     return n - m;
+}
+
+// Metres from the car back along the line (the newest point is on the car) to point j (x) and to
+// points j + 1..4 (near); 100 farther than 28 points.
+float trailFromCar(float j, out float4 near)
+{
+    float atJ = 100.0;
+    near = 100.0;
+    float newest = g_trail.y - 1.0;
+    if (newest - j < 28.0)
+    {
+        float path = 0.0;
+        float3 q = trailPoint(newest).xyz;
+        [loop] for (int i = 0; i <= 28; i++)
+        {
+            float index = newest - i;
+            if (index < j - 0.5) break;
+            if (i > 0)
+            {
+                float3 r = trailPoint(index).xyz;
+                path += distance(q, r);
+                q = r;
+            }
+            float m = index - j;
+            if (m < 0.5) atJ = path;
+            else if (m < 1.5) near.x = path;
+            else if (m < 2.5) near.y = path;
+            else if (m < 3.5) near.z = path;
+            else if (m < 4.5) near.w = path;
+        }
+    }
+    return atJ;
 }
 
 float3 toView(float3 w)
@@ -109,8 +147,10 @@ TrailOut VS_Trail(uint id : SV_VertexID)
     // This corner's point, smoothed, and the line's direction there.
     float j = first + k + corner.y;
     float4 pj = corner.y > 0.5 ? b : a;
-    float3 s = smoothPoint(j, pj);
-    float3 d = trailTangent(j, pj, s);
+    float4 near;
+    float fromCar = trailFromCar(j, near);
+    float3 s = smoothPoint(j, pj, near.xyz);
+    float3 d = trailTangent(j, pj, s, fromCar, near);
     float len = length(d);
     if (len < 1e-3) return o;
     float age = g_trail.z - (corner.y > 0.5 ? b.w : abs(a.w));
@@ -120,22 +160,7 @@ TrailOut VS_Trail(uint id : SV_VertexID)
     // along the line goes to the pixels (data.w), the fade-in lies 1.6 to 2.6 m behind the car at
     // any speed. Farther back along the line it stays, also where the car drives over its old line
     // again. (It was the points' age: driving slowly the line next to the car popped in and out,
-    // at speed the points lie metres apart.)
-    float fromCar = 100.0;
-    float newest = g_trail.y - 1.0;
-    if (newest - j < 24.0)
-    {
-        float path = 0.0;
-        float3 q = trailPoint(newest).xyz;
-        [loop] for (int i = 1; i <= 24; i++)
-        {
-            if (newest - i < j - 0.5) break;
-            float3 r = trailPoint(newest - i).xyz;
-            path += distance(q, r);
-            q = r;
-        }
-        fromCar = path;
-    }
+    // at speed the points lie metres apart.) fromCar: see above.
     float3 dir = d / len;
     float3 right = cross(float3(0, 1, 0), dir);
     float rl = length(right);

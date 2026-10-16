@@ -24,7 +24,7 @@ public:
     // After the composite (with the weather's particles): records the car, draws the trail into
     // fx.currentRtv().
     void draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s);
-
+
     // The recording alone (also for the offline test): dt (s), the car's position (null: not seen
     // this frame). True: the live end (slot head()) is drawn after the kept points.
     bool record(float dt, const float* car);
@@ -44,6 +44,7 @@ private:
     static constexpr UINT kPoints = 16384; // 4.5 min at 60 points a second, ~3 min at full speed
     void clear();
     static constexpr float kMinStep = 0.3f; // m: closer points are no line (the car shaking in place)
+    static constexpr float kLift = 0.1f;    // m over the car's origin (on the road), see draw()
     ID3D11VertexShader* m_vs = nullptr;
     ID3D11PixelShader* m_ps = nullptr;
     ID3D11Texture2D* m_pointsTex = nullptr;

@@ -184,10 +184,222 @@ int trailTest() {
     return 0;
 }
 
+// The trail shader's line near the car, on the CPU (trail.hlsl VS_Trail: the smoothing, the line's
+// direction, the way back to the car that places the fade-in). `ramp`: the shader since
+// 2026-10-17 (a pair of neighbours joins a point's smoothing as the one ahead moves 0 to 3 m away
+// from the car); without it the shader before.
+struct V3 {
+    float x = 0, y = 0, z = 0;
+};
+V3 operator+(V3 a, V3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+V3 operator-(V3 a, V3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+V3 operator*(V3 a, float k) { return {a.x * k, a.y * k, a.z * k}; }
+float dot3(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+float len3(V3 a) { return std::sqrt(dot3(a, a)); }
+V3 cross3(V3 a, V3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+
+struct TrailShape {
+    const TrailStage& t;
+    float count, y; // g_trail.x (points), g_trail.y (next index + ring)
+    bool ramp;
+    static constexpr float kRing = 16384.0f;
+    float w(float i) const { return t.point(static_cast<UINT>(std::fmod(i + 2.0f * kRing, kRing)))[3]; }
+    V3 p(float i) const {
+        const float* q = t.point(static_cast<UINT>(std::fmod(i + 2.0f * kRing, kRing)));
+        return {q[0], q[1], q[2]};
+    }
+    // Metres from the car back to point i (100: far), as the shader's loop.
+    float along(float i) const {
+        const float newest = y - 1.0f;
+        if (newest - i >= 28.0f || i > newest + 0.5f) return 100.0f;
+        float path = 0.0f;
+        V3 q = p(newest);
+        for (int k = 1; k <= 28 && newest - k >= i - 0.5f; k++) {
+            const V3 r = p(newest - k);
+            path += len3(q - r);
+            q = r;
+        }
+        return path;
+    }
+    V3 smooth(float i) const {
+        const float first = y - count, last = y - 1.0f;
+        const V3 c = p(i);
+        V3 back[3], ahead[3];
+        float nb = 0, nf = 0;
+        bool open = w(i) > 0.0f;
+        for (int k = 1; k <= 3; k++) {
+            back[k - 1] = p(i - k);
+            open = open && i - k >= first && w(i - k) != 0.0f && len3(back[k - 1] - c) < 12.0f;
+            nb += open ? 1.0f : 0.0f;
+            open = open && w(i - k) > 0.0f;
+        }
+        open = true;
+        for (int k = 1; k <= 3; k++) {
+            ahead[k - 1] = p(i + k);
+            open = open && i + k <= last && w(i + k) > 0.0f && len3(ahead[k - 1] - c) < 12.0f;
+            nf += open ? 1.0f : 0.0f;
+        }
+        const float n = std::min(nb, nf);
+        V3 sum = c * 4.0f;
+        float weight = 4.0f;
+        for (int k = 1; k <= 3; k++) {
+            if (k > n) continue;
+            const float pair = (4.0f - k) * (ramp ? std::clamp((along(i + k) - 2.6f) / 3.0f, 0.0f, 1.0f) : 1.0f);
+            sum = sum + (back[k - 1] + ahead[k - 1]) * pair;
+            weight += 2.0f * pair;
+        }
+        return sum * (1.0f / weight);
+    }
+    V3 tangent(float j, V3 s) const {
+        const float first = y - count, last = y - 1.0f;
+        const V3 pj = p(j), pm = p(j - 1.0f), pp = p(j + 1.0f);
+        const bool hasPrev = w(j) > 0.0f && j - 1.0f >= first && w(j - 1.0f) != 0.0f && len3(pm - pj) < 25.0f;
+        const bool hasNext = j + 1.0f <= last && w(j + 1.0f) > 0.0f && len3(pp - pj) < 25.0f;
+        return (hasNext ? smooth(j + 1.0f) : s) - (hasPrev ? smooth(j - 1.0f) : s);
+    }
+    // Point j of the line `offset` metres to the side (the tyre lines: 0.75), metres from the car.
+    V3 vertex(float j, float offset, float& fromCar) const {
+        const V3 s = smooth(j);
+        const V3 d = tangent(j, s);
+        fromCar = along(j);
+        const float l = len3(d);
+        if (l < 1e-3f) return s;
+        const V3 right = cross3({0, 1, 0}, d * (1.0f / l));
+        const float rl = len3(right);
+        return s + (rl > 1e-3f ? right * (1.0f / rl) : V3{1, 0, 0}) * offset;
+    }
+};
+
+// A chase camera rigidly behind the car (6 m back, 3.3 m up, looking 9 degrees down, 2560x1440 at
+// the game's 938 px focal length, as in the owner's captures): where a point is on the screen.
+struct ChaseCamera {
+    V3 eye, right, up, fwd;
+    ChaseCamera(V3 car, V3 heading) {
+        eye = car - heading * 6.0f + V3{0, 3.3f, 0};
+        const float pitch = 9.2f * 3.14159265f / 180.0f;
+        fwd = heading * std::cos(pitch) - V3{0, std::sin(pitch), 0};
+        right = cross3({0, 1, 0}, fwd);
+        right = right * (1.0f / len3(right));
+        up = cross3(fwd, right);
+    }
+    void screen(V3 p, float& sx, float& sy) const {
+        const V3 d = p - eye;
+        const float z = dot3(d, fwd);
+        sx = 1280.0f + 938.0f * dot3(d, right) / z;
+        sy = 720.0f - 938.0f * dot3(d, up) / z;
+    }
+};
+
+// --trailtest, the line's start: a car on a straight and on a 60 m curve at 125 frames a second
+// (frame times +-20 %), its height 2.5 cm up and down around the road (capture 030: -1.9 to +3.1
+// cm). Per frame, as the chase camera sees it: how far the fade-in (where it is half on) and the
+// right tyre line 2 and 4 m behind the car move on the screen (in a perfect line they stand
+// still), and the lowest the first 4 m get under the road (on capture 030 the road hides the line
+// from 4.2 cm under it: mp_preview with --car at heights around the road's 25.372).
+void trailShapeTest() {
+    for (int curve = 0; curve < 2; curve++) {
+        for (float speed : {8.0f, 30.0f, 60.0f, 120.0f}) {
+            for (int version = 0; version < 2; version++) {
+                const bool ramp = version == 1;
+                const float lift = ramp ? 0.1f : 0.0f; // effects_trail.h kLift
+                const float radius = 60.0f;
+                TrailStage trail;
+                trail.startRecording();
+                unsigned seed = 777;
+                auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0f; };
+                float s = 0.0f, time = 0.0f;
+                double fadeMove = 0, fadeMax = 0, tyre2 = 0, tyre4 = 0;
+                int frames = 0;
+                float lowest = 1.0f;
+                float last[3][2] = {};
+                bool haveLast = false;
+                for (int f = 0; f < 1500; f++) {
+                    const float dt = (1.0f / 125.0f) * (0.8f + 0.4f * rnd());
+                    s += speed * dt;
+                    time += dt;
+                    const float height = 0.006f + 0.025f * std::sin(time * 2.0f * 3.14159265f / 0.6f);
+                    V3 car, heading;
+                    if (curve) {
+                        const float a = s / radius;
+                        car = {radius * std::sin(a), height, radius * (1.0f - std::cos(a))};
+                        heading = {std::cos(a), 0, std::sin(a)};
+                    } else {
+                        car = {s, height, 0};
+                        heading = {1, 0, 0};
+                    }
+                    const float recorded[3] = {car.x, car.y + lift, car.z};
+                    trail.tick(dt);
+                    const bool live = trail.record(dt, recorded);
+                    const UINT points = live ? std::min(trail.count() + 1, 16384u) : trail.count();
+                    const UINT next = live ? (trail.head() + 1) % 16384 : trail.head();
+                    if (points < 40 || f < 100) continue;
+                    const TrailShape shape{trail, static_cast<float>(points), static_cast<float>(next) + TrailShape::kRing, ramp};
+                    const ChaseCamera camera(car, heading);
+                    // The right tyre line from the car back: its points and metres from the car.
+                    V3 line[30];
+                    float from[30];
+                    for (int k = 0; k < 30; k++) line[k] = shape.vertex(shape.y - 1.0f - k, 0.75f, from[k]);
+                    // Where the fade-in is half on (2.1 m from the car along the line).
+                    float now[3][2] = {};
+                    for (int k = 0; k + 1 < 30; k++) {
+                        if (from[k] <= 2.1f && from[k + 1] > 2.1f) {
+                            const float u = (2.1f - from[k]) / (from[k + 1] - from[k]);
+                            camera.screen(line[k] + (line[k + 1] - line[k]) * u, now[0][0], now[0][1]);
+                            break;
+                        }
+                    }
+                    // The tyre line 2 and 4 m behind the car (on the true path), as the camera sees it.
+                    for (int m = 0; m < 2; m++) {
+                        const float back = m == 0 ? 2.0f : 4.0f;
+                        for (int k = 0; k + 1 < 30; k++) {
+                            const float da = dot3(car - line[k], heading), db = dot3(car - line[k + 1], heading);
+                            if (curve) {
+                                // On the curve: the angle around its centre.
+                                const V3 centre{0, 0, radius};
+                                const float a = s / radius - back / radius;
+                                const V3 tangentDir{std::cos(a), 0, std::sin(a)};
+                                const float ta = dot3(line[k] - centre, tangentDir), tb = dot3(line[k + 1] - centre, tangentDir);
+                                if (ta >= 0.0f && tb < 0.0f) {
+                                    const V3 hit = line[k] + (line[k + 1] - line[k]) * (ta / (ta - tb));
+                                    camera.screen(hit, now[1 + m][0], now[1 + m][1]);
+                                    break;
+                                }
+                            } else if (da <= back && db > back) {
+                                const V3 hit = line[k] + (line[k + 1] - line[k]) * ((back - da) / (db - da));
+                                camera.screen(hit, now[1 + m][0], now[1 + m][1]);
+                                break;
+                            }
+                        }
+                    }
+                    // The road is at height 0.
+                    for (int k = 0; k < 30 && from[k] < 4.0f; k++) lowest = std::min(lowest, line[k].y);
+                    if (haveLast) {
+                        const float fm = std::fabs(now[0][1] - last[0][1]);
+                        fadeMove += fm;
+                        fadeMax = std::max<double>(fadeMax, fm);
+                        tyre2 += std::hypot(now[1][0] - last[1][0], now[1][1] - last[1][1]);
+                        tyre4 += std::hypot(now[2][0] - last[2][0], now[2][1] - last[2][1]);
+                        frames++;
+                    }
+                    memcpy(last, now, sizeof(last));
+                    haveLast = true;
+                }
+                printf("trail start %-8s %4.0f m/s %s: fade-in moves %5.2f px (max %5.1f), tyre line at 2 m %5.2f px, at 4 m %5.2f px "
+                       "(mean per frame); first 4 m at least %+5.1f cm over the road\n",
+                       curve ? "curve" : "straight", speed, ramp ? "new" : "old", fadeMove / frames, fadeMax, tyre2 / frames, tyre4 / frames,
+                       lowest * 100.0f);
+            }
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc == 2 && !strcmp(argv[1], "--trailtest")) return trailTest();
+    if (argc == 2 && !strcmp(argv[1], "--trailtest")) {
+        trailShapeTest();
+        return trailTest();
+    }
     if (argc < 3) {
         printf("usage: mp_preview <capture folder> <out.bmp> [--preset Name] [--view N] [--set Key=Value ...]\n");
         return 2;
@@ -407,6 +619,7 @@ int main(int argc, char** argv) {
                 if (haveTrailFrom)
                     for (int i = 0; i < 3; i++) car.position[i] = trailFrom[i] + (trailCar[i] - trailFrom[i]) * k;
                 car.valid = true;
+                car.up[1] = 1.0f;
                 engine.car = &car;
             }
             if (!renderer.toneMap(ctx, rtv, in[0], in[1], engineConstants, look, engine)) {
