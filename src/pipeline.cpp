@@ -284,6 +284,7 @@ void Pipeline::destroyTargets() {
     m_materialIds.destroy();
     for (auto& t : m_waterLevel) t.destroy();
     gfx::release(m_waterRead);
+    gfx::release(m_waterDone);
     m_waterPending = -1;
     m_depthCopy.destroy();
     m_clouds.destroy();
@@ -2760,11 +2761,17 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
 }
 
-// Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back two
-// frames later, when the GPU is long done with it (no stall). A flat sheet of it (within 0.6 m)
-// is the sea.
+// Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back once
+// the GPU has got past it (an event query, asked without waiting). A flat sheet of it (within
+// 0.6 m) is the sea. GetRenderTargetData waits for everything queued before it: read two frames
+// later regardless, it stalled the CPU until the GPU had caught up (92 ms in the previewer, up
+// to the 3 frames the game lets the GPU fall behind in game, 4 times a second).
 void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
-    if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2) {
+    // Not there after 6 frames (the previewer, which queues frames without presenting them): read
+    // anyway, as before.
+    const bool done = m_waterPending < 0 || !m_waterDone || m_waterDone->GetData(nullptr, 0, D3DGETDATA_FLUSH) == S_OK ||
+                      m_frame - m_waterDrawn >= 6;
+    if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2 && done) {
         const gfx::Target& t = m_waterLevel[m_waterPending];
         m_waterPending = -1;
         if (!m_waterRead) device->CreateOffscreenPlainSurface(1, 1, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &m_waterRead, nullptr);
@@ -2793,6 +2800,8 @@ void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
             bind(device, 0, m_nd.texture, false);
             bind(device, 1, m_materialTexture, false);
             runPass(device, kWaterLevel, m_waterLevel[i]);
+            if (!m_waterDone) device->CreateQuery(D3DQUERYTYPE_EVENT, &m_waterDone);
+            if (m_waterDone) m_waterDone->Issue(D3DISSUE_END);
             m_waterPending = i;
             m_waterDrawn = m_frame;
         }

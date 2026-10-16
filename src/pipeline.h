@@ -337,6 +337,7 @@ private:
     gfx::Target m_adapted[2];   // 1x1 ping-pong
     gfx::Target m_waterLevel[2];          // 1x1: the water material on screen (sum of heights, count, lowest, highest)
     IDirect3DSurface9* m_waterRead = nullptr; // system memory copy of one of them
+    IDirect3DQuery9* m_waterDone = nullptr;   // an event after the pending one's pass: the GPU got there
     int m_waterPending = -1;              // the one drawn and not read yet
     int m_waterIndex = 0;
     unsigned m_waterDrawn = 0;            // the frame it was drawn in
