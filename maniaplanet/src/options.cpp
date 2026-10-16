@@ -31,7 +31,7 @@ void load() {
     o.fallbackAtEnd = GetPrivateProfileIntW(L"ManiaPlanet", L"FallbackAtEnd", 1, ini.c_str()) != 0;
     o.hdrStage = GetPrivateProfileIntW(L"ManiaPlanet", L"HdrStage", 1, ini.c_str()) != 0;
     wchar_t text[32] = {};
-    GetPrivateProfileStringW(L"ManiaPlanet", L"SoftShadows", L"0", text, 32, ini.c_str());
+    GetPrivateProfileStringW(L"ManiaPlanet", L"SoftShadows", L"1", text, 32, ini.c_str());
     const float soft = static_cast<float>(_wtof(text));
     o.softShadows = soft > 0.0f && soft <= 10.0f ? soft : 0.0f;
     o.engineLightDraws = GetPrivateProfileIntW(L"ManiaPlanet", L"EngineLightDraws", 1, ini.c_str()) != 0;
