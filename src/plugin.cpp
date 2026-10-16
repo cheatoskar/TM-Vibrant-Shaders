@@ -2,6 +2,7 @@
 #include "audio.h"
 #include "capture.h"
 #include "casters.h"
+#include "perflog.h"
 #include "config.h"
 #include "depth.h"
 #include "engine.h"
@@ -252,6 +253,7 @@ void logHangs(double ms, double captureMs, bool racing) {
 }
 
 void countPipelineCpu(double ms) {
+    perflog::addCpu(ms);
     if (g_cpuStats.frames >= 20000) return;
     g_cpuStats.total += ms;
     g_cpuStats.worst = ms > g_cpuStats.worst ? ms : g_cpuStats.worst;
@@ -1549,6 +1551,7 @@ void onCameraBegin(void* camera) {
     g_device->GetRenderTarget(0, &rt);
     g_scene.inMainCamera = isMainTarget(g_device, rt);
     if (g_scene.inMainCamera) {
+        perflog::mark(g_device, perflog::Mark::GameBegin);
         g_scene.haveView = false;
         g_scene.haveProjection = false;
         // The scene's perspective projection (as onSetTransform takes it), not an orthographic one.
@@ -1702,6 +1705,7 @@ void onDraw(IDirect3DDevice9* device) {
 // keeps the meshes that stay put). Not the car (it moves), glass or water (light passes).
 void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count) {
     if (!g_castersOn || !g_scene.inMainCamera || !g_scene.haveView || !g_scene.haveProjection) return;
+    if (!casters::takeTurn()) return; // most draws of a big map wait for a later frame
     DWORD z = FALSE, zwrite = FALSE, blend = FALSE, alphaTest = FALSE, colorWrite = 0;
     device->GetRenderState(D3DRS_ZENABLE, &z);
     device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
@@ -1736,6 +1740,13 @@ void castersTick() {
     }
     if (g_castersOn && !on) casters::reset("CasterShadows off");
     g_castersOn = on;
+    // The draws are checked only while a pipeline uses the maps (or did in the last 3 s: auto
+    // quality turns the effects off for moments, a preset glides in).
+    static DWORD s_wantedAt = 0;
+    const bool wanted = g_pipeline.consumeCastersWanted() | g_pipelineB.consumeCastersWanted();
+    if (wanted) s_wantedAt = GetTickCount();
+    casters::pauseRecording(!wanted && GetTickCount() - s_wantedAt > 3000);
+    casters::frameDone();
 }
 
 void onCameraEnd(void* camera, const engine::CameraInfo&) {
@@ -1748,9 +1759,11 @@ void onCameraEnd(void* camera, const engine::CameraInfo&) {
         }
     }
     if (g_scene.inMainCamera && g_device) {
+        perflog::mark(g_device, perflog::Mark::GameEnd);
         endGBuffer(g_device);
         endHdr(g_device);
         processScene(g_device);
+        perflog::mark(g_device, perflog::Mark::ModEnd);
     }
     g_scene.inMainCamera = false;
 }
@@ -1791,6 +1804,7 @@ void onDeviceCreated(IDirect3DDevice9* device) {
 }
 
 void onPreReset() {
+    perflog::release();
     g_pipeline.release();
     releaseSideB();
     g_sceneCopy.destroy();
@@ -1903,9 +1917,11 @@ void onPresent(IDirect3DDevice9* device) {
     // Fallback when the engine hooks are unavailable: process at Present (HUD included).
     if (!engine::active() && g_scene.haveView) processScene(device);
 
-    // GPU timing costs a few queries per frame: only while it's used.
+    // GPU timing per pass: auto quality, the overlay and the perf log line use it (a few
+    // timestamp queries a frame, never waited for).
     const Settings& settings = Config::get().settings;
-    g_pipeline.setProfiling(settings.autoQuality || Config::get().showOverlay);
+    g_pipeline.setProfiling(true);
+    perflog::frame(device, g_pipeline, g_shadedThisFrame, casters::cpuMs());
     // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
     // frame times when it ends starts a quiet period).
     // The video export likewise: its frames are slow on purpose.
@@ -2190,6 +2206,20 @@ void ensureBooted() {
 
 void boot() {
     ensureBooted();
+    // The HLSL compiled while the mod runs, compiled here ahead (this thread is the plugin's own;
+    // the game is not waiting for it): the first shaded frame took 1.4 s, most of it compiling
+    // the trail's and the height map's vertex shaders, and every device reset compiled them again.
+    if (g_passive) return;
+    LARGE_INTEGER t0, t1, f;
+    QueryPerformanceCounter(&t0);
+    std::vector<gfx::ShaderSource> shaders;
+    Pipeline::runtimeShaders(shaders);
+    casters::runtimeShaders(shaders);
+    gfx::precompile(shaders);
+    QueryPerformanceCounter(&t1);
+    QueryPerformanceFrequency(&f);
+    TMVS_LOG("boot: %u shaders compiled ahead in %.0f ms", static_cast<unsigned>(shaders.size()),
+             static_cast<double>(t1.QuadPart - t0.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart));
 }
 
 void shutdown() {

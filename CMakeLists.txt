@@ -139,6 +139,7 @@ add_library(tm_vibrant_shaders SHARED
   src/dllmain.cpp
   src/plugin.cpp
   src/casters.cpp
+  src/perflog.cpp
   src/engine.cpp
   src/hook.cpp
   src/depth.cpp
@@ -209,6 +210,12 @@ target_compile_options(tmvs_sharetest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_gbuftest tools/gbuftest.cpp)
 target_link_libraries(tmvs_gbuftest PRIVATE tmvs_core)
 target_compile_options(tmvs_gbuftest PRIVATE ${TMVS_OPTIONS})
+
+# CasterShadows CPU test: a synthetic track through casters::recordDraw, the recording's cost per
+# draw (development tool).
+add_executable(tmvs_castertest tools/castertest.cpp src/casters.cpp)
+target_link_libraries(tmvs_castertest PRIVATE tmvs_core)
+target_compile_options(tmvs_castertest PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an

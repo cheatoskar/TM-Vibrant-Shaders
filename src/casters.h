@@ -1,5 +1,7 @@
 #pragma once
+#include "gfx.h"
 #include <d3d9.h>
+#include <vector>
 
 // CasterShadows: light-space depth maps drawn from the game's own static geometry, for the
 // long shadows of the sun and the black hole.
@@ -31,10 +33,23 @@ struct Maps {
     MapInfo farMap;  // the whole track, coarse
 };
 
+// Every indexed draw of the main camera asks first (before looking at its state): false, it isn't
+// checked this frame (a later frame checks it, see frameDone) or the recording is paused.
+bool takeTurn();
+
 // One indexed draw of the main camera, with the game's state bound. view / projection: the
 // camera's (SetTransform). Only opaque draws of static materials should come here.
 void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
                 const float view[16], const float projection[16]);
+
+// Once a frame (Present): the next frame's share of the draws to check (recordDraw spreads its
+// work over frames on maps with many draws).
+void frameDone();
+// While no pipeline uses the maps (long shadows and volumetric light off, no sun), the draws
+// aren't checked at all: what is kept stays, recording goes on where it was when they're used again.
+void pauseRecording(bool paused);
+// CPU time of the recording and of drawing the maps since the start, ms (the perf log).
+double cpuMs();
 
 // Draws what is new into the maps (inside the pipeline's state save). sunWorld: towards the
 // light; camera: world position. False while neither map is complete (the height map's
@@ -47,6 +62,9 @@ bool update(IDirect3DDevice9* device, const float sunWorld[3], const float camer
 void reset(const char* why, bool log = true);
 // Device reset or shutdown: also the maps themselves (default pool).
 void releaseDevice();
+
+// The caster maps' shaders, for gfx::precompile (compiled ahead, off the render thread).
+void runtimeShaders(std::vector<gfx::ShaderSource>& out);
 
 // How many meshes are kept now (tests, the log).
 unsigned keptMeshes();

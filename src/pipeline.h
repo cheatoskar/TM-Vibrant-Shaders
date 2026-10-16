@@ -150,6 +150,13 @@ public:
     // shaderDir: folder containing tmvs.hlsl; empty = embedded copy.
     bool init(IDirect3DDevice9* device, const std::wstring& shaderDir);
     bool ready() const { return m_ready; }
+    // Whether a frame since the last call wanted the CasterShadows maps (long shadows or the
+    // volumetric light, with a sun): while none does, the plugin pauses their recording.
+    bool consumeCastersWanted() {
+        const bool wanted = m_castersWanted;
+        m_castersWanted = false;
+        return wanted;
+    }
     void release();
     bool reloadShaders(IDirect3DDevice9* device);
     const std::string& lastError() const { return m_lastError; }
@@ -193,10 +200,14 @@ public:
         m_shelterValid = false;
     }
 
+    // The HLSL the pipeline compiles while it runs (vertex shaders of the height map, trail and
+    // rain, small helpers): gfx::precompile compiles them ahead, off the render thread.
+    static void runtimeShaders(std::vector<gfx::ShaderSource>& out);
+
     // GPU timing per pass with timestamp queries (results arrive a few frames late).
     void setProfiling(bool enabled) { m_profiling = enabled; }
     void collectProfile(bool wait); // wait = block until every issued frame is resolved
-    int passCount() const { return kPassCount; }
+    int passCount() const { return kProfileSlots; } // the passes, then the CasterShadows maps' drawing
     static const char* passName(int pass);
     float passTime(int pass) const { return m_passMs[pass]; } // smoothed milliseconds
     float totalTime() const { return m_totalMs; }
@@ -260,6 +271,9 @@ private:
         kLampUp,
         kPassCount
     };
+    // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
+    static constexpr int kProfileCasters = kPassCount;
+    static constexpr int kProfileSlots = kPassCount + 1;
 
     static constexpr int kBloomLevels = 6;
     static constexpr int kLampLevels = 5; // lamp glare: an eighth down to 1/128 of the resolution
@@ -281,6 +295,7 @@ private:
     bool buildMaterialMask(IDirect3DDevice9* device, const Inputs& in);
     bool ensureRain(IDirect3DDevice9* device);
     bool ensureTrail(IDirect3DDevice9* device);
+    static std::string trailSource();
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
     void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool splashes,
                   IDirect3DSurface9* target);
@@ -344,6 +359,7 @@ private:
     gfx::Target m_adapted[2];   // 1x1 ping-pong
     gfx::Target m_waterLevel[2];          // 1x1: the water material on screen (sum of heights, count, lowest, highest)
     IDirect3DSurface9* m_waterRead = nullptr; // system memory copy of one of them
+    IDirect3DQuery9* m_waterDone = nullptr;   // an event after the pending one's pass: the GPU got there
     int m_waterPending = -1;              // the one drawn and not read yet
     int m_waterIndex = 0;
     unsigned m_waterDrawn = 0;            // the frame it was drawn in
@@ -376,6 +392,7 @@ private:
     bool m_taaValid = false;
     bool m_temporalValid = false; // this frame continues the previous one (no camera cut)
     bool m_sunKnown = false;
+    bool m_castersWanted = false; // see consumeCastersWanted
 
     // Previous frame's camera (reprojection for TAA and motion blur).
     float m_prevView[16] = {};
@@ -490,7 +507,7 @@ private:
     ProfileFrame m_profile[kProfileFrames];
     ProfileFrame* m_currentProfile = nullptr;
     int m_profileIndex = 0;
-    float m_passMs[kPassCount] = {};
+    float m_passMs[kProfileSlots] = {};
     float m_totalMs = 0.0f;
     float m_sunFade = 0.0f; // sun on screen (0 = shafts and flare invisible)
     float m_lastTime = 0.0f;

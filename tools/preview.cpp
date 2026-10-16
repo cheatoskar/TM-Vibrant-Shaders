@@ -217,6 +217,62 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
     return true;
 }
 
+// --casters d: stand-in CasterShadows maps (the game's meshes aren't in a capture), both of the
+// game's size (4096^2 INTZ) and filled with one depth d (1 nothing casts, 0.5 everything farther
+// along the light than the middle is shadowed): what sampling the maps costs the passes.
+float g_casterDepth = -1.0f;
+IDirect3DTexture9* g_casterTex[2] = {};
+
+bool previewCasters(IDirect3DDevice9* device, const float sunWorld[3], const float camera[3], casters::Maps& out) {
+    const D3DFORMAT intz = static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z'));
+    const UINT size = 4096;
+    for (int k = 0; k < 2; k++) {
+        if (g_casterTex[k]) continue;
+        IDirect3DSurface9* surface = nullptr;
+        if (FAILED(device->CreateTexture(size, size, 1, D3DUSAGE_DEPTHSTENCIL, intz, D3DPOOL_DEFAULT, &g_casterTex[k], nullptr)) ||
+            FAILED(g_casterTex[k]->GetSurfaceLevel(0, &surface)))
+            return false;
+        IDirect3DSurface9* savedDepth = nullptr;
+        device->GetDepthStencilSurface(&savedDepth);
+        device->SetDepthStencilSurface(surface);
+        device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, g_casterDepth, 0);
+        device->SetDepthStencilSurface(savedDepth);
+        if (savedDepth) savedDepth->Release();
+        surface->Release();
+    }
+    // The light's frame as casters.cpp builds it: f along the light, u across, v up.
+    float f[3] = {-sunWorld[0], -sunWorld[1], -sunWorld[2]};
+    const float lf = sqrtf(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    if (lf < 1e-6f || f[1] / lf > -0.02f) return false;
+    for (float& x : f) x /= lf;
+    float u[3] = {f[2], 0.0f, -f[0]};
+    const float lu = sqrtf(u[0] * u[0] + u[2] * u[2]);
+    if (lu < 1e-6f) u[0] = 1.0f, u[2] = 0.0f;
+    else u[0] /= lu, u[2] /= lu;
+    const float v[3] = {f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]};
+    auto dot = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    const float halfSize[2] = {200.0f, 2500.0f}; // near map, whole track
+    casters::MapInfo* maps[2] = {&out.nearMap, &out.farMap};
+    for (int k = 0; k < 2; k++) {
+        const float sa = 2.0f * halfSize[k], sb = sa, sd = 3000.0f;
+        const float a0 = dot(camera, u) - halfSize[k], b0 = dot(camera, v) - halfSize[k], d0 = dot(camera, f) - 1500.0f;
+        const float half = 0.5f / size;
+        casters::MapInfo& m = *maps[k];
+        for (int j = 0; j < 3; j++) {
+            m.rows[0][j] = u[j] / sa;
+            m.rows[1][j] = -v[j] / sb;
+            m.rows[2][j] = f[j] / sd;
+        }
+        m.rows[0][3] = -a0 / sa + half;
+        m.rows[1][3] = 1.0f + b0 / sb + half;
+        m.rows[2][3] = -d0 / sd;
+        m.texel[0] = m.texel[1] = 1.0f / size;
+        m.bias = 0.3f / sd;
+        m.texture = g_casterTex[k];
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -288,7 +344,7 @@ int main(int argc, char** argv) {
     const char* before = nullptr;
     const char* batch = nullptr;
     std::vector<const char*> overrides;
-    bool sunOverride = false, sunColorOverride = false, bench = false;
+    bool sunOverride = false, sunColorOverride = false, bench = false, precompile = false;
     bool moonReplaced = false;           // --moon: as in game with EngineMoon on a night map under the black hole
     float sun[3] = {}, sunColor[3] = {};
     const char* lutFile = nullptr;
@@ -319,6 +375,10 @@ int main(int argc, char** argv) {
             bars = static_cast<UINT>(atoi(argv[++i]));
         } else if (!strcmp(argv[i], "--bench")) {
             bench = true;
+        } else if (!strcmp(argv[i], "--casters") && i + 1 < argc) {
+            g_casterDepth = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--precompile")) {
+            precompile = true; // as the plugin's boot: the runtime HLSL compiled before the pipeline
         } else if (!strcmp(argv[i], "--moon")) {
             moonReplaced = true;
         } else if (!strcmp(argv[i], "--before") && i + 1 < argc) {
@@ -417,14 +477,34 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // CPU time of creating the pipelines and of their first frame (the hitch in game).
+    LARGE_INTEGER clockFreq, initStart, initEnd;
+    QueryPerformanceFrequency(&clockFreq);
+    auto msSince = [&](const LARGE_INTEGER& from) {
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        return 1000.0 * static_cast<double>(now.QuadPart - from.QuadPart) / static_cast<double>(clockFreq.QuadPart);
+    };
+    if (precompile) {
+        QueryPerformanceCounter(&initStart);
+        std::vector<gfx::ShaderSource> shaders;
+        Pipeline::runtimeShaders(shaders);
+        gfx::precompile(shaders);
+        printf("CPU: %u shaders compiled ahead in %.1f ms\n", static_cast<unsigned>(shaders.size()), msSince(initStart));
+    }
+    QueryPerformanceCounter(&initStart);
     Pipeline pipeline;
     if (!pipeline.init(device, shaderDir)) {
         fprintf(stderr, "shader compilation failed:\n%s\n", pipeline.lastError().c_str());
         return 1;
     }
     // The compare split's preset side (plugin.cpp renderSideB): a pipeline of its own.
+    const double initMs = msSince(initStart);
+    QueryPerformanceCounter(&initEnd);
     Pipeline pipelineB;
     if (compare && !pipelineB.init(device, shaderDir)) return 1;
+    const double initBMs = compare ? msSince(initEnd) : 0.0;
+    bool firstFrame = true;
     if (lutFile) {
         lut::Table table;
         std::string error;
@@ -582,6 +662,7 @@ int main(int argc, char** argv) {
             in.sunColorKnown = cap.sunColor[3] > 0.5f;
         }
         in.moonReplaced = moonReplaced;
+        if (g_casterDepth >= 0.0f) in.casterMap = previewCasters;
         // The previous frame's camera, moved by job.move (world space): view translation
         // t' = t - move * R.
         if (waterHeight > -1e29f) {
@@ -670,7 +751,10 @@ int main(int argc, char** argv) {
                 for (int j = 0; j < 3; j++) driven.carPosition[j] = carEnd[j] + carDir[j] * back * step;
             }
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
+            LARGE_INTEGER renderStart;
+            QueryPerformanceCounter(&renderStart);
             pipeline.render(device, driven, job.settings, output.surface);
+            if (firstFrame) printf("CPU: pipeline created in %.1f ms, its first frame %.1f ms\n", initMs, msSince(renderStart));
             // The export's supersampling: the same moment again (the output is the last one).
             for (int r = 0; r < repeats && frame == frames - 1; r++) {
                 Pipeline::Inputs again = driven;
@@ -678,7 +762,10 @@ int main(int argc, char** argv) {
                 again.repeat = true;
                 pipeline.render(device, again, job.settings, output.surface);
             }
+            QueryPerformanceCounter(&renderStart);
             if (compare) pipelineB.render(device, driven, settingsB, outputB.surface);
+            if (compare && firstFrame) printf("CPU: second pipeline (compare) created in %.1f ms, its first frame %.1f ms\n", initBMs, msSince(renderStart));
+            firstFrame = false;
             if (bench) pipeline.collectProfile(true);
         }
         if (compare) {
@@ -750,6 +837,9 @@ int main(int argc, char** argv) {
 
     pipeline.release();
     pipelineB.release();
+    for (auto& t : g_casterTex) {
+        if (t) t->Release();
+    }
     for (LoadedCapture* c : captures) {
         if (c->color) c->color->Release();
         if (c->depth) c->depth->Release();

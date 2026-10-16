@@ -55,6 +55,7 @@ bool Pipeline::init(IDirect3DDevice9* device, const std::wstring& shaderDir) {
 }
 
 const char* Pipeline::passName(int pass) {
+    if (pass == kProfileCasters) return "Casters";
     return pass >= 0 && pass < kPassCount ? kEntryPoints[pass] + 3 : "?";
 }
 
@@ -109,13 +110,13 @@ bool Pipeline::profileResolve(ProfileFrame& frame, bool wait) {
     }
     frame.pending = false;
     if (disjoint || frequency == 0 || frame.count < 2) return true;
-    float ms[kPassCount] = {};
+    float ms[kProfileSlots] = {};
     for (int i = 1; i < frame.count; i++) {
         if (frame.pass[i] >= 0) ms[frame.pass[i]] += static_cast<float>(static_cast<double>(times[i] - times[i - 1]) * 1000.0 / frequency);
     }
     const float total = static_cast<float>(static_cast<double>(times[frame.count - 1] - times[0]) * 1000.0 / frequency);
     const float k = m_totalMs > 0.0f ? 0.1f : 1.0f;
-    for (int p = 0; p < kPassCount; p++) m_passMs[p] += (ms[p] - m_passMs[p]) * k;
+    for (int p = 0; p < kProfileSlots; p++) m_passMs[p] += (ms[p] - m_passMs[p]) * k;
     m_totalMs += (total - m_totalMs) * k;
     return true;
 }
@@ -286,6 +287,7 @@ void Pipeline::destroyTargets() {
     m_materialIds.destroy();
     for (auto& t : m_waterLevel) t.destroy();
     gfx::release(m_waterRead);
+    gfx::release(m_waterDone);
     m_waterPending = -1;
     m_depthCopy.destroy();
     m_clouds.destroy();
@@ -1024,6 +1026,14 @@ bool Pipeline::ensureLut(IDirect3DDevice9* device) {
     return ok;
 }
 
+// One colour (the material debug view, the class mask), and material id -> its class's colour.
+const char* const kSolidPS = "float4 c : register(c32); float4 main() : COLOR0 { return c; }";
+const char* const kPalettePS = "sampler2D ids : register(s0); sampler2D palette : register(s1);\n"
+                               "float4 main(float2 uv : TEXCOORD0) : COLOR0 {\n"
+                               "    float id = floor(tex2D(ids, uv).r * 255.0 + 0.5);\n"
+                               "    return tex2D(palette, float2((id + 0.5) / 256.0, 0.5));\n"
+                               "}\n";
+
 bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     // The game's depth-stencil is our INTZ texture; its stencil holds the material class of
     // every pixel (written while the game drew, see the plugin). Bound as the depth-stencil
@@ -1035,7 +1045,7 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
         return false;
     if (in.materialClasses) return buildMaterialIds(device, in);
     if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
-    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
     if (!m_solidPS) return false;
     for (int i = 0; i < 16; i++) device->SetTexture(i, nullptr);
     IDirect3DSurface9* ds = nullptr;
@@ -1078,15 +1088,9 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
 bool Pipeline::buildMaterialIds(IDirect3DDevice9* device, const Inputs& in) {
     if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
     if (!m_materialIds.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
-    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
     if (!m_paletteLookupPS)
-        m_paletteLookupPS = gfx::compilePixelShader(device,
-                                                    "sampler2D ids : register(s0); sampler2D palette : register(s1);\n"
-                                                    "float4 main(float2 uv : TEXCOORD0) : COLOR0 {\n"
-                                                    "    float id = floor(tex2D(ids, uv).r * 255.0 + 0.5);\n"
-                                                    "    return tex2D(palette, float2((id + 0.5) / 256.0, 0.5));\n"
-                                                    "}\n",
-                                                    "main", "MaterialPalette");
+        m_paletteLookupPS = gfx::compilePixelShader(device, kPalettePS, "main", "MaterialPalette");
     if (!m_solidPS || !m_paletteLookupPS) return false;
     // Filled in system memory and uploaded (no managed pool on D3D9Ex).
     IDirect3DTexture9* staging = nullptr;
@@ -1604,6 +1608,22 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
 
 } // namespace
 
+std::string Pipeline::trailSource() {
+    char defines[96];
+    snprintf(defines, sizeof(defines), "#define TRAIL_W %u.0\n#define TRAIL_POINTS %u.0\n", kTrailWidth, kTrailPoints);
+    return std::string(defines) + kRainVS;
+}
+
+void Pipeline::runtimeShaders(std::vector<gfx::ShaderSource>& out) {
+    gfx::quadShaders(out);
+    // In the order the first frames need them: the height map, the trail, the material mask.
+    out.push_back({kSplatVS, "main", "vs_3_0", "SplatVS"});
+    out.push_back({trailSource(), "trailVS", "vs_3_0", "TrailVS"});
+    out.push_back({kSolidPS, "main", "ps_3_0", "Solid"});
+    out.push_back({kPalettePS, "main", "ps_3_0", "MaterialPalette"});
+    for (const char* entry : {"dropVS", "splashVS", "sprayVS", "snowVS"}) out.push_back({kRainVS, entry, "vs_3_0", "RainVS"});
+}
+
 bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
     if (!m_trailSupported) return false;
     if (m_trailVB && m_trailIB && m_trailPoints.valid()) return true;
@@ -1624,10 +1644,7 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
                                                          D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING,
                                                          D3DRTYPE_TEXTURE, D3DFMT_A16B16G16R16F));
         if (d3d) d3d->Release();
-        char defines[96];
-        snprintf(defines, sizeof(defines), "#define TRAIL_W %u.0\n#define TRAIL_POINTS %u.0\n", kTrailWidth, kTrailPoints);
-        const std::string source = std::string(defines) + kRainVS;
-        m_trailVS = ok ? gfx::compileVertexShader(device, source.c_str(), "trailVS", "TrailVS") : nullptr;
+        m_trailVS = ok ? gfx::compileVertexShader(device, trailSource(), "trailVS", "TrailVS") : nullptr;
         const D3DVERTEXELEMENT9 elements[] = {
             {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
             {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
@@ -2399,6 +2416,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Rain splashes land on it too.
     const bool wantLong = s.longShadows > 0.0f && s.shadowStrength > 0.0f && m_sunKnown;
     const bool wantVolume = s.volumetricLight > 0.0f && m_sunKnown;
+    if (wantLong || wantVolume) m_castersWanted = true;
     if (m_heightReset) {
         m_heightReset = false;
         m_heightValid = false;
@@ -2424,7 +2442,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     casters::Maps casterMaps;
     float camera[3];
     for (int j = 0; j < 3; j++) camera[j] = -(in.view[12] * in.view[j * 4 + 0] + in.view[13] * in.view[j * 4 + 1] + in.view[14] * in.view[j * 4 + 2]);
+    profileMark(-1);
     const bool casterShadows = (longShadows || (heightMap && wantVolume)) && in.casterMap && in.casterMap(device, m_sunWorld, camera, casterMaps);
+    profileMark(kProfileCasters); // the maps' draws (new meshes, the near map following the camera)
     const casters::MapInfo* casterInfo[2] = {&casterMaps.nearMap, &casterMaps.farMap};
     for (int k = 0; k < 2; k++) {
         float constants[4][4] = {};
@@ -2936,11 +2956,17 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
 }
 
-// Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back two
-// frames later, when the GPU is long done with it (no stall). A flat sheet of it (within 0.6 m)
-// is the sea.
+// Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back once
+// the GPU has got past it (an event query, asked without waiting). A flat sheet of it (within
+// 0.6 m) is the sea. GetRenderTargetData waits for everything queued before it: read two frames
+// later regardless, it stalled the CPU until the GPU had caught up (92 ms in the previewer, up
+// to the 3 frames the game lets the GPU fall behind in game, 4 times a second).
 void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
-    if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2) {
+    // Not there after 6 frames (the previewer, which queues frames without presenting them): read
+    // anyway, as before.
+    const bool done = m_waterPending < 0 || !m_waterDone || m_waterDone->GetData(nullptr, 0, D3DGETDATA_FLUSH) == S_OK ||
+                      m_frame - m_waterDrawn >= 6;
+    if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2 && done) {
         const gfx::Target& t = m_waterLevel[m_waterPending];
         m_waterPending = -1;
         if (!m_waterRead) device->CreateOffscreenPlainSurface(1, 1, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &m_waterRead, nullptr);
@@ -2969,6 +2995,8 @@ void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
             bind(device, 0, m_nd.texture, false);
             bind(device, 1, m_materialTexture, false);
             runPass(device, kWaterLevel, m_waterLevel[i]);
+            if (!m_waterDone) device->CreateQuery(D3DQUERYTYPE_EVENT, &m_waterDone);
+            if (m_waterDone) m_waterDone->Issue(D3DISSUE_END);
             m_waterPending = i;
             m_waterDrawn = m_frame;
         }
