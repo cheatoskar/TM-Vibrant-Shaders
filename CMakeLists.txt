@@ -120,11 +120,12 @@ add_library(tmvs_core STATIC
   src/weather.cpp
   src/image.cpp
   src/lut.cpp
+  src/mp4writer.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(tmvs_core PRIVATE ${stb_SOURCE_DIR})
-target_link_libraries(tmvs_core PUBLIC d3d9 d3dcompiler dxguid)
+target_link_libraries(tmvs_core PUBLIC d3d9 d3dcompiler dxguid ole32 oleaut32)
 
 set(TMVS_DEFINITIONS WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 set(TMVS_OPTIONS /W4 /EHsc /permissive- /utf-8)
@@ -183,6 +184,11 @@ set_property(SOURCE thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES
 file(GLOB TMVS_THUMBNAIL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails/*.jpg")
 set_source_files_properties(thumbnails/thumbnails.rc PROPERTIES OBJECT_DEPENDS "${TMVS_THUMBNAIL_FILES}")
 target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
+
+# MP4 writer test: synthetic frames and sound through Media Foundation (development tool).
+add_executable(tmvs_mp4test tools/mp4test.cpp)
+target_link_libraries(tmvs_mp4test PRIVATE tmvs_core)
+target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an
