@@ -40,6 +40,7 @@ struct GameBuild {
     uintptr_t clipGroupStop;       // void CGameCtnMediaClipViewer::ClipGroupStop()
     uintptr_t raceClipStop;        // void CGameRace::MediaClipStop()
     uintptr_t interpolatedLocation; // const GmIso4* CSceneMobil::GetInterpolatedLocation(CSceneSector*) const (vtable slot 32)
+    uintptr_t coreCmdBuffer;       // CMwCmdBufferCore* CMwCmdBufferCore::TheCoreCmdBuffer (the game's clock)
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -51,12 +52,12 @@ constexpr GameBuild kBuilds[] = {
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
      {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70},
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
-     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0},
+     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0},
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
-     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500},
+     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840},
 };
 const GameBuild* g_build = nullptr;
 
@@ -89,6 +90,24 @@ struct InlineSite {
 constexpr InlineSite kClipTracksUpdate = {kClipTracks, {0xd9, 0xe8, 0x83, 0xec, 0x08}, 5, -1, "CGameCtnMediaClipPlayer::TracksUpdate"};
 constexpr InlineSite kClipViewerCams = {kClipCams, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnMediaClipViewer::UpdateCams"};
 constexpr InlineSite kVideoShootSite = {kVideoShoot, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CGameCtnMediaVideoShooter::DoShoot"};
+// The export's settings (the same in both builds, from DoShoot): the shooter holds the dialog's
+// CGameCtnMediaVideoParams at +0x4c (Fps +0x14, Width +0x18, Height +0x1c, Hq +0x20,
+// HqSampleSize +0x24, HqMB +0x28, Stereo3d +0x38, from its parameter table); +0x14 set means
+// this run opens no video output. With Hq and a sample size n > 1 the camera gets a
+// CSceneFxSuperSample of n x n (n at most 11). With HqMB and n x n >= 9 the samples are spread
+// over time ("external loop"): every rendered frame is one sample, the clock advances by
+// 1 / (fps n n), and only the last of them is written. Otherwise its FxRender renders the
+// camera n x n times within the frame, each with a sub-pixel offset, into the same texture.
+constexpr size_t kShooterNoVideo = 0x14;
+constexpr size_t kShooterParams = 0x4c;
+constexpr size_t kVideoParamsSize = 0x3c;
+// CMwCmdBufferCore::EnableFixedTickTime(enable, ms, fraction): while +0x38 or +0x3c is set,
+// each Run() advances the game's clock by +0x38 ms plus +0x3c / 2^31 ms instead of the real
+// time (the export sets 1 / (fps x samples per video frame)). The clock (CMwTimer at +0x70)
+// keeps its time in ms at +0x78 (CMwTimer::GetTickTime). Checked in both builds.
+constexpr size_t kCoreFixedMs = 0x38;
+constexpr size_t kCoreFixedFraction = 0x3c;
+constexpr size_t kCoreTickTime = 0x78;
 // Map load (CGameCtnApp::ChallengeCreateSceneGraph): the zone gets the sea level of the
 // environment's decoration, -1 when it has none.
 constexpr InlineSite kWaterTileHeight = {kTileHeight, {0x55, 0x8b, 0xe9, 0xd9, 0x85, 0x08, 0x01, 0x00, 0x00}, 9, -1, "CHmsZone::WaterRenderTileHeightSet"};
@@ -275,6 +294,9 @@ FxCanActiveFn g_fxCanActive[2] = {};
 bool g_skipGameFx = false;
 DWORD g_lastCinematic = 0;      // GetTickCount of the last cinematic hook call
 unsigned g_cinematicSources = 0;
+unsigned g_engineFrames = 0;    // RenderFrameBegin calls
+void* g_shooter = nullptr;      // the video shooter whose DoShoot ran last
+unsigned g_shootFrame = 0;      // and in which frame (g_engineFrames)
 
 uintptr_t rebase(uintptr_t linkAddress) {
     return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) - kPreferredBase + linkAddress;
@@ -355,6 +377,8 @@ void __fastcall updateCamsDetour(void* self, void* edx) {
 // Runs once per frame while the export shoots (a fiber that is resumed every frame).
 void __fastcall doShootDetour(void* self, void* edx, void* fiber) {
     markCinematic(4);
+    g_shooter = self;
+    g_shootFrame = g_engineFrames;
     g_doShoot(self, edx, fiber);
 }
 
@@ -778,6 +802,7 @@ int __fastcall frameBeginDetour(void* self, void* edx) {
                  static_cast<unsigned>(*reinterpret_cast<const unsigned short*>(rebase(g_build->shaderLevel))));
     }
     logDisplayConfig();
+    g_engineFrames++;
     if (g_callbacks.frameBegin) g_callbacks.frameBegin();
     return g_frameBegin(self, edx);
 }
@@ -1142,6 +1167,45 @@ unsigned cinematicSources() {
     const unsigned s = g_cinematicSources;
     g_cinematicSources = 0;
     return s;
+}
+
+bool videoExport(VideoExport& out) {
+    out = VideoExport();
+    // Counted in frames, not ms: one frame of a 4K export with supersampling takes seconds.
+    if (!g_doShoot || !g_shooter || g_engineFrames - g_shootFrame > 3) return false;
+    const BYTE* shooter = static_cast<const BYTE*>(g_shooter);
+    __try {
+        if (!readable(shooter, kShooterParams + sizeof(void*))) return false;
+        const BYTE* params = *reinterpret_cast<const BYTE* const*>(shooter + kShooterParams);
+        if (!params || !readable(params, kVideoParamsSize)) return false;
+        const auto at = [params](size_t offset) { return *reinterpret_cast<const int*>(params + offset); };
+        out.fps = static_cast<float>(at(0x14));
+        out.width = at(0x18);
+        out.height = at(0x1c);
+        out.hq = at(0x20) != 0;
+        out.hqSamples = out.hq && at(0x24) > 1 ? (at(0x24) > 11 ? 11 : at(0x24)) : 1;
+        out.hqMotionBlur = at(0x28) != 0;
+        out.stereo = at(0x38);
+        out.writesVideo = *reinterpret_cast<const int*>(shooter + kShooterNoVideo) == 0;
+        // Not the dialog's numbers (another build, a patched game): no export as far as we know.
+        if (out.fps < 1.0f || out.fps > 1000.0f || out.width < 16 || out.height < 16 || out.width > 16384 || out.height > 16384) return false;
+        const int samples = out.hqSamples * out.hqSamples;
+        out.subFrames = samples > 1 && out.hqMotionBlur && samples >= 9 && out.writesVideo;
+        out.samplesPerFrame = samples > 1 && !out.subFrames ? samples : 1;
+        out.samplesPerVideoFrame = out.subFrames ? samples : 1;
+        const BYTE* const* core = reinterpret_cast<const BYTE* const*>(rebase(g_build->coreCmdBuffer));
+        if (readable(core, sizeof(void*)) && *core && readable(*core, kCoreTickTime + sizeof(DWORD))) {
+            const DWORD ms = *reinterpret_cast<const DWORD*>(*core + kCoreFixedMs);
+            const DWORD fraction = *reinterpret_cast<const DWORD*>(*core + kCoreFixedFraction);
+            out.step = (static_cast<double>(ms) + static_cast<double>(fraction) / 2147483648.0) / 1000.0;
+            if (out.step > 1.0) out.step = 0.0; // not a frame step: the real clock
+            out.gameClock = static_cast<double>(*reinterpret_cast<const DWORD*>(*core + kCoreTickTime)) / 1000.0;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out = VideoExport();
+        return false;
+    }
+    return true;
 }
 
 } // namespace engine

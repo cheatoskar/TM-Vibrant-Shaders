@@ -12,7 +12,10 @@
 //     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
 //                             view, 0.1 s apart (neon trail test)
 //     --bench                 GPU time per pass
-//     --nohdr                 ignore capture_NNN.hdr16 next to the capture (the game's float
+//     --video                 the video export's quality (photo mode's depth of field, moving)
+//     --repeat <n>            n more sub-pixel samples of the last frame (the export's
+//                             supersampling: history read, not advanced); the last is written
+//     --nohdr                ignore capture_NNN.hdr16 next to the capture (the game's float
 //                             image, GameHdr): render from the 8-bit image only
 //     --nomat                 ignore capture_NNN.mat next to the capture (which material drew
 //                             each pixel): no material masks, as before F12 wrote them
@@ -241,7 +244,7 @@ int main(int argc, char** argv) {
     }
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
-                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--lut file.cube] [--lutmix 0..1] [--photo] [--focus u,v] [--bench] "
+                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--lut file.cube] [--lutmix 0..1] [--photo] [--video] [--repeat n] [--focus u,v] [--bench] "
                         "[--batch jobs.txt]\n"
                         "       tmvs_preview --sound <out.wav> [rain] [volume] [wind] | --play <seconds> [volume] [snow] | --decode <in.mp3> <out.wav>\n");
         return 2;
@@ -262,6 +265,8 @@ int main(int argc, char** argv) {
     const char* lutFile = nullptr;
     float lutMix = 1.0f;
     bool photoMode = false;              // the photo mode's look (3x reach, full-res blur)
+    bool videoMode = false;              // --video: the video export's quality (the same paths, moving)
+    int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     bool useMaterials = true;            // capture_NNN.mat next to the capture (--nomat: no material masks)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
@@ -291,6 +296,10 @@ int main(int argc, char** argv) {
             useMaterials = false;
         } else if (!strcmp(argv[i], "--photo")) {
             photoMode = true;
+        } else if (!strcmp(argv[i], "--video")) {
+            videoMode = true;
+        } else if (!strcmp(argv[i], "--repeat") && i + 1 < argc) {
+            repeats = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &focus[0], &focus[1]);
         } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
@@ -447,6 +456,7 @@ int main(int argc, char** argv) {
         Pipeline::Inputs in;
         in.lut = lutFile ? lutMix : 0.0f;
         in.photo = photoMode;
+        in.video = videoMode;
         in.focusPoint[0] = focus[0];
         in.focusPoint[1] = focus[1];
         in.color = loaded->color;
@@ -539,6 +549,13 @@ int main(int argc, char** argv) {
             }
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
             pipeline.render(device, driven, job.settings, output.surface);
+            // The export's supersampling: the same moment again (the output is the last one).
+            for (int r = 0; r < repeats && frame == frames - 1; r++) {
+                Pipeline::Inputs again = driven;
+                again.temporal = false;
+                again.repeat = true;
+                pipeline.render(device, again, job.settings, output.surface);
+            }
             if (bench) pipeline.collectProfile(true);
         }
         device->EndScene();

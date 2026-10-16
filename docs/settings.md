@@ -162,6 +162,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Motion blur | `MotionBlur` | 0 – 1.5 | Blur from camera movement. 1 = one full frame of movement. Your car stays sharp in the chase camera. |
 | Depth of field | `DepthOfField` | 0 – 1 | Background and foreground blur. |
 | Only in replays and video export | `CinematicOnlyInReplays` | on / off | Motion blur and depth of field switch off while you drive. On by default. |
+| Best quality in the video export | `VideoExportBest` | on / off | The replay editor's video export: full effect quality (no auto quality), photo mode's depth of field, and the effects run on the video's own clock (exposure, focus, rain, lightning and clouds move as in the finished video, however slowly its frames render). With the export's *high quality* (supersampling) every sample gets the effects and TAA is off. Off: as before. On by default. |
 | Focus distance (m) | `FocusDistance` | 0 – 200 | 0 = auto focus on the middle of the screen. |
 | Max blur (px) | `BokehSize` | 2 – 24 | Largest blur size, at 1080p. |
 

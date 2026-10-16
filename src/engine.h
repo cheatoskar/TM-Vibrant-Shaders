@@ -145,5 +145,29 @@ bool setCurrentMapComments(const std::string& comments);
 // 2 video export), for the log.
 unsigned cinematicSources();
 
+// The game's video export (replay editor, "Shoot video"), as its dialog set it up. The game
+// renders each frame at the export's size into its own target, then copies it into the AVI
+// at the end of the frame (CVisionViewportDx9::RenderFrameEnd): the mod's image is what it
+// writes. Its clock runs at a fixed step instead of the real time.
+struct VideoExport {
+    int width = 0, height = 0; // the video's size
+    float fps = 0.0f;
+    bool hq = false;           // "high quality": supersampling, hqSamples x hqSamples samples
+    int hqSamples = 1;         // per side (1 = none, the game takes at most 11)
+    bool hqMotionBlur = false; // the dialog's motion blur
+    bool subFrames = false;    // each rendered frame is one sample at its own moment, the game
+                               // averages samplesPerVideoFrame of them (real motion blur)
+    int samplesPerFrame = 1;   // main camera renders per rendered frame (sub-pixel samples, all
+                               // into the same target; averaged by the game)
+    int samplesPerVideoFrame = 1;
+    bool writesVideo = true;   // false: a run that writes no video (DoShoot skipped the output)
+    int stereo = 0;            // the dialog's 3D stereo mode (0 off)
+    double step = 0.0;         // seconds the game's clock advances per rendered frame, 0 = real time
+    double gameClock = 0.0;    // the game's clock (s), for the log
+};
+// True while the export runs (its fiber ran this frame or the one before), with its settings.
+// False without the hook or when the game's memory doesn't look as expected.
+bool videoExport(VideoExport& out);
+
 } // namespace engine
 } // namespace tmshaders

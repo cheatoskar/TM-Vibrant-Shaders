@@ -105,6 +105,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("MotionBlur", "Motion blur", "Cinematic", Float, motionBlur, 0.0f, 1.5f),
         TMVS_FIELD("DepthOfField", "Depth of field", "Cinematic", Float, depthOfField, 0.0f, 1.0f),
         TMVS_FIELD("CinematicOnlyInReplays", "Only in replays and video export", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
+        TMVS_FIELD("VideoExportBest", "Best quality in the video export", "Cinematic", Bool, videoExportBest, 0.0f, 1.0f),
         TMVS_FIELD("FocusDistance", "Focus distance (m, 0 = auto)", "Cinematic", Float, focusDistance, 0.0f, 200.0f),
         TMVS_FIELD("BokehSize", "Max blur (px)", "Cinematic", Float, bokehSize, 2.0f, 24.0f),
 
@@ -235,7 +236,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights");
 }
 
@@ -796,6 +797,7 @@ void applyPreset(Settings& s, Preset preset) {
     const float keepTarget = s.targetFps;
     const float keepSound = s.weatherSound;
     const bool keepReplayOnly = s.cinematicOnlyInReplays;
+    const bool keepVideoBest = s.videoExportBest;
     const bool keepJitter = s.taaJitter;
     const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
     const bool keepTrailTyres = s.trailTyres;
@@ -822,6 +824,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.targetFps = keepTarget;
     s.weatherSound = keepSound;
     s.cinematicOnlyInReplays = keepReplayOnly;
+    s.videoExportBest = keepVideoBest;
     s.taaJitter = keepJitter;
     switch (preset) {
         case Preset::Vibrant:
@@ -1235,6 +1238,7 @@ void Config::load() {
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
     if (GetPrivateProfileStringW(L"Settings", L"WeatherSound", L"", target, 32, ini)) settings.weatherSound = static_cast<float>(_wtof(target));
     settings.cinematicOnlyInReplays = GetPrivateProfileIntW(L"Settings", L"CinematicOnlyInReplays", 1, ini) != 0;
+    settings.videoExportBest = GetPrivateProfileIntW(L"Settings", L"VideoExportBest", 1, ini) != 0;
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
     readFields(settings, ini, L"Settings", true, true);
     if (preset == kCustomPreset) {
