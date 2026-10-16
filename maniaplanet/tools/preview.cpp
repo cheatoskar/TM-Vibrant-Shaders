@@ -393,6 +393,111 @@ void trailShapeTest() {
     }
 }
 
+// --cartest: which car the trail follows (CarTracker, engine_frame.h) against the pick before
+// 2026-10-17 (the car that continues last frame's within 30 m, else the nearest; a frame without
+// any car forgot it). The player drives 100 m/s at 125 frames a second, a ghost 90 m/s 0.4 m to
+// the side starts 40 m ahead (the player drives into it and through it). Scenes: the chase camera
+// all along; 0.5 s chase, 1.5 s cockpit (its car drawn or not), chase again; the same with the
+// ghost only 10 m ahead as the cockpit starts; a respawn 50 m back. Exit code 1: the new pick was
+// on the ghost in a chase camera after the first scene's start.
+int carTest() {
+    struct OldPick {
+        bool lastValid = false;
+        float last[3] = {};
+        int pick(const CarCandidate* cars, int count, const V3& eye) {
+            float best = lastValid ? 30.0f * 30.0f : 1e30f;
+            const float ref[3] = {lastValid ? last[0] : eye.x, lastValid ? last[1] : eye.y, lastValid ? last[2] : eye.z};
+            int found = -1;
+            for (int c = 0; c < count; c++) {
+                const float dx = cars[c].world[0] - ref[0], dy = cars[c].world[1] - ref[1], dz = cars[c].world[2] - ref[2];
+                const float d = dx * dx + dy * dy + dz * dz;
+                if (d < best) {
+                    best = d;
+                    found = c;
+                }
+            }
+            lastValid = found >= 0;
+            if (found >= 0) memcpy(last, cars[found].world, sizeof(last));
+            return found;
+        }
+    };
+    const char* scenes[] = {"chase camera", "cockpit, car not drawn", "cockpit, car drawn", "respawn 50 m back", "cockpit, ghost close"};
+    int failures = 0;
+    for (int scene = 0; scene < 5; scene++) {
+        CarTracker tracker;
+        OldPick old;
+        unsigned seed = 99;
+        auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0f; };
+        double now = 100.0;
+        float player = 0.0f, ghost = scene == 4 ? 15.0f : 40.0f;
+        int ghostNew = 0, ghostOld = 0, noneNew = 0, noneOld = 0, ghostNewAfter = 0, ghostOldAfter = 0, tracks = 0;
+        unsigned lastTrack = 0;
+        for (int f = 0; f < 500; f++) {
+            const float dt = (1.0f / 125.0f) * (0.9f + 0.2f * rnd());
+            now += dt;
+            const float t = f / 125.0f;
+            player += 100.0f * dt;
+            ghost += 90.0f * dt;
+            if (scene == 3 && f == 200) player -= 50.0f;
+            const bool cockpit = (scene == 1 || scene == 2 || scene == 4) && t >= 0.5f && t < 2.0f;
+            const V3 p{player, 0, 0}, g{ghost, 0, -0.4f};
+            // The camera: chase (6 m back, 3.3 m up, aimed at the car) or cockpit (at the driver's head).
+            V3 eye, fwd;
+            if (cockpit) {
+                eye = p + V3{0.2f, 1.0f, 0};
+                fwd = {1, 0, 0};
+            } else {
+                eye = p - V3{6.0f, -3.3f, 0};
+                fwd = p - eye;
+                fwd = fwd * (1.0f / len3(fwd));
+            }
+            V3 right = cross3({0, 1, 0}, fwd);
+            right = right * (1.0f / len3(right));
+            const V3 up = cross3(fwd, right);
+            CarCandidate cars[2];
+            int count = 0, playerIndex = -1;
+            auto add = [&](const V3& w) {
+                const V3 d = w - eye;
+                CarCandidate& c = cars[count++];
+                c.view[0] = dot3(d, right);
+                c.view[1] = dot3(d, up);
+                c.view[2] = dot3(d, fwd);
+                c.world[0] = w.x;
+                c.world[1] = w.y;
+                c.world[2] = w.z;
+            };
+            // The ghost first (the engine's order is not known), the player's car unless the cockpit hides it.
+            if (len3(g - eye) < 400.0f) add(g);
+            if (!((scene == 1 || scene == 4) && cockpit)) {
+                playerIndex = count;
+                add(p);
+            }
+            const int n = tracker.pick(cars, count, now);
+            const int o = old.pick(cars, count, eye);
+            const bool after = scene == 3 ? f >= 210 : (scene == 0 ? f >= 0 : (scene == 4 ? f >= 250 + 6 : t >= 2.1f));
+            ghostNew += n >= 0 && n != playerIndex;
+            ghostOld += o >= 0 && o != playerIndex;
+            noneNew += n < 0;
+            noneOld += o < 0;
+            if (after) {
+                ghostNewAfter += n >= 0 && n != playerIndex;
+                ghostOldAfter += o >= 0 && o != playerIndex;
+            }
+            if (n >= 0 && tracker.track() != lastTrack) {
+                tracks++;
+                lastTrack = tracker.track();
+                if (getenv("CARTEST_VERBOSE"))
+                    printf("  frame %d (%.2f s): takes up the %s\n", f, t, n == playerIndex ? "player" : "ghost");
+            }
+        }
+        printf("car test %-24s on the ghost  new %3d, old %3d of 500 frames (in the chase camera afterwards  new %3d, old %3d); "
+               "no car  new %3d, old %3d; cars taken up %d\n",
+               scenes[scene], ghostNew, ghostOld, ghostNewAfter, ghostOldAfter, noneNew, noneOld, tracks);
+        failures += ghostNewAfter > 0;
+    }
+    return failures ? 1 : 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -400,6 +505,7 @@ int main(int argc, char** argv) {
         trailShapeTest();
         return trailTest();
     }
+    if (argc == 2 && !strcmp(argv[1], "--cartest")) return carTest();
     if (argc < 3) {
         printf("usage: mp_preview <capture folder> <out.bmp> [--preset Name] [--view N] [--set Key=Value ...]\n");
         return 2;

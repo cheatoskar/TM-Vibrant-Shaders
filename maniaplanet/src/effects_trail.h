@@ -62,6 +62,7 @@ private:
     float m_start[3] = {};   // where the run began (the first point after a clear)
     bool m_startValid = false;
     int m_mapSerial = -1;
+    unsigned m_track = 0; // the car's (EngineCar::track)
     bool m_ready = false;
 };
 

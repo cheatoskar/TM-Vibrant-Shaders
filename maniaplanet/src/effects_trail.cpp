@@ -162,6 +162,13 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         const float sx = position[0] - m_start[0], sy = position[1] - m_start[1], sz = position[2] - m_start[2];
         if (dx * dx + dy * dy + dz * dz > 25.0f * 25.0f && sx * sx + sy * sy + sz * sz < 12.0f * 12.0f) clear();
     }
+    // Another car taken up (the camera went to another, or the one followed was a ghost): a new
+    // line, none from the old car's place to the new one's.
+    if (carSeen && car->track != m_track) {
+        m_track = car->track;
+        m_break = true;
+        m_liveFrames = 0;
+    }
     if (s.neonTrail <= 0.0f) {
         m_break = true;
         return;
