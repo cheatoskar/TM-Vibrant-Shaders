@@ -92,6 +92,18 @@ void hideGameSky(bool hide);
 // night outside (0.25, 0.75]) and answers whether the game lights the map at midnight
 // instead (its own moon, fog and sky; no baked sun). Visual only: the map stays as it is.
 void setNightAtLoad(bool (*decide)(float dayTime));
+// The game's moon on night maps under the black hole (EngineMoon). At each map load, before the
+// scene is made, `decide` gets the map's time of day and whether it is lit at midnight, and
+// answers what the game's moon does there: mode 1 shines from `toward` (world direction towards
+// the light: the lightmap baked at load, the glints, the car), 2 off (ambient and lamps stay).
+// Fixed for the map: its lightmap is baked once.
+struct MoonLight {
+    int mode = 0;
+    float toward[3] = {0.0f, 1.0f, 0.0f};
+};
+void setMoonAtLoad(bool (*decide)(float dayTime, bool litAtNight, MoonLight& moon));
+// The moon of this map is changed and the game's weather has used it.
+bool moonReplaced();
 // The loaded map's own time of day (-1 unknown) and whether it is lit at midnight instead.
 float mapDayTime();
 bool mapLitAtNight();

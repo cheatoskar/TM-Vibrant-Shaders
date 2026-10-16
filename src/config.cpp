@@ -120,6 +120,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("GameMaterials", "Read the game's materials (TMUF sea, debug view)", "Image", Bool, gameMaterials, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameFX", "Turn off the game's FX post-processing (next map)", "Image", Bool, disableGameFx, 0.0f, 1.0f),
         TMVS_FIELD("GameNight", "Real night under night skies", "Image", Bool, gameNight, 0.0f, 1.0f),
+        TMVS_FIELD("EngineMoon", "The game's moon under the black hole (next map)", "Image", Int, engineMoon, 0.0f, 2.0f),
         TMVS_FIELD("GameSkyClouds", "Keep the game's clouds under night skies", "Image", Bool, gameSkyClouds, 0.0f, 1.0f),
         TMVS_FIELD("GameHdr", "Game HDR (float target: texture in bright light)", "Image", Bool, gameHdr, 0.0f, 1.0f),
         TMVS_FIELD("CleanHighlights", "Clean highlights (no frost on floodlit white)", "Image", Bool, cleanHighlights, 0.0f, 1.0f),
@@ -235,7 +236,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights");
 }
 
@@ -787,6 +788,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepFx = s.disableGameFx;
     const bool keepMaterials = s.gameMaterials;
     const bool keepNight = s.gameNight;
+    const int keepMoon = s.engineMoon;
     const bool keepSkyClouds = s.gameSkyClouds;
     const bool keepClean = s.cleanHighlights;
     const bool keepHdr = s.gameHdr;
@@ -813,6 +815,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.disableGameFx = keepFx;
     s.gameMaterials = keepMaterials;
     s.gameNight = keepNight;
+    s.engineMoon = keepMoon;
     s.gameSkyClouds = keepSkyClouds;
     s.cleanHighlights = keepClean;
     s.gameHdr = keepHdr;
@@ -1226,6 +1229,8 @@ void Config::load() {
     settings.disableGameFx = GetPrivateProfileIntW(L"Settings", L"DisableGameFX", 1, ini) != 0;
     settings.gameMaterials = GetPrivateProfileIntW(L"Settings", L"GameMaterials", 1, ini) != 0;
     settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 1, ini) != 0;
+    settings.engineMoon = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"EngineMoon", 0, ini));
+    if (settings.engineMoon < 0 || settings.engineMoon > 2) settings.engineMoon = 0;
     settings.gameSkyClouds = GetPrivateProfileIntW(L"Settings", L"GameSkyClouds", 0, ini) != 0;
     settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
     settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 0, ini) != 0;

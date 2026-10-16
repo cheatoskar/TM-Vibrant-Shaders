@@ -241,7 +241,7 @@ int main(int argc, char** argv) {
     }
     if (argc < 3) {
         fprintf(stderr, "usage: tmvs_preview <capture.tmcap> <out.bmp> [--preset name] [--set Key=Value] [--debug n] "
-                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--lut file.cube] [--lutmix 0..1] [--photo] [--focus u,v] [--bench] "
+                        "[--shaders dir] [--before file.bmp] [--sun x,y,z] [--suncolor r,g,b] [--move x,y,z] [--time s] [--water y] [--lut file.cube] [--lutmix 0..1] [--photo] [--focus u,v] [--bench] [--moon] "
                         "[--batch jobs.txt]\n"
                         "       tmvs_preview --sound <out.wav> [rain] [volume] [wind] | --play <seconds> [volume] [snow] | --decode <in.mp3> <out.wav>\n");
         return 2;
@@ -258,6 +258,7 @@ int main(int argc, char** argv) {
     const char* batch = nullptr;
     std::vector<const char*> overrides;
     bool sunOverride = false, sunColorOverride = false, bench = false;
+    bool moonReplaced = false;           // --moon: as in game with EngineMoon on a night map under the black hole
     float sun[3] = {}, sunColor[3] = {};
     const char* lutFile = nullptr;
     float lutMix = 1.0f;
@@ -276,6 +277,8 @@ int main(int argc, char** argv) {
             shaderDir = widen(argv[++i]);
         } else if (!strcmp(argv[i], "--bench")) {
             bench = true;
+        } else if (!strcmp(argv[i], "--moon")) {
+            moonReplaced = true;
         } else if (!strcmp(argv[i], "--before") && i + 1 < argc) {
             before = argv[++i];
         } else if (!strcmp(argv[i], "--batch") && i + 1 < argc) {
@@ -473,6 +476,7 @@ int main(int argc, char** argv) {
             memcpy(in.sunColor, cap.sunColor, sizeof(float) * 3);
             in.sunColorKnown = cap.sunColor[3] > 0.5f;
         }
+        in.moonReplaced = moonReplaced;
         // The previous frame's camera, moved by job.move (world space): view translation
         // t' = t - move * R.
         if (waterHeight > -1e29f) {

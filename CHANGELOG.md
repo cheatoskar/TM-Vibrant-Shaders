@@ -1,5 +1,9 @@
 # Changelog
 
+### Unreleased
+
+- New setting *The game's moon under the black hole* (`EngineMoon`, *Game* panel, off by default): on night maps under the black hole the game's own moon (its baked light and shadows, glints, the car's light) shines from the black hole instead of from the side, or is taken out. From the next map on.
+
 ### 1.4.0-preview (2026-10-12)
 
 - **TrackMania 2 (ManiaPlanet 4):** the mod as a 64-bit `d3d11.dll` for ManiaPlanet's Direct3D 11 renderer, with the same menu, presets and settings ([maniaplanet/README.md](maniaplanet/README.md)). Skies with real night, AO, contact shadows, GI and neon light from the engine's normals, haze, light shafts and volumetric light through the engine's shadow maps, weather with sound, depth of field, motion blur and TAA with the engine's motion vectors, photo mode with the compare split, the neon trail from the car's position in the engine, Author's Shaders (read from the map, set in the editor). `F5` switches the effects (`F7` is ManiaPlanet's friends list). Installed with `Install.cmd` from `TM-Vibrant-Shaders-ManiaPlanet.zip`.
