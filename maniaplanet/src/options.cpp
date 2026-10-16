@@ -30,6 +30,10 @@ void load() {
                                                                                           : Placement::BeforeHud;
     o.fallbackAtEnd = GetPrivateProfileIntW(L"ManiaPlanet", L"FallbackAtEnd", 1, ini.c_str()) != 0;
     o.hdrStage = GetPrivateProfileIntW(L"ManiaPlanet", L"HdrStage", 1, ini.c_str()) != 0;
+    wchar_t text[32] = {};
+    GetPrivateProfileStringW(L"ManiaPlanet", L"SoftShadows", L"0", text, 32, ini.c_str());
+    const float soft = static_cast<float>(_wtof(text));
+    o.softShadows = soft > 0.0f && soft <= 10.0f ? soft : 0.0f;
     o.engineLightDraws = GetPrivateProfileIntW(L"ManiaPlanet", L"EngineLightDraws", 1, ini.c_str()) != 0;
 }
 
@@ -39,6 +43,9 @@ void save() {
     WritePrivateProfileStringW(L"ManiaPlanet", L"Placement", o.placement == Placement::EndOfFrame ? L"1" : L"0", ini.c_str());
     WritePrivateProfileStringW(L"ManiaPlanet", L"FallbackAtEnd", o.fallbackAtEnd ? L"1" : L"0", ini.c_str());
     WritePrivateProfileStringW(L"ManiaPlanet", L"HdrStage", o.hdrStage ? L"1" : L"0", ini.c_str());
+    wchar_t text[32];
+    swprintf(text, 32, L"%.2f", o.softShadows);
+    WritePrivateProfileStringW(L"ManiaPlanet", L"SoftShadows", text, ini.c_str());
     WritePrivateProfileStringW(L"ManiaPlanet", L"EngineLightDraws", o.engineLightDraws ? L"1" : L"0", ini.c_str());
 }
 
@@ -56,6 +63,7 @@ bool setValue(const std::string& key, const std::string& value) {
     else if (!_stricmp(k, "EngineLightDraws")) o.engineLightDraws = atoi(value.c_str()) != 0;
     else if (!_stricmp(k, "View")) o.view = static_cast<View>(atoi(value.c_str()));
     else if (!_stricmp(k, "Split")) o.split = static_cast<float>(atof(value.c_str()));
+    else if (!_stricmp(k, "SoftShadows")) o.softShadows = static_cast<float>(atof(value.c_str()));
     else if (!_stricmp(k, "Enabled")) s.enabled = atoi(value.c_str()) != 0;
     else if (!_stricmp(k, "ShowMenu")) config.showOverlay = atoi(value.c_str()) != 0; // F8, for the test
     else if (!_stricmp(k, "MenuPage")) config.menuPage = atoi(value.c_str());

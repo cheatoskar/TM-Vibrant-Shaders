@@ -72,6 +72,8 @@ enum EngineTexture : int {
     kTexShadowDepth,  // the sun shadow pass's linear depth (Tech3/DeferredShadowPssm_p t0, R32 float)
     kTexShadowMap0,   // its two shadow maps (t1, t2: 4096 x 4096, 16 bit)
     kTexShadowMap1,
+    kTexShadowSplits, // its split atlas (t3: 6400 x 1280, 16 bit, five tiles; variants with splits)
+    kTexShadowNormal, // the face normal it reads (TMapVNormalInC; variants with splits), for captures
     kTexLights,       // EngineLightDraws: the light the engine drew as light (engine_lights.cpp), float
     kTexCount
 };

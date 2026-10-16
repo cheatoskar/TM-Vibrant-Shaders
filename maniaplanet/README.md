@@ -92,6 +92,8 @@ The log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in `Documents\Man
   (from the constants the engine draws with) and the map's comments (for Author's Shaders). It
   writes only the comments of the map open in the editor, when you click *Set as Author's Shader*.
 - Whether servers or competitions allow a `d3d11.dll` mod is not confirmed. Check the rules of where you play.
+- *Soft sun shadows* (off by default) draws the engine's sun shadow pass with the mod's own shader.
+  Nothing in the game's memory changes, but whether the anti-cheat minds a replaced shader is not known.
 - Openplanet can run at the same time (it loads as its own DLL). If something breaks with
   Openplanet, test once without it and report it with a capture.
 
@@ -151,6 +153,58 @@ At that draw the mod runs its own passes on the same inputs, and the engine's dr
   whiten the sky), added to the HDR image.
 - With the engine's curve and nothing added, the engine's own draw runs.
 
+## Soft sun shadows
+
+Setting *Soft sun shadows* (Settings page, panel "ManiaPlanet"; `SoftShadows` in
+`maniaplanet.ini`), **off by default**. Its value is the sun's size in the sky in degrees (the real
+sun: 0.53). The shadows are then sharp where a thing touches the ground and get wider the farther
+they fall from it, like real ones.
+
+The engine's sun shadows (`Tech3/DeferredShadowPssm_p`, a full-screen pass into the light mask):
+- Inputs: the linear depth (t0), two static shadow maps of the whole map (t1, t2, 4096², about 1 m
+  per texel), the split atlas (t3, 6400 x 1280: five 1280² splits, the coarsest about 370 m wide,
+  the finest about 11 m) and the face normal. Its constants (`ShaderP`, 11 + 5 x splits registers)
+  hold the camera ray, the maps' matrices and each split's rectangle in the atlas.
+- It takes the finest split that holds the pixel, with one bilinear comparison tap (a few more
+  along the pixel's footprint at grazing views). No blend between splits, no bias in the shader
+  (the maps are drawn with a depth bias). Outside the splits, the static maps.
+- It writes lit² into the light mask. 48 variants in the GpuCache: 1 to 5 splits, with or without
+  an opacity map and a sprite (cloud) map, SM5 and SM4.
+
+The mod's shader (`shaders/softshadow.hlsli`, `src/softshadow.cpp`) draws that pass instead, with
+the engine's own textures and constants, for that one draw: the engine's shader, `b5` and `s5`
+are bound again right after it. Nothing in the game's memory changes.
+- Outside the splits, and the opacity and sprite maps: the engine's code, unchanged.
+- In the splits (PCSS): a blocker search around the pixel (8 gathers in the finest split that
+  holds 40 m x the light's angle at 12 texels or less), against the receiver's plane from the face
+  normal, not a fixed bias. From the blockers' mean height above it, the penumbra's radius (height
+  x the light's angle). Then 12 gathered taps on a turned disc of that radius, in the finest split
+  that holds it at 8 texels or less, stretched along the pixel's footprint. Deep in the shadow and
+  in full light the filter is skipped.
+- Only the 40 variants it knows (by DXBC checksum: the five-split one runs in races) and only if
+  their constants and textures are bound as expected. Otherwise the engine's shader stays and the
+  log says why, once. When it takes over, the log says
+  `soft shadows: the mod's PCSS shader draws the engine's sun shadow pass (...)`. The menu's
+  status line says which.
+- Cost: about 1 ms at 2560 x 1440 on a GTX 1080 Ti (the engine's pass: 0.2 ms).
+- Online: whether ManiaPlanet's anti-cheat minds a replaced shader is not known. That is why it is off by default.
+
+`mp_shadowtest` checks it offline on the inputs of the pass (an F12 capture now saves the atlas,
+`engine_shadowsplits.dds`, and the face normal, `engine_shadownormal.dds`). The engine's shader
+comes from the GpuCache. The name has 48 variants; the last argument picks the five-split one by
+its DXBC checksum (without it, `--dump` takes the first):
+
+```powershell
+python -I maniaplanet/tools/gpucache.py --dump "<...>/GpuCache_D3D11_SM5.zip" Tech3/DeferredShadowPssm_p pssm.dxbc 30a64492
+build-mp/Release/mp_shadowtest.exe <capture folder> <out dir> pssm.dxbc --light 0.5,1,2 [--bench 50] [--variants <dir>]
+```
+
+It draws the pass with the engine's shader and with the mod's (as the hooks do) and checks: the
+mod's port of the engine's shader gives the engine's light mask (`--variants`: every variant in a
+folder), the engine's shader and slots come back after the draw, and an unknown variant, constants
+too small, a missing atlas or light size 0 keep the engine's shader. It writes the results as
+`.f32` (width, height, RGBA floats) and prints the GPU time of each.
+
 ## Captures (F12)
 
 Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
@@ -161,7 +215,8 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 | `hdr_t*.dds` | What the engine's tone map reads |
 | `input.dds/.bmp`, `view.txt` | The image before the mod, and the format it was drawn with |
 | `output.dds/.bmp` | The finished frame |
-| `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion; with EngineLightDraws `engine_lights.dds` (what its light draws added, before the exposure) |
+| `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion; the sun shadow pass's linear depth, static maps, split atlas and face normal; with EngineLightDraws `engine_lights.dds` (what its light draws added, before the exposure) |
+| `shadow_cb.bin`, `scenep.bin` | The sun shadow pass's constants (for `mp_shadowtest`) |
 | `camera.txt`, `scenev.bin` | The engine camera, decoded and raw |
 | `tonemap_cb.bin` | The engine's tone-map constants (for `mp_preview --hdr`) |
 | `car.txt` | The car per frame over the last 240 frames: time, frame time, found, position, step (is the neon trail's source even?), camera, which car was taken, and every car in the camera's view (ghosts) |
@@ -198,6 +253,8 @@ python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/DeferredDeCompF
 build-mp/Release/mp_harness.exe ... defread.dxbc --decomp decomp.dxbc   # also: the light mask after a map change
 python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" "Tech3 Block DefReadP1 SelfIllum" selfillum.dxbc
 build-mp/Release/mp_harness.exe ... defread.dxbc --selfillum selfillum.dxbc   # also: EngineLightDraws' light buffer
+python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/DeferredShadowPssm_p pssm.dxbc 30a64492   # the five-split variant
+build-mp/Release/mp_harness.exe ... [--decomp decomp.dxbc] --shadow pssm.dxbc   # also: soft shadows
 ```
 
 It checks that:
@@ -209,6 +266,9 @@ It checks that:
 - with `--decomp`: after a map change (new engine targets, the face-normal pass first) the light mask is the new one;
 - with `--selfillum`: with EngineLightDraws the engine's image stays the same and the light buffer holds the
   material's own light, not its lit surface;
+- with `--shadow`: soft shadows off, the engine's sun shadow pass draws; on, the mod's shader draws a
+  penumbra at a shadow's edge and the same light and shadow elsewhere, says so in the log, and the
+  engine's shader and slots are bound again after the draw; off again, the engine's light mask to the bit;
 - the TMVS curve replaces the engine's tone map and matches its mid grey (UNORM and sRGB);
 - the Present fallback works;
 - a capture writes its files;
@@ -225,6 +285,8 @@ It checks that:
 | `tools/preview.cpp` | Offline previewer for captures |
 | `src/shaderdb.cpp`, `src/shaderdb_table.inc` | Engine shader checksums (generated by `tools/gen_shaderdb.py`) |
 | `src/renderer.cpp`, `shaders/mp.hlsl` | The passes (luma blur for clarity, grade), state save/restore |
+| `src/softshadow.cpp`, `shaders/softshadow*.hlsl*` | Soft sun shadows: the engine's shadow variants, the swap at its draw, the PCSS shader |
+| `tools/shadowtest.cpp` | Offline test of the soft shadows against the engine's shadow shader |
 | `src/overlay.cpp` | F8 menu (ImGui, DX11) |
 | `src/capture.cpp` | Frame capture (trace, DDS/BMP) |
 | `src/settings.cpp` | Presets and `settings.ini` |

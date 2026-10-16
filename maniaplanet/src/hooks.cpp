@@ -20,6 +20,7 @@
 #include "photo11.h"
 #include "maplook.h"
 #include "shaderdb.h"
+#include "softshadow.h"
 #include <windows.h>
 #include <dxgi1_2.h>
 #include <d3d11_4.h>
@@ -238,6 +239,8 @@ void releaseTextures() {
 
 // The engine's sun shadow pass of this frame (volumetric light).
 EngineShadow g_shadow;
+// The mod's soft shadow shader is bound for the engine's shadow draw (softshadow::end after it).
+bool g_softShadowBound = false;
 
 void releaseShadow() {
     if (g_shadow.constants) g_shadow.constants->Release();
@@ -278,6 +281,23 @@ void takeShadowPass(ID3D11DeviceContext* ctx) {
             srv[i]->Release();
         }
         setTexture(kTexShadowDepth + i, res);
+        if (res) res->Release();
+    }
+    // Variants with splits: their atlas (t3) and the face normal they read, for captures.
+    ID3D11PixelShader* ps = nullptr;
+    ctx->PSGetShader(&ps, nullptr, nullptr);
+    const softshadow::Variant variant = softshadow::variantOf(ps);
+    if (ps) ps->Release();
+    const int slots[2] = {3, variant.normalSlot()};
+    for (int i = 0; i < 2; i++) {
+        ID3D11ShaderResourceView* view = nullptr;
+        if (variant.known) ctx->PSGetShaderResources(slots[i], 1, &view);
+        ID3D11Resource* res = nullptr;
+        if (view) {
+            view->GetResource(&res);
+            view->Release();
+        }
+        setTexture(kTexShadowSplits + i, res);
         if (res) res->Release();
     }
     ID3D11SamplerState* sampler = nullptr;
@@ -707,7 +727,13 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     // half a scene (the editor was dark and foggy until Alt).
     Role role = f.ps.role;
     if (role == Role::ToneMap && (!f.ps.name || strncmp(f.ps.name, "Effects/", 8) != 0)) role = Role::Scene;
-    if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/DeferredShadowPssm_p")) takeShadowPass(ctx);
+    if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/DeferredShadowPssm_p")) {
+        takeShadowPass(ctx);
+        // Soft shadows: the mod's shader draws this pass (the engine's is bound again after it).
+        softshadow::Params soft;
+        soft.lightSize = g_lookSettings.enabled ? options::current().softShadows : 0.0f;
+        g_softShadowBound = softshadow::begin(ctx, soft);
+    }
     if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/CarSkin_DefWrite_p") && f.rt && screenSized(f.rtW, f.rtH))
         takeCar(ctx);
 
@@ -824,6 +850,7 @@ HRESULT STDMETHODCALLTYPE createPixelShaderDetour(ID3D11Device* device, const vo
     if (SUCCEEDED(hr) && out && *out && !t_inside) {
         ShaderInfo info = shaderdb::identify(code, size);
         if (info.role == Role::Scene) info.lightSlot = shaderdb::lightTextureSlot(code, size);
+        if (info.name && !strcmp(info.name, "Tech3/DeferredShadowPssm_p")) softshadow::noteEngineShader(*out, code, size);
         {
             std::unique_lock<std::shared_mutex> lock(g_shaderLock);
             g_shaders[*out] = info;
@@ -892,32 +919,51 @@ void STDMETHODCALLTYPE omSetRenderTargetsAndUAVsDetour(ID3D11DeviceContext* ctx,
     g_omSetRenderTargetsAndUAVs.get<OMSetRenderTargetsAndUAVsFn>(ctx)(ctx, count, rtvs, dsv, uavStart, uavCount, uavs, initialCounts);
 }
 
+// After a draw of the game: the engine's shader back where the mod's soft shadows drew.
+void afterDraw(ID3D11DeviceContext* ctx) {
+    if (!g_softShadowBound) return;
+    g_softShadowBound = false;
+    softshadow::end(ctx);
+}
+
 void STDMETHODCALLTYPE drawIndexedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, INT c) {
-    if (isMain(ctx) && onDraw(ctx)) return;
+    if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
     const DrawIndexedFn original = g_drawIndexed.get<DrawIndexedFn>(ctx);
     original(ctx, a, b, c);
-    if (isMain(ctx)) drawLights(ctx, [&] { original(ctx, a, b, c); });
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c); });
+    }
 }
 
 void STDMETHODCALLTYPE drawDetour(ID3D11DeviceContext* ctx, UINT a, UINT b) {
-    if (isMain(ctx) && onDraw(ctx)) return;
+    if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
     const DrawFn original = g_draw.get<DrawFn>(ctx);
     original(ctx, a, b);
-    if (isMain(ctx)) drawLights(ctx, [&] { original(ctx, a, b); });
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b); });
+    }
 }
 
 void STDMETHODCALLTYPE drawIndexedInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, INT d, UINT e) {
-    if (isMain(ctx) && onDraw(ctx)) return;
+    if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
     const DrawIndexedInstancedFn original = g_drawIndexedInstanced.get<DrawIndexedInstancedFn>(ctx);
     original(ctx, a, b, c, d, e);
-    if (isMain(ctx)) drawLights(ctx, [&] { original(ctx, a, b, c, d, e); });
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c, d, e); });
+    }
 }
 
 void STDMETHODCALLTYPE drawInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, UINT d) {
-    if (isMain(ctx) && onDraw(ctx)) return;
+    if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
     const DrawInstancedFn original = g_drawInstanced.get<DrawInstancedFn>(ctx);
     original(ctx, a, b, c, d);
-    if (isMain(ctx)) drawLights(ctx, [&] { original(ctx, a, b, c, d); });
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c, d); });
+    }
 }
 
 void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11CommandList* list, BOOL restore) {
@@ -1089,6 +1135,7 @@ void beginWith(IDXGISwapChain* sc) {
     {
         Inside guard; // the mod's own shaders aren't the game's
         g_rendererReady = g_renderer.init(device);
+        softshadow::init(device);
         prepareLook();
         overlay::init(desc.OutputWindow, device, g_ctx);
     }

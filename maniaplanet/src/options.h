@@ -23,6 +23,9 @@ struct Options {
     bool fallbackAtEnd = true;
     View view = View::Normal;
     float split = 0.5f; // Split: the game's own image left of this
+    // Soft sun shadows: the light's angular diameter in degrees (the sun is 0.53) for the mod's
+    // PCSS shader in place of the engine's sun shadow pass; 0 keeps the engine's (default).
+    float softShadows = 0.0f;
     // The light sources (lamps, screens, halos, the car's lights) from what the engine draws as
     // light, not guessed from the image's colours (engine_lights.cpp). On since the owner's test
     // (2026-10-16, captures 031/032): grass no longer glows, the road borders still do.
@@ -38,7 +41,7 @@ void save();
 } // namespace options
 
 // Sets a look setting (a settings.ini key: Exposure, Bloom, ToneCurve ...; also Preset, Enabled,
-// Lut, LutAmount) or a ManiaPlanet option (Placement, FallbackAtEnd, View, Split). False for an
+// Lut, LutAmount) or a ManiaPlanet option (Placement, FallbackAtEnd, View, Split, SoftShadows). False for an
 // unknown key. For the offline tools and the test.
 bool setValue(const std::string& key, const std::string& value);
 
