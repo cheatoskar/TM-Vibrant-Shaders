@@ -58,6 +58,7 @@ float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug 
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
+float4 u_Water2    : register(c47); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
 float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
 
 sampler2D s0 : register(s0);
@@ -1965,6 +1966,18 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
                 if (qm.z - tex2Dlod(s1, float4(projectToUV(qm), 0, 0)).w > 0.0) b = m; else a = m;
             }
             quv = projectToUV(p + r * b);
+            // Clean water: the ray only hits what faces it, and it meets that surface (no jump in
+            // the depth). From above the ray passes under the ramps and bridges over the pools:
+            // it came out behind their tops (facing up, away from the ray) or behind their edges,
+            // and the water mirrored the tops of the ramps in blotches that came and went with
+            // the steps (a noisy, smeared copy of the stands and roads). Those rays go on.
+            if (onWater && u_Water2.x > 0.5) {
+                float4 hitNd = tex2Dlod(s1, float4(quv, 0, 0));
+                if (dot(hitNd.xyz, r) > 0.0 || (p + r * b).z - hitNd.w > 0.1 + b * 0.03) {
+                    tPrev = t;
+                    continue;
+                }
+            }
             float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
             float confidence = saturate(edge * 10.0) * saturate((1.0 - t / maxDist) * 3.0);
             float3 hit = toLinear(tex2Dlod(s0, float4(quv, 0, 0)).rgb);
@@ -2234,7 +2247,7 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     float3 n = nd.xyz;
     float3 p = viewPosition(uv, nd.w);
     float3 occ = upsampleOcclusion(uv, nd.w, n);
-    float dist = length(p);
+    float dist = sceneDist; // the same length, once (instruction slots)
 
     // Low-frequency normal for relighting: averages neighbours on the same surface so
     // reconstruction noise (z-fighting decals, mesh seams) doesn't flicker the sun term.
@@ -2307,7 +2320,9 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     if (u_Water.z > 2.5) water = min(water, mat.b);
     else if (u_Water.z > 1.5) water *= 1.0 - smoothstep(1.05, 1.2, albedo.r / max(albedo.b, 1e-4)) * (1.0 - smoothstep(0.06, 0.15, luma(albedo)));
     // The open sea far out (other materials than near the shore): whatever lies at its level.
-    if (u_Water.z > 0.5 && u_Water.z < 1.5 && nd.w > 400.0) water = max(water, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * u_Weather.w);
+    // Computed once for here and the night sky's sea below (saves instruction slots).
+    float seaFar = u_Water.z > 0.5 && u_Water.z < 1.5 ? step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) : 0.0;
+    if (nd.w > 400.0) water = max(water, seaFar * u_Weather.w);
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
@@ -2326,7 +2341,10 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     // Dirt (warm brown, rough) mirrored the banners like a polished floor: a faint sheen only.
     float dirt = smoothstep(0.3, 0.45, sat) * (1.0 - smoothstep(0.75, 0.9, sat)) * saturate((c.r - c.g) / max(c.r, 1e-3) * 8.0) *
                  saturate((c.g - c.b) / max(c.r, 1e-3) * 8.0);
-    dry *= 1.0 - 0.85 * dirt;
+    // Clean water (u_Water2.x): the game's water is no dry track either. It took the dry track's
+    // reflection blur (ReflectionBlur, a disc of 8 taps) and polish: what it mirrored came out
+    // soft and grainy.
+    dry *= saturate(1.0 - 0.85 * dirt - water * u_Water2.x);
     reflectivity = max(reflectivity, min(u_Nature.w, 1.0) * dry * lerp(0.35, 1.0, polish));
     polish *= dry;
     float2 slope = 0;
@@ -2366,7 +2384,7 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine) {
     if (u_Mat.z > 0.5) {
         // Far out the sea is drawn by other materials: whatever lies at the sea level.
         float sea = mat.b;
-        if (u_Water.z > 0.5 && u_Water.z < 1.5) sea = max(sea, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * saturate(nd.w / 200.0 - 1.0));
+        sea = max(sea, seaFar * saturate(nd.w / 200.0 - 1.0));
         // The sunset painted on a ring around the map (TMUF Island), far islands: no sunset at night.
         sea = max(sea, smoothstep(1000.0, 1600.0, nd.w));
         c = lerp(c, luma(c) * float3(0.7, 0.85, 1.0), sea * 0.85);

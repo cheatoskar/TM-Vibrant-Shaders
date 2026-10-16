@@ -2000,6 +2000,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool engineLights = s.engineLights && in.hdr;
     const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, s.borderGlow};
     device->SetPixelShaderConstantF(46, engineConstants, 1);
+    // c47 x (CleanWater): the reflection on the game's water skips what it can't see (the tops
+    // of the ramps over the pools) and takes no dry-track blur. Only where the engine tells the
+    // water's height (or it was measured): the colour guess also takes blue kerbs for water.
+    const bool waterKnown = in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown);
+    const float waterConstants[4] = {s.cleanWater && waterKnown ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(47, waterConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
