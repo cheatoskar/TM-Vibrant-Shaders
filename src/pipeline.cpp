@@ -2220,18 +2220,26 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (!ceilings) m_ceilingValid = false;
     const bool longShadows = heightMap && wantLong;
     // 1c. CasterShadows: the game's own static meshes drawn from the light, built up over the
-    // map. Its constants go up every frame: the game's pixel shaders use these registers too.
-    casters::MapInfo casterMap;
-    const bool casterShadows = longShadows && in.casterMap && in.casterMap(device, m_sunWorld, casterMap);
-    float casterConstants[4][4] = {};
-    if (casterShadows) {
-        memcpy(casterConstants, casterMap.rows, sizeof(casterMap.rows));
-        casterConstants[3][0] = 1.0f;
-        casterConstants[3][1] = casterMap.texel[0];
-        casterConstants[3][2] = casterMap.texel[1];
-        casterConstants[3][3] = casterMap.bias;
+    // map: around the camera (c47-c50, s3) and over the whole track (c54-c57, s4). For the long
+    // shadows and the volumetric light alike, so the shafts' gaps line up with the shadows.
+    // The constants go up every frame: the game's pixel shaders use these registers too.
+    casters::Maps casterMaps;
+    float camera[3];
+    for (int j = 0; j < 3; j++) camera[j] = -(in.view[12] * in.view[j * 4 + 0] + in.view[13] * in.view[j * 4 + 1] + in.view[14] * in.view[j * 4 + 2]);
+    const bool casterShadows = (longShadows || (heightMap && wantVolume)) && in.casterMap && in.casterMap(device, m_sunWorld, camera, casterMaps);
+    const casters::MapInfo* casterInfo[2] = {&casterMaps.nearMap, &casterMaps.farMap};
+    for (int k = 0; k < 2; k++) {
+        float constants[4][4] = {};
+        const casters::MapInfo& map = *casterInfo[k];
+        if (casterShadows && map.texture) {
+            memcpy(constants, map.rows, sizeof(map.rows));
+            constants[3][0] = 1.0f;
+            constants[3][1] = map.texel[0];
+            constants[3][2] = map.texel[1];
+            constants[3][3] = map.bias;
+        }
+        device->SetPixelShaderConstantF(k == 0 ? 47 : 54, &constants[0][0], 4);
     }
-    device->SetPixelShaderConstantF(47, &casterConstants[0][0], 4);
     const bool lightGrid = longShadows && s.longShadowQuality > 0 && updateLightGrid(device, s);
     const float noGrid[2][4] = {};
     device->SetPixelShaderConstantF(52, lightGrid ? &m_lightGridConstants[0][0] : &noGrid[0][0], 2);
@@ -2248,9 +2256,15 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         } else {
             bind(device, 2, longShadows ? m_heightMap[m_heightIndex].texture : nullptr, m_heightFilter);
         }
-        if (casterShadows) bind(device, 3, casterMap.texture, false);
+        if (casterShadows) {
+            bind(device, 3, casterMaps.nearMap.texture, false);
+            bind(device, 4, casterMaps.farMap.texture, false);
+        }
         runPass(device, kOcclusionShadow, m_occlusion);
-        if (casterShadows) device->SetTexture(3, nullptr); // a depth texture bound as a texture
+        if (casterShadows) {
+            device->SetTexture(3, nullptr); // depth textures bound as textures
+            device->SetTexture(4, nullptr);
+        }
         bind(device, 0, m_occlusion.texture, false);
         bind(device, 1, m_ndHalf.texture, false);
         passConstants(device, 1.0f / hw, 0.0f);
@@ -2280,8 +2294,16 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         }
         bind(device, 0, m_ndHalf.texture, false);
         bind(device, 1, m_shadowHeight.texture, false); // R32F: no filtering on older GPUs
+        if (casterShadows) {
+            bind(device, 3, casterMaps.nearMap.texture, false);
+            bind(device, 4, casterMaps.farMap.texture, false);
+        }
         passConstants(device, kVolumeSteps[q], 0.0f);
         runPass(device, kVolumetric, m_rays[1]);
+        if (casterShadows) {
+            device->SetTexture(3, nullptr);
+            device->SetTexture(4, nullptr);
+        }
     }
     // 2c. One-bounce global illumination, blurred like the AO.
     const bool gi = s.globalIllumination > 0.0f;
