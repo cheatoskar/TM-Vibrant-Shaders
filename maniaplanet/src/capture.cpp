@@ -264,8 +264,21 @@ void traceDraw(ID3D11DeviceContext* ctx, const char* shader, Role role, unsigned
     describe(rtv[1], rt1, sizeof(rt1));
     describe(dsv, ds, sizeof(ds));
     for (int i = 0; i < 4; i++) describe(srv[i], t[i], sizeof(t[i]));
-    fprintf(g_trace, "%5u %-7s %-48s rt0[%s] rt1[%s] ds[%s] t0[%s] t1[%s] t2[%s] t3[%s]\n", index,
-            shaderdb::roleName(role), shader ? shader : "?", rt0, rt1, ds, t[0], t[1], t[2], t[3]);
+    // rt0's blending (D3D11_BLEND / D3D11_BLEND_OP numbers): which passes add light (one, one, add).
+    char blend[48] = "off";
+    ID3D11BlendState* bs = nullptr;
+    float factor[4];
+    UINT mask = 0;
+    ctx->OMGetBlendState(&bs, factor, &mask);
+    if (bs) {
+        D3D11_BLEND_DESC d;
+        bs->GetDesc(&d);
+        const D3D11_RENDER_TARGET_BLEND_DESC& b = d.RenderTarget[0];
+        if (b.BlendEnable) snprintf(blend, sizeof(blend), "s%d d%d op%d", b.SrcBlend, b.DestBlend, b.BlendOp);
+        bs->Release();
+    }
+    fprintf(g_trace, "%5u %-7s %-48s rt0[%s] rt1[%s] ds[%s] blend[%s] t0[%s] t1[%s] t2[%s] t3[%s]\n", index,
+            shaderdb::roleName(role), shader ? shader : "?", rt0, rt1, ds, blend, t[0], t[1], t[2], t[3]);
     for (auto* v : rtv)
         if (v) v->Release();
     if (dsv) dsv->Release();
