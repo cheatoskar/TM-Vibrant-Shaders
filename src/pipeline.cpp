@@ -2136,6 +2136,19 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     if (!ceilings) m_ceilingValid = false;
     const bool longShadows = heightMap && wantLong;
+    // 1c. CasterShadows: the game's own static meshes drawn from the light, built up over the
+    // map. Its constants go up every frame: the game's pixel shaders use these registers too.
+    casters::MapInfo casterMap;
+    const bool casterShadows = longShadows && in.casterMap && in.casterMap(device, m_sunWorld, casterMap);
+    float casterConstants[4][4] = {};
+    if (casterShadows) {
+        memcpy(casterConstants, casterMap.rows, sizeof(casterMap.rows));
+        casterConstants[3][0] = 1.0f;
+        casterConstants[3][1] = casterMap.texel[0];
+        casterConstants[3][2] = casterMap.texel[1];
+        casterConstants[3][3] = casterMap.bias;
+    }
+    device->SetPixelShaderConstantF(47, &casterConstants[0][0], 4);
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
                                     longShadows ? s.longShadows : 0.0f};
     device->SetPixelShaderConstantF(34, longConstants, 1);
@@ -2145,7 +2158,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 0, m_ndHalf.texture, false);
         bind(device, 1, m_nd.texture, false);
         bind(device, 2, longShadows ? m_heightMap[m_heightIndex].texture : nullptr, m_heightFilter);
+        if (casterShadows) bind(device, 3, casterMap.texture, false);
         runPass(device, kOcclusionShadow, m_occlusion);
+        if (casterShadows) device->SetTexture(3, nullptr); // a depth texture bound as a texture
         bind(device, 0, m_occlusion.texture, false);
         bind(device, 1, m_ndHalf.texture, false);
         passConstants(device, 1.0f / hw, 0.0f);

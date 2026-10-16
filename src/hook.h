@@ -20,6 +20,9 @@ struct DeviceCallbacks {
     void (*draw)(IDirect3DDevice9* device) = nullptr;
     // After the game's draw (GameHdr: an additive draw's own target is unbound again).
     void (*drawDone)(IDirect3DDevice9* device) = nullptr;
+    // An indexed draw, after `draw`, with its parameters (CasterShadows keeps static meshes).
+    void (*drawIndexed)(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start,
+                        UINT count) = nullptr;
     void (*setTransform)(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* matrix) = nullptr;
     void (*setLight)(DWORD index, const D3DLIGHT9* light) = nullptr;
 };

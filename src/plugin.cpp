@@ -1,6 +1,7 @@
 #include "plugin.h"
 #include "audio.h"
 #include "capture.h"
+#include "casters.h"
 #include "config.h"
 #include "depth.h"
 #include "engine.h"
@@ -123,6 +124,7 @@ gfx::Target g_hdrAdded;
 bool g_hdrAddedActive = false; // cleared at this camera's start, takes the additive draws
 bool g_hdrAddedBound = false;  // the render target during the current (additive) draw
 bool g_hdrAddedValid = false;  // holds the last main camera's added light
+bool g_castersOn = false;      // CasterShadows this frame: the main camera's meshes are recorded (casters.cpp)
 
 float seconds() {
     LARGE_INTEGER now;
@@ -889,6 +891,7 @@ void processScene(IDirect3DDevice9* device) {
     inputs.freeze = photo::tiling();
     inputs.lut = updateLut();
     inputs.materials = materialsWanted();
+    if (g_castersOn) inputs.casterMap = casters::update;
     g_frameWidth = width;
     g_frameHeight = height;
 
@@ -1204,6 +1207,38 @@ void onDraw(IDirect3DDevice9* device) {
     else untagStencil(device);
 }
 
+// CasterShadows: the main camera's opaque draws of static materials go to casters.cpp (which
+// keeps the meshes that stay put). Not the car (it moves), glass or water (light passes).
+void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count) {
+    if (!g_castersOn || !g_scene.inMainCamera || !g_scene.haveView || !g_scene.haveProjection) return;
+    DWORD z = FALSE, zwrite = FALSE, blend = FALSE, alphaTest = FALSE, colorWrite = 0;
+    device->GetRenderState(D3DRS_ZENABLE, &z);
+    device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+    device->GetRenderState(D3DRS_ALPHATESTENABLE, &alphaTest);
+    device->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
+    // Alpha-tested meshes (fences, leaves) would cast solid shadows: left out for now.
+    if (!z || !zwrite || blend || alphaTest || !colorWrite) return;
+    const engine::Material material = engine::currentMaterial();
+    if (material == engine::Material::Car || material == engine::Material::Glass || material == engine::Material::Water) return;
+    casters::recordDraw(device, type, base, minIndex, vertices, start, count, g_scene.view, g_scene.projection);
+}
+
+// Once a frame: the kept meshes belong to the map that is open (the game's buffers are held
+// while they are kept), and only while the setting is on.
+void castersTick() {
+    const Settings& s = Config::get().settings;
+    const bool on = s.enabled && s.casterShadows && engine::active();
+    static int s_loads = -1, s_closes = -1;
+    if (engine::mapLoads() != s_loads || engine::mapCloses() != s_closes) {
+        s_loads = engine::mapLoads();
+        s_closes = engine::mapCloses();
+        casters::reset("map changed");
+    }
+    if (g_castersOn && !on) casters::reset("CasterShadows off");
+    g_castersOn = on;
+}
+
 void onCameraEnd(void* camera, const engine::CameraInfo&) {
     if (g_device) untagStencil(g_device);
     if (tracer::tracing()) {
@@ -1267,6 +1302,7 @@ void onPreReset() {
     g_hdrScene.destroy();
     g_hdrAddedActive = g_hdrAddedBound = g_hdrAddedValid = false;
     g_hdrAdded.destroy();
+    casters::releaseDevice();
     depth::onPreReset();
     overlay::preReset();
 }
@@ -1349,6 +1385,7 @@ void onPresent(IDirect3DDevice9* device) {
         TMVS_LOG("engine: cinematic %s (sources %u)", cinematic ? "on" : "off", engine::cinematicSources());
     }
     relightOnSwitch(settings);
+    castersTick();
     g_shadedThisFrame = false;
     g_gameplayThisFrame = false;
 
@@ -1553,6 +1590,7 @@ void bootOnce() {
     deviceCallbacks.setLight = onSetLight;
     deviceCallbacks.draw = onDraw;
     deviceCallbacks.drawDone = onDrawDone;
+    deviceCallbacks.drawIndexed = onDrawIndexed;
     g_deviceCallbacks = deviceCallbacks;
     // Never block the caller (possibly the game's main thread) on retries.
     if (!hook::install(deviceCallbacks)) {
