@@ -117,11 +117,15 @@ Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (a
 
 ## Controls
 
+Default keys; every one can be changed in the menu (*Settings* → *Hotkeys*, [details](docs/settings.md#hotkeys)).
+
 | Key | Action |
 |---|---|
 | `F8` | Open or close the menu |
 | `F7` | Shaders on or off, for a before/after look |
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
+| `F9` | Reload the shaders (development) |
+| `F11` | Trace the next frame (development) |
 | `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms, `Shift+F6` splits the screen: the game without and with the mod |
 
 ![The F8 menu: every preset as a card with a picture](docs/images/menu.jpg)

@@ -115,6 +115,7 @@ add_library(tmvs_core STATIC
   src/noise.cpp
   src/framecap.cpp
   src/config.cpp
+  src/keys.cpp
   src/gbx.cpp
   src/log.cpp
   src/weather.cpp
@@ -190,6 +191,11 @@ target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_mp4test tools/mp4test.cpp)
 target_link_libraries(tmvs_mp4test PRIVATE tmvs_core)
 target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
+
+# Hotkey table test: key names round-trip, conflicts, the ini (development tool).
+add_executable(tmvs_keystest tools/keystest.cpp)
+target_link_libraries(tmvs_keystest PRIVATE tmvs_core)
+target_compile_options(tmvs_keystest PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an

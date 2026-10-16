@@ -1,4 +1,5 @@
 #include "config.h"
+#include "keys.h"
 #include "log.h"
 #include <windows.h>
 #include <cstddef>
@@ -805,6 +806,7 @@ void Config::markDirty() {
 }
 
 void Config::tick() {
+    if (keys::takeChanged()) markDirty(); // a hotkey was rebound
     if (m_dirty && GetTickCount() - m_dirtySince > 1500) save();
 }
 
@@ -1287,6 +1289,7 @@ void Config::load() {
     if (settings.videoCodec < 0 || settings.videoCodec > 2) settings.videoCodec = 1;
     if (GetPrivateProfileStringW(L"Settings", L"VideoBitrate", L"", target, 32, ini)) settings.videoBitrate = static_cast<float>(_wtof(target));
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
+    keys::load(ini);
     readFields(settings, ini, L"Settings", true, true);
     if (preset == kCustomPreset) {
         // Your changes, on top of the preset they started from.
@@ -1341,6 +1344,7 @@ void Config::save() {
     swprintf(value, 16, L"%d", static_cast<int>(mood));
     WritePrivateProfileStringW(L"General", L"LastMood", value, ini);
     writeFields(own, ini, L"Settings", true);
+    keys::save(ini);
     m_dirty = false;
 }
 
