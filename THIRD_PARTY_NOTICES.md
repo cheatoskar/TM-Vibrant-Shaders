@@ -42,9 +42,9 @@ JPEG reader and writer for the preset pictures in the menu (https://github.com/n
 
 The rain, thunder and snow storm sounds embedded in `TMVibrantShaders.dll` and in the ManiaPlanet `d3d11.dll` are recordings from freesound.org under CC0 1.0 (public domain). Sources and authors: [sounds/CREDITS.md](sounds/CREDITS.md).
 
-## AMD FidelityFX Contrast Adaptive Sharpening (CAS)
+## AMD FidelityFX Contrast Adaptive Sharpening (CAS) and Super Resolution 1 (FSR 1)
 
-The sharpening pass follows the CAS algorithm.
+The sharpening pass follows the CAS algorithm. The render scale's upscaling (EASU) and sharpening (RCAS), and the half-resolution aurora's upscaling, are ports of FSR 1 (`ffx_fsr1.h`), Copyright (c) 2021 Advanced Micro Devices, Inc., under the same licence; the notice is also in `shaders/tmvs.hlsl`.
 
 ```
 Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
