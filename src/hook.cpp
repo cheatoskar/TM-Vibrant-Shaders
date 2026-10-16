@@ -122,8 +122,15 @@ void traceDrawState(IDirect3DDevice9* device, const char* kind, UINT primitives)
     IDirect3DPixelShader9* ps = nullptr;
     device->GetVertexShader(&vs);
     device->GetPixelShader(&ps);
+    // Alpha-tested draws (fences, grids: CasterAlphaTest keeps them) say so, with ref and func.
+    DWORD alphaTest = 0, alphaRef = 0, alphaFunc = 0;
+    device->GetRenderState(D3DRS_ALPHATESTENABLE, &alphaTest);
+    device->GetRenderState(D3DRS_ALPHAREF, &alphaRef);
+    device->GetRenderState(D3DRS_ALPHAFUNC, &alphaFunc);
+    char alpha[40] = "";
+    if (alphaTest) snprintf(alpha, sizeof(alpha), " alphatest=%lu/%lu", alphaRef, alphaFunc);
     // With the bytecode hashes the draws can be matched to the dumped sources (gameshaders).
-    tracer::event("  %s prims=%u z=%lu zw=%lu blend=%lu cw=%lx vs=%p#%016llx ps=%p#%016llx", kind, primitives, z, zw, blend, cw,
+    tracer::event("  %s prims=%u z=%lu zw=%lu blend=%lu cw=%lx%s vs=%p#%016llx ps=%p#%016llx", kind, primitives, z, zw, blend, cw, alpha,
                   static_cast<void*>(vs), static_cast<unsigned long long>(shaderHash(vs)), static_cast<void*>(ps),
                   static_cast<unsigned long long>(shaderHash(ps)));
     if (vs) vs->Release();
