@@ -21,6 +21,10 @@ public:
         // With EngineLights it is the light source instead of the guess. Null = none.
         IDirect3DTexture9* added = nullptr;
         IDirect3DTexture9* depth = nullptr; // raw hardware depth in .r (INTZ or R32F)
+        // The INTZ texture whose stencil holds the game's materials when `depth` is a copy of part
+        // of it (RenderScale: the scene lies in its top left corner, where a target of the scene's
+        // size finds it). Null = depth itself.
+        IDirect3DTexture9* stencil = nullptr;
         // GameGBuffer: the normals the game's patched shaders wrote (A16B16G16R16F: world normal,
         // distance from the eye in w, 0 = none). Used with the setting on, where they belong to the
         // surface the depth shows; elsewhere the normal comes from the depth. Null = none.
@@ -32,6 +36,12 @@ public:
         IDirect3DTexture9* gameLight = nullptr;
         UINT width = 0;
         UINT height = 0;
+        // RenderScale: the size of `output` when the scene came in smaller (width x height, the size
+        // the game drew it at): every pass runs at the small size and the finished image goes up to
+        // this one with FSR 1 at the end (EASU, then RCAS by FsrSharpness; the look's Sharpen is
+        // skipped then). 0 = output is width x height.
+        UINT outputWidth = 0;
+        UINT outputHeight = 0;
         float view[16] = {};
         float projection[16] = {};
         float sunDirection[3] = {0.0f, 1.0f, 0.0f}; // world space, towards the sun
@@ -170,8 +180,9 @@ public:
     void beginStateSave(IDirect3DDevice9* device);
     void endStateSave(IDirect3DDevice9* device);
 
-    // Writes the final image to `output` (must not be inputs.color).
-    void render(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, IDirect3DSurface9* output);
+    // Writes the final image to `output` (must not be inputs.color). False: nothing was written
+    // (not ready, no targets).
+    bool render(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, IDirect3DSurface9* output);
 
     // Capture helpers.
     bool readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out);
@@ -190,6 +201,18 @@ public:
     // band): the area's shaded image `band` (its size), mirrored at the area's edges. Rows farther
     // out than the band is high stay as they are.
     bool fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom);
+    // RenderScale: the part `from` of the float scene stretched over `to` of `target` (bilinear,
+    // cut to 0..1 as the game's 8-bit target would have it): a scaled camera that isn't shaded
+    // the scaled way (or not at all) still fills the screen.
+    bool stretchScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, const RECT& from, IDirect3DSurface9* target, const RECT& to);
+    // `source` point sampled at w x h into `out` (format): what the game would have drawn at that
+    // size (the previewer's RenderScale). depth: `source` holds raw depth in .r (out R32F).
+    bool downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth);
+    // RenderScale on: a change of size between the scaled and the full image (photo mode, an F12
+    // capture, a fallback frame) keeps what belongs to the world rather than the screen: the height
+    // map, the neon trail, rain, the exposure, focus and sky colour. Off: a new size starts
+    // everything over, as before.
+    void keepWorldOnResize(bool keep) { m_keepWorld = keep; }
     // Reads a float colour target (A16B16G16R16F) back as raw half floats, RGBA, rows top-down.
     bool readHalfColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint16_t>& out);
     // The material id of every pixel (one byte, rows top-down), after a frame rendered with
@@ -275,6 +298,8 @@ private:
         kLampDown,
         kLampUp,
         kLightingGameLight,
+        kFsrEasu,
+        kFsrRcas,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
@@ -286,7 +311,9 @@ private:
 
     bool compileAll(IDirect3DDevice9* device);
     bool ensureTargets(IDirect3DDevice9* device, UINT width, UINT height);
-    void destroyTargets();
+    // keepWorld: only what has the screen's size (see keepWorldOnResize).
+    void destroyTargets(bool keepWorld = false);
+    void upscaleOutput(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output);
     void setFrameConstants(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings);
     void runPass(IDirect3DDevice9* device, Pass pass, gfx::Target& target);
     void runPass(IDirect3DDevice9* device, Pass pass, IDirect3DSurface9* target, UINT width, UINT height);
@@ -391,6 +418,9 @@ private:
     gfx::Target m_dof2;         // half: the smoothing pass of the normal blur
     gfx::Target m_hdr2;         // full: HDR after DOF / motion blur
     gfx::Target m_taa[2];       // full: TAA history ping-pong (rgb, view z)
+    gfx::Target m_scaled;       // RenderScale: the finished image at the scene's (small) size
+    gfx::Target m_fsr;          // RenderScale: EASU's image at the output's size, before RCAS
+    bool m_keepWorld = false;   // see keepWorldOnResize
     int m_adaptIndex = 0;
     int m_focusIndex = 0;
     int m_focusOnCar = -1;      // DofAutofocus Car: the log's last word on where the car came from (-1 none yet)

@@ -1309,9 +1309,28 @@ float3 clearSky(float3 rd) {
 }
 
 // FSR 1 EASU (AMD FidelityFX Super Resolution, edge-adaptive spatial upsampling), for the
-// effects rendered at half resolution. 12 taps around the sample, an edge direction and
-// length from the luma gradients, then a Lanczos-like kernel stretched along the edge,
-// clamped to the 4 nearest texels so it never rings. size = input w, h, 1/w, 1/h.
+// effects rendered at half resolution and for RenderScale (PS_FsrEasu). 12 taps around the
+// sample, an edge direction and length from the luma gradients, then a Lanczos-like kernel
+// stretched along the edge, clamped to the 4 nearest texels so it never rings. size = input
+// w, h, 1/w, 1/h. Ported from AMD's ffx_fsr1.h (EASU here, RCAS at PS_FsrRcas):
+//
+//   Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a copy of this
+//   software and associated documentation files (the "Software"), to deal in the Software
+//   without restriction, including without limitation the rights to use, copy, modify, merge,
+//   publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+//   to whom the Software is furnished to do so, subject to the following conditions:
+//
+//   The above copyright notice and this permission notice shall be included in all copies or
+//   substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+//   INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+//   PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+//   FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+//   DEALINGS IN THE SOFTWARE.
 void easuSet(inout float2 dir, inout float len, float w, float lA, float lB, float lC, float lD, float lE) {
     float dc = lD - lC, cb = lC - lB;
     float lenX = max(abs(dc), abs(cb));
@@ -3546,10 +3565,11 @@ float4 PS_CopyDepth(float2 uv : TEXCOORD0) : COLOR0 {
 
 // The game's image drawn into a float target (GameHdr), cut to 0..1 as the game's own 8-bit
 // target would have: s0 = float scene, u_Pass0 = area (xy offset, zw size, in uv). u_Pass1.x 1:
-// as it is (the added light, blended one-one into the float scene).
+// as it is (the added light, blended one-one into the float scene); u_Pass1.y 1: alpha too (the
+// previewer's RenderScale: normals with their distance, the material mask), else 1.
 float4 PS_Resolve(float2 uv : TEXCOORD0) : COLOR0 {
-    float3 c = tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0)).rgb;
-    return float4(u_Pass1.x > 0.5 ? c : saturate(c), 1);
+    float4 c = tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0));
+    return float4(u_Pass1.x > 0.5 ? c.rgb : saturate(c.rgb), u_Pass1.y > 0.5 ? c.a : 1);
 }
 
 // ---------------------------------------------------------------------------------
@@ -3663,6 +3683,46 @@ float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR0 {
     float3 drop = lensDrops(uv);
     float4 flake = lensSnow(uv);
     return float4(lerp(tex2Dlod(s0, float4(uv + drop.xy, 0, 0)).rgb * drop.z, flake.rgb, flake.a), 1);
+}
+
+// ---------------------------------------------------------------------------------
+// RenderScale: the game drew its 3D image smaller and every pass above ran at that size; the
+// finished image (after TAA, the lens drops and the rain) goes up to the screen's size with
+// FSR 1, before the HUD is drawn. In display space (sRGB), the perceptual space AMD's EASU and
+// RCAS expect, not linear light. AMD's MIT notice is at easuSample.
+// ---------------------------------------------------------------------------------
+// EASU: s0 = the small image (point sampled: the filter is its own), u_Pass0 = its w, h, 1/w, 1/h.
+float4 PS_FsrEasu(float2 uv : TEXCOORD0) : COLOR0 {
+    return float4(easuSample(s0, uv, u_Pass0), 1);
+}
+
+// RCAS (robust contrast-adaptive sharpening) at the screen's size: a cross of 5 taps and the
+// strongest negative lobe that keeps every channel of the result between the cross's darkest
+// and brightest (it never rings past its neighbours), weakened where the cross looks like noise
+// (film grain, TAA's left-over flicker). s0 = the EASU image (point), u_Pass0.xy = its texel
+// size, u_Pass0.z = sharpness, 2^-stops (1 = AMD's strongest).
+float4 PS_FsrRcas(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 t = u_Pass0.xy;
+    float3 b = tex2Dlod(s0, float4(uv + float2(0, -t.y), 0, 0)).rgb;
+    float3 d = tex2Dlod(s0, float4(uv + float2(-t.x, 0), 0, 0)).rgb;
+    float3 e = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float3 f = tex2Dlod(s0, float4(uv + float2(t.x, 0), 0, 0)).rgb;
+    float3 h = tex2Dlod(s0, float4(uv + float2(0, t.y), 0, 0)).rgb;
+    // Noise: the centre's distance from the cross's average, against the cross's range (luma x 2).
+    float bL = b.b * 0.5 + (b.r * 0.5 + b.g), dL = d.b * 0.5 + (d.r * 0.5 + d.g), eL = e.b * 0.5 + (e.r * 0.5 + e.g);
+    float fL = f.b * 0.5 + (f.r * 0.5 + f.g), hL = h.b * 0.5 + (h.r * 0.5 + h.g);
+    float range = max(max(max(bL, dL), max(eL, fL)), hL) - min(min(min(bL, dL), min(eL, fL)), hL);
+    float nz = saturate(abs(0.25 * (bL + dL + fL + hL) - eL) / max(range, 1e-5));
+    nz = 1.0 - 0.5 * nz;
+    // The lobe that would push a channel below 0 or above 1 around this pixel, per channel.
+    float3 mn4 = min(min(b, d), min(f, h));
+    float3 mx4 = max(max(b, d), max(f, h));
+    float3 hitMin = min(mn4, e) / max(4.0 * mx4, 1e-5);
+    float3 hitMax = (1.0 - max(mx4, e)) / min(4.0 * mn4 - 4.0, -1e-5);
+    float3 lobeRGB = max(-hitMin, hitMax);
+    // 0.1875 = 1/4 - 1/16: AMD's limit (no more than a cross of -0.1875 around a centre of 1).
+    float lobe = max(-0.1875, min(max(lobeRGB.r, max(lobeRGB.g, lobeRGB.b)), 0.0)) * u_Pass0.z * nz;
+    return float4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1);
 }
 
 // ---------------------------------------------------------------------------------
