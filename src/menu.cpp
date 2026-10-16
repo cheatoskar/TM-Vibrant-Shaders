@@ -231,7 +231,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("PlanetAzimuth") || is("PlanetElevation")) return (sky == 3 || sky == 5) && s.planetSize > 0.0f;
     if (is("PlanetView")) return sky == 5 && s.planetSize > 0.0f;
     if (is("CloudCoverage") || is("CloudHeight")) return s.volumetricClouds > 0.0f;
-    if (is("LongShadowRange")) return s.longShadows > 0.0f;
+    if (is("LongShadowRange") || is("LongShadowQuality")) return s.longShadows > 0.0f;
     if (is("ShadowLength")) return s.shadowStrength > 0.0f;
     if (is("GodRayDecay")) return s.godRays > 0.0f;
     if (is("Puddles")) return s.wetness > 0.0f;
@@ -340,6 +340,9 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             } else if (!strcmp(f.key, "EngineMoon")) {
                 static const char* kMoons[] = {"As the game has it", "From the black hole", "Off (ambient and lamps only)"};
                 changed |= ImGui::Combo(label, value, kMoons, IM_ARRAYSIZE(kMoons));
+            } else if (!strcmp(f.key, "LongShadowQuality")) {
+                static const char* kLongQualities[] = {"Traced in steps (as before)", "Every map cell (no gaps)"};
+                changed |= ImGui::Combo(label, value, kLongQualities, IM_ARRAYSIZE(kLongQualities));
             } else if (!strcmp(f.key, "PlanetView")) {
                 changed |= ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
             } else {

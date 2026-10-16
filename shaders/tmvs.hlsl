@@ -58,7 +58,9 @@ float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug 
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
-float4 u_Water2    : register(c47); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
+float4 u_Water2    : register(c51); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
+float4 u_LightGrid : register(c52); // LongShadowQuality 1: horizontal light direction (world x, z), the light grid's corner along it and across it (m)
+float4 u_LightGrid2 : register(c53); // 1 / light grid size (m), horizontal length of the light direction, margin growth per m of ray, range (m; 0 = s2 is the height map)
 float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
 float4 u_CasterU   : register(c47); // CasterShadows (occlusion pass): world -> shadow map u
 float4 u_CasterV   : register(c48); // world -> shadow map v
@@ -327,6 +329,74 @@ float casterShadow(float3 pView, float3 nView, float2 jitter) {
     return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
+// LongShadowQuality 1: the same test without stepping. The 24 steps above lie metres apart far
+// along the ray (9 m at the end of 120 m): a wall top one or two map cells thick is hit by some
+// rays and missed by their neighbours, so a low light drew its shadow weak and grainy, cut off
+// where the steps stopped hitting it, and changing with the distance to the wall as the car moved.
+// Here a grid turned to the light holds for every cell the highest the ray from it must clear
+// (PS_LightGridInit / PS_LightGridSweep): every cell along the ray counts, one lookup.
+// s2 = light grid (r: height + 10000 - drop of the ray to it, 0 = nothing; g: distance to it, m)
+float longShadowGrid(float3 pView, float3 nView) {
+    float3 sun = u_SunWorld.xyz;
+    if (sun.y < 0.02) return 0.0;
+    // Off a wall face by more than a grid cell: the grid holds the wall's top one cell wider than
+    // the wall (and the lookups blend the next cell in), its face lit by a low light came out in
+    // dark stripes, one per grid row.
+    float3 nWorld = viewToWorldDir(nView);
+    float3 origin = worldPosition(pView) + nWorld * 0.2 + float3(nWorld.x, 0.0, nWorld.z) * 1.6 / u_LightGrid2.x / 1024.0;
+    const float t0 = 0.7; // as the trace's first step: the receiver's own wall stays out
+    float3 q = origin + sun * t0;
+    float2 along = float2(dot(q.xz, u_LightGrid.xy), dot(q.xz, float2(-u_LightGrid.y, u_LightGrid.x)));
+    float2 uv = (along - u_LightGrid.zw) * u_LightGrid2.x;
+    if (any(uv < 0.0) || any(uv > 1.0)) return 0.0;
+    float2 caster = tex2Dlod(s2, float4(uv, 0, 0)).rg;
+    // Penumbra across the light: four lookups side by side, as far apart as the edge is soft
+    // in height (wider the farther the caster). One row of cells alone ends its shadow where its
+    // own highest cell does: a low light drew each row's end as a tooth metres long.
+    float t = t0 + max(caster.g, 0.0) / u_LightGrid2.y;
+    float width = (0.3 + t * 0.04) * u_LightGrid2.x;
+    float level = q.y + 0.35 + t0 * u_LightGrid2.z + 10000.0; // what a caster must rise above
+    float occlusion = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 c = tex2Dlod(s2, float4(uv.x, uv.y + (k - 1.5) * 0.5 * width, 0, 0)).rg;
+        // r < 5000: nothing seen towards the light (or a blend with nothing). The last fifth of the
+        // range fades: every cell counts now, a tall caster's shadow would end in a straight cut.
+        float tc = t0 + c.g / u_LightGrid2.y;
+        if (c.r > 5000.0) occlusion += saturate((c.r - level) / (0.3 + tc * 0.04)) * saturate((u_LightGrid2.w - tc) * 5.0 / u_LightGrid2.w);
+    }
+    return occlusion * 0.25;
+}
+
+// The light grid: 1024^2 cells of the height map's size, turned so that +x points to the light
+// (horizontally). Corner and direction in u_LightGrid, s0 = height map (point sampled).
+// out.r = highest height of the four map cells around the cell (+10000, 0 = never seen): a wall
+// top thinner than a cell must not fall between two cells of the turned grid.
+float4 PS_LightGridInit(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 a = u_LightGrid.zw + uv / u_LightGrid2.x;
+    float2 xz = a.x * u_LightGrid.xy + a.y * float2(-u_LightGrid.y, u_LightGrid.x);
+    float2 m = (xz - u_HeightMap.xy) / u_HeightMap.z;
+    if (any(m < 0.0) || any(m > 1.0)) return 0;
+    float t = u_Pass0.x; // half a map cell
+    float h = max(max(tex2Dlod(s0, float4(m + float2(-t, -t), 0, 0)).r, tex2Dlod(s0, float4(m + float2(t, -t), 0, 0)).r),
+                  max(tex2Dlod(s0, float4(m + float2(-t, t), 0, 0)).r, tex2Dlod(s0, float4(m + float2(t, t), 0, 0)).r));
+    return float4(h, 0, 0, 1);
+}
+
+// One sweep towards the light: each cell takes the best of itself and three cells further on,
+// lowered by how far the ray climbs (and its margin grows) on the way there. Four sweeps of
+// four cover 256 cells. s0 = previous sweep (point sampled), u_Pass0.xyz = the three offsets
+// (uv), w = drop per uv unit; u_Pass1.x = metres per uv unit.
+float4 PS_LightGridSweep(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 best = tex2Dlod(s0, float4(uv, 0, 0)).rg;
+    [unroll] for (int j = 0; j < 3; j++) {
+        float o = j == 0 ? u_Pass0.x : (j == 1 ? u_Pass0.y : u_Pass0.z);
+        float2 v = tex2Dlod(s0, float4(uv.x + o, uv.y, 0, 0)).rg;
+        float s = v.r - o * u_Pass0.w;
+        if (uv.x + o < 1.0 && v.r > 0.0 && s > best.r) best = float2(s, v.g + o * u_Pass1.x);
+    }
+    return float4(best, 0, 1);
+}
+
 // ---------------------------------------------------------------------------------
 // Volumetric light: sun shafts with real shadows in the haze, also with the sun off screen.
 // 1. Shadow height map (256^2 over the height map's area): for every column, the height
@@ -470,9 +540,11 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (u_Temporal.w > 0.0 && u_SunView.w > 0.5 && ndl > -0.25) {
         // Interleaved gradient noise: even, so the blur below removes it (no blotches).
         float2 jitter = float2(noise2, frac(noise2 * 13.71 + noise));
-        // CasterShadows: the map of the game's meshes where it reaches, the height map beyond.
+        // CasterShadows: the map of the game's meshes where it reaches; beyond it the light grid
+        // (LongShadowQuality 1) or the trace.
         float casters = u_Casters.x > 0.5 ? casterShadow(p, n, jitter) : -1.0;
-        float occluded = casters >= 0.0 ? casters : longShadow(p, n, frac(noise + 0.5), jitter);
+        float occluded = casters >= 0.0 ? casters
+                         : (u_LightGrid2.w > 0.5 ? longShadowGrid(p, n) : longShadow(p, n, frac(noise + 0.5), jitter));
         longVis = 1.0 - occluded * u_Temporal.w;
         sunVis = min(sunVis, longVis);
     }

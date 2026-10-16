@@ -23,6 +23,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("ShadowLength", "Shadow ray length (m)", "Lighting", Float, shadowLength, 1.0f, 30.0f),
         TMVS_FIELD("LongShadows", "Long-range shadows", "Lighting", Float, longShadows, 0.0f, 1.0f),
         TMVS_FIELD("LongShadowRange", "Long shadow range (m)", "Lighting", Float, longShadowRange, 30.0f, 250.0f),
+        TMVS_FIELD("LongShadowQuality", "Long shadows: every cell (no gaps)", "Lighting", Int, longShadowQuality, 0.0f, 1.0f),
         TMVS_FIELD("NeonLight", "Neon light on surroundings", "Lighting", Float, neonLight, 0.0f, 2.0f),
         TMVS_FIELD("GlobalIllumination", "Bounce light (global illumination)", "Lighting", Float, globalIllumination, 0.0f, 2.0f),
         TMVS_FIELD("SunLight", "Sunlight warmth", "Lighting", Float, sunLight, 0.0f, 1.5f),

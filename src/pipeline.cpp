@@ -21,6 +21,7 @@ const char* const kEntryPoints[] = {
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
+    "PS_LightGridInit", "PS_LightGridSweep",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -298,6 +299,7 @@ void Pipeline::destroyTargets() {
     for (auto& t : m_heightMap) t.destroy();
     for (auto& t : m_ceilingMap) t.destroy();
     m_shadowHeight.destroy();
+    for (auto& t : m_lightGrid) t.destroy();
     gfx::release(m_heightDepth);
     gfx::release(m_splatPoints);
     gfx::release(m_cloudNoise);
@@ -871,6 +873,80 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
     // volumetric passes read the shifted map ~40 m off for one frame (shadows popping up).
     const float map[4] = {m_heightOrigin[0], m_heightOrigin[1], m_heightWorld, s.longShadowRange};
     device->SetPixelShaderConstantF(35, map, 1);
+}
+
+// LongShadowQuality 1: the height map turned so that +x points to the light, then swept towards
+// it (see longShadowGrid in tmvs.hlsl). Only when the map, the light or the range changed (the
+// map: every other frame). Returns false where the GPU lacks the format: the trace stays.
+bool Pipeline::updateLightGrid(IDirect3DDevice9* device, const Settings& s) {
+    if (!m_lightGridSupported) return false;
+    if (!m_lightGrid[0].valid()) {
+        IDirect3D9* d3d = nullptr;
+        device->GetDirect3D(&d3d);
+        D3DDEVICE_CREATION_PARAMETERS cp{};
+        device->GetCreationParameters(&cp);
+        D3DDISPLAYMODE mode{};
+        device->GetDisplayMode(0, &mode);
+        const bool target = d3d && SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format, D3DUSAGE_RENDERTARGET,
+                                                                     D3DRTYPE_TEXTURE, D3DFMT_G32R32F));
+        m_lightGridFilter = d3d && SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format, D3DUSAGE_QUERY_FILTER,
+                                                                     D3DRTYPE_TEXTURE, D3DFMT_G32R32F));
+        if (d3d) d3d->Release();
+        bool ok = target && m_lightGrid[0].create(device, m_heightSize, m_heightSize, D3DFMT_G32R32F) &&
+                  m_lightGrid[1].create(device, m_heightSize, m_heightSize, D3DFMT_G32R32F);
+        TMVS_LOG("pipeline: long-shadow light grid %s", ok ? (m_lightGridFilter ? "ready (filtered)" : "ready (point sampled)")
+                                                           : "unavailable (no G32R32F target) - long shadows are traced in steps");
+        if (!ok) {
+            for (auto& t : m_lightGrid) t.destroy();
+            m_lightGridSupported = false;
+            return false;
+        }
+        m_lightGridStale = true;
+    }
+    // The light's horizontal direction is the grid's x. Straight overhead it has none: any will do,
+    // nothing is far from its caster then.
+    const float sx = m_sunWorld[0], sy = m_sunWorld[1], sz = m_sunWorld[2];
+    const float horizontal = sqrtf(sx * sx + sz * sz);
+    const float lx = horizontal > 1e-3f ? sx / horizontal : 1.0f, lz = horizontal > 1e-3f ? sz / horizontal : 0.0f;
+    const float ch = fmaxf(horizontal, 1e-3f);
+    // The trace's margin: it grows by this much per metre along the ray (more under a low light).
+    const float margin = 0.012f + 0.02f * fminf(fmaxf(1.0f - sy * 3.0f, 0.0f), 1.0f);
+    const float texel = m_heightWorld / m_heightSize;
+    // The corner around the height map's middle, in whole cells along and across the light, so the
+    // cells keep their place while the map stays put.
+    const float mx = m_heightOrigin[0] + m_heightWorld * 0.5f, mz = m_heightOrigin[1] + m_heightWorld * 0.5f;
+    const float along = floorf((mx * lx + mz * lz - m_heightWorld * 0.5f) / texel) * texel;
+    const float across = floorf((-mx * lz + mz * lx - m_heightWorld * 0.5f) / texel) * texel;
+    const float grid[2][4] = {{lx, lz, along, across}, {1.0f / m_heightWorld, ch, margin, s.longShadowRange}};
+    const bool moved = memcmp(grid, m_lightGridConstants, sizeof(grid)) != 0;
+    if (!m_lightGridStale && !moved) return true;
+    memcpy(m_lightGridConstants, grid, sizeof(grid));
+    m_lightGridStale = false;
+
+    device->SetPixelShaderConstantF(52, &grid[0][0], 2);
+    bind(device, 0, m_heightMap[m_heightIndex].texture, false);
+    passConstants(device, 0.5f / m_heightSize, 0.0f);
+    runPass(device, kLightGridInit, m_lightGrid[0]);
+    // Sweeps of four: each cell takes the best of the 4 windows after it, so the window grows
+    // x4 a sweep; the last one is cut to the range (its windows overlap: a maximum doesn't mind).
+    const int cells = static_cast<int>(ceilf(s.longShadowRange * ch / texel));
+    int window = 1, index = 0;
+    while (window < cells) {
+        const int next = window * 4 < cells ? window * 4 : cells;
+        float offset[3];
+        for (int j = 0; j < 3; j++) offset[j] = static_cast<float>(std::min((j + 1) * window, next - window)) / m_heightSize;
+        // How far the ray climbs (and its margin grows) per uv unit along the grid.
+        const float drop = (sy + margin) / ch * m_heightWorld;
+        bind(device, 0, m_lightGrid[index].texture, false);
+        passConstants(device, offset[0], offset[1], offset[2], drop);
+        const float metres[4] = {m_heightWorld, 0.0f, 0.0f, 0.0f};
+        device->SetPixelShaderConstantF(33, metres, 1);
+        runPass(device, kLightGridSweep, m_lightGrid[index ^ 1]);
+        index ^= 1;
+        window = next;
+    }
+    m_lightGridIndex = index;
+    return true;
 }
 
 bool Pipeline::ensureCloudNoise(IDirect3DDevice9* device) {
@@ -2020,12 +2096,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool engineLights = s.engineLights && in.hdr;
     const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, s.borderGlow};
     device->SetPixelShaderConstantF(46, engineConstants, 1);
-    // c47 x (CleanWater): the reflection on the game's water skips what it can't see (the tops
+    // c51 x (CleanWater): the reflection on the game's water skips what it can't see (the tops
     // of the ramps over the pools) and takes no dry-track blur. Only where the engine tells the
     // water's height (or it was measured): the colour guess also takes blue kerbs for water.
     const bool waterKnown = in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown);
     const float waterConstants[4] = {s.cleanWater && waterKnown ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
-    device->SetPixelShaderConstantF(47, waterConstants, 1);
+    device->SetPixelShaderConstantF(51, waterConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
@@ -2139,6 +2215,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (heightMap && splat && (!m_heightValid || (m_frame & 1))) {
         updateHeightMap(device, in, s, ceilings);
         m_shadowHeightStale = true;
+        m_lightGridStale = true;
     }
     if (!ceilings) m_ceilingValid = false;
     const bool longShadows = heightMap && wantLong;
@@ -2155,6 +2232,9 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         casterConstants[3][3] = casterMap.bias;
     }
     device->SetPixelShaderConstantF(47, &casterConstants[0][0], 4);
+    const bool lightGrid = longShadows && s.longShadowQuality > 0 && updateLightGrid(device, s);
+    const float noGrid[2][4] = {};
+    device->SetPixelShaderConstantF(52, lightGrid ? &m_lightGridConstants[0][0] : &noGrid[0][0], 2);
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
                                     longShadows ? s.longShadows : 0.0f};
     device->SetPixelShaderConstantF(34, longConstants, 1);
@@ -2163,7 +2243,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (s.aoStrength > 0.0f || s.shadowStrength > 0.0f || s.debugView == 3 || s.debugView == 4 || s.debugView == 7) {
         bind(device, 0, m_ndHalf.texture, false);
         bind(device, 1, m_nd.texture, false);
-        bind(device, 2, longShadows ? m_heightMap[m_heightIndex].texture : nullptr, m_heightFilter);
+        if (lightGrid) {
+            bind(device, 2, m_lightGrid[m_lightGridIndex].texture, m_lightGridFilter);
+        } else {
+            bind(device, 2, longShadows ? m_heightMap[m_heightIndex].texture : nullptr, m_heightFilter);
+        }
         if (casterShadows) bind(device, 3, casterMap.texture, false);
         runPass(device, kOcclusionShadow, m_occlusion);
         if (casterShadows) device->SetTexture(3, nullptr); // a depth texture bound as a texture

@@ -97,6 +97,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Shadow ray length (m) | `ShadowLength` | 1 – 30 | How far those shadow rays travel. |
 | Long-range shadows | `LongShadows` | 0 – 1 | Shadows from a height map of the track that builds up while you drive: long evening shadows, also from objects off screen. |
 | Long shadow range (m) | `LongShadowRange` | 30 – 250 | How far the long shadows reach. |
+| Long shadows: every cell | `LongShadowQuality` | 0 / 1 (1) | 1: every cell of the height map towards the light counts (a grid turned to the light and swept towards it), so thin casters like wall tops cast their whole shadow under a low sun or the black hole, without grain. 0: traced in 24 steps as before (thin casters were hit by some rays and missed by others: weak, grainy shadows that ended in straight lines). |
 | Neon light on surroundings | `NeonLight` | 0 – 2 | How much the coloured borders and signs light up the road and walls around them. With *Light sources from the game* the light comes only from what the game draws as light (lamps, glows, start lights) and the neon borders (by *Neon strips glow*), each in its own colour; floodlit grass, banners and car paint no longer light their surroundings. |
 | Bounce light | `GlobalIllumination` | 0 – 2 | One bounce of coloured light from surface to surface. |
 | Sunlight warmth | `SunLight` | 0 – 1.5 | How strongly sunlit surfaces take on the sun colour. |
