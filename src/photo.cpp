@@ -3,6 +3,7 @@
 #include "engine.h"
 #include "image.h"
 #include "log.h"
+#include "pipeline.h"
 #include "settings.h"
 #include <cmath>
 #include <cstdio>
@@ -405,6 +406,41 @@ void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3D
     };
     fill(x - 2 * t, x + 2 * t, D3DCOLOR_XRGB(16, 16, 16));
     fill(x - t, x + t, D3DCOLOR_XRGB(235, 235, 235));
+}
+
+std::string splitLightNote() {
+    if (g_splitPreset.empty()) return std::string();
+    const Config& config = Config::get();
+    const Settings& mine = config.settings;
+    if (!mine.enabled) return std::string();
+    // Asked every frame by the bar at the bottom: your own presets are files, read again only
+    // when another one is picked or after a second.
+    static std::string s_name;
+    static DWORD s_read = 0;
+    static Settings s_other;
+    static bool s_known = false;
+    if (s_name != g_splitPreset || GetTickCount() - s_read > 1000) {
+        s_name = g_splitPreset;
+        s_read = GetTickCount();
+        s_other = mine;
+        s_known = config.presetSettings(g_splitPreset, s_other);
+    }
+    if (!s_known) return std::string();
+    const Settings& other = s_other;
+    // As the plugin decides them: real night and the moon at map load (or on a switch), the
+    // game's sky and its sun's halo every frame (onFrameBegin), all from your look.
+    const float dayTime = engine::mapDayTime();
+    const bool ownNight = dayTime >= 0.0f && moodOfDayTime(dayTime) == Mood::Night;
+    const bool otherNightSky = Pipeline::skyReplacesSun(other);
+    if (engine::mapLitAtNight() && !otherNightSky && !ownNight)
+        return "Lit at midnight for your look: " + g_splitPreset + "'s sun can't show here";
+    if (engine::moonReplaced() && !Pipeline::blackHoleLights(other))
+        return "The game's moon is changed for your look: " + g_splitPreset + " can't show it";
+    if (Pipeline::skyReplacesSun(mine) && !otherNightSky)
+        return "The game's sky and sun are hidden for your look: " + g_splitPreset + " can't show them";
+    if (!Pipeline::skyReplacesSun(mine) && otherNightSky && mine.gameNight && !ownNight)
+        return "Lit by the game's sun for your look: " + g_splitPreset + "'s real night can't show here";
+    return std::string();
 }
 
 void notify(const char* text, DWORD seconds) {

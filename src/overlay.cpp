@@ -37,6 +37,21 @@ bool g_initialized = false;
 HWND g_hwnd = nullptr;
 WNDPROC g_originalWndProc = nullptr;
 Status g_status;
+// The compare split's bar at the bottom (the two looks, the other side switchable) was drawn last
+// frame: it takes the mouse over it, also with the menu closed.
+bool g_splitBar = false;
+
+// The mouse for the split's bar with the menu closed: moves always (hover), presses only over it
+// (or while ImGui holds one: its release), so the game keeps every other click and its mouse
+// capture (the backend takes and releases the capture with each press).
+bool splitBarMouse(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    if (!g_splitBar || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
+    ImGuiIO& io = ImGui::GetIO();
+    const bool held = io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2];
+    if (msg != WM_MOUSEMOVE && !io.WantCaptureMouse && !held) return false;
+    ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam);
+    return msg != WM_MOUSEMOVE;
+}
 
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -105,6 +120,7 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
         if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST && ImGui::GetIO().WantCaptureMouse) return 1;
         if ((msg == WM_KEYDOWN || msg == WM_CHAR) && ImGui::GetIO().WantCaptureKeyboard) return 1;
     }
+    if (!config.showOverlay && splitBarMouse(hwnd, msg, wparam, lparam)) return 0;
     // Photo mode: focus click and depth of field on the wheel (the game doesn't see them).
     if (photo::handleMessage(hwnd, msg, wparam, lparam)) return 0;
     return CallWindowProcW(g_originalWndProc, hwnd, msg, wparam, lparam);
@@ -154,6 +170,46 @@ bool consumeReloadRequest() {
     return menu::consumeReloadRequest();
 }
 
+// The compare split's bar: your look's name on its side of the line, the other side's (the game's
+// image or a preset) as a list on the other. A line above the list when the frame, lit for your
+// look, can't show the preset's light (photo::splitLightNote).
+void drawSplitBar() {
+    Config& config = Config::get();
+    std::string& other = photo::splitPreset();
+    const float scale = menu::scale();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    const float x = photo::splitPosition() * size.x, y = size.y - 24.0f * scale, pad = 8.0f * scale;
+    const bool mineLeft = photo::splitSwapped();
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
+    const char* kGame = "The game's image";
+    // Your side.
+    ImGui::SetNextWindowPos(ImVec2(mineLeft ? x - pad : x + pad, y), ImGuiCond_Always, ImVec2(mineLeft ? 1.0f : 0.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##splitMine", nullptr, flags | ImGuiWindowFlags_NoInputs);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(config.preset.empty() ? "Your look" : config.preset.c_str());
+    ImGui::End();
+    // The other side.
+    const std::vector<std::string> names = config.presetNames();
+    float widest = ImGui::CalcTextSize(kGame).x;
+    for (const std::string& name : names) widest = std::max(widest, ImGui::CalcTextSize(name.c_str()).x);
+    const std::string note = photo::splitLightNote();
+    ImGui::SetNextWindowPos(ImVec2(mineLeft ? x + pad : x - pad, y), ImGuiCond_Always, ImVec2(mineLeft ? 0.0f : 1.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##splitOther", nullptr, flags);
+    if (!note.empty()) ImGui::TextDisabled("%s", note.c_str());
+    ImGui::SetNextItemWidth(widest + ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 2.0f);
+    if (ImGui::BeginCombo("##splitOtherList", other.empty() ? kGame : other.c_str(), ImGuiComboFlags_HeightLarge)) {
+        if (ImGui::Selectable(kGame, other.empty())) other.clear();
+        for (const std::string& name : names) {
+            if (ImGui::Selectable(name.c_str(), other == name)) other = name;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::End();
+}
+
 void draw(IDirect3DDevice9* device) {
     if (!g_initialized) {
         init(device);
@@ -163,13 +219,16 @@ void draw(IDirect3DDevice9* device) {
     const char* photoHint = photo::status();
     if (!menu) {
         Config::get().previewPreset.clear();
-        if (!*photoHint) return;
+        if (!*photoHint) {
+            g_splitBar = false;
+            return;
+        }
     }
 
     ImGui_ImplDX9_NewFrame();
     ImGui_ImplWin32_NewFrame();
-    // Draw ImGui's cursor over the menu (the game hides the OS cursor), the game's elsewhere.
-    ImGui::GetIO().MouseDrawCursor = menu && ImGui::GetIO().WantCaptureMouse;
+    // Draw ImGui's cursor over the menu or the split's bar (the game hides the OS cursor), the game's elsewhere.
+    ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse;
     ImGui::NewFrame();
     if (menu) {
         // The pipeline's GPU timings for the Performance page.
@@ -216,28 +275,11 @@ void draw(IDirect3DDevice9* device) {
         ImGui::TextUnformatted(photoHint);
         ImGui::End();
     }
-    if (photo::splitShown()) {
-        // Which side is which, next to the line near the bottom (drawn at Present: not in photos).
-        ImDrawList* draw = ImGui::GetForegroundDrawList();
-        const ImVec2 size = ImGui::GetIO().DisplaySize;
-        const float x = photo::splitPosition() * size.x, y = size.y - 48.0f * menu::scale(), pad = 10.0f * menu::scale();
-        // With a preset on the other side: its name, and your preset's on the mod's side.
-        const std::string& preset = photo::splitPreset();
-        const Config& config = Config::get();
-        const char* other = preset.empty() ? "Game" : preset.c_str();
-        const char* mine = preset.empty() || config.preset.empty() ? "TMVS" : config.preset.c_str();
-        const char* left = photo::splitSwapped() ? mine : other;
-        const char* right = photo::splitSwapped() ? other : mine;
-        const ImVec2 lw = ImGui::CalcTextSize(left);
-        const auto label = [&](float at, const char* text) {
-            const ImVec2 s = ImGui::CalcTextSize(text);
-            draw->AddRectFilled(ImVec2(at - 4.0f * menu::scale(), y - 2.0f * menu::scale()), ImVec2(at + s.x + 4.0f * menu::scale(), y + s.y + 2.0f * menu::scale()),
-                                IM_COL32(0, 0, 0, 140), 3.0f * menu::scale());
-            draw->AddText(ImVec2(at, y), IM_COL32(235, 235, 235, 255), text);
-        };
-        label(x - pad - lw.x, left);
-        label(x + pad, right);
-    }
+    // The compare split: which side is which, at the line near the bottom, the other side a list
+    // to switch it without the menu. With photo mode's line on screen only (drawn at Present:
+    // never in the photos).
+    g_splitBar = photo::splitShown() && *photoHint;
+    if (g_splitBar) drawSplitBar();
     ImGui::EndFrame();
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
