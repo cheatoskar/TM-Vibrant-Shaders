@@ -11,6 +11,7 @@
 #include "options.h"
 #include "renderer.h"
 #include "shaderdb.h"
+#include "softshadow.h"
 #include "thumbnails11.h"
 #include "photo11.h"
 #include "maplook.h"
@@ -284,6 +285,16 @@ void gamePanel() {
     changed |= ImGui::RadioButton("End of frame (interface too)", &placement, 1);
     o.placement = static_cast<Placement>(placement);
     changed |= ImGui::Checkbox("End of frame when the interface start isn't found", &o.fallbackAtEnd);
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+    ImGui::SliderFloat("Soft sun shadows", &o.softShadows, 0.0f, 4.0f, o.softShadows > 0.0f ? "light %.2f degrees" : "off (the game's)");
+    if (o.softShadows < 0.05f) o.softShadows = 0.0f;
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("The sun's shadows soft like real ones: sharp where a thing touches the ground, wider the farther\n"
+                          "they fall from it. The value is the sun's size in the sky (the real sun: 0.5 degrees; more is softer).\n"
+                          "Off: the game's own shadows.\n"
+                          "The mod draws the game's shadow pass with its own shader (nothing in the game's memory changes).\n"
+                          "Whether ManiaPlanet's anti-cheat minds that is not known.");
     if (changed) options::save();
     int view = static_cast<int>(o.view);
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
@@ -317,6 +328,7 @@ void gamePanel() {
         found += engineTextureName(i);
     }
     ImGui::TextDisabled("Engine textures: %s", found.empty() ? "none" : found.c_str());
+    ImGui::TextDisabled("Soft shadows: %s", softshadow::status());
     ImGui::TextDisabled("Shaders recognised: %u of %u, %u draws, %ux%u", st.shadersKnown, st.shadersCreated, st.drawsLastFrame,
                         st.width, st.height);
 }

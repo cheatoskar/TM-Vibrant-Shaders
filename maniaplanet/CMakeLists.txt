@@ -104,6 +104,7 @@ add_library(tmvs_mp_core STATIC
   src/engine_frame.cpp
   src/shaderdb.cpp
   src/renderer.cpp
+  src/softshadow.cpp
   src/effects.cpp
   src/effects_sky.cpp
   src/effects_weather.cpp
@@ -176,6 +177,12 @@ target_link_libraries(tmvs_mp PRIVATE tmvs_mp_core)
 add_executable(mp_preview tools/preview.cpp)
 target_link_libraries(mp_preview PRIVATE tmvs_mp_core d3d11)
 target_compile_options(mp_preview PRIVATE /W4 /EHsc /permissive- /utf-8)
+
+# Offline test of the soft sun shadows against the engine's own shadow shader (tools/shadowtest.cpp).
+#   mp_shadowtest <folder> <out dir> <engine shader.dxbc> [--light 0.5,1,2] [--bench N] [--variants dir]
+add_executable(mp_shadowtest tools/shadowtest.cpp)
+target_link_libraries(mp_shadowtest PRIVATE tmvs_mp_core d3d11 d3dcompiler)
+target_compile_options(mp_shadowtest PRIVATE /W4 /EHsc /permissive- /utf-8)
 
 # Offline test: a small D3D11 program that draws like the game (scene with depth, the engine's own
 # tone-map pixel shader, then an interface draw) through the proxy and checks where the effects land.

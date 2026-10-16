@@ -23,6 +23,9 @@ struct Options {
     bool fallbackAtEnd = true;
     View view = View::Normal;
     float split = 0.5f; // Split: the game's own image left of this
+    // Soft sun shadows: the light's angular diameter in degrees (the sun is 0.53) for the mod's
+    // PCSS shader in place of the engine's sun shadow pass; 0 keeps the engine's (default).
+    float softShadows = 0.0f;
 };
 
 namespace options {
@@ -34,7 +37,7 @@ void save();
 } // namespace options
 
 // Sets a look setting (a settings.ini key: Exposure, Bloom, ToneCurve ...; also Preset, Enabled,
-// Lut, LutAmount) or a ManiaPlanet option (Placement, FallbackAtEnd, View, Split). False for an
+// Lut, LutAmount) or a ManiaPlanet option (Placement, FallbackAtEnd, View, Split, SoftShadows). False for an
 // unknown key. For the offline tools and the test.
 bool setValue(const std::string& key, const std::string& value);
 
