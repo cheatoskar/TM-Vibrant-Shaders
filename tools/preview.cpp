@@ -850,6 +850,7 @@ int main(int argc, char** argv) {
         if (c->hdr) c->hdr->Release();
         if (c->added) c->added->Release();
         if (c->normals) c->normals->Release();
+        if (c->light) c->light->Release();
         if (c->materials) c->materials->Release();
         delete c;
     }
