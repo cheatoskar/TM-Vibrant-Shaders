@@ -9,6 +9,9 @@
 //     --sun <x,y,z>           override the sun direction (world space, towards the sun)
 //     --suncolor <r,g,b>      override the game's light colour
 //     --move <x,y,z>          previous frame's camera offset in metres (motion blur test)
+//     --trail <m/s>           neon trail test: a car driving to where the depth finder sees it
+//     --bank <deg>            ... rolled by that much (its up tilted: a banked curve)
+//     --clip                  ... while a clip of the map plays (driving off, clipInRace on)
 //     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
 //                             view, 0.1 s apart (neon trail test)
 //     --bench                 GPU time per pass
@@ -164,6 +167,8 @@ struct Job {
     float drive[3] = {}; // camera motion per frame (camera axes), for trail tests
     float time = -1.0f; // scene time of the last frame (s), -1 = the capture's
     float trail = 0.0f; // > 0: the neon trail of a car driving at this speed (m/s) to where the car is in the capture
+    float bank = 0.0f;  // trail test: the car rolled by this many degrees (its up tilted to the right: a banked curve)
+    bool clip = false;  // trail test: a clip of the map plays while the car drives (driving off, clipInRace on)
 };
 
 struct LoadedCapture {
@@ -200,6 +205,8 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
             else if (!_strnicmp(w.c_str(), "drive=", 6)) sscanf(w.c_str() + 6, "%f,%f,%f", &job.drive[0], &job.drive[1], &job.drive[2]);
             else if (!_strnicmp(w.c_str(), "time=", 5)) job.time = static_cast<float>(atof(w.c_str() + 5));
             else if (!_strnicmp(w.c_str(), "trail=", 6)) job.trail = static_cast<float>(atof(w.c_str() + 6));
+            else if (!_strnicmp(w.c_str(), "bank=", 5)) job.bank = static_cast<float>(atof(w.c_str() + 5));
+            else if (!_stricmp(w.c_str(), "clip=1")) job.clip = true;
             else setByKey(job.settings, w.c_str());
         }
         jobs.push_back(job);
@@ -348,6 +355,10 @@ int main(int argc, char** argv) {
             lutMix = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--trail") && i + 1 < argc) {
             defaults.trail = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--bank") && i + 1 < argc) {
+            defaults.bank = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--clip")) {
+            defaults.clip = true;
         } else if (!strcmp(argv[i], "--time") && i + 1 < argc) {
             defaults.time = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--drive") && i + 1 < argc) {
@@ -614,6 +625,24 @@ int main(int argc, char** argv) {
             }
             if (trail) {
                 driven.driving = driven.carKnown = driven.carFromEngine = true;
+                if (job.clip) {
+                    driven.driving = false;
+                    driven.clipInRace = true;
+                }
+                // Rolled about the way it drives (carDir points back along the road).
+                if (job.bank != 0.0f) {
+                    const float a = job.bank * 3.14159265f / 180.0f;
+                    const float f[3] = {-carDir[0], -carDir[1], -carDir[2]};
+                    float r[3] = {f[2], 0.0f, -f[0]}; // right of the way, level
+                    const float rl = sqrtf(r[0] * r[0] + r[2] * r[2]);
+                    if (rl > 1e-4f) {
+                        r[0] /= rl;
+                        r[2] /= rl;
+                        float u[3] = {f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]};
+                        if (u[1] < 0.0f) for (float& c : u) c = -c;
+                        for (int j = 0; j < 3; j++) driven.carUp[j] = u[j] * cosf(a) + r[j] * sinf(a);
+                    }
+                }
                 // Per frame as far as the frame's time step (time=: 0.02 s, else 0.1 s).
                 const float step = job.trail * (job.time >= 0.0f ? 0.02f : 0.1f);
                 for (int j = 0; j < 3; j++) driven.carPosition[j] = carEnd[j] + carDir[j] * back * step;

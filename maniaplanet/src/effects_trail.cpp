@@ -31,7 +31,7 @@ bool TrailStage::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Trail, sizeof(g_PS_Trail), nullptr, &m_ps));
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = kPoints;
-    td.Height = 1;
+    td.Height = 2; // the points, the car's up at each
     td.MipLevels = 1;
     td.ArraySize = 1;
     td.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -56,7 +56,8 @@ bool TrailStage::init(ID3D11Device* device) {
     rt.BlendOpAlpha = D3D11_BLEND_OP_ADD;
     rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
     ok &= SUCCEEDED(device->CreateBlendState(&bd, &m_add));
-    m_points.assign(kPoints * 4, 0.0f);
+    m_points.assign(kPoints * 8, 0.0f);
+    m_dirty = -2;
     m_ready = ok;
     if (!ok) TMVS_LOG("trail: creating shaders or buffers failed");
     return ok;
@@ -85,13 +86,15 @@ void TrailStage::clear() {
     m_keptValid = false;
     m_startValid = false;
     m_break = true;
+    if (m_points.size() < kPoints * 8) m_points.assign(kPoints * 8, 0.0f);
     std::fill(m_points.begin(), m_points.end(), 0.0f);
+    m_dirty = -2;
 }
 
 // Records the car: every frame into the next slot (the live end, so it stays on the car), kept
 // 60 times a second while it moves, or every metre. A jump (a respawn) starts a new line; a frame
 // without the car doesn't (it left holes). True: the live end is drawn (slot m_head).
-bool TrailStage::record(float dt, const float* car) {
+bool TrailStage::record(float dt, const float* car, const float* up) {
     if (!car) {
         // A frame without the car (its constants not found this time): the live end stays where
         // it was last seen for a few frames. (Without it the line's end fell back to the last kept
@@ -115,6 +118,13 @@ bool TrailStage::record(float dt, const float* car) {
     float* p = &m_points[m_head * 4];
     memcpy(p, car, sizeof(float) * 3);
     p[3] = m_break ? -stamp : stamp;
+    // The car's up at the point: the line lies across it on banked curves, walls and loops.
+    float* u = &m_points[(kPoints + m_head) * 4];
+    u[0] = up ? up[0] : 0.0f;
+    u[1] = up ? up[1] : 1.0f;
+    u[2] = up ? up[2] : 0.0f;
+    u[3] = 1.0f;
+    m_dirty = m_dirty == -1 || m_dirty == static_cast<int>(m_head) ? static_cast<int>(m_head) : -2;
     // Kept: 60 a second while it moves, and every metre. Less than 30 cm from the last point
     // (standing, shaking after a crash) is no line: those points pointed every way and fanned the
     // tyre lines out around the car.
@@ -176,12 +186,22 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     m_time += dt;
     m_clock += dt;
 
-    const bool live = record(dt, carSeen ? position : nullptr);
+    const bool live = record(dt, carSeen ? position : nullptr, carSeen ? car->up : nullptr);
     const UINT points = live ? std::min(m_count + 1, kPoints) : m_count;
     const UINT next = live ? (m_head + 1) % kPoints : m_head;
     if (points < 2) return;
 
-    ctx->UpdateSubresource(m_pointsTex, 0, nullptr, m_points.data(), kPoints * 16, 0);
+    // Only the slot written this frame (the whole ring was 256 KB a frame), all after a clear.
+    if (m_dirty == -2) {
+        ctx->UpdateSubresource(m_pointsTex, 0, nullptr, m_points.data(), kPoints * 16, 0);
+    } else if (m_dirty >= 0) {
+        const UINT slot = static_cast<UINT>(m_dirty);
+        for (UINT row = 0; row < 2; row++) {
+            const D3D11_BOX box = {slot, row, 0, slot + 1, row + 1, 1};
+            ctx->UpdateSubresource(m_pointsTex, 0, &box, &m_points[(row * kPoints + slot) * 4], 16, 0);
+        }
+    }
+    m_dirty = -1;
     TrailConstants c = {};
     c.trail[0] = static_cast<float>(points);
     c.trail[1] = static_cast<float>(next + kPoints);

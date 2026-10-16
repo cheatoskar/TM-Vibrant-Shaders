@@ -1243,18 +1243,31 @@ void processScene(IDirect3DDevice9* device) {
     // one of its frames: a 4K frame with supersampling lost its blur halfway through).
     const bool cinematic = engine::cinematicActive() || g_exporting;
     inputs.driving = !cinematic;
-    inputs.carKnown = engine::carLocation(inputs.carPosition);
+    inputs.carKnown = engine::carLocation(inputs.carPosition, inputs.carUp);
+    // A clip of the map (in-game trigger) while the player drives: the trail goes on recording.
+    inputs.clipInRace = !g_exporting && engine::clipInRace() && inputs.carKnown;
     {
         static DWORD s_carSeen = 0;
         if (inputs.carKnown) s_carSeen = GetTickCount();
         inputs.carFromEngine = s_carSeen && GetTickCount() - s_carSeen < 5000;
     }
     {
-        static int s_carSource = -1; // the log says once which way the trail finds the car
-        const int source = inputs.carKnown ? 1 : 0;
-        if (inputs.driving && source != s_carSource && (source == 1 || s_carSource < 0)) {
+        // The log says which way the trail finds the car while it records (from the engine, the
+        // engine's car lost, in the depth buffer), each change up to 30 times.
+        static int s_carSource = -1, s_logged = 0;
+        const int source = inputs.carKnown ? 1 : (inputs.carFromEngine ? 2 : 0);
+        if ((inputs.driving || inputs.clipInRace) && source != s_carSource && s_logged < 30) {
             s_carSource = source;
-            TMVS_LOG("pipeline: neon trail follows the car %s", source ? "from the engine" : "in the depth buffer");
+            s_logged++;
+            static const char* const kSource[] = {"in the depth buffer", "from the engine", "nowhere: the engine lost it (a gap in the line)"};
+            TMVS_LOG("pipeline: neon trail follows the car %s", kSource[source]);
+        }
+        static int s_clip = 0, s_clipLogged = 0;
+        if ((inputs.clipInRace ? 1 : 0) != s_clip && s_clipLogged < 30) {
+            s_clip = inputs.clipInRace ? 1 : 0;
+            s_clipLogged++;
+            TMVS_LOG("pipeline: neon trail: %s", s_clip ? "a clip of the map plays while you drive: the trail records on"
+                                                          : "the clip of the map is over");
         }
     }
     {
