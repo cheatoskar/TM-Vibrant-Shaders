@@ -66,6 +66,13 @@ Settings and your presets are in `Documents\ManiaPlanet\TMVS` (`settings.ini`, `
 the same format as in TMNF. ManiaPlanet's own options are in `maniaplanet.ini`, on the Settings
 page, panel "ManiaPlanet":
 - **HDR stage:** on = the look on the engine's HDR image, off = on its finished image.
+- **Light sources from the engine's draws** (`EngineLightDraws`, off for now): the lamps, light
+  strips, screens, halos and the car's lights glow as the engine draws them, nothing is guessed
+  from colours (TMNF's EngineLights). The draws of self-illuminated materials (`TMapSelfIllum`,
+  `TMapAdvert`, `TMapIllum`) and the additive ones (`Tech3_Block_TAdd`: halos) are drawn a second
+  time into a float buffer of their own (a self-illuminated one twice: the second time with its
+  light texture black, subtracted, so only its own light stays); later draws over them take their
+  share away again. The debug view "Light sources" shows what counts as light.
 - **Placement**, and the **compare and check views**.
 - **Status lines.**
 - **Compare (split)** shows the game's image left and the mod's right.
@@ -152,7 +159,7 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 | `hdr_t*.dds` | What the engine's tone map reads |
 | `input.dds/.bmp`, `view.txt` | The image before the mod, and the format it was drawn with |
 | `output.dds/.bmp` | The finished frame |
-| `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion |
+| `engine_*.dds` | The engine's textures: hdr, exposure, depth, normal, albedo (diffuse), specular, light mask, motion; with EngineLightDraws `engine_lights.dds` (what its light draws added, before the exposure) |
 | `camera.txt`, `scenev.bin` | The engine camera, decoded and raw |
 | `tonemap_cb.bin` | The engine's tone-map constants (for `mp_preview --hdr`) |
 | `car.txt` | The car per frame over the last 240 frames: time, frame time, found, position, step (is the neon trail's source even?) |
@@ -186,6 +193,8 @@ build-mp/Release/mp_harness.exe build-mp/Release/d3d11.dll tonemap.dxbc ui.dxbc 
 build-mp/Release/mp_harness.exe ... --grade in.bmp out.bmp "Punchy"   # a picture through a preset
 python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/DeferredDeCompFaceNormal_p decomp.dxbc
 build-mp/Release/mp_harness.exe ... defread.dxbc --decomp decomp.dxbc   # also: the light mask after a map change
+python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" "Tech3 Block DefReadP1 SelfIllum" selfillum.dxbc
+build-mp/Release/mp_harness.exe ... defread.dxbc --selfillum selfillum.dxbc   # also: EngineLightDraws' light buffer
 ```
 
 It checks that:
@@ -195,6 +204,8 @@ It checks that:
 - the camera is read from a SceneV upload (with multithread protection on, like the game);
 - the G-buffer and motion are found by name;
 - with `--decomp`: after a map change (new engine targets, the face-normal pass first) the light mask is the new one;
+- with `--selfillum`: with EngineLightDraws the engine's image stays the same and the light buffer holds the
+  material's own light, not its lit surface;
 - the TMVS curve replaces the engine's tone map and matches its mid grey (UNORM and sRGB);
 - the Present fallback works;
 - a capture writes its files;
