@@ -49,13 +49,26 @@ const wchar_t* const kMouseOwner = L"TMMods.MouseOwner";
 HANDLE selfHandle() {
     return reinterpret_cast<HANDLE>(&__ImageBase);
 }
+unsigned g_drawFrame = 0; // draw() calls: the answer below is kept for one frame
 bool foreignOwnsMouse(HWND hwnd) {
     HANDLE owner = GetPropW(hwnd, kMouseOwner);
     if (!owner || owner == selfHandle()) return false;
-    // Still loaded? A mod that went away with the property set must not leave us deaf.
+    // Still loaded? A mod that went away with the property set must not leave us deaf. Asked on
+    // every mouse message while the other mod holds the property, and GetModuleHandleExW takes the
+    // loader lock: the answer holds for this frame (and at most 100 ms, should draw() stop).
+    static HANDLE s_owner = nullptr;
+    static unsigned s_frame = 0;
+    static DWORD s_tick = 0;
+    static bool s_loaded = false;
+    const DWORD now = GetTickCount();
+    if (owner == s_owner && s_frame == g_drawFrame && now - s_tick < 100) return s_loaded;
     HMODULE module = nullptr;
-    return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                              reinterpret_cast<LPCWSTR>(owner), &module) != 0;
+    s_loaded = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                  reinterpret_cast<LPCWSTR>(owner), &module) != 0;
+    s_owner = owner;
+    s_frame = g_drawFrame;
+    s_tick = now;
+    return s_loaded;
 }
 // Z-order between the two mods' overlays: the one that drew last is on top and gets the mouse when
 // both menus lie under the pointer. After our ImGui render we write our HMODULE here; at the start
@@ -308,6 +321,7 @@ void drawSplitBar() {
 }
 
 void draw(IDirect3DDevice9* device) {
+    g_drawFrame++;
     if (!g_initialized) {
         init(device);
         if (!g_initialized) return;
