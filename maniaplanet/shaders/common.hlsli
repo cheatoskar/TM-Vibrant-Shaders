@@ -69,6 +69,8 @@ cbuffer Frame : register(b0)
     float4 u_Fog;       // c46: the engine's fog colour (rgb, linear), 0
     float4 u_Misc;      // c47: engine exposure is applied in the input (1) or read here (0), photo mode,
                         //      TMNF colours -> display linear here (sky.hlsli tmnfScale), 0
+    float4 u_Moon;      // c48: BlackHoleMoon (0 off, else the black hole's light strength), the engine's
+                        //      SpecMaxExp, SpecScale x light w (SceneP), its cloud factor (luma, between min and max)
 };
 
 cbuffer PassParams : register(b1)

@@ -382,6 +382,11 @@ const char* tooltipFor(const char* key) {
         {"TrailKeepRuns", "How many earlier runs' trails stay after a restart, dimmer the older they are. 0 clears the trail on every restart."},
         // Photo mode (General, not a look setting).
         {"SplitPhotoLabels", "Photos of the compare split get both sides' names burnt in at the bottom, at the line (the list on the screen is never in them)."},
+        // TrackMania 2 (maniaplanet.ini, the host's own panel).
+        {"BlackHoleMoon", "Night maps under the black hole: the game's moon (its blue glint on chrome and the sculptures, its light) is taken out\n"
+                          "of the picture and the black hole lights the scene instead, warm, with the game's own shine on each material.\n"
+                          "1 = as bright as the moon was, 0 = off. Shadows: the game's moon shadows where the black hole stands near the moon,\n"
+                          "else only short contact shadows. Only the mod's shaders change, nothing in the game."},
     };
     for (const auto& t : kTips)
         if (!strcmp(t.key, key)) return t.tip;
@@ -1941,6 +1946,10 @@ void drawMenu() {
 }
 
 } // namespace
+
+const char* tooltip(const char* key) {
+    return tooltipFor(key);
+}
 
 void setupStyle(HWND window) {
     ImGuiIO& io = ImGui::GetIO();

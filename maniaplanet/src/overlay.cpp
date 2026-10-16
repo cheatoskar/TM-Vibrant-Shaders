@@ -304,6 +304,12 @@ void gamePanel() {
                           "Off: the game's own shadows.\n"
                           "The mod draws the game's shadow pass with its own shader (nothing in the game's memory changes).\n"
                           "Whether ManiaPlanet's anti-cheat minds that is not known.");
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+    ImGui::SliderFloat("Black hole moon", &o.blackHoleMoon, 0.0f, 2.0f, o.blackHoleMoon > 0.0f ? "%.2f" : "Off");
+    if (o.blackHoleMoon < 0.05f) o.blackHoleMoon = 0.0f;
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    if (ImGui::IsItemHovered())
+        if (const char* tip = tmshaders::menu::tooltip("BlackHoleMoon")) ImGui::SetTooltip("%s", tip);
     if (changed) options::save();
     int view = static_cast<int>(o.view);
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
@@ -426,6 +432,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {10, "Engine light: ambient"},
                             {11, "Engine light: the rest"},
                             {12, "Light sources (lamps, neon)"},
+                            {13, "The moon's glint (with Black hole moon)"},
                             {20, "Light shafts"},
                             {21, "Volumetric clouds"},
                             {22, "Sky"},

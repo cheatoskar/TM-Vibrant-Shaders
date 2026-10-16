@@ -10,6 +10,7 @@
 #include "shaders/PS_GI.h"
 #include "shaders/PS_GITemporal.h"
 #include "shaders/PS_Lighting.h"
+#include "shaders/PS_LightingMoon.h"
 #include "shaders/PS_OcclusionShadow.h"
 #include "shaders/PS_SpillBlur.h"
 #include "shaders/PS_SpillDown.h"
@@ -183,6 +184,7 @@ bool Effects::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillDown, sizeof(g_PS_SpillDown), nullptr, &m_spillDown));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillBlur, sizeof(g_PS_SpillBlur), nullptr, &m_spillBlur));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Lighting, sizeof(g_PS_Lighting), nullptr, &m_lighting));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_LightingMoon, sizeof(g_PS_LightingMoon), nullptr, &m_lightingMoon));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Volumetric, sizeof(g_PS_Volumetric), nullptr, &m_volumetric));
 
     D3D11_BUFFER_DESC cb = {};
@@ -256,6 +258,7 @@ void Effects::release() {
     safeRelease(m_spillDown);
     safeRelease(m_spillBlur);
     safeRelease(m_lighting);
+    safeRelease(m_lightingMoon);
     safeRelease(m_volumetric);
     safeRelease(m_frameCb);
     safeRelease(m_passCb);
@@ -358,7 +361,7 @@ void Effects::run(ID3D11DeviceContext* ctx, int pass, ID3D11PixelShader* ps, con
 // The TMNF constants (pipeline.cpp, setFrameConstants) from the settings and the engine's camera.
 void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings& s) {
     const Camera& cam = *frame.camera;
-    float(&c)[48][4] = m_c;
+    float(&c)[49][4] = m_c;
     memset(c, 0, sizeof(c));
     constexpr float kPi = 3.14159265f;
 
@@ -642,6 +645,34 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[47][0] = 0.0f; // the passes read the engine's HDR image and expose it themselves
     c[47][1] = frame.photo ? 1.0f : 0.0f;
     c[47][2] = m_tmnfScale;
+
+    // BlackHoleMoon (maniaplanet.ini): on a night map under the black hole, the engine's moon (its
+    // diffuse light and its glint, blue on chrome and the ring sculptures) is taken out of the
+    // image and the black hole lights the scene instead (scene.hlsl), with the engine's own
+    // specular model: its constants (SceneP: SpecMaxExp, SpecScale, the light's w) and the
+    // material's specular from the G-buffer. Only what the proxy sees; nothing in the game changes.
+    const float moonStrength = options::current().blackHoleMoon;
+    if (moonStrength > 0.0f && blackHole && mapNight && cam.hasSceneP && cam.sunDirectionKnown && has(kTexSpecular) > 0.5f &&
+        has(kTexLightMask) > 0.5f && has(kTexNormal) > 0.5f && c[42][3] > 0.5f) {
+        float gen[4], light[4], cmax[4];
+        memcpy(gen, cam.rawP + kScenePLightGenSpec, sizeof(gen));
+        memcpy(light, cam.rawP + kScenePLightDirRgbLinear0, sizeof(light));
+        memcpy(cmax, cam.rawP + kScenePCloudsMax, sizeof(cmax));
+        const float specScale = gen[3] * light[3];
+        if (std::isfinite(gen[2]) && gen[2] >= 0.0f && gen[2] < 4096.0f && std::isfinite(specScale) && specScale >= 0.0f &&
+            std::isfinite(cmax[0]) && std::isfinite(cmax[1]) && std::isfinite(cmax[2])) {
+            // The cloud factor varies with the engine's cloud texture (not seen here): halfway
+            // between its darkest and brightest, as a luma.
+            float mid[3];
+            for (int i = 0; i < 3; i++) mid[i] = 0.5f * (c[42][i] + fminf(fmaxf(cmax[i], c[42][i]), 1.0f));
+            c[48][0] = moonStrength;
+            c[48][1] = gen[2];
+            c[48][2] = specScale;
+            c[48][3] = 0.2126f * mid[0] + 0.7152f * mid[1] + 0.0722f * mid[2];
+            c[43][0] = 0.0f; // the moon is replaced here, not taken out by EngineMoon 2's path as well
+            c[33][3] = 0.0f; // nor its glint guessed by CleanHighlights: it is rebuilt exactly here
+        }
+    }
 }
 
 bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tmshaders::Settings& s) {
@@ -785,7 +816,9 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     ctx->PSSetShaderResources(16, 1, &volume);
     ctx->PSSetShaderResources(17, 1, &engineLights);
     const float p1[4] = {volume ? 1.0f : 0.0f, 0, 0, 0};
-    run(ctx, kLighting, m_lighting, m_hdr[0], in, 8, p0, p1);
+    // BlackHoleMoon acting (c48.x): the variant with the moon's relight (the plain one stays as it was).
+    ID3D11PixelShader* lighting = m_c[48][0] > 0.0f && m_lightingMoon ? m_lightingMoon : m_lighting;
+    run(ctx, kLighting, lighting, m_hdr[0], in, 8, p0, p1);
     ID3D11ShaderResourceView* noVolume[2] = {};
     ctx->PSSetShaderResources(16, 2, noVolume);
 

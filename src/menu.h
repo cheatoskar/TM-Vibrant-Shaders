@@ -62,6 +62,8 @@ struct Host {
 void setupStyle(HWND window);
 float scale();
 void draw(const Host& host);
+// A setting's explanation for its tooltip (null: none), for the host's own panel too.
+const char* tooltip(const char* key);
 // Set when the user asks for a shader reload from the menu; cleared by the call.
 bool consumeReloadRequest();
 
