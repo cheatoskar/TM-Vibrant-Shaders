@@ -35,7 +35,7 @@ int g_written = 0;
 // drawn on the render thread: both under g_mutex.
 std::unordered_set<uint64_t> g_patchedHashes;               // bytecode of the patched shaders handed to the game
 std::unordered_set<const IDirect3DPixelShader9*> g_normalShaders; // created from one of them
-int g_patched = 0, g_failed = 0;
+int g_patched = 0, g_failed = 0;      // compiles (a shader compiled again counts again)
 std::map<std::string, int> g_skipped; // reason -> shaders
 int g_logged = -1;                    // shaders counted at the last summary
 DWORD g_lastCompile = 0;
@@ -218,7 +218,7 @@ bool writesNormal(IDirect3DPixelShader9* shader) {
 
 int patchedCount() {
     std::lock_guard<std::mutex> lock(g_mutex);
-    return g_patched;
+    return static_cast<int>(g_patchedHashes.size());
 }
 
 void tick() {
@@ -231,8 +231,9 @@ void tick() {
     g_logged = total;
     std::string why;
     for (const auto& r : g_skipped) why += (why.empty() ? "" : ", ") + std::to_string(r.second) + " " + r.first;
-    TMVS_LOG("gbuffer: %d pixel shaders patched, %d left as they are (%s), %d kept after a failed patch", g_patched, skipped,
-             why.empty() ? "-" : why.c_str(), g_failed);
+    // Distinct shaders patched (the game may compile one again); the others counted per compile.
+    TMVS_LOG("gbuffer: %d pixel shaders patched, %d left as they are (%s), %d kept after a failed patch",
+             static_cast<int>(g_patchedHashes.size()), skipped, why.empty() ? "-" : why.c_str(), g_failed);
 }
 
 } // namespace gameshaders

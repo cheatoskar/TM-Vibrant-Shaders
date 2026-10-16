@@ -1399,7 +1399,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "EngineLights", "Light sources from the game: lamps and glows as the game draws them glow, nothing is guessed (with Game HDR)");
                           l |= drawKey(s, "CasterShadows", "Long shadows from the game's own meshes drawn from the sun or black hole (needs Long-range shadows)");
                           l |= drawKey(s, "CleanWater", "Clean water: pools mirror only what they can see, sharp (off = blotches of the ramps over them)");
-                          l |= drawKey(s, "GameGBuffer", "Normals from the game's shaders: AO, shadows, reflections and light follow the blocks' bump maps and the car's real shape (with Game HDR; restart)");
+                          l |= drawKey(s, "GameGBuffer", "Normals from the game's shaders: AO, shadows, reflections and light follow the blocks' bump maps and the car's real shape (with Game HDR; the first time, restart the game)");
                           l |= drawKey(s, "ShadeMenuBars", "Replay menu: the shaded image under its bars (off = leftovers of earlier frames)");
                           return l;
                       }});

@@ -505,6 +505,8 @@ void onDrawGBuffer(IDirect3DDevice9* device) {
         }
     }
     if (want == g_gbufBound) return;
+    // F11 traces show where the normal target comes and goes (the mod's own calls aren't traced).
+    if (tracer::tracing()) tracer::event("  gbuffer: normal target %s for the next draw", want ? "bound" : "unbound");
     if (!want) {
         unbindGBuffer(device);
         return;

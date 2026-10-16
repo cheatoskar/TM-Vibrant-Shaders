@@ -131,7 +131,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("EngineLights", "Light sources from the game (with Game HDR)", "Image", Bool, engineLights, 0.0f, 1.0f),
         TMVS_FIELD("CasterShadows", "Long shadows from the game's meshes", "Image", Bool, casterShadows, 0.0f, 1.0f),
         TMVS_FIELD("CleanWater", "Clean water (a clear mirror, no blotches)", "Image", Bool, cleanWater, 0.0f, 1.0f),
-        TMVS_FIELD("GameGBuffer", "Normals from the game's shaders (restart)", "Image", Bool, gameGBuffer, 0.0f, 1.0f),
+        TMVS_FIELD("GameGBuffer", "Normals from the game's shaders (first time: restart)", "Image", Bool, gameGBuffer, 0.0f, 1.0f),
         TMVS_FIELD("ShadeMenuBars", "Shaded image under the replay menu's bars", "Image", Bool, shadeMenuBars, 0.0f, 1.0f),
 
         TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
