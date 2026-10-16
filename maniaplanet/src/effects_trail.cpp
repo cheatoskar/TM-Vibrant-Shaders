@@ -88,6 +88,54 @@ void TrailStage::clear() {
     std::fill(m_points.begin(), m_points.end(), 0.0f);
 }
 
+// Records the car: every frame into the next slot (the live end, so it stays on the car), kept
+// 60 times a second while it moves, or every metre. A jump (a respawn) starts a new line; a frame
+// without the car doesn't (it left holes). True: the live end is drawn (slot m_head).
+bool TrailStage::record(float dt, const float* car) {
+    if (!car) {
+        // A frame without the car (its constants not found this time): the live end stays where
+        // it was last seen for a few frames. (Without it the line's end fell back to the last kept
+        // point and jumped forward again: the fade-in behind the car stuttered.)
+        m_liveFrames = m_liveFrames > 0 ? m_liveFrames - 1 : 0;
+        return m_liveFrames > 0;
+    }
+    m_liveFrames = 0;
+    if (dt <= 0.0f) return false;
+    if (!m_startValid) {
+        memcpy(m_start, car, sizeof(m_start));
+        m_startValid = true;
+    }
+    float moved = 0.0f;
+    if (m_keptValid) {
+        const float dx = car[0] - m_kept[0], dy = car[1] - m_kept[1], dz = car[2] - m_kept[2];
+        moved = sqrtf(dx * dx + dy * dy + dz * dz);
+        if (moved > 25.0f) m_break = true;
+    }
+    const float stamp = m_time + 1.0f; // never 0 (= no car)
+    float* p = &m_points[m_head * 4];
+    memcpy(p, car, sizeof(float) * 3);
+    p[3] = m_break ? -stamp : stamp;
+    // Kept: 60 a second while it moves, and every metre. Less than 30 cm from the last point
+    // (standing, shaking after a crash) is no line: those points pointed every way and fanned the
+    // tyre lines out around the car.
+    if ((m_clock >= 1.0f / 60.0f && moved >= kMinStep) || moved >= 1.0f || !m_keptValid) {
+        m_clock = moved >= 1.0f ? 0.0f : fmodf(m_clock, 1.0f / 60.0f);
+        memcpy(m_kept, car, sizeof(m_kept));
+        m_keptValid = true;
+        m_break = false;
+        m_head = (m_head + 1) % kPoints;
+        if (m_count < kPoints) m_count++;
+        return false; // just kept: it's the newest point now
+    }
+    // The live end follows the car from 1 cm on. (It waited for 30 cm, like a kept point: above
+    // 60 frames a second the line's end fell 20-30 cm behind the car every second or third frame
+    // and caught up again, and the fade-in behind the car, measured from that end, stuttered. The
+    // live piece itself lies inside the fade-in, so it can't fan out.)
+    if (moved < 0.01f) return false;
+    m_liveFrames = 3;
+    return true;
+}
+
 void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s) {
     if (!m_ready) return;
     const float dt = m_lastTime >= 0.0 ? static_cast<float>(std::clamp(frame.time - m_lastTime, 0.0, 0.25)) : 0.0f;
@@ -114,42 +162,7 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     m_time += dt;
     m_clock += dt;
 
-    // Record the car: every frame into the next slot (the live end, so it stays on the car), kept
-    // 60 times a second while it moves, or every metre. A jump (a respawn) starts a new line; a
-    // frame without the car doesn't (it left holes).
-    bool live = false;
-    if (carSeen && dt > 0.0f) {
-        if (!m_startValid) {
-            memcpy(m_start, car->position, sizeof(m_start));
-            m_startValid = true;
-        }
-        if (m_keptValid) {
-            const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
-            const float jump = sqrtf(dx * dx + dy * dy + dz * dz);
-            if (jump > 25.0f) m_break = true;
-        }
-        const float stamp = m_time + 1.0f; // never 0 (= no car)
-        float* p = &m_points[m_head * 4];
-        memcpy(p, car->position, sizeof(float) * 3);
-        p[3] = m_break ? -stamp : stamp;
-        float moved = 0.0f;
-        if (m_keptValid) {
-            const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
-            moved = sqrtf(dx * dx + dy * dy + dz * dz);
-        }
-        // Less than 30 cm from the last point (standing, shaking after a crash) is no line: those
-        // points pointed every way and fanned the tyre lines out around the car.
-        live = moved >= kMinStep || !m_keptValid;
-        if ((m_clock >= 1.0f / 60.0f && moved >= kMinStep) || moved >= 1.0f || !m_keptValid) {
-            m_clock = moved >= 1.0f ? 0.0f : fmodf(m_clock, 1.0f / 60.0f);
-            memcpy(m_kept, car->position, sizeof(m_kept));
-            m_keptValid = true;
-            m_break = false;
-            m_head = (m_head + 1) % kPoints;
-            if (m_count < kPoints) m_count++;
-            live = false;
-        }
-    }
+    const bool live = record(dt, carSeen ? car->position : nullptr);
     const UINT points = live ? std::min(m_count + 1, kPoints) : m_count;
     const UINT next = live ? (m_head + 1) % kPoints : m_head;
     if (points < 2) return;

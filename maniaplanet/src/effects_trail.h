@@ -24,6 +24,21 @@ public:
     // After the composite (with the weather's particles): records the car, draws the trail into
     // fx.currentRtv().
     void draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s);
+
+    // The recording alone (also for the offline test): dt (s), the car's position (null: not seen
+    // this frame). True: the live end (slot head()) is drawn after the kept points.
+    bool record(float dt, const float* car);
+    void startRecording() {
+        if (m_points.empty()) m_points.assign(kPoints * 4, 0.0f);
+        clear();
+    }
+    void tick(float dt) {
+        m_time += dt;
+        m_clock += dt;
+    }
+    UINT head() const { return m_head; }
+    UINT count() const { return m_count; }
+    const float* point(UINT i) const { return &m_points[(i % kPoints) * 4]; }
 
 private:
     static constexpr UINT kPoints = 16384; // 4.5 min at 60 points a second, ~3 min at full speed
@@ -41,6 +56,7 @@ private:
     float m_kept[3] = {};
     bool m_keptValid = false;
     bool m_break = true;
+    int m_liveFrames = 0; // frames the live end may stay without the car
     double m_lastTime = -1.0;
     float m_start[3] = {};   // where the run began (the first point after a clear)
     bool m_startValid = false;
