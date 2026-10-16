@@ -208,7 +208,8 @@ bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds") ||
-           !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") || !strcmp(f.key, "CleanWater");
+           !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") || !strcmp(f.key, "CleanWater") ||
+           !strcmp(f.key, "ShadeMenuBars");
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -1335,6 +1336,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "CleanHighlights", "Clean highlights: floodlit white at night stays even (off = as in 1.4.0)");
                           l |= drawKey(s, "EngineLights", "Light sources from the game: lamps and glows as the game draws them glow, nothing is guessed (with Game HDR)");
                           l |= drawKey(s, "CleanWater", "Clean water: pools mirror only what they can see, sharp (off = blotches of the ramps over them)");
+                          l |= drawKey(s, "ShadeMenuBars", "Replay menu: the shaded image under its bars (off = leftovers of earlier frames)");
                           return l;
                       }});
     panels.push_back({"Photo mode", g_host->splitOn ? 11.0f : 8.0f, [&config] {

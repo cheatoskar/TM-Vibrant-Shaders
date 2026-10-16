@@ -131,6 +131,10 @@ public:
     // Adds `added` (the light the game's additive draws put into a target of their own) into
     // the float scene `target`, inside `area`, as it is.
     bool addScene(IDirect3DDevice9* device, IDirect3DTexture9* added, IDirect3DSurface9* target, const RECT& area);
+    // The rows above (top) and below (bottom) a full-width `area` of `target` (the replay menu's
+    // band): the area's shaded image `band` (its size), mirrored at the area's edges. Rows farther
+    // out than the band is high stay as they are.
+    bool fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom);
     // Reads a float colour target (A16B16G16R16F) back as raw half floats, RGBA, rows top-down.
     bool readHalfColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint16_t>& out);
     // The material id of every pixel (one byte, rows top-down), after a frame rendered with

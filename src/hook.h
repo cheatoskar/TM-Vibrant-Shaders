@@ -22,6 +22,8 @@ struct DeviceCallbacks {
     void (*drawDone)(IDirect3DDevice9* device) = nullptr;
     void (*setTransform)(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* matrix) = nullptr;
     void (*setLight)(DWORD index, const D3DLIGHT9* light) = nullptr;
+    // Before the game's Clear (not the plugin's own).
+    void (*clear)(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags) = nullptr;
 };
 
 bool install(const DeviceCallbacks& callbacks);
