@@ -174,3 +174,82 @@ Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Hori
   by name (`engine::classify`): lamps known, not guessed, and the guess can step back.
 - The car with the car test (now visible offline on capture 044 with a synthetic `.mat`): no
   pink-white glow, texture on the body, but darker than the game (car p95 194 vs. 255).
+
+## Normals from the game's shaders (GameGBuffer, 2026-10-16, off by default)
+
+- **Why:** the pipeline's normals come from the depth buffer (PS_Prepare): stair steps on curved
+  surfaces (the car, ramps), no bump detail, noise where decals z-fight. TMNF compiles its
+  material pixel shaders from HLSL at run time (`gameshaders`), so their source can be made to
+  write the normal they shade with.
+- **The patch (`src/gbufpatch.cpp`)**, on the source handed to `D3DXCompileShader`: one more
+  `PS_OUTPUT` field (`COLOR1`) and, before each `return Output;`, `float4(normalize(N), |E|)`:
+  - N = what the shader's own editor debug view calls its world normal (`MDbg_NormalInW(...)`:
+    `nNormal`, normal-mapped on blocks; `NormalInWorld` on water), else the interpolated input
+    `NormalInW` (car, decorations). Shaders that show a constant there (`float3(0,1,0)`: the flat
+    ground and road blends) or have neither are left alone.
+  - E = the eye vector the vertex shader already passes (`EyeToPos`, `EyeToPosInW`, `PosToEyeInW`,
+    `PosInW` = `Position - GbxEyeInVisual` in world orientation); only its length is used.
+  - The game's compile runs first; the patched result replaces it only when it compiled, writes
+    `oC1` and every constant/sampler of the game's table is in the same register. Otherwise the
+    game gets its own bytes.
+- **Dumped Stadium shaders (88 pixel shaders, `tmvs_gbuftest <gameshaders> --device`):** all
+  recompile from the dumps, 86 of 86 with a hash to the game's exact bytecode. 33 patched (19
+  `nNormal`, 13 `NormalInW`, 1 `NormalInWorld`), +2..7 instruction slots, none failed; 48 have no
+  world normal (ground/road blends, shadows, depth, post effects), 5 no eye vector (the light
+  accumulation shaders take an absolute position), 2 another structure. On the GTX 1080 Ti all
+  33 draw COLOR0 bit-identical to the game's shader with random inputs and textures; COLOR1 is a
+  unit normal and its w the eye distance. Both compiles cost 1.7 ms more per patched shader.
+- **Binding (`plugin.cpp`):** in the main camera, with GameHdr (two targets need the same bit
+  depth: A16B16G16R16F), a cleared target is bound as render target 1 only for draws with a
+  patched shader, depth writes on and no blending (blending acts on every target), into the float
+  scene; unbound for any other draw and before the game's Clear (it would wipe it) and target
+  switches. Measured on the device: fog leaves target 1 alone (NVIDIA), an alpha-tested pixel
+  writes no normal, `SetRenderTarget(1, ...)` keeps viewport and scissor, a shader writing COLOR1
+  with nothing bound draws as before (so turning the setting off while playing is safe).
+- **Which normal is used (PS_PrepareGBuffer):** a draw with a shader without normals can come
+  later and cover a block (road, terrain, ps_1_1 materials). So the game's normal counts only where
+  its distance matches the depth's (1 % + 3 cm) and it is a unit vector; elsewhere the depth's
+  normal stays. Two-sided faces seen from behind are turned to the camera. Everything reading the
+  normal buffer (AO, contact and long shadows, reflections, GI, relighting) takes it; PS_Lighting
+  is untouched (3899 slots). 0.13 ms instead of 0.09 ms.
+- **Offline proof:** off (and on without `.nrm16`) pixel-identical on captures 044/081/083/085;
+  synthetic `.nrm16` from the depth: 5 % wrong distances all rejected (identical to off),
+  flipped normals identical to facing ones, a ripple shows in reflections and light.
+- **Only the game can tell:** whether the game compiles at every start (no shader cache) and
+  creates its shaders from the blob it got (the log's draw count says it); how many of the main
+  camera's opaque draws have a patched shader (the earlier trace: 466 opaque draws, all with a
+  pixel shader; which of them are blocks and car); the look: bump detail in the sun's relighting
+  and reflections, and in AO (normal-mapped normals tilt the AO hemisphere: AO may pick up the
+  bump pattern - if it looks noisy, AO should keep the depth's normal); TMUF environments (other
+  shaders: the log's patched/skipped counts per environment).
+- **Next (not built): the light apart from the albedo (COLOR2).** In the block shader
+  `LDiffus = (Ambient + PreLightGen) * Occlusion + Lighting` is the light a surface gets (baked
+  lightmap, ambient cube, prelight) and `Diffuse` its albedo; the spike compiled it into COLOR2
+  (49 slots). That gives exact relighting at night (take the baked sun out by division, put the
+  moon or the black hole in) instead of guessing from the image. Missing: a third 64-bit target
+  (29 MB at 1440p), the ground's light (`Color0/Color1` per vertex, `TcLight` lightmap: their own
+  rule), and room in the lighting pass (PS_Lighting 3899/3900; PS_LightingEngine has 62 slots or a
+  pass of its own).
+
+### Owner test of GameGBuffer
+
+1. Menu, *Game* page: *Normals from the game's shaders* on (or `GameGBuffer=1` in settings.ini,
+   `[Settings]`). Restart the game (the shaders are patched as it compiles them at its start).
+2. Log at the start: `gbuffer: on, the game's pixel shaders are patched as it compiles them` and
+   `gameshaders: D3DXCompileShader hooked, D3DXAssembleShader left alone`.
+3. A Stadium map (A01), drive 10 s. Log: `gbuffer: N pixel shaders patched, M left as they are
+   (...), 0 kept after a failed patch` (Stadium: N about 20-35), `gbuffer: the patched shaders'
+   normals go into a second target (2560x1440)`, after 8 s `gbuffer: X opaque draws in the main
+   camera, W wrote normals, ...` (W should be a large part of X). Not expected: `kept after a
+   failed patch` > 0, `the game draws into a second target itself`.
+4. The game's image must look exactly as before with F7 (shaders off): the patched shaders draw
+   the same colour. With the mod on: the car's AO and reflections without stair steps, bumps on the
+   blocks in the sun. Switch the setting off and on in the menu (works without restart now) to
+   compare; *Debug view* *Normals* shows it best (bump detail on the blocks, a smooth car).
+5. F12 on a spot with blocks and the car (also once at night). Log: `gbuffer (capture): normals
+   on X% of the image; ...`. The capture gets `capture_NNN.nrm16`; send it with the `.tmcap`.
+   Offline: `python tools/gbuffer.py capture_NNN.tmcap --map gbuf.png` and the previewer with
+   `--set GameGBuffer=1` against `=0`.
+6. Watch for: surfaces black, flickering or with wrong colour (a broken patch: not expected),
+   noisy AO on bumpy blocks, water reflections changed, frame time (overlay) more than ~0.3 ms up.
+   Anything wrong: setting off, everything as before.

@@ -61,7 +61,7 @@ set(TMVS_ENTRIES
   PS_SkyClear PS_SkyStars PS_SkyBlackHole PS_SkyAurora PS_SkyRing PS_AuroraHalf PS_SkyAverage PS_Shelter PS_Clouds PS_Reflect PS_SpillDown PS_SpillBlur PS_Lighting PS_RainDrop PS_RainSplash PS_Spray PS_TrailPoint PS_Trail PS_SnowFlake
   PS_Focus PS_DofBlur PS_Cinematic
   PS_RayMask PS_RayBlur PS_BloomDown PS_BloomUp PS_Luminance PS_Adapt PS_Final PS_FXAA PS_TAA PS_Sharpen PS_Copy
-  PS_CopyDepth PS_WaterLevel PS_Resolve PS_LightingEngine PS_SpillDownEngine PS_LightGridInit PS_LightGridSweep)
+  PS_CopyDepth PS_WaterLevel PS_Resolve PS_LightingEngine PS_SpillDownEngine PS_LightGridInit PS_LightGridSweep PS_PrepareGBuffer)
 
 file(GLOB TMVS_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
 list(SORT TMVS_SDK_BINS ORDER DESCENDING)
@@ -122,6 +122,7 @@ add_library(tmvs_core STATIC
   src/image.cpp
   src/lut.cpp
   src/mp4writer.cpp
+  src/gbufpatch.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
@@ -196,6 +197,12 @@ target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_keystest tools/keystest.cpp)
 target_link_libraries(tmvs_keystest PRIVATE tmvs_core)
 target_compile_options(tmvs_keystest PRIVATE ${TMVS_OPTIONS})
+
+# GameGBuffer test: the game's dumped pixel shaders through the compile patch with the game's own
+# compiler, and (--device) drawn next to the game's on a D3D9 device (development tool).
+add_executable(tmvs_gbuftest tools/gbuftest.cpp)
+target_link_libraries(tmvs_gbuftest PRIVATE tmvs_core)
+target_compile_options(tmvs_gbuftest PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an

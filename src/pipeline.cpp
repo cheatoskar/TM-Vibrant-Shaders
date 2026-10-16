@@ -21,7 +21,7 @@ const char* const kEntryPoints[] = {
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
-    "PS_LightGridInit", "PS_LightGridSweep",
+    "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -2135,7 +2135,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 0, in.depth, false);
     runPass(device, kLinearDepth, m_linearDepth);
     bind(device, 0, m_linearDepth.texture, false);
-    runPass(device, kPrepare, m_nd);
+    // GameGBuffer: the game's own normals where they belong to the surface seen (a pass of its
+    // own: without them PS_Prepare is as it was).
+    const bool gameNormals = in.gbuffer && s.gameGBuffer;
+    if (gameNormals) bind(device, 1, in.gbuffer, false);
+    runPass(device, gameNormals ? kPrepareGBuffer : kPrepare, m_nd);
     bind(device, 0, m_nd.texture, false);
     passConstants(device, 1.0f / in.width, 1.0f / in.height);
     runPass(device, kDownsampleND, m_ndHalf);
