@@ -207,7 +207,7 @@ const Field* findField(const char* key) {
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights");
 }
 
@@ -335,6 +335,9 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             } else if (!strcmp(f.key, "ToneCurve")) {
                 static const char* kCurves[] = {"The game's", "TMVS (colours keep their hue)", "ACES (film)"};
                 changed |= ImGui::Combo(label, value, kCurves, IM_ARRAYSIZE(kCurves));
+            } else if (!strcmp(f.key, "EngineMoon")) {
+                static const char* kMoons[] = {"As the game has it", "From the black hole", "Off (ambient and lamps only)"};
+                changed |= ImGui::Combo(label, value, kMoons, IM_ARRAYSIZE(kMoons));
             } else if (!strcmp(f.key, "PlanetView")) {
                 changed |= ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
             } else {
@@ -1331,6 +1334,7 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "GameMaterials", "Read the game's materials (TMUF sea, debug view)");
                           l |= drawKey(s, "DisableGameFX", "Turn off the game's FX: bloom, colour filter (next map)");
                           l |= drawKey(s, "GameNight", "Real night under night skies: the game lights day maps at midnight");
+                          l |= drawKey(s, "EngineMoon", "Under the black hole: the game's own moonlight (baked light and shadows, glints, the car) shines from the black hole, or is taken out. From the next map on");
                           l |= drawKey(s, "GameSkyClouds", "Keep the game's sunset clouds (and the sea mirroring them) under night skies");
                           l |= drawKey(s, "GameHdr", "Game HDR: the game draws into a float target, bright light keeps its texture (F12 also saves it)");
                           l |= drawKey(s, "CleanHighlights", "Clean highlights: floodlit white at night stays even (off = as in 1.4.0)");

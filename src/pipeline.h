@@ -28,6 +28,9 @@ public:
         bool sunKnown = false;
         float sunColor[3] = {1.0f, 1.0f, 1.0f};     // the game's light colour
         bool sunColorKnown = false;
+        // The game's moon was moved to the black hole or taken out (EngineMoon): a night map
+        // whose light the game now matches to the black hole, nothing of a sun baked anywhere.
+        bool moonReplaced = false;
         float time = 0.0f;
         // false for extra cameras in the same frame (replay camera blends): they must not
         // touch temporal history (TAA, motion blur, exposure, focus).
@@ -93,6 +96,11 @@ public:
     static bool skyReplacesSun(const Settings& s) {
         return (s.skyMode >= 2 && s.skyMode != 5) || ((s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f);
     }
+
+    // The black hole of the space skies lights the scene instead of the sun; `toward` is the
+    // world direction towards it (it turns with the sky).
+    static bool blackHoleLights(const Settings& s) { return (s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f; }
+    static void blackHoleDirection(const Settings& s, float toward[3]);
 
     // Neon trail: start over (race restart, new map) / start a new line (respawn).
     void resetTrail() { m_trailReset = true; }

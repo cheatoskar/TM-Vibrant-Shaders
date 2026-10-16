@@ -349,6 +349,15 @@ void Pipeline::runPass(IDirect3DDevice9* device, Pass pass, IDirect3DSurface9* t
     profileMark(pass);
 }
 
+void Pipeline::blackHoleDirection(const Settings& s, float toward[3]) {
+    const float az = s.blackHoleAzimuth * 3.14159265f / 180.0f, el = s.blackHoleElevation * 3.14159265f / 180.0f;
+    const float rot = s.skyRotation * 3.14159265f / 180.0f;
+    const float d[3] = {sinf(az) * cosf(el), sinf(el), cosf(az) * cosf(el)};
+    toward[0] = cosf(rot) * d[0] - sinf(rot) * d[2];
+    toward[1] = d[1];
+    toward[2] = sinf(rot) * d[0] + cosf(rot) * d[2];
+}
+
 void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, const Settings& s) {
     const float* V = in.view;
     const float* P = in.projection;
@@ -380,16 +389,9 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
 
     // The black hole of the space skies (it turns with the sky). Where there is one it is the
     // light of the scene instead of the sun: shafts, shadows, flare and glow come from it.
-    const bool blackHole = (s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f;
+    const bool blackHole = blackHoleLights(s);
     float hole[3];
-    {
-        const float az = s.blackHoleAzimuth * 3.14159265f / 180.0f, el = s.blackHoleElevation * 3.14159265f / 180.0f;
-        const float rot = s.skyRotation * 3.14159265f / 180.0f;
-        const float d[3] = {sinf(az) * cosf(el), sinf(el), cosf(az) * cosf(el)};
-        hole[0] = cosf(rot) * d[0] - sinf(rot) * d[2];
-        hole[1] = d[1];
-        hole[2] = sinf(rot) * d[0] + cosf(rot) * d[2];
-    }
+    blackHoleDirection(s, hole);
     const float holeConstants[4] = {hole[0], hole[1], hole[2], blackHole ? s.skyEffectSize : 0.0f};
     device->SetPixelShaderConstantF(40, holeConstants, 1);
 
@@ -557,7 +559,10 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[36][0] = s.neonLight;
     // The game's sun, even under a night sky: 1 known, 0 unknown, -1 the map is a night map
     // (its light is the moon: no sun glare to tell from lamps, nothing baked to take out).
-    c[36][1] = mapNight ? -1.0f : (in.sunKnown && len > 1e-5f ? 1.0f : 0.0f);
+    // EngineMoon: the game's light is the night's, moved to the black hole or off, whatever its
+    // colour says (a sunset map lit at midnight keeps a warm, "dusk" moon colour): no sun baked
+    // to take out, nothing white is glare. Only this flag: the exposure and grade stay.
+    c[36][1] = mapNight || in.moonReplaced ? -1.0f : (in.sunKnown && len > 1e-5f ? 1.0f : 0.0f);
     c[36][2] = weather::lightningFlash(in.time, s.lightning);
     // The bolt of the current strike: its direction is picked once, near where the camera
     // looks at that moment (a bolt behind you is a wasted strike), and then stays put.

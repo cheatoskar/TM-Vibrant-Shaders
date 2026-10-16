@@ -20,7 +20,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -41,6 +41,9 @@ struct GameBuild {
     uintptr_t raceClipStop;        // void CGameRace::MediaClipStop()
     uintptr_t interpolatedLocation; // const GmIso4* CSceneMobil::GetInterpolatedLocation(CSceneSector*) const (vtable slot 32)
     uintptr_t coreCmdBuffer;       // CMwCmdBufferCore* CMwCmdBufferCore::TheCoreCmdBuffer (the game's clock)
+    // CMotionManagerWeathers::UpdateAsync, the moon's branch: its calls of GmMat3::SetDOV (the
+    // moon's direction) and GxLight::SetBaseRGB (its colour), and those two functions.
+    uintptr_t moonDirectionCall, setDov, moonColorCall, setBaseRgb;
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -50,14 +53,16 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
-     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0},
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
+     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
-     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840},
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
+     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0},
 };
 const GameBuild* g_build = nullptr;
 
@@ -181,6 +186,23 @@ constexpr int kInterpolatedLocationSlot = 32;
 // here too, or the later jump puts the map's own time back.
 constexpr InlineSite kJumpTimeSite = {kJumpTime, {0x51, 0x56, 0x8b, 0xf1, 0xd9, 0x46, 0x28}, 7, -1, "CMotionManagerWeathers::JumpToTimeRemapped"};
 constexpr size_t kDecorationMood = 0x60; // CGameCtnDecorationMood*
+// The weather sets the scene's directional light (CMotionManagerWeathers::UpdateAsync, at every
+// time jump and frame). Where its moon colour is brighter than the sun's (night) it builds the
+// light's travel direction itself, a horizontal one from the time of day (A01 lit at midnight:
+// (-1, 0, 0)), turns it into the light's location (GmMat3::SetDOV, then the CSceneLight's
+// SetLocation) and gives the light the moon's colour (GxLight::SetBaseRGB). The same vector
+// makes its specular cube. At night the map's lightmap (CHmsPackLightMap, fid parameter IsNight)
+// is baked in colour at map load from that light: ambient dome, the moon with its shadows, the
+// lamps; the block shaders take their light from it (PreLightGen) and add no moon of their own.
+// So the direction or colour given to these two calls is the moon of the whole map: the bake,
+// the glints, the car. Both calls are in the moon's branch only (the sun has its own matrix).
+// The lightmap cache (ProgramData/TrackMania/Cache/*.LightMap.zip) is keyed by map, decoration
+// and IsNight, not by the light: a night bake saved there would come back as it is.
+// The lightmap cache of a map (CHmsPackLightMap): whether the saved one still fits, and saving
+// a new one. With the moon changed the cache is neither used nor written: a saved bake of the
+// game's moon would come back without the change, and a changed one would stay when it is off.
+constexpr InlineSite kCacheUpToDateSite = {kCacheUpToDate, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CHmsPackLightMap::CacheIsUpToDate"};
+constexpr InlineSite kCacheSaveSite = {kCacheSave, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CHmsPackLightMap::CacheSaveLightMap"};
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
 
@@ -263,6 +285,20 @@ volatile bool g_hideGameSky = false;   // a night sky replaces the game's: its p
 using LoadSceneFn = void(__fastcall*)(void*, void*);
 LoadSceneFn g_loadScene = nullptr;
 bool (*g_wantNight)(float dayTime) = nullptr; // the plugin: light this map at midnight?
+bool (*g_moonAtLoad)(float dayTime, bool litAtNight, MoonLight& moon) = nullptr; // the plugin: what the moon does on this map
+using SetDovFn = void*(__fastcall*)(void*, void*, float*, int);
+using SetBaseRgbFn = void*(__fastcall*)(void*, void*, const float*);
+SetDovFn g_setDov = nullptr;
+SetBaseRgbFn g_setBaseRgb = nullptr;
+int g_moonMode = 0;                // this map: 0 the game's moon, 1 along g_moonTravel, 2 off
+float g_moonTravel[3] = {};        // the light's travel direction (away from the black hole)
+bool g_moonApplied = false;        // the weather reached the moon's code since the load
+bool g_moonLogged = false;
+float g_moonGameTravel[3] = {};    // the direction the game wanted (for the log)
+using CacheFn = int(__fastcall*)(void*, void*);
+CacheFn g_cacheUpToDate = nullptr;
+CacheFn g_cacheSave = nullptr;
+bool g_cacheLogged = false;
 using JumpTimeFn = void(__fastcall*)(void*, void*, float);
 JumpTimeFn g_jumpTime = nullptr;
 int g_jumpsLogged = 0;
@@ -357,6 +393,24 @@ void* inlineHook(const InlineSite& site, void* detour) {
     VirtualProtect(target, site.length, old, &old);
     FlushInstructionCache(GetCurrentProcess(), target, site.length);
     return trampoline;
+}
+
+// Points one call instruction (E8 rel32) inside a function at the detour, after checking that it
+// calls the function the map names there. Returns that function (the original), or null.
+void* patchCall(uintptr_t site, uintptr_t callee, void* detour, const char* name) {
+    BYTE* call = reinterpret_cast<BYTE*>(rebase(site));
+    const uintptr_t expected = rebase(callee);
+    if (!site || !readable(call, 5) || call[0] != 0xE8 ||
+        reinterpret_cast<uintptr_t>(call + 5) + static_cast<uintptr_t>(*reinterpret_cast<const int32_t*>(call + 1)) != expected) {
+        TMVS_LOG("engine: %s does not match this executable, not hooked", name);
+        return nullptr;
+    }
+    DWORD old = 0;
+    VirtualProtect(call, 5, PAGE_EXECUTE_READWRITE, &old);
+    *reinterpret_cast<int32_t*>(call + 1) = static_cast<int32_t>(static_cast<BYTE*>(detour) - (call + 5));
+    VirtualProtect(call, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), call, 5);
+    return reinterpret_cast<void*>(expected);
 }
 
 void markCinematic(unsigned source) {
@@ -733,6 +787,74 @@ void __fastcall clipTriggersDetour(void* self, void* edx) {
     g_clipTriggers(self, edx);
 }
 
+// The moon's direction, as the game passes it to SetDOV: replaced in place, so the specular cube
+// (built from the same vector afterwards) follows.
+void* __fastcall moonDirectionDetour(void* matrix, void* edx, float* direction, int flag) {
+    if (g_moonMode != 0 && direction) {
+        __try {
+            memcpy(g_moonGameTravel, direction, sizeof(g_moonGameTravel));
+            if (g_moonMode == 1) memcpy(direction, g_moonTravel, sizeof(g_moonTravel));
+            g_moonApplied = true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    return g_setDov(matrix, edx, direction, flag);
+}
+
+// The moon's colour: none with the moon off (the light's intensity and flags stay).
+void* __fastcall moonColorDetour(void* light, void* edx, const float* rgb) {
+    static const float kNone[3] = {};
+    if (g_moonMode != 0 && rgb && !g_moonLogged) {
+        g_moonLogged = true;
+        __try {
+            TMVS_LOG("engine: the game's moon (colour %.2f %.2f %.2f, towards %.2f %.2f %.2f) %s", rgb[0], rgb[1], rgb[2], -g_moonGameTravel[0],
+                     -g_moonGameTravel[1], -g_moonGameTravel[2], g_moonMode == 1 ? "shines from the black hole" : "is off");
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    if (g_moonMode == 2) {
+        g_moonApplied = true;
+        return g_setBaseRgb(light, edx, kNone);
+    }
+    return g_setBaseRgb(light, edx, rgb);
+}
+
+int __fastcall cacheUpToDateDetour(void* self, void* edx) {
+    if (g_moonMode == 0) return g_cacheUpToDate(self, edx);
+    if (!g_cacheLogged) {
+        g_cacheLogged = true;
+        TMVS_LOG("engine: lightmap cache not used: the game bakes this map's light with the changed moon (and doesn't save it)");
+    }
+    return 0;
+}
+
+int __fastcall cacheSaveDetour(void* self, void* edx) {
+    return g_moonMode == 0 ? g_cacheSave(self, edx) : 0;
+}
+
+// EngineMoon, once per map load, before the scene (and with it the lightmap) is made: the
+// lightmap is baked once, so the moon stays as decided here for the whole map.
+void decideMoon(float dayTime, bool litAtNight) {
+    g_moonMode = 0;
+    g_moonApplied = false;
+    g_moonLogged = false;
+    g_cacheLogged = false;
+    MoonLight moon;
+    if (!g_moonAtLoad || !g_moonAtLoad(dayTime, litAtNight, moon) || moon.mode < 1 || moon.mode > 2) return;
+    if (!g_setDov || !g_setBaseRgb || !g_cacheUpToDate || !g_cacheSave) {
+        TMVS_LOG("engine: the moon can't be changed in this build (hooks missing), the game's moon stays");
+        return;
+    }
+    const float len = sqrtf(moon.toward[0] * moon.toward[0] + moon.toward[1] * moon.toward[1] + moon.toward[2] * moon.toward[2]);
+    if (!(len > 1e-4f && len < 1e4f)) return;
+    for (int i = 0; i < 3; i++) g_moonTravel[i] = -moon.toward[i] / len;
+    g_moonMode = moon.mode;
+    if (moon.mode == 1)
+        TMVS_LOG("engine: this map's moon shines from the black hole (towards %.3f %.3f %.3f)", -g_moonTravel[0], -g_moonTravel[1], -g_moonTravel[2]);
+    else
+        TMVS_LOG("engine: this map's moon is off (ambient and lamps stay)");
+}
+
 void __fastcall loadSceneDetour(void* self, void* edx) {
     const BYTE* decoration = static_cast<const BYTE*>(self);
     void* mood = readable(decoration + kDecorationMood, sizeof(void*)) ? *reinterpret_cast<void* const*>(decoration + kDecorationMood) : nullptr;
@@ -742,6 +864,7 @@ void __fastcall loadSceneDetour(void* self, void* edx) {
         g_weather = nullptr;
         g_nightForced = false;
         g_mapDayTime = -1.0f;
+        decideMoon(-1.0f, false);
         g_loadScene(self, edx);
         return;
     }
@@ -751,6 +874,7 @@ void __fastcall loadSceneDetour(void* self, void* edx) {
     g_nightForced = g_wantNight && g_wantNight(original);
     TMVS_LOG("engine: map time of day %.3f%s", original, g_nightForced ? ", lit at midnight (night sky)" : "");
     if (g_nightForced) *time = 0.0f;
+    decideMoon(original, g_nightForced);
     g_loadScene(self, edx);
     *time = original;
     g_weatherTime = original; // the load's jumps asked for the midnight forced above
@@ -944,6 +1068,12 @@ bool install(const Callbacks& callbacks) {
     g_clipTriggers = reinterpret_cast<ClipTriggersFn>(inlineHook(kClipTriggersSite, reinterpret_cast<void*>(&clipTriggersDetour)));
     g_jumpTime = reinterpret_cast<JumpTimeFn>(inlineHook(kJumpTimeSite, reinterpret_cast<void*>(&jumpTimeDetour)));
     g_raceTriggers = reinterpret_cast<RaceTriggersFn>(inlineHook(kRaceTriggersSite, reinterpret_cast<void*>(&raceTriggersDetour)));
+    g_cacheUpToDate = reinterpret_cast<CacheFn>(inlineHook(kCacheUpToDateSite, reinterpret_cast<void*>(&cacheUpToDateDetour)));
+    g_cacheSave = reinterpret_cast<CacheFn>(inlineHook(kCacheSaveSite, reinterpret_cast<void*>(&cacheSaveDetour)));
+    g_setDov = reinterpret_cast<SetDovFn>(patchCall(g_build->moonDirectionCall, g_build->setDov, reinterpret_cast<void*>(&moonDirectionDetour),
+                                                    "CMotionManagerWeathers::UpdateAsync (moon direction)"));
+    g_setBaseRgb = reinterpret_cast<SetBaseRgbFn>(patchCall(g_build->moonColorCall, g_build->setBaseRgb, reinterpret_cast<void*>(&moonColorDetour),
+                                                            "CMotionManagerWeathers::UpdateAsync (moon colour)"));
     patchFx(0, reinterpret_cast<void*>(&bloomCanActiveDetour));
     patchFx(1, reinterpret_cast<void*>(&colorsCanActiveDetour));
     g_active = true;
@@ -967,10 +1097,24 @@ bool mapLitAtNight() {
     return g_nightForced;
 }
 
+void setMoonAtLoad(bool (*decide)(float dayTime, bool litAtNight, MoonLight& moon)) {
+    g_moonAtLoad = decide;
+}
+
+bool moonReplaced() {
+    return g_moonMode != 0 && g_moonApplied;
+}
+
 bool relightNight(bool night) {
     if (night == g_nightForced) return true;
     if (!g_jumpTime || !g_weather || g_weatherTime < 0.0f || g_mapDayTime < 0.0f || !readable(g_weather, 0x30)) return false;
     g_nightForced = night;
+    // The lightmap stays as it was baked: a moon changed at load ends with the night (back to
+    // the game's light by day); one switched on now is the game's own until the next map.
+    if (!night && g_moonMode != 0) {
+        g_moonMode = 0;
+        g_moonApplied = false;
+    }
     TMVS_LOG("engine: real night %s during the map: weather %p to time of day %.3f", night ? "on" : "off", g_weather,
              night ? 0.0f : g_weatherTime);
     __try {

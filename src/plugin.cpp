@@ -824,6 +824,7 @@ void processScene(IDirect3DDevice9* device) {
     memcpy(inputs.projection, g_scene.projection, sizeof(inputs.projection));
     inputs.sunKnown = sunDirection(inputs.sunDirection);
     inputs.sunColorKnown = g_scene.haveLight;
+    inputs.moonReplaced = engine::moonReplaced();
     memcpy(inputs.sunColor, g_scene.lightColor, sizeof(inputs.sunColor));
     inputs.time = effectTime();
     inputs.temporal = temporal;
@@ -1461,6 +1462,35 @@ bool nightAtLoad(float dayTime) {
     return nightFor(dayTime, true);
 }
 
+// EngineMoon, at map load: on a night map (its own night or lit at midnight) whose look has the
+// black hole, the game's own moon (its baked light and shadows, glints, the car) shines from the
+// black hole instead of from the side, or is off. Decided with the look of the map's mood, as
+// real night is; an Author's Shader read later doesn't change it.
+bool moonAtLoad(float dayTime, bool litAtNight, engine::MoonLight& moon) {
+    const Settings& s = Config::get().settings;
+    if (!s.enabled || s.engineMoon == 0 || dayTime < 0.0f) return false;
+    const Mood mood = moodOfDayTime(dayTime);
+    if (!litAtNight && mood != Mood::Night) return false; // the game's sun lights this map
+    const Settings look = Config::get().lookForMood(mood);
+    if (!Pipeline::blackHoleLights(look)) {
+        TMVS_LOG("config: engine moon: the %s look has no black hole, the game's moon stays", moodName(mood));
+        return false;
+    }
+    moon.mode = s.engineMoon;
+    Pipeline::blackHoleDirection(look, moon.toward);
+    // Not from below the horizon (BlackHoleElevation goes down to -10): the ground would shade
+    // everything and light the undersides. At least 3 degrees up.
+    const float minUp = 0.0523f;
+    if (moon.toward[1] < minUp) {
+        const float flat = sqrtf(moon.toward[0] * moon.toward[0] + moon.toward[2] * moon.toward[2]);
+        const float k = flat > 1e-4f ? sqrtf(1.0f - minUp * minUp) / flat : 0.0f;
+        moon.toward[0] *= k;
+        moon.toward[2] *= k;
+        moon.toward[1] = flat > 1e-4f ? minUp : 1.0f;
+    }
+    return true;
+}
+
 // Real night switched in the menu, or a look picked with or without a night sky while a map
 // runs: the map is relit now, not at the next one. It follows the look that is on (also an
 // Author's Shader, read after the map's light was set up), once that has held for 1.5 s
@@ -1508,6 +1538,7 @@ void bootOnce() {
     engineCallbacks.frameEnd = onFrameEnd;
     engine::install(engineCallbacks);
     engine::setNightAtLoad(nightAtLoad);
+    engine::setMoonAtLoad(moonAtLoad);
 
     hook::DeviceCallbacks deviceCallbacks;
     deviceCallbacks.adjustPresentParams = onAdjustPresentParams;

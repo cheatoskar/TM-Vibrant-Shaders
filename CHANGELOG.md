@@ -3,6 +3,7 @@
 ### Unreleased
 
 - Video export (replay editor, *Shoot video*): the effects run on the video's own clock instead of the real time, so exposure, focus, rain, lightning and clouds move in the video as they do in a replay (before, a frame that took 0.2 s to render moved them 0.2 s on: at 30 fps six times too fast, and unevenly). Full effect quality during the export (auto quality no longer drops it because the frames are slow) and photo mode's depth of field. With the dialog's *high quality* (supersampling) every one of the game's samples gets the effects (before, only the first of n x n did: the video showed a faint trace of them) and TAA steps aside for the game's own anti-aliasing. The first frame starts clean, without fading in from the editor's view. Setting *Best quality in the video export* (`VideoExportBest`, on).
+- New setting *The game's moon under the black hole* (`EngineMoon`, *Game* panel, off by default): on night maps under the black hole the game's own moon (its baked light and shadows, glints, the car's light) shines from the black hole instead of from the side, or is taken out. From the next map on.
 
 ### 1.4.0-preview (2026-10-12)
 
