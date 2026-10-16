@@ -30,6 +30,9 @@ void addCpu(double ms);
 void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, double castersCpuMs);
 // Before a device reset: the queries go (default pool).
 void release();
+// Whether this frame's disjoint bracket is open (from frame() to the next Present): the
+// pipeline's profiling then opens none of its own inside it.
+bool bracketOpen();
 
 } // namespace perflog
 } // namespace tmshaders

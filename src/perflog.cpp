@@ -215,6 +215,11 @@ void release() {
     for (auto& s : g_sets) releaseSet(s);
     g_current = -1;
     g_havePresent = false;
+    g_failed = false; // a new device may have the queries (CreateQuery failed during a reset)
+}
+
+bool bracketOpen() {
+    return g_current >= 0;
 }
 
 } // namespace perflog

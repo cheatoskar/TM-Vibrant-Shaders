@@ -212,7 +212,13 @@ public:
     static void runtimeShaders(std::vector<gfx::ShaderSource>& out);
 
     // GPU timing per pass with timestamp queries (results arrive a few frames late).
-    void setProfiling(bool enabled) { m_profiling = enabled; }
+    // outerDisjoint: the caller's own frame-wide TIMESTAMPDISJOINT bracket (perflog) is open
+    // around the next renders: the pipeline opens none of its own inside it (two open at once
+    // are untested off NVIDIA) and checks its stamps for sense instead.
+    void setProfiling(bool enabled, bool outerDisjoint = false) {
+        m_profiling = enabled;
+        m_outerDisjoint = outerDisjoint;
+    }
     void collectProfile(bool wait); // wait = block until every issued frame is resolved
     int passCount() const { return kProfileSlots; } // the passes, then the CasterShadows maps' drawing
     static const char* passName(int pass);
@@ -312,13 +318,16 @@ private:
     void swapRepeatCamera();
 
     struct ProfileFrame {
-        static constexpr int kMaxStamps = 80; // the long shadows' light grid takes up to 6
+        // About 70 with lamps, light grid, GI and depth of field on: room for the passes at the
+        // end of the frame (else they go untimed).
+        static constexpr int kMaxStamps = 128;
         IDirect3DQuery9* disjoint = nullptr;
         IDirect3DQuery9* frequency = nullptr;
         IDirect3DQuery9* stamps[kMaxStamps] = {};
         int pass[kMaxStamps] = {};
         int count = 0;
         bool pending = false;
+        bool outer = false; // timed inside the caller's disjoint bracket (its own not issued)
     };
     static constexpr int kProfileFrames = 4;
     void profileBegin(IDirect3DDevice9* device);
@@ -513,6 +522,7 @@ private:
     float m_boltAzimuth = 0.0f;
     bool m_historyValid = false;
     bool m_profiling = false;
+    bool m_outerDisjoint = false;
     ProfileFrame m_profile[kProfileFrames];
     ProfileFrame* m_currentProfile = nullptr;
     int m_profileIndex = 0;

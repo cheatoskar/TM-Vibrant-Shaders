@@ -73,7 +73,8 @@ void Pipeline::profileBegin(IDirect3DDevice9* device) {
     }
     if (!frame.frequency || !frame.stamps[ProfileFrame::kMaxStamps - 1]) return;
     frame.count = 0;
-    frame.disjoint->Issue(D3DISSUE_BEGIN);
+    frame.outer = m_outerDisjoint;
+    if (!frame.outer) frame.disjoint->Issue(D3DISSUE_BEGIN);
     m_currentProfile = &frame;
     profileMark(-1);
 }
@@ -88,7 +89,7 @@ void Pipeline::profileMark(int pass) {
 void Pipeline::profileEnd() {
     ProfileFrame* frame = m_currentProfile;
     if (!frame) return;
-    frame->disjoint->Issue(D3DISSUE_END);
+    if (!frame->outer) frame->disjoint->Issue(D3DISSUE_END);
     frame->frequency->Issue(D3DISSUE_END);
     frame->pending = true;
     m_currentProfile = nullptr;
@@ -104,12 +105,20 @@ bool Pipeline::profileResolve(ProfileFrame& frame, bool wait) {
         }
         return hr == S_OK;
     };
-    if (!get(frame.disjoint, &disjoint, sizeof(disjoint)) || !get(frame.frequency, &frequency, sizeof(frequency))) return false;
+    if (frame.outer) disjoint = FALSE; // the caller's bracket tells it, not read here: the checks below
+    else if (!get(frame.disjoint, &disjoint, sizeof(disjoint))) return false;
+    if (!get(frame.frequency, &frequency, sizeof(frequency))) return false;
     UINT64 times[ProfileFrame::kMaxStamps] = {};
     for (int i = 0; i < frame.count; i++) {
         if (!get(frame.stamps[i], &times[i], sizeof(UINT64))) return false;
     }
     frame.pending = false;
+    // Without its own disjoint query: a frame whose stamps run backwards or span more than a
+    // second (the clock changed under them) is left out rather than smoothed in.
+    if (frame.outer && frequency != 0) {
+        for (int i = 1; i < frame.count && !disjoint; i++) disjoint = times[i] < times[i - 1];
+        if (frame.count >= 2 && times[frame.count - 1] - times[0] > frequency) disjoint = TRUE;
+    }
     if (disjoint || frequency == 0 || frame.count < 2) return true;
     float ms[kProfileSlots] = {};
     for (int i = 1; i < frame.count; i++) {

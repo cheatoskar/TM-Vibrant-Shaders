@@ -1881,6 +1881,7 @@ void onDeviceCreated(IDirect3DDevice9* device) {
 
 void onPreReset() {
     perflog::release();
+    g_pipeline.setProfiling(true, false); // perflog's bracket is gone until the next Present
     g_pipeline.release();
     releaseSideB();
     g_sceneCopy.destroy();
@@ -1998,8 +1999,10 @@ void onPresent(IDirect3DDevice9* device) {
     // GPU timing per pass: auto quality, the overlay and the perf log line use it (a few
     // timestamp queries a frame, never waited for).
     const Settings& settings = Config::get().settings;
-    g_pipeline.setProfiling(true);
     perflog::frame(device, g_pipeline, g_shadedThisFrame, casters::cpuMs());
+    // Inside perflog's frame-wide disjoint query (open from here to the next Present) the
+    // pipeline opens none of its own: only one at a time.
+    g_pipeline.setProfiling(true, perflog::bracketOpen());
     // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
     // frame times when it ends starts a quiet period).
     // The video export likewise: its frames are slow on purpose.
