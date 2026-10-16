@@ -53,7 +53,7 @@ cbuffer Frame : register(b0)
     float4 u_PrevView2; // c30: row 2
     float4 u_PrevProj;  // c31: previous frame's P00, P11, P20, P21
     float4 u_Engine;    // c32: engine textures present: normals, albedo, light mask, motion
-    float4 u_Engine2;   // c33: engine sun known (1; -1 = night map, the moon), specular present, ambient strength, 0
+    float4 u_Engine2;   // c33: engine sun known (1; -1 = night map, the moon), specular present, ambient strength, CleanHighlights (1: the sun's glint goes with the sun under night skies)
     float4 u_Temporal;  // c34: TAA on, history valid, noise frame (0..63), 0
     float4 u_Ambient;   // c35: the engine's ambient light (rgb, linear), 0
     float4 u_Light2;    // c36: neon light, game sun (1 known, -1 night map), lightning flash, lightning bolt

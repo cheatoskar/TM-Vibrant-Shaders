@@ -575,6 +575,7 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[32][3] = has(kTexMotion);
     c[33][0] = cam.sunDirectionKnown ? (mapNight ? -1.0f : 1.0f) : 0.0f;
     c[33][1] = has(kTexSpecular);
+    c[33][3] = s.cleanHighlights ? 1.0f : 0.0f; // the sun's glint goes with the sun under night skies
     c[34][0] = s.taa ? 1.0f : 0.0f;
     c[34][1] = m_temporalValid ? 1.0f : 0.0f;
     c[34][2] = static_cast<float>(m_frame % 64);

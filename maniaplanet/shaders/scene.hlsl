@@ -488,8 +488,9 @@ float4 PS_Lighting(VSOut i) : SV_Target
     // the sun's mirror direction above the surface's own diffuse light, of the sun's hue; it is
     // squeezed to about that light. Both shares (lighting, light sources) come down by the same
     // factor, so the colour stays and no edge shows where emissiveOf counts the light differently
-    // (taking it out of one share left grey holes with hard edges in the gold).
-    if (u_SunOut.x > 0.0 && u_Engine2.x > 0.5)
+    // (taking it out of one share left grey holes with hard edges in the gold). Off with
+    // CleanHighlights (as in 1.4.0).
+    if (u_SunOut.x > 0.0 && u_Engine2.x > 0.5 && u_Engine2.w > 0.5)
     {
         float3 sunC = max(u_EngineSun.rgb, 1e-4);
         float level = max(luma(sunPart + ambPart), 1e-4);
