@@ -71,6 +71,7 @@ What single settings cost there (Golden Hour):
 | GameHdr | +0.1 ms in the passes | plus the game drawing into a float target (in game only) |
 | CleanWater | ≤ 0.1 ms | |
 | CasterShadows | ~0 ms to sample | drawing the maps: in game only, see the log line below |
+| CasterAlphaTest | ~0 ms to sample | drawing fences and grids into the maps: ~1 µs of GPU and ~0.3 µs of CPU more per mesh than a solid one (`tmvs_castertest --rebuild`) |
 
 The most expensive passes: the lighting (1.4 ms), reflections (0.5–1.4 ms), the custom sky of Golden Hour
 or Horizon (0.8–1.0 ms), the final grade (0.4 ms), light shafts (0.5 ms), AO and shadows (0.3–0.6 ms), TAA

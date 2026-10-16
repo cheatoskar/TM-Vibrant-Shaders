@@ -41,6 +41,10 @@ constexpr float kUnboundedReach = 64.0f; // a mesh whose vertices can't be read:
 // The same buffers this close are one mesh at one place: float noise of the camera's matrices,
 // and TAA jitter should the projection SetTransform gives lack it (a shear of up to 0.5 m at 1 km).
 constexpr double kSamePlace = 1.0, kSameAxes = 0.01;
+// Alpha-tested meshes kept (CasterAlphaTest): each holds the state to draw it again, ~1 KB.
+constexpr size_t kMaxAlpha = 8000;
+constexpr DWORD kStages = 16;     // sampler stages of ps_2_0 and up
+constexpr DWORD kMaxStreams = 16;
 
 struct Caster {
     IDirect3DVertexBuffer9* vb = nullptr;
@@ -53,7 +57,49 @@ struct Caster {
     float world[4][3] = {}; // mesh -> world, row vectors (rows 0..2 the axes, row 3 the place)
     float lo[3] = {}, hi[3] = {}; // world bounds
     float box[4] = {};            // light space bounds for the current light: across min/max, up min/max
+    int alpha = -1;               // alpha-tested: its state in g_alpha; -1 opaque (our own shaders)
 };
+
+// An alpha-tested mesh is drawn into the maps with the game's own shaders, constants and
+// textures as they were at its draw, and the game's alpha test: its holes stay holes whatever
+// the material does to its alpha (which texture, which texture coordinates, a coordinate
+// transform in the vertex shader, Tech3's planar projected ones). Only the camera's matrix
+// (GbxVisualPrCamera) is swapped for the map's. Everything here holds a reference.
+struct AlphaPart {
+    IDirect3DVertexShader9* vs = nullptr;
+    IDirect3DPixelShader9* ps = nullptr;
+    IDirect3DVertexDeclaration9* decl = nullptr; // the game's (every element the shader reads)
+    int camera = -1;                             // GbxVisualPrCamera's first register
+    DWORD streams = 0;                           // the streams the declaration reads (bit per stream)
+    IDirect3DVertexBuffer9* vb[kMaxStreams] = {};
+    UINT offset[kMaxStreams] = {}, stride[kMaxStreams] = {};
+    DWORD samplers = 0; // the pixel shader's samplers: bound to the kept texture, or to none
+    IDirect3DBaseTexture9* texture[kStages] = {};
+    DWORD sampler[kStages][8] = {}; // kSamplerStates
+    DWORD alphaRef = 0, alphaFunc = D3DCMP_ALWAYS;
+    // The shaders' constants: (kind, register, count) blocks into `data`.
+    struct Block {
+        BYTE kind; // 0 vertex float4, 1 vertex int4, 2 vertex bool, 3 pixel float4, 4 pixel int4, 5 pixel bool
+        WORD reg, count;
+        uint32_t at;
+    };
+    std::vector<Block> blocks;
+    std::vector<uint32_t> data;
+};
+
+// What a shader reads, from its constant table: (set, register, count) of the constants
+// (set 0 bool, 1 int4, 2 float4) and its samplers.
+struct ShaderUse {
+    struct Range {
+        BYTE set;
+        WORD reg, count;
+    };
+    std::vector<Range> ranges;
+    DWORD samplers = 0;
+};
+
+const D3DSAMPLERSTATETYPE kSamplerStates[8] = {D3DSAMP_ADDRESSU,  D3DSAMP_ADDRESSV,  D3DSAMP_ADDRESSW,  D3DSAMP_BORDERCOLOR,
+                                               D3DSAMP_MAGFILTER, D3DSAMP_MINFILTER, D3DSAMP_MIPFILTER, D3DSAMP_MAXMIPLEVEL};
 
 // A mesh seen at a place, not yet for long enough.
 struct Pending {
@@ -85,6 +131,9 @@ struct Stats {
     unsigned frames = 0, draws = 0, noCamera = 0, otherProjection = 0, noDecl = 0, stream = 0, pool = 0, pending = 0, known = 0;
     unsigned promoted = 0, duplicates = 0, unbounded = 0, mapDraws = 0, nearBuilds = 0;
     unsigned checked = 0, paused = 0; // draws checked (the others wait for a later frame); draws while paused
+    // Alpha-tested draws checked; kept (with their state); not kept (no pixel shader, a stream
+    // instanced or not managed, kMaxAlpha reached); render-target textures left out; drawn into the maps.
+    unsigned alphaChecked = 0, alphaKept = 0, alphaRefused = 0, alphaTextures = 0, alphaMapDraws = 0;
     double recordMs = 0.0, updateMs = 0.0;
 };
 
@@ -106,6 +155,8 @@ int g_lastRegister = -1;
 const void* g_lastDecl = nullptr;
 DeclInfo g_lastDeclInfo;
 std::map<std::pair<WORD, BYTE>, IDirect3DVertexDeclaration9*> g_ownDecls; // (offset, type) -> position-only declaration
+std::vector<AlphaPart> g_alpha;                               // the alpha-tested meshes' state (Caster::alpha)
+std::unordered_map<const void*, ShaderUse> g_uses;            // the game's shaders -> what they read
 Stats g_stats;
 unsigned g_frameDraws = 0;           // draws handed over this frame
 unsigned g_stride = 1, g_phase = 0;  // this frame checks the draws whose index + phase is a multiple of stride
@@ -178,6 +229,48 @@ double milliseconds(const LARGE_INTEGER& a, const LARGE_INTEGER& b) {
     return static_cast<double>(b.QuadPart - a.QuadPart) * g_toMs;
 }
 
+// A shader's bytecode (DWORDs). False: none, or nonsense.
+template <typename Shader>
+bool shaderCode(Shader* shader, std::vector<DWORD>& code) {
+    UINT size = 0;
+    if (FAILED(shader->GetFunction(nullptr, &size)) || size < 8 || size >= (1u << 20)) return false;
+    code.resize((size + 3) / 4);
+    if (FAILED(shader->GetFunction(code.data(), &size))) return false;
+    code.resize(size / 4);
+    return true;
+}
+
+// The constant table in a shader's bytecode (shaders the game compiled from HLSL keep it):
+// entry(set, register, count, table, bytes, name offset) for every constant. False: none.
+template <typename Entry>
+bool forEachConstant(const std::vector<DWORD>& code, Entry entry) {
+    const size_t n = code.size();
+    bool found = false;
+    // Comment tokens: low word 0xFFFE, length in DWORDs in bits 16..30. The table
+    // starts with "CTAB"; its offsets count from just after that.
+    for (size_t i = 1; i < n;) {
+        const DWORD token = code[i];
+        if ((token & 0xFFFF) != 0xFFFE) break; // the table comes before the first instruction
+        const size_t length = (token >> 16) & 0x7FFF;
+        if (i + 1 + length > n) break;
+        if (length >= 8 && code[i + 1] == MAKEFOURCC('C', 'T', 'A', 'B')) {
+            found = true;
+            const unsigned char* table = reinterpret_cast<const unsigned char*>(&code[i + 2]);
+            const size_t bytes = (length - 1) * 4;
+            auto u32 = [&](size_t at) -> DWORD { return at + 4 <= bytes ? *reinterpret_cast<const DWORD*>(table + at) : 0; };
+            auto u16 = [&](size_t at) -> WORD { return at + 2 <= bytes ? *reinterpret_cast<const WORD*>(table + at) : 0; };
+            const DWORD constants = u32(12), info = u32(16);
+            for (DWORD c = 0; c < constants && c < 512; c++) {
+                const size_t at = info + c * 20;
+                if (at + 20 > bytes) break;
+                entry(u16(at + 4), u16(at + 6), u16(at + 8), table, bytes, u32(at));
+            }
+        }
+        i += 1 + length;
+    }
+    return found;
+}
+
 // GbxVisualPrCamera's first register, from the constant table in the shader's bytecode
 // (shaders the game compiled from HLSL keep it). -1: the shader has none (assembled ones,
 // the sky, 2D). c0 in every material shader seen so far (62 of 74 dumped vertex shaders).
@@ -190,39 +283,14 @@ int cameraRegister(IDirect3DVertexShader9* vs) {
         return it->second;
     }
     int result = -1;
-    UINT size = 0;
-    if (SUCCEEDED(vs->GetFunction(nullptr, &size)) && size >= 8 && size < (1u << 20)) {
-        std::vector<DWORD> code((size + 3) / 4);
-        if (SUCCEEDED(vs->GetFunction(code.data(), &size))) {
-            const size_t n = size / 4;
-            // Comment tokens: low word 0xFFFE, length in DWORDs in bits 16..30. The table
-            // starts with "CTAB"; its offsets count from just after that.
-            for (size_t i = 1; i < n;) {
-                const DWORD token = code[i];
-                if ((token & 0xFFFF) != 0xFFFE) break; // the table comes before the first instruction
-                const size_t length = (token >> 16) & 0x7FFF;
-                if (i + 1 + length > n) break;
-                if (length >= 8 && code[i + 1] == MAKEFOURCC('C', 'T', 'A', 'B')) {
-                    const unsigned char* table = reinterpret_cast<const unsigned char*>(&code[i + 2]);
-                    const size_t bytes = (length - 1) * 4;
-                    auto u32 = [&](size_t at) -> DWORD { return at + 4 <= bytes ? *reinterpret_cast<const DWORD*>(table + at) : 0; };
-                    auto u16 = [&](size_t at) -> WORD { return at + 2 <= bytes ? *reinterpret_cast<const WORD*>(table + at) : 0; };
-                    const DWORD constants = u32(12), info = u32(16);
-                    for (DWORD c = 0; c < constants && c < 512; c++) {
-                        const size_t at = info + c * 20;
-                        if (at + 20 > bytes) break;
-                        const DWORD name = u32(at);
-                        const WORD set = u16(at + 4), reg = u16(at + 6), count = u16(at + 8);
-                        static const char kName[] = "GbxVisualPrCamera";
-                        if (name + sizeof(kName) <= bytes && !memcmp(table + name, kName, sizeof(kName)) && set == 2 /* D3DXRS_FLOAT4 */ &&
-                            count == 4) {
-                            result = reg;
-                        }
-                    }
-                }
-                i += 1 + length;
+    std::vector<DWORD> code;
+    if (shaderCode(vs, code)) {
+        forEachConstant(code, [&](WORD set, WORD reg, WORD count, const unsigned char* table, size_t bytes, DWORD name) {
+            static const char kName[] = "GbxVisualPrCamera";
+            if (name + sizeof(kName) <= bytes && !memcmp(table + name, kName, sizeof(kName)) && set == 2 /* D3DXRS_FLOAT4 */ && count == 4) {
+                result = reg;
             }
-        }
+        });
     }
     g_vsRegister[vs] = result;
     g_lastVS = vs;
@@ -361,6 +429,129 @@ bool managedStatic(IDirect3DIndexBuffer9* ib) {
     return SUCCEEDED(ib->GetDesc(&d)) && d.Pool == D3DPOOL_MANAGED && !(d.Usage & D3DUSAGE_DYNAMIC);
 }
 
+// A texture an alpha-tested mesh may keep: not a render target or depth texture (their content
+// changes every frame: the game's shadow buffer, reflections; a material's alpha isn't there).
+bool keepableTexture(IDirect3DBaseTexture9* t) {
+    DWORD usage = D3DUSAGE_RENDERTARGET;
+    switch (t->GetType()) {
+    case D3DRTYPE_TEXTURE: {
+        D3DSURFACE_DESC d{};
+        if (SUCCEEDED(static_cast<IDirect3DTexture9*>(t)->GetLevelDesc(0, &d))) usage = d.Usage;
+        break;
+    }
+    case D3DRTYPE_CUBETEXTURE: {
+        D3DSURFACE_DESC d{};
+        if (SUCCEEDED(static_cast<IDirect3DCubeTexture9*>(t)->GetLevelDesc(0, &d))) usage = d.Usage;
+        break;
+    }
+    case D3DRTYPE_VOLUMETEXTURE: {
+        D3DVOLUME_DESC d{};
+        if (SUCCEEDED(static_cast<IDirect3DVolumeTexture9*>(t)->GetLevelDesc(0, &d))) usage = d.Usage;
+        break;
+    }
+    default:
+        break;
+    }
+    return !(usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL));
+}
+
+// What a shader reads (cached per shader until the meshes are let go).
+template <typename Shader>
+const ShaderUse& shaderUse(Shader* shader, bool pixel) {
+    auto it = g_uses.find(shader);
+    if (it != g_uses.end()) return it->second;
+    ShaderUse use;
+    std::vector<DWORD> code;
+    bool table = false;
+    if (shaderCode(shader, code)) {
+        table = forEachConstant(code, [&](WORD set, WORD reg, WORD count, const unsigned char*, size_t, DWORD) {
+            if (set == 3 /* D3DXRS_SAMPLER */) {
+                for (DWORD s = reg; s < static_cast<DWORD>(reg) + count && s < kStages; s++) use.samplers |= 1u << s;
+            } else if (set <= 2 && count > 0) {
+                use.ranges.push_back({static_cast<BYTE>(set), reg, count});
+            }
+        });
+    }
+    if (!table && pixel) {
+        // Assembled (the game's ps_1_x materials keep no table): every constant and stage it can read.
+        const bool v1 = code.empty() || ((code[0] >> 8) & 0xFF) <= 1;
+        use.ranges.push_back({2, 0, static_cast<WORD>(v1 ? 8 : 32)});
+        use.samplers = v1 ? 0x3F : 0xFFFF;
+    }
+    return g_uses[shader] = use;
+}
+
+void releaseAlpha(AlphaPart& a) {
+    gfx::release(a.vs);
+    gfx::release(a.ps);
+    gfx::release(a.decl);
+    for (DWORD s = 0; s < kMaxStreams; s++) gfx::release(a.vb[s]);
+    for (DWORD s = 0; s < kStages; s++) gfx::release(a.texture[s]);
+}
+
+// The state of the alpha-tested draw bound now, to draw it again into the maps. False: it
+// can't be (no pixel shader, a stream instanced or not in the managed pool).
+bool captureAlpha(IDirect3DDevice9* device, int camera, AlphaPart& a) {
+    device->GetPixelShader(&a.ps);
+    device->GetVertexShader(&a.vs);
+    device->GetVertexDeclaration(&a.decl);
+    if (!a.ps || !a.vs || !a.decl) return false;
+    a.camera = camera;
+    D3DVERTEXELEMENT9 elements[MAXD3DDECLLENGTH + 1];
+    UINT count = MAXD3DDECLLENGTH + 1;
+    if (FAILED(a.decl->GetDeclaration(elements, &count))) return false;
+    for (UINT i = 0; i < count && elements[i].Stream != 0xFF; i++) {
+        if (elements[i].Stream >= kMaxStreams) return false;
+        a.streams |= 1u << elements[i].Stream;
+    }
+    for (DWORD s = 0; s < kMaxStreams; s++) {
+        if (!(a.streams & (1u << s))) continue;
+        UINT freq = 1;
+        device->GetStreamSourceFreq(s, &freq);
+        device->GetStreamSource(s, &a.vb[s], &a.offset[s], &a.stride[s]);
+        if (!a.vb[s] || freq != 1 || a.stride[s] == 0 || !managedStatic(a.vb[s])) return false;
+    }
+    auto snapshot = [&](const ShaderUse& use, bool pixel) {
+        for (const ShaderUse::Range& r : use.ranges) {
+            const UINT limit = r.set == 2 ? (pixel ? 224u : 256u) : 16u;
+            if (r.reg >= limit) continue;
+            const WORD n = static_cast<WORD>(r.count < limit - r.reg ? r.count : limit - r.reg);
+            AlphaPart::Block b{static_cast<BYTE>((pixel ? 3 : 0) + (2 - r.set)), r.reg, n, static_cast<uint32_t>(a.data.size())};
+            a.data.resize(a.data.size() + (r.set == 0 ? n : n * 4u), 0);
+            void* p = a.data.data() + b.at;
+            switch (b.kind) {
+            case 0: device->GetVertexShaderConstantF(b.reg, static_cast<float*>(p), n); break;
+            case 1: device->GetVertexShaderConstantI(b.reg, static_cast<int*>(p), n); break;
+            case 2: device->GetVertexShaderConstantB(b.reg, static_cast<BOOL*>(p), n); break;
+            case 3: device->GetPixelShaderConstantF(b.reg, static_cast<float*>(p), n); break;
+            case 4: device->GetPixelShaderConstantI(b.reg, static_cast<int*>(p), n); break;
+            default: device->GetPixelShaderConstantB(b.reg, static_cast<BOOL*>(p), n); break;
+            }
+            a.blocks.push_back(b);
+        }
+    };
+    snapshot(shaderUse(a.vs, false), false);
+    const ShaderUse& pixelUse = shaderUse(a.ps, true);
+    snapshot(pixelUse, true);
+    a.samplers = pixelUse.samplers;
+    for (DWORD s = 0; s < kStages; s++) {
+        if (!(pixelUse.samplers & (1u << s))) continue;
+        IDirect3DBaseTexture9* t = nullptr;
+        device->GetTexture(s, &t);
+        if (!t) continue;
+        if (!keepableTexture(t)) {
+            t->Release();
+            g_stats.alphaTextures++;
+            continue;
+        }
+        a.texture[s] = t;
+        for (int k = 0; k < 8; k++) device->GetSamplerState(s, kSamplerStates[k], &a.sampler[s][k]);
+    }
+    device->GetRenderState(D3DRS_ALPHAREF, &a.alphaRef);
+    device->GetRenderState(D3DRS_ALPHAFUNC, &a.alphaFunc);
+    return true;
+}
+
 // The mesh's own bounds from its vertices (the managed pool keeps a copy in system memory:
 // reading it doesn't touch the GPU). False: not readable, or nonsense.
 bool meshBounds(const Caster& m, const DeclInfo& info, float lo[3], float hi[3]) {
@@ -431,6 +622,9 @@ void forgetMeshes() {
         gfx::release(c.ib);
     }
     g_casters.clear();
+    for (AlphaPart& a : g_alpha) releaseAlpha(a);
+    g_alpha.clear();
+    g_uses.clear();
     g_known.clear();
     g_pending.clear();
     g_pendingCount = 0;
@@ -461,6 +655,13 @@ void logStats(const char* when) {
              when, static_cast<unsigned>(g_casters.size()), s.promoted, s.duplicates, s.unbounded, s.draws / f, s.checked / f, s.known / f,
              s.pending / f, s.noCamera / f, s.otherProjection / f, s.noDecl / f, s.stream / f, s.pool / f, s.paused / f, s.recordMs / f,
              s.updateMs / f, s.mapDraws / f, s.nearBuilds, g_farBuilds, s.frames);
+    // CasterAlphaTest: only once alpha-tested draws came (none: the line is as before).
+    if (s.alphaChecked || !g_alpha.empty()) {
+        TMVS_LOG("casters (%s): alpha-tested: %u meshes kept (%u new, %u refused), %.0f draws checked per frame, %.0f drawn into the maps "
+                 "per frame, %u render-target textures left out",
+                 when, static_cast<unsigned>(g_alpha.size()), s.alphaKept, s.alphaRefused, s.alphaChecked / f, s.alphaMapDraws / f,
+                 s.alphaTextures);
+    }
     g_stats = Stats();
 }
 
@@ -572,8 +773,122 @@ bool overlaps(const Caster& c, const LightMap& m) {
     return c.box[1] >= m.a0 && c.box[0] <= m.a0 + m.sa && c.box[3] >= m.b0 && c.box[2] <= m.b0 + m.sb;
 }
 
+// What the alpha-tested meshes' draws change beyond the opaque ones' (constants, samplers,
+// streams 1..15): saved at the first such draw of an update, given back at its end. The
+// pipeline's passes after the maps rely on constants they set before.
+struct AlphaSave {
+    bool constants = false;
+    float vsF[256][4], psF[224][4];
+    int vsI[16][4], psI[16][4];
+    BOOL vsB[16], psB[16];
+    DWORD alphaRef, alphaFunc;
+    DWORD stages = 0;
+    IDirect3DBaseTexture9* texture[kStages];
+    DWORD sampler[kStages][8];
+    DWORD streams = 0;
+    IDirect3DVertexBuffer9* vb[kMaxStreams];
+    UINT offset[kMaxStreams], stride[kMaxStreams];
+};
+AlphaSave g_save;
+UINT g_vsConstants = 0, g_psConstants = 0; // the device's float registers
+
+void saveForAlpha(IDirect3DDevice9* device, const AlphaPart& a) {
+    AlphaSave& s = g_save;
+    if (!s.constants) {
+        s.constants = true;
+        if (!g_vsConstants) {
+            D3DCAPS9 caps{};
+            device->GetDeviceCaps(&caps);
+            g_vsConstants = caps.MaxVertexShaderConst < 96 ? 96 : (caps.MaxVertexShaderConst > 256 ? 256 : caps.MaxVertexShaderConst);
+            g_psConstants = caps.PixelShaderVersion >= D3DPS_VERSION(3, 0) ? 224 : 32;
+        }
+        device->GetVertexShaderConstantF(0, &s.vsF[0][0], g_vsConstants);
+        device->GetPixelShaderConstantF(0, &s.psF[0][0], g_psConstants);
+        device->GetVertexShaderConstantI(0, &s.vsI[0][0], 16);
+        device->GetPixelShaderConstantI(0, &s.psI[0][0], 16);
+        device->GetVertexShaderConstantB(0, s.vsB, 16);
+        device->GetPixelShaderConstantB(0, s.psB, 16);
+        device->GetRenderState(D3DRS_ALPHAREF, &s.alphaRef);
+        device->GetRenderState(D3DRS_ALPHAFUNC, &s.alphaFunc);
+    }
+    const DWORD streams = a.streams & ~1u & ~s.streams; // stream 0: update() gives it back
+    for (DWORD i = 1; i < kMaxStreams; i++) {
+        if (streams & (1u << i)) device->GetStreamSource(i, &s.vb[i], &s.offset[i], &s.stride[i]);
+    }
+    s.streams |= streams;
+    const DWORD stages = a.samplers & ~s.stages;
+    for (DWORD i = 0; i < kStages; i++) {
+        if (!(stages & (1u << i))) continue;
+        device->GetTexture(i, &s.texture[i]);
+        for (int k = 0; k < 8; k++) device->GetSamplerState(i, kSamplerStates[k], &s.sampler[i][k]);
+    }
+    s.stages |= stages;
+}
+
+void restoreAfterAlpha(IDirect3DDevice9* device) {
+    AlphaSave& s = g_save;
+    if (s.constants) {
+        device->SetVertexShaderConstantF(0, &s.vsF[0][0], g_vsConstants);
+        device->SetPixelShaderConstantF(0, &s.psF[0][0], g_psConstants);
+        device->SetVertexShaderConstantI(0, &s.vsI[0][0], 16);
+        device->SetPixelShaderConstantI(0, &s.psI[0][0], 16);
+        device->SetVertexShaderConstantB(0, s.vsB, 16);
+        device->SetPixelShaderConstantB(0, s.psB, 16);
+        device->SetRenderState(D3DRS_ALPHAREF, s.alphaRef);
+        device->SetRenderState(D3DRS_ALPHAFUNC, s.alphaFunc);
+    }
+    for (DWORD i = 1; i < kMaxStreams; i++) {
+        if (!(s.streams & (1u << i))) continue;
+        device->SetStreamSource(i, s.vb[i], s.offset[i], s.stride[i]);
+        gfx::release(s.vb[i]);
+    }
+    for (DWORD i = 0; i < kStages; i++) {
+        if (!(s.stages & (1u << i))) continue;
+        device->SetTexture(i, s.texture[i]);
+        for (int k = 0; k < 8; k++) device->SetSamplerState(i, kSamplerStates[k], s.sampler[i][k]);
+        gfx::release(s.texture[i]);
+    }
+    s.constants = false;
+    s.streams = s.stages = 0;
+}
+
+// An alpha-tested mesh: the game's draw again with the map's matrix (see AlphaPart).
+void drawAlpha(IDirect3DDevice9* device, const Caster& c, const AlphaPart& a, const float columns[4][4]) {
+    saveForAlpha(device, a);
+    device->SetVertexShader(a.vs);
+    device->SetPixelShader(a.ps);
+    device->SetVertexDeclaration(a.decl);
+    for (const AlphaPart::Block& b : a.blocks) {
+        const void* p = a.data.data() + b.at;
+        switch (b.kind) {
+        case 0: device->SetVertexShaderConstantF(b.reg, static_cast<const float*>(p), b.count); break;
+        case 1: device->SetVertexShaderConstantI(b.reg, static_cast<const int*>(p), b.count); break;
+        case 2: device->SetVertexShaderConstantB(b.reg, static_cast<const BOOL*>(p), b.count); break;
+        case 3: device->SetPixelShaderConstantF(b.reg, static_cast<const float*>(p), b.count); break;
+        case 4: device->SetPixelShaderConstantI(b.reg, static_cast<const int*>(p), b.count); break;
+        default: device->SetPixelShaderConstantB(b.reg, static_cast<const BOOL*>(p), b.count); break;
+        }
+    }
+    device->SetVertexShaderConstantF(a.camera, &columns[0][0], 4);
+    for (DWORD s = 0; s < kMaxStreams; s++) {
+        if (a.streams & (1u << s)) device->SetStreamSource(s, a.vb[s], a.offset[s], a.stride[s]);
+    }
+    for (DWORD s = 0; s < kStages; s++) {
+        if (!(a.samplers & (1u << s))) continue;
+        device->SetTexture(s, a.texture[s]);
+        if (!a.texture[s]) continue;
+        for (int k = 0; k < 8; k++) device->SetSamplerState(s, kSamplerStates[k], a.sampler[s][k]);
+    }
+    device->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
+    device->SetRenderState(D3DRS_ALPHAREF, a.alphaRef);
+    device->SetRenderState(D3DRS_ALPHAFUNC, a.alphaFunc);
+    device->SetIndices(c.ib);
+    device->DrawIndexedPrimitive(c.type, c.base, c.minIndex, c.vertices, c.start, c.count);
+}
+
 // Draws the meshes from the map's cursor on (only those over its region), within the budget.
-void drawInto(IDirect3DDevice9* device, LightMap& m, UINT& budget, UINT& checks, bool select) {
+// `alphaBound`: the last draw was an alpha-tested mesh's (the game's shaders are bound).
+void drawInto(IDirect3DDevice9* device, LightMap& m, UINT& budget, UINT& checks, bool select, bool& alphaBound) {
     const UINT total = static_cast<UINT>(g_casters.size());
     if (!m.active || (m.cleared && m.cursor >= total) || budget == 0 || checks == 0) return;
     device->SetDepthStencilSurface(m.surface);
@@ -605,6 +920,21 @@ void drawInto(IDirect3DDevice9* device, LightMap& m, UINT& budget, UINT& checks,
                 for (int k = 0; k < 3; k++) sum += static_cast<double>(c.world[r][k]) * lm[k][col];
                 columns[col][r] = static_cast<float>(sum);
             }
+        }
+        if (c.alpha >= 0) {
+            drawAlpha(device, c, g_alpha[c.alpha], columns);
+            alphaBound = true;
+            lastDecl = nullptr;
+            budget--;
+            g_stats.mapDraws++;
+            g_stats.alphaMapDraws++;
+            continue;
+        }
+        if (alphaBound) {
+            device->SetVertexShader(g_vs);
+            device->SetPixelShader(g_ps);
+            device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+            alphaBound = false;
         }
         if (c.decl != lastDecl) {
             device->SetVertexDeclaration(c.decl);
@@ -657,8 +987,9 @@ bool takeTurn() {
 }
 
 void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
-                const float view[16], const float projection[16]) {
+                const float view[16], const float projection[16], bool alphaTested) {
     g_stats.checked++;
+    if (alphaTested) g_stats.alphaChecked++;
     LARGE_INTEGER t0;
     QueryPerformanceCounter(&t0);
     struct Timer {
@@ -822,8 +1153,25 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
         return;
     }
     g_known.insert(h);
+    // Alpha-tested: kept with the state to draw it again (once: the key stays known also when
+    // it can't be, so it isn't looked at again).
+    int alpha = -1;
+    if (alphaTested) {
+        AlphaPart part;
+        if (g_alpha.size() >= kMaxAlpha || !captureAlpha(device, reg, part)) {
+            releaseAlpha(part);
+            g_stats.alphaRefused++;
+            gfx::release(vb);
+            gfx::release(ib);
+            return;
+        }
+        alpha = static_cast<int>(g_alpha.size());
+        g_alpha.push_back(std::move(part));
+        g_stats.alphaKept++;
+    }
     // Static: kept, with the game's buffers (references held until reset()).
     Caster m;
+    m.alpha = alpha;
     m.vb = vb;
     m.offset = offset;
     m.stride = stride;
@@ -1003,10 +1351,12 @@ bool update(IDirect3DDevice9* device, const float sunWorld[3], const float camer
         // What the camera sees first: new meshes into the near map in use, then the next near
         // map, then the whole-track map (all of it, a rebuild spreads over frames).
         UINT budget = kDrawBudget, checks = kCheckBudget;
-        if (g_nearFront >= 0) drawInto(device, g_near[g_nearFront], budget, checks, true);
-        if (g_nearBuild >= 0) drawInto(device, g_near[g_nearBuild], budget, checks, true);
-        drawInto(device, g_far, budget, checks, false);
+        bool alphaBound = false;
+        if (g_nearFront >= 0) drawInto(device, g_near[g_nearFront], budget, checks, true, alphaBound);
+        if (g_nearBuild >= 0) drawInto(device, g_near[g_nearBuild], budget, checks, true, alphaBound);
+        drawInto(device, g_far, budget, checks, false, alphaBound);
 
+        restoreAfterAlpha(device); // before c0..c3 below: those are the same values
         for (size_t i = 0; i < sizeof(kStates) / sizeof(kStates[0]); i++) device->SetRenderState(kStates[i], saved[i]);
         device->SetVertexShaderConstantF(0, &savedConstants[0][0], 4);
         device->SetPixelShader(savedPS);
@@ -1071,6 +1421,10 @@ void runtimeShaders(std::vector<gfx::ShaderSource>& out) {
 
 unsigned keptMeshes() {
     return static_cast<unsigned>(g_casters.size());
+}
+
+unsigned keptAlphaMeshes() {
+    return static_cast<unsigned>(g_alpha.size());
 }
 
 void releaseDevice() {

@@ -159,6 +159,7 @@ bool g_hdrAddedActive = false; // cleared at this camera's start, takes the addi
 bool g_hdrAddedBound = false;  // the render target during the current (additive) draw
 bool g_hdrAddedValid = false;  // holds the last main camera's added light
 bool g_castersOn = false;      // CasterShadows this frame: the main camera's meshes are recorded (casters.cpp)
+bool g_casterAlphaTest = false; // CasterAlphaTest this frame: the alpha-tested ones too
 // GameGBuffer: the game's patched pixel shaders (gameshaders.h) also write the world normal and the
 // distance from the eye of what they draw into COLOR1. During the main camera this target is the
 // second render target for exactly those draws: opaque ones (depth writes, no blending: the blend
@@ -1781,11 +1782,13 @@ void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UI
     device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
     device->GetRenderState(D3DRS_ALPHATESTENABLE, &alphaTest);
     device->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
-    // Alpha-tested meshes (fences, leaves) would cast solid shadows: left out for now.
-    if (!z || !zwrite || blend || alphaTest || !colorWrite) return;
+    if (!z || !zwrite || blend || !colorWrite) return;
+    // Alpha-tested meshes (fences, grids, leaves): with CasterAlphaTest drawn into the maps with
+    // the game's alpha test (their holes let the light through), else left out (a solid shadow).
+    if (alphaTest && !g_casterAlphaTest) return;
     const engine::Material material = engine::currentMaterial();
     if (material == engine::Material::Car || material == engine::Material::Glass || material == engine::Material::Water) return;
-    casters::recordDraw(device, type, base, minIndex, vertices, start, count, g_scene.view, g_scene.projection);
+    casters::recordDraw(device, type, base, minIndex, vertices, start, count, g_scene.view, g_scene.projection, alphaTest != FALSE);
 }
 
 // Once a frame: the kept meshes belong to the map that is open (the game's buffers are held
@@ -1809,6 +1812,10 @@ void castersTick() {
     }
     if (g_castersOn && !on) casters::reset("CasterShadows off");
     g_castersOn = on;
+    // CasterAlphaTest off: the alpha-tested meshes kept go (all of them, the rest comes back
+    // within seconds). On: they are kept from now on.
+    if (g_casterAlphaTest && !s.casterAlphaTest && casters::keptAlphaMeshes() > 0) casters::reset("CasterAlphaTest off");
+    g_casterAlphaTest = s.casterAlphaTest;
     // The draws are checked only while a pipeline uses the maps (or did in the last 3 s: auto
     // quality turns the effects off for moments, a preset glides in).
     static DWORD s_wantedAt = 0;
