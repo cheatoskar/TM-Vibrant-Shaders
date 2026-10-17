@@ -81,7 +81,7 @@ void drawPerformance() {
         {"Light shafts", {"RayMask", "RayBlur", nullptr}},
         {"Bloom", {"BloomDown", "BloomUp", nullptr}},
         {"Exposure, colour grading", {"Luminance", "Adapt", "Final"}},
-        {"FXAA", {"FXAA", nullptr, nullptr}},
+        {"Edge smoothing (FXAA, SMAA)", {"FXAA", "Smaa*", nullptr}},
         {"Temporal AA", {"TAA", nullptr, nullptr}},
         {"Sharpening", {"Sharpen", "Copy", nullptr}},
     };
@@ -256,6 +256,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("TargetFPS")) return s.autoQuality;
     if (is("FsrSharpness")) return s.renderScale < 0.99f;
     if (is("TAAJitter")) return s.taa;
+    if (is("SMAA")) return s.fxaa;
     if (!strncmp(f.key, "Trail", 5)) return s.neonTrail > 0.0f;
     if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f || s.snow > 0.0f;
     if (is("SunAzimuth")) return s.sunElevationOverride >= 0.0f;
@@ -436,7 +437,8 @@ const char* tooltipFor(const char* key) {
         {"TrailWidth", "Width of the trail, in metres."},
         {"MotionBlur", "Blur from camera movement. 1 is one full frame of movement."},
         {"DepthOfField", "Blurs what is in front of and behind the point in focus."},
-        {"FXAA", "Smooths edges within one frame. Fast, a little soft."},
+        {"FXAA", "Smooths edges within one frame: SMAA, or FXAA (a little softer, a little faster)."},
+        {"SMAA", "SMAA finds the edges and blends along them: smoother long edges, sharper textures than FXAA. About 0.2 ms more at 1440p. Off: FXAA."},
         {"Quality", "Samples for AO, shadows, clouds, volumetric light and bounce light. Low is clearly faster."},
         // Sharing presets as text (Shaders page).
         {"ShareCopy", "Puts the current look on the clipboard as one line of text (TMVS1:...) to paste into a chat. Only the look's settings are in it, not your installation's (auto quality, sound volume, neon trail, ...). The same code works in TrackMania Nations/United and TrackMania 2."},
@@ -1324,7 +1326,8 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"CinematicOnlyInReplays", nullptr}}));
     panels.push_back(settingsPanel("Image quality", s,
                                    {{"TAA", "Temporal AA"},
-                                    {"FXAA", "FXAA"},
+                                    {"FXAA", "Edge smoothing"},
+                                    {"SMAA", "SMAA instead of FXAA"},
                                     {"Sharpen", "Sharpening"},
                                     {"Quality", "Effect quality"},
                                     {"AutoQuality", "Auto quality"}}));
@@ -1830,7 +1833,7 @@ void drawAbout(Config& config) {
                           return false;
                       }});
     panels.push_back({"Credits", 6.0f, [] {
-                          ImGui::TextWrapped("Built with Dear ImGui, minimp3 and stb. Sharpening: AMD FidelityFX CAS. Upscaling: AMD FidelityFX FSR 1. Anti-aliasing: FXAA 3.11.");
+                          ImGui::TextWrapped("Built with Dear ImGui, minimp3 and stb. Sharpening: AMD FidelityFX CAS. Upscaling: AMD FidelityFX FSR 1. Anti-aliasing: FXAA 3.11, SMAA (Jimenez, Echevarria, Masia, Navarro, Gutierrez).");
                           ImGui::TextWrapped("Rain and thunder: CC0 recordings from freesound.org by Rubaoliva, loganzsound, seth-m, Fission9, TRP, "
                                              "Kinoton, Martineerok, kingsrow and bastipictures. The snow storm wind is made by the mod itself.");
                           ImGui::TextDisabled("Licences: see THIRD_PARTY_NOTICES.txt in the download.");

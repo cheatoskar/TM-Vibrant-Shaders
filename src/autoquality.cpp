@@ -45,7 +45,7 @@ constexpr Knob kKnobTable[AutoQuality::kKnobs] = {
     {"reflections, grass detail", {"Reflect"}, 1.0f},
     {"volumetric clouds", {"Clouds"}, 1.0f},
     {"TAA", {"TAA"}, 1.0f},
-    {"FXAA", {"FXAA"}, 1.0f},
+    {"edge smoothing", {"FXAA", "SmaaEdges", "SmaaWeights", "SmaaBlend"}, 1.0f},
     {"lowest samples", {"OcclusionShadow", "Clouds", "Volumetric", "GI"}, 0.3f},
     {"depth of field, motion blur", {"Focus", "DofBlur", "Cinematic"}, 1.0f},
     {"light shafts", {"RayMask", "RayBlur"}, 1.0f},

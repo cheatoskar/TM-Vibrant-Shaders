@@ -82,7 +82,7 @@ In TrackMania's launcher, *Advanced* options:
 
 | Game setting | Recommended | Why |
 |---|---|---|
-| Antialiasing | **Off** | The mod switches it off anyway (the depth effects need a readable depth buffer) and brings its own FXAA and TAA. |
+| Antialiasing | **Off** | The mod switches it off anyway (the depth effects need a readable depth buffer) and brings its own SMAA (or FXAA) and TAA. |
 | Anisotropic filtering | **16x** | Costs almost nothing and keeps the road and the thin neon strips sharp in the distance, so they still glow far away. |
 | Shader quality | PC3 High | The richest base image to light. Lower works, it just starts flatter. |
 | Shadows | Complex | Fine. The mod adds its own shadows on top. |

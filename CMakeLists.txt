@@ -63,7 +63,8 @@ set(TMVS_ENTRIES
   PS_RayMask PS_RayBlur PS_BloomDown PS_BloomUp PS_Luminance PS_Adapt PS_Final PS_FXAA PS_TAA PS_Sharpen PS_Copy
   PS_CopyDepth PS_WaterLevel PS_Resolve PS_LightingEngine PS_SpillDownEngine PS_LightGridInit PS_LightGridSweep PS_PrepareGBuffer
   PS_LampSource PS_LampDown PS_LampUp PS_LightingGameLight PS_FsrEasu PS_FsrRcas PS_SpillTemporal
-  PS_SpillSource PS_SpillSourceEngine PS_SpillDownSource)
+  PS_SpillSource PS_SpillSourceEngine PS_SpillDownSource
+  PS_SmaaEdges PS_SmaaWeights PS_SmaaBlend)
 
 file(GLOB TMVS_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
 list(SORT TMVS_SDK_BINS ORDER DESCENDING)
@@ -88,7 +89,7 @@ foreach(entry ${TMVS_ENTRIES})
     COMMAND "${TMVS_FXC}" /nologo /O3 /T ps_3_0 /E ${entry} /Vn g_${entry} /Fh "${out}" "${TMVS_SHADER}"
     # Stay below the 4096 instruction slots many drivers allow (with a little headroom).
     COMMAND "${CMAKE_COMMAND}" -DHEADER=${out} -DLIMIT=3900 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shader_slots.cmake"
-    DEPENDS "${TMVS_SHADER}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shader_slots.cmake"
+    DEPENDS "${TMVS_SHADER}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/SMAA.hlsl" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shader_slots.cmake"
     COMMENT "fxc ${entry}"
     VERBATIM)
   list(APPEND TMVS_SHADER_HEADERS "${out}")

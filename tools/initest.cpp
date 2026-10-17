@@ -289,6 +289,17 @@ int wmain(int argc, wchar_t** argv) {
         config.save();
         CHECK(readFile(ini) == saved); // and saves the same again
         std::printf("Config::save on %ls: %s\n", ini.c_str(), saved == real + "[MyStuff]\r\n; mine\r\nfoo=bar\r\n" ? "file unchanged" : "file changed");
+        // A file from before SMAA (FXAA, no SMAA) keeps FXAA; one that names SMAA gets it.
+        writeFile(ini, "[General]\r\nPreset=Custom\r\nBasePreset=Vibrant\r\n[Settings]\r\nFXAA=1\r\n");
+        config.load();
+        CHECK(config.settings.fxaa && !config.settings.smaa);
+        writeFile(ini, "[General]\r\nPreset=Custom\r\nBasePreset=Vibrant\r\n[Settings]\r\nFXAA=1\r\nSMAA=1\r\n");
+        config.load();
+        CHECK(config.settings.fxaa && config.settings.smaa);
+        writeFile(ini, "[General]\r\nPreset=Vibrant\r\n");
+        config.load();
+        CHECK(config.settings.fxaa && config.settings.smaa); // the built-in presets: SMAA
+        writeFile(ini, saved);
     }
 #endif
 

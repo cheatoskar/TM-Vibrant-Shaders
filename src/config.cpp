@@ -130,7 +130,8 @@ const std::vector<Field>& fields() {
 
         TMVS_FIELD("TAA", "Temporal AA", "Image quality", Bool, taa, 0.0f, 1.0f),
         TMVS_FIELD("TAAJitter", "TAA jitter", "Image quality", Bool, taaJitter, 0.0f, 1.0f),
-        TMVS_FIELD("FXAA", "FXAA", "Image quality", Bool, fxaa, 0.0f, 1.0f),
+        TMVS_FIELD("FXAA", "Edge smoothing", "Image quality", Bool, fxaa, 0.0f, 1.0f),
+        TMVS_FIELD("SMAA", "SMAA instead of FXAA", "Image quality", Bool, smaa, 0.0f, 1.0f),
         TMVS_FIELD("Sharpen", "Sharpening", "Image quality", Float, sharpen, 0.0f, 1.0f),
         TMVS_FIELD("Quality", "Effect quality", "Image quality", Int, quality, 0.0f, 2.0f),
         TMVS_FIELD("AutoQuality", "Auto quality", "Image quality", Bool, autoQuality, 0.0f, 1.0f),
@@ -291,6 +292,10 @@ void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, 
             if (std::isfinite(v)) *reinterpret_cast<float*>(base + f.offset) = v;
         }
     }
+    // A file from before SMAA (FXAA, no SMAA) keeps its FXAA: SMAA is only the new default.
+    wchar_t value[16];
+    if (!onlyTrail && GetPrivateProfileStringW(section, L"FXAA", L"", value, 16, ini) && !GetPrivateProfileStringW(section, L"SMAA", L"", value, 16, ini))
+        settings.smaa = false;
 }
 
 void writeFields(const Settings& settings, IniFile& ini, const wchar_t* section, bool includeSystem) {
@@ -404,6 +409,7 @@ const char* const kTagKeys[] = {
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
     "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus", "LampGlare", "LampHaze", "LampSkyHalos", "Floodlights",
+    "SMAA",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
@@ -1501,6 +1507,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.neonLight = 0.45f;
             s.grassDetail = 0.0f;
             s.taa = false;
+            s.smaa = false; // FXAA: 0.15 - 0.25 ms cheaper at 1440p
             break;
         case Preset::RainyDay:
             s.volumetricLight = 0.0f;

@@ -330,6 +330,9 @@ private:
         kSpillSource,
         kSpillSourceEngine,
         kSpillDownSource,
+        kSmaaEdges,
+        kSmaaWeights,
+        kSmaaBlend,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
@@ -355,6 +358,7 @@ private:
     bool updateLightGrid(IDirect3DDevice9* device, const Settings& settings);
     bool ensureCloudNoise(IDirect3DDevice9* device);
     bool ensureLut(IDirect3DDevice9* device);
+    bool ensureSmaa(IDirect3DDevice9* device, UINT width, UINT height);
     bool buildMaterialMask(IDirect3DDevice9* device, const Inputs& in);
     bool ensureRain(IDirect3DDevice9* device);
     bool ensureTrail(IDirect3DDevice9* device);
@@ -462,6 +466,11 @@ private:
     gfx::Target m_taa[2];       // full: TAA history ping-pong (rgb, view z)
     gfx::Target m_scaled;       // RenderScale: the finished image at the scene's (small) size
     gfx::Target m_fsr;          // RenderScale: EASU's image at the output's size, before RCAS
+    gfx::Target m_smaaEdges;    // full: SMAA's edges (rg)
+    gfx::Target m_smaaWeights;  // full: SMAA's blending weights
+    IDirect3DTexture9* m_smaaArea = nullptr;   // SMAA's precomputed area texture (A8L8, 160x560)
+    IDirect3DTexture9* m_smaaSearch = nullptr; // SMAA's search texture (L8, 64x16)
+    bool m_smaaFailed = false;  // the textures couldn't be made: FXAA instead, not tried every frame
     bool m_keepWorld = false;   // see keepWorldOnResize
     int m_adaptIndex = 0;
     int m_focusIndex = 0;
