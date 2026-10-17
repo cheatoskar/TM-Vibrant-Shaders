@@ -1323,9 +1323,9 @@ bool drawStudio(Config& config, Settings& s) {
     if (confirm("Reset preset?", ("Reset all settings to " + config.basePreset() + "?").c_str(), "Reset")) {
         // Back to the preset your changes started from (a map's look: its own look again).
         if (config.basePreset() == kMapLookPreset) {
-            const Settings base = config.baseline();
+            const Settings look = config.baseline();
             const bool enabled = s.enabled;
-            s = base;
+            s = look;
             s.enabled = enabled;
             config.preset = kMapLookPreset;
             config.markDirty();
@@ -1709,9 +1709,9 @@ void markdown(const std::string& text) {
         // Links: [text](url) -> text.
         for (size_t open; (open = line.find('[')) != std::string::npos;) {
             const size_t close = line.find("](", open);
-            const size_t end = close == std::string::npos ? std::string::npos : line.find(')', close);
-            if (end == std::string::npos) break;
-            line = line.substr(0, open) + line.substr(open + 1, close - open - 1) + line.substr(end + 1);
+            const size_t shut = close == std::string::npos ? std::string::npos : line.find(')', close);
+            if (shut == std::string::npos) break;
+            line = line.substr(0, open) + line.substr(open + 1, close - open - 1) + line.substr(shut + 1);
         }
         if (line.empty()) {
             ImGui::Spacing();
