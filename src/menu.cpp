@@ -403,7 +403,7 @@ const char* tooltipFor(const char* key) {
         {"WaterFarReflections", "Pools and the sea mirror the stands and masts across them, not only what is near. Off: as before."},
         {"GameGBuffer", "Surface normals from the game's shaders, so AO, shadows, reflections and light follow bump maps and the car's real shape. Needs Game HDR. (restart the first time)"},
         {"GameLight", "Under night skies, darkens and cools the light the game lit each surface with instead of the whole image: paint keeps its colour, and what the game's lamps light stays as bright as the game drew it. Needs Game HDR and Game light sources. (restart the first time)"},
-        {"ShadeMenuBars", "Black under the replay menu's bars. Off shows leftovers of earlier frames."},
+        {"ShadeMenuBars", "The replay mirrored under the replay menu's bars. Off: black bars."},
         {"NeonTrail", "A glowing trail behind the car. 0 is off."},
         {"TrailTyres", "Two lines from the rear tyres instead of one."},
         {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},

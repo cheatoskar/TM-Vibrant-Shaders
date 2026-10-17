@@ -215,8 +215,9 @@ public:
     bool capScene(IDirect3DDevice9* device, IDirect3DSurface9* target, const RECT& area);
     static constexpr float kSceneCeiling = 4.0f;
     // The rows above (top) and below (bottom) a full-width `area` of `target` (the replay menu's
-    // band): black, as the game's own bars.
-    bool fillBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom);
+    // band): the area's shaded image `band` (its size) mirrored at the area's edges (rows farther
+    // out than the band is high stay as they are), or black with no band.
+    bool fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom);
     // RenderScale: the part `from` of the float scene stretched over `to` of `target` (bilinear,
     // cut to 0..1 as the game's 8-bit target would have it): a scaled camera that isn't shaded
     // the scaled way (or not at all) still fills the screen.

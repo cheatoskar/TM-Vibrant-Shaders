@@ -3409,38 +3409,50 @@ bool Pipeline::capScene(IDirect3DDevice9* device, IDirect3DSurface9* target, con
     return true;
 }
 
-bool Pipeline::fillBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom) {
+bool Pipeline::fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom) {
     if (!m_ready || !target) return false;
-    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
-    if (!m_solidPS) return false;
+    // No band: black, as the game's own bars when it clears them.
+    if (!band && !m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
+    if (!band && !m_solidPS) return false;
     D3DSURFACE_DESC desc{};
     target->GetDesc(&desc);
     const LONG width = static_cast<LONG>(desc.Width), height = static_cast<LONG>(desc.Height);
-    if (area.left != 0 || area.right != width || area.bottom <= area.top || area.top < 0 || area.bottom > height) return false;
+    const LONG bandHeight = area.bottom - area.top;
+    if (area.left != 0 || area.right != width || bandHeight < 1 || area.top < 0 || area.bottom > height) return false;
+    const float h = static_cast<float>(bandHeight), scale = static_cast<float>(height) / h;
     const BOOL softwareVP = setPassStates(device);
     device->SetRenderTarget(0, target);
     device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
-    // Black, as the game's own bars when it clears them. The shaded band mirrored at its edges
-    // used to fill them: under the half-transparent bars it looked like the road reflecting the
-    // menu, and with the menu hidden like a mirror image of the scene (owner and tester, 2026-10-17).
-    const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    device->SetPixelShaderConstantF(32, black, 1);
-    device->SetPixelShader(m_solidPS);
+    if (band) {
+        device->SetPixelShader(m_shaders[kResolve]);
+        bind(device, 0, band, false);
+        const float mode[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // c33.x 0: cut to 0..1 (an 8-bit image anyway)
+        device->SetPixelShaderConstantF(33, mode, 1);
+    } else {
+        const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        device->SetPixelShaderConstantF(32, black, 1);
+        device->SetPixelShader(m_solidPS);
+    }
+    // PS_Resolve reads the band at u_Pass0.xy + uv * u_Pass0.zw, uv over the whole target: row y
+    // above the band gets band row (top - 1 - y), row y below it band row (2 h - 1 - (y - top)).
     // The scissor rect after SetRenderTarget (which resets it); the quad sets only the viewport.
     bool drew = false;
     if (top && area.top > 0) {
-        const RECT rows = {0, 0, width, area.top};
+        const RECT rows = {0, band && area.top > bandHeight ? area.top - bandHeight : 0, width, area.top};
         device->SetScissorRect(&rows);
+        if (band) passConstants(device, 0.0f, static_cast<float>(area.top) / h, 1.0f, -scale);
         m_quad.draw(device, desc.Width, desc.Height);
         drew = true;
     }
     if (bottom && area.bottom < height) {
-        const RECT rows = {0, area.bottom, width, height};
+        const RECT rows = {0, area.bottom, width, band && height - area.bottom > bandHeight ? area.bottom + bandHeight : height};
         device->SetScissorRect(&rows);
+        if (band) passConstants(device, 0.0f, (2.0f * h + static_cast<float>(area.top)) / h, 1.0f, -scale);
         m_quad.draw(device, desc.Width, desc.Height);
         drew = true;
     }
     device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    if (band) device->SetTexture(0, nullptr);
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
     return drew;
 }

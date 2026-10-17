@@ -909,7 +909,7 @@ int main(int argc, char** argv) {
                 device->ColorFill(tall.surface, nullptr, D3DCOLOR_XRGB(255, 0, 255));
                 const RECT area = {0, static_cast<LONG>(bars), static_cast<LONG>(cap.width), static_cast<LONG>(bars + cap.height)};
                 device->StretchRect(output.surface, nullptr, tall.surface, &area, D3DTEXF_NONE);
-                if (!pipeline.fillBars(device, tall.surface, area, true, true)) fprintf(stderr, "fillBars failed\n");
+                if (!pipeline.fillBars(device, output.texture, tall.surface, area, true, true)) fprintf(stderr, "fillBars failed\n");
                 output.destroy();
                 output = tall;
                 tall = gfx::Target();
