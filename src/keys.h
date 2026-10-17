@@ -100,6 +100,11 @@ Action captureTarget();
 // A window message while capturing: true = consumed, the game must not see it. Esc cancels.
 bool feed(UINT msg, WPARAM wparam, LPARAM lparam);
 
+// CenterSpeed (a speedometer mod) opens its own menu with F8, with any modifier held. Loaded: a
+// Menu key still on the default F8 moves to F5, once (stamped in settings.ini: an F8 chosen later
+// stays). No longer loaded: a menu moved that way goes back to F8. TMNF only; logged.
+void centerSpeed(bool loaded);
+
 // settings.ini
 void load(const wchar_t* ini);
 void save(const wchar_t* ini);

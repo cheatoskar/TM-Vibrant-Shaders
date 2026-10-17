@@ -2903,6 +2903,9 @@ void logDeviceLost(HRESULT coop) {
 void onPresent(IDirect3DDevice9* device) {
     g_device = device;
     g_frame++;
+    // CenterSpeed's menu key is F8 too (keys::centerSpeed). The ModLoader has loaded it by the first
+    // frame; once more some seconds later, should it come late.
+    if (g_frame == 1 || g_frame == 600) keys::centerSpeed(GetModuleHandleW(L"CenterSpeed.dll") != nullptr);
     // Device lost (alt-tab, mode switch): nothing can be drawn until the game resets it.
     static bool s_lost = false;
     const HRESULT coop = device->TestCooperativeLevel();

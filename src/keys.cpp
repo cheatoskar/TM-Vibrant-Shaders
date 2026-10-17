@@ -110,6 +110,10 @@ bool plainOk(unsigned vk) {
 Binding g_binding[kCount];
 bool g_init = false;
 bool g_changed = false;
+// [Keys] MenuMovedForCenterSpeed: the menu was moved off F8 because CenterSpeed was loaded (see
+// centerSpeed()); g_menuStampWritten: the file has the line (so a cleared stamp is written as 0).
+bool g_menuMoved = false;
+bool g_menuStampWritten = false;
 std::string g_note;
 bool g_capturing = false;
 Action g_target = Action::Count;
@@ -255,6 +259,43 @@ bool assign(Action a, const Binding& b) {
     g_changed = true;
     return true;
 }
+
+#ifdef TMVS_MANIAPLANET
+void centerSpeed(bool) {}
+#else
+void centerSpeed(bool loaded) {
+    ensure();
+    const int m = static_cast<int>(Action::Menu);
+    const Binding f8 = kInfo[m].def;
+    const Binding f5{VK_F5, 0};
+    auto taken = [](const Binding& b, int except) {
+        for (int i = 0; i < kCount; i++) {
+            if (i != except && kInfo[i].available && g_binding[i] == b) return true;
+        }
+        return false;
+    };
+    if (loaded && !g_menuMoved && g_binding[m] == f8) {
+        // CenterSpeed opens its menu on F8 whatever modifier is held (so Shift+F8 would open both),
+        // and F9 is the 100% TMX menu's. Moved once and stamped: an F8 chosen afterwards stays.
+        if (taken(f5, m)) {
+            TMVS_LOG("keys: CenterSpeed is loaded and uses F8 too; F5 is taken here, so the menu stays on F8 (change it in Settings, Hotkeys)");
+            return;
+        }
+        g_binding[m] = f5;
+        g_menuMoved = true;
+        g_changed = true;
+        TMVS_LOG("keys: CenterSpeed is loaded and opens its own menu with F8: this mod's menu moved to F5 (Settings, Hotkeys)");
+    } else if (!loaded && g_menuMoved) {
+        // CenterSpeed gone: F8 again, unless the player picked another key since.
+        if (g_binding[m] == f5 && !taken(f8, m)) {
+            g_binding[m] = f8;
+            TMVS_LOG("keys: CenterSpeed is no longer loaded: the menu is back on F8");
+        }
+        g_menuMoved = false;
+        g_changed = true;
+    }
+}
+#endif
 
 void resetDefaults() {
     ensure();
@@ -464,6 +505,8 @@ void load(const wchar_t* ini) {
     // Reload used to be F9, which the 100% TMX mod's menu uses too. Every key is always written
     // on save, so an F9 here is either the old default or a deliberate choice that can't be
     // told apart: move it once, and stamp the version so a later F9 chosen on purpose stays.
+    g_menuMoved = GetPrivateProfileIntW(L"Keys", L"MenuMovedForCenterSpeed", 0, ini) != 0;
+    g_menuStampWritten = static_cast<int>(GetPrivateProfileIntW(L"Keys", L"MenuMovedForCenterSpeed", -1, ini)) != -1;
     if (GetPrivateProfileIntW(L"Keys", L"KeysVersion", 1, ini) < 2) {
         const int r = static_cast<int>(Action::Reload);
         if (kInfo[r].available && g_binding[r] == Binding{VK_F9, 0}) {
@@ -504,6 +547,10 @@ void save(IniFile& ini) {
     wchar_t version[16] = {};
     swprintf(version, 16, L"%d", kKeysVersion);
     ini.set(L"Keys", L"KeysVersion", version);
+    if (g_menuMoved || g_menuStampWritten) {
+        ini.set(L"Keys", L"MenuMovedForCenterSpeed", g_menuMoved ? L"1" : L"0");
+        g_menuStampWritten = true;
+    }
 }
 
 } // namespace keys
