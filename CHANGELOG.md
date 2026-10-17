@@ -26,6 +26,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - New settings *Haze distance*, *Highlight roll-off*, *Floodlit surfaces* and *Game sunset clouds*.
 - Experimental, off: *Game normals* (the game's own shaders hand the mod their normals). *Night on game light* (their light) is not in the menu: `GameLight=1` in `settings.ini`.
 - `tmvs.log` writes a performance line every 2000 frames ([performance](docs/performance.md)).
+- **SMAA** edge smoothing (*Image quality*, *SMAA instead of FXAA*, on in every preset but *Performance*): smoother long edges and sharper textures than FXAA for about 0.2 ms more at 1440p. Older `settings.ini` and preset files keep FXAA.
 
 **Changed defaults**
 - On: *Game HDR*, *Game light sources*, *Clean highlights*, *Long mesh shadows*, *Fence shadows*, *Gap-free long shadows*, *Clean water*, *Replay menu shading*, *Real night*, *Game moonlight* from the black hole, *Turn off game FX* (the game's own bloom and colour filter, from the next map on), temporal AA (not in *Performance*), MP4 for the video export and *Best export quality*.

@@ -43,7 +43,7 @@ Everything is Shader Model 3.0 (`shaders/tmvs.hlsl`, compiled when the mod is bu
 7. **Lighting:** sun, sky ambient, AO, shadows, bounce light, wetness, puddles, water, grass and fog combined in HDR.
 8. **Neon trail:** points recorded on the GPU, drawn as a glowing ribbon.
 9. **Camera effects:** depth of field and motion blur (replays), light shafts, bloom, auto exposure, tone mapping and grading.
-10. **Anti-aliasing:** FXAA, TAA, CAS sharpening, drops on the lens.
+10. **Anti-aliasing:** SMAA (or FXAA), TAA, CAS sharpening, drops on the lens.
 11. **Particles:** rain, splashes and spray, drawn on the finished image.
 
 The *Performance* panel in the menu times each of these groups on the GPU with timestamp queries.

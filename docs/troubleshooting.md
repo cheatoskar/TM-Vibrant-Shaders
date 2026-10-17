@@ -31,7 +31,7 @@ The menu shows *Unknown game build: effects also apply to the HUD*. The mod know
 
 ## Edges look more jagged than before
 
-The game's own antialiasing (MSAA) is switched off on purpose: the depth effects need a single-sample depth buffer. FXAA and TAA replace it. Set anisotropic filtering to 16x in the game options for sharp roads in the distance.
+The game's own antialiasing (MSAA) is switched off on purpose: the depth effects need a single-sample depth buffer. SMAA (or FXAA) and TAA replace it. Set anisotropic filtering to 16x in the game options for sharp roads in the distance.
 
 ## Fine patterns shimmer
 

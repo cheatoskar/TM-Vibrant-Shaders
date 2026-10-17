@@ -46,7 +46,7 @@ static bool isMachine(const Field& f) {
 // changed default of an older field still fails the fingerprint below. (Version 1 ships with 1.4.0, so until
 // then the defaults of these may still change: LampGlare and LampHaze got theirs from the owner's test.)
 static bool isAddedSinceV1(const Field& f) {
-    static const char* const kAdded[] = {"LampGlare", "LampHaze", "LampSkyHalos", "Floodlights", "DofAutofocus"};
+    static const char* const kAdded[] = {"LampGlare", "LampHaze", "LampSkyHalos", "Floodlights", "DofAutofocus", "SMAA"};
     for (const char* key : kAdded) {
         if (!strcmp(key, f.key)) return true;
     }

@@ -65,7 +65,7 @@ Dieselbe ZIP enthält eine `d3d11.dll` für ManiaPlanets Direct3D-11-Renderer (n
 
 ## Empfohlene Spieleinstellungen
 
-Im TrackMania-Launcher unter *Erweitert*: **Kantenglättung aus** (der Mod schaltet sie sowieso ab und bringt FXAA und TAA mit), **anisotrope Filterung 16x**, Shader-Qualität PC3 High. Die **FX-Nachbearbeitung** (Post-Processing) des Spiels schaltet der Mod selbst ab, solange er läuft (Bloom und Farbfilter, ab der nächsten Map; *Turn off game FX* auf der Einstellungsseite). Die Einstellung im Launcher bleibt, wie sie ist.
+Im TrackMania-Launcher unter *Erweitert*: **Kantenglättung aus** (der Mod schaltet sie sowieso ab und bringt SMAA (oder FXAA) und TAA mit), **anisotrope Filterung 16x**, Shader-Qualität PC3 High. Die **FX-Nachbearbeitung** (Post-Processing) des Spiels schaltet der Mod selbst ab, solange er läuft (Bloom und Farbfilter, ab der nächsten Map; *Turn off game FX* auf der Einstellungsseite). Die Einstellung im Launcher bleibt, wie sie ist.
 
 ## Probleme?
 
@@ -77,6 +77,6 @@ Im TrackMania-Launcher unter *Erweitert*: **Kantenglättung aus** (der Mod schal
 | Kein Regen- oder Donner-Sound | Nur bei Regen oder Blitzen, im Rennen und wenn das Spiel im Vordergrund ist. Lautstärke im Menü (*Rain & thunder sound*, bis 2) und im Windows-Lautstärkemixer (*TmForever*). Die Sound- und Musikregler im Spiel wirken nicht darauf. |
 | Zu wenig FPS | *Auto quality* an lassen, Preset *Performance* oder *Effect quality: Low*. Auf der Seite *Performance* steht, was am meisten kostet. |
 | Straßen und Stadion weiß ohne Texturen, Flaggen normal | Das Spiel konnte seine Texturen nicht laden (32-Bit-Spiel, 2 GB Adressraum, geteilt mit Overlays und Recordern wie Medal). Spiel neu starten, unnötige Overlays schließen oder die Texturqualität im Launcher senken. Mit `tmvs.log` melden: Zeilen mit `memory:` zeigen, was fehlschlug. |
-| Kanten zackiger als vorher | Absicht: Die Kantenglättung des Spiels muss für die Tiefeneffekte aus sein. FXAA und TAA ersetzen sie. |
+| Kanten zackiger als vorher | Absicht: Die Kantenglättung des Spiels muss für die Tiefeneffekte aus sein. SMAA (oder FXAA) und TAA ersetzen sie. |
 
 Fehler melden: [GitHub Issues](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues), mit `tmvs.log` und bei Bildfehlern einem `F12`-Capture (`screen_*.bmp` und `capture_*.tmcap`). Mehr in [troubleshooting.md](troubleshooting.md).

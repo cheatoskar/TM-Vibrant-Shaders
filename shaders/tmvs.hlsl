@@ -3611,6 +3611,40 @@ float4 PS_FXAA(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // ---------------------------------------------------------------------------------
+// SMAA 1x (Jimenez et al., MIT licence, shaders/SMAA.hlsl as published), the alternative to
+// FXAA on the same image: three passes, u_Pass0 = (1 / width, 1 / height, width, height).
+// The quad's vertex shader already moves D3D9's pixel centres onto the texel centres, so the
+// texture coordinate is what SMAA's D3D10 path expects; its vertex shader parts (a few mads)
+// run here, in the pixel shader, as the pipeline has one vertex shader for all passes.
+// ---------------------------------------------------------------------------------
+#define SMAA_HLSL_3
+#define SMAA_RT_METRICS u_Pass0
+#define SMAA_PRESET_HIGH
+#include "SMAA.hlsl"
+
+// s0 = LDR (gamma, as FXAA sees it) -> edges (rg). No edge: discarded, the target is cleared.
+float4 PS_SmaaEdges(float2 uv : TEXCOORD0) : COLOR0 {
+    float4 offset[3];
+    SMAAEdgeDetectionVS(uv, offset);
+    return float4(SMAALumaEdgeDetectionPS(uv, offset, s0), 0.0, 0.0);
+}
+
+// s0 = edges (bilinear), s1 = area texture (bilinear), s2 = search texture (point).
+float4 PS_SmaaWeights(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 pixcoord;
+    float4 offset[3];
+    SMAABlendingWeightCalculationVS(uv, pixcoord, offset);
+    return SMAABlendingWeightCalculationPS(uv, pixcoord, offset, s0, s1, s2, 0.0);
+}
+
+// s0 = LDR read as sRGB (blended in linear light, written back as sRGB), s1 = blending weights.
+float4 PS_SmaaBlend(float2 uv : TEXCOORD0) : COLOR0 {
+    float4 offset;
+    SMAANeighborhoodBlendingVS(uv, offset);
+    return SMAANeighborhoodBlendingPS(uv, offset, s0, s1);
+}
+
+// ---------------------------------------------------------------------------------
 // AMD FidelityFX CAS (contrast adaptive sharpening) - s0 = LDR, u_Pass0.xy = texel,
 // s1 = shelter (1x1, lens drops and flakes dry off under a roof)
 // ---------------------------------------------------------------------------------

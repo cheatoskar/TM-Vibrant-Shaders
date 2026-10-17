@@ -4,6 +4,8 @@
 #include "config.h"
 #include "noise.h"
 #include "tmvs_bytecode.h"
+#include "smaa/AreaTex.h"
+#include "smaa/SearchTex.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -24,6 +26,7 @@ const char* const kEntryPoints[] = {
     "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer", "PS_LampSource", "PS_LampDown", "PS_LampUp",
     "PS_LightingGameLight", "PS_FsrEasu", "PS_FsrRcas", "PS_SpillTemporal",
     "PS_SpillSource", "PS_SpillSourceEngine", "PS_SpillDownSource",
+    "PS_SmaaEdges", "PS_SmaaWeights", "PS_SmaaBlend",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -197,6 +200,14 @@ bool Pipeline::compileAll(IDirect3DDevice9* device) {
     // fxc produced at build time.
     std::string source;
     const bool fromDisk = !m_shaderDir.empty() && readFile(m_shaderDir + L"\\tmvs.hlsl", source);
+    // tmvs.hlsl includes SMAA.hlsl (fxc finds it next to it at build time); D3DCompile gets no
+    // include handler, so it goes in here.
+    if (fromDisk) {
+        const std::string include = "#include \"SMAA.hlsl\"";
+        const size_t at = source.find(include);
+        std::string smaa;
+        if (at != std::string::npos && readFile(m_shaderDir + L"\\SMAA.hlsl", smaa)) source.replace(at, include.size(), smaa);
+    }
     const DWORD started = GetTickCount();
 
     IDirect3DPixelShader9* compiled[kPassCount] = {};
@@ -329,6 +340,8 @@ void Pipeline::destroyTargets(bool keepWorld) {
     for (auto& t : m_taa) t.destroy();
     m_scaled.destroy();
     m_fsr.destroy();
+    m_smaaEdges.destroy();
+    m_smaaWeights.destroy();
     gfx::release(m_splatPoints); // one point per 5 pixels of the depth
     m_taaValid = false;
     m_width = m_height = 0;
@@ -351,6 +364,9 @@ void Pipeline::destroyTargets(bool keepWorld) {
     gfx::release(m_heightDepth);
     gfx::release(m_cloudNoise);
     gfx::release(m_lut);
+    gfx::release(m_smaaArea);
+    gfx::release(m_smaaSearch);
+    m_smaaFailed = false;
     gfx::release(m_rainVB);
     gfx::release(m_rainIB);
     gfx::release(m_trailVB);
@@ -1071,6 +1087,34 @@ bool Pipeline::ensureLut(IDirect3DDevice9* device) {
         m_lutSize = 0; // don't try every frame
     }
     return ok;
+}
+
+// SMAA's two look-up textures, uploaded as the reference D3D9 demo does (the area texture's
+// two channels as A8L8, read .ra; the search texture as L8), and its two targets.
+bool Pipeline::ensureSmaa(IDirect3DDevice9* device, UINT width, UINT height) {
+    if (m_smaaFailed) return false;
+    auto upload = [device](UINT w, UINT h, D3DFORMAT format, const unsigned char* bytes, UINT pitch, IDirect3DTexture9** out) {
+        IDirect3DTexture9* staging = nullptr;
+        if (FAILED(device->CreateTexture(w, h, 1, 0, format, D3DPOOL_SYSTEMMEM, &staging, nullptr))) return false;
+        D3DLOCKED_RECT rect{};
+        bool ok = SUCCEEDED(staging->LockRect(0, &rect, nullptr, 0));
+        if (ok) {
+            for (UINT y = 0; y < h; y++) memcpy(static_cast<BYTE*>(rect.pBits) + static_cast<size_t>(y) * rect.Pitch, bytes + static_cast<size_t>(y) * pitch, pitch);
+            staging->UnlockRect(0);
+        }
+        ok = ok && SUCCEEDED(device->CreateTexture(w, h, 1, 0, format, D3DPOOL_DEFAULT, out, nullptr)) && SUCCEEDED(device->UpdateTexture(staging, *out));
+        staging->Release();
+        if (!ok) gfx::release(*out);
+        return ok;
+    };
+    if (!m_smaaArea && !upload(AREATEX_WIDTH, AREATEX_HEIGHT, D3DFMT_A8L8, areaTexBytes, AREATEX_PITCH, &m_smaaArea)) m_smaaFailed = true;
+    if (!m_smaaFailed && !m_smaaSearch && !upload(SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT, D3DFMT_L8, searchTexBytes, SEARCHTEX_PITCH, &m_smaaSearch))
+        m_smaaFailed = true;
+    if (m_smaaFailed) {
+        TMVS_LOG("pipeline: SMAA's textures can't be made, FXAA instead");
+        return false;
+    }
+    return m_smaaEdges.create(device, width, height, D3DFMT_A8R8G8B8) && m_smaaWeights.create(device, width, height, D3DFMT_A8R8G8B8);
 }
 
 // One colour (the material debug view, the class mask), and material id -> its class's colour.
@@ -3026,14 +3070,16 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // c33 (final pass): the lamp glare's and the lamp haze's strength (0: off, s10 not read).
     device->SetPixelShaderConstantF(33, lampScale, 1);
     if (lampReady) bind(device, 10, m_lampUp[0].texture, true);
-    // Disabled post passes are skipped entirely, not just passed through.
-    const bool fxaa = s.fxaa && post;
+    // Disabled post passes are skipped entirely, not just passed through. SMAA takes FXAA's
+    // place (FXAA if its textures can't be made).
+    const bool smaa = s.fxaa && s.smaa && post && ensureSmaa(device, in.width, in.height);
+    const bool fxaa = s.fxaa && post && !smaa;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
                      m_taa[1].create(device, in.width, in.height, D3DFMT_A16B16G16R16F);
     const bool sharpen = s.sharpen > 0.001f && post && !upscale;
-    // Chain: Final -> [FXAA] -> [TAA] -> [Sharpen | Copy] -> output (RenderScale: -> EASU -> RCAS).
+    // Chain: Final -> [FXAA | SMAA] -> [TAA] -> [Sharpen | Copy] -> output (RenderScale: -> EASU -> RCAS).
     IDirect3DTexture9* current = nullptr;
-    if (!fxaa && !taa && !sharpen && !drops) {
+    if (!fxaa && !smaa && !taa && !sharpen && !drops) {
         runPass(device, kFinal, output, in.width, in.height);
     } else {
         runPass(device, kFinal, m_ldr);
@@ -3050,6 +3096,34 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             runPass(device, kFXAA, m_ldr2);
             current = m_ldr2.texture;
         }
+    }
+    if (smaa) {
+        // Edges (no edge: discarded, so the target starts cleared), the blending weights from
+        // them, then the blend. The blend reads the image as sRGB and writes it back as sRGB:
+        // it mixes in linear light, as SMAA's reference does.
+        passConstants(device, 1.0f / in.width, 1.0f / in.height, static_cast<float>(in.width), static_cast<float>(in.height));
+        device->SetRenderTarget(0, m_smaaEdges.surface);
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        bind(device, 0, current, true);
+        runPass(device, kSmaaEdges, m_smaaEdges);
+        bind(device, 0, m_smaaEdges.texture, true);
+        bind(device, 1, m_smaaArea, true);
+        bind(device, 2, m_smaaSearch, false);
+        runPass(device, kSmaaWeights, m_smaaWeights);
+        bind(device, 0, current, true);
+        bind(device, 1, m_smaaWeights.texture, true);
+        bind(device, 2, nullptr, false);
+        device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, TRUE);
+        device->SetRenderState(D3DRS_SRGBWRITEENABLE, TRUE);
+        if (!taa && !sharpen && !drops) {
+            runPass(device, kSmaaBlend, output, in.width, in.height);
+            current = nullptr;
+        } else {
+            runPass(device, kSmaaBlend, m_ldr2);
+            current = m_ldr2.texture;
+        }
+        device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+        device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
     }
     if (taa) {
         const int previous = m_taaIndex;
