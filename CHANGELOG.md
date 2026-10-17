@@ -33,7 +33,8 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 
 **Fixed**
 - Day maps: the road keeps the game's concrete texture (stains, tyre marks, cracks). Taming the sun glare darkened the bright concrete more than its marks, so the road came out flat grey; it now goes by the brightness around each pixel, and the road is as bright as before. *Clean highlights* off gives the old look.
-- Night maps: floodlit white comes out even instead of in frost-like patches; no huge white blobs over the sky on some day maps (B13); your car no longer counts as a lamp.
+- Night maps: floodlit white comes out even instead of in frost-like patches; your car no longer counts as a lamp.
+- *Game HDR*: no huge white blobs over the sky on some day maps (B13) after a while on the map.
 - Water: a clear mirror instead of blotches of the ramps over it, the sky you picked in the reflection, the United Island sea gets waves; roads at Rally's sea level and Stadium dirt at water height are no longer water.
 - Long shadows: no bright boxes around the car under a low light, smooth edges, no grain without TAA.
 - TAA no longer leaves see-through copies behind the car; the car's bounce light no longer trails behind it.
