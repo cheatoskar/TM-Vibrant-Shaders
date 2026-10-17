@@ -2377,7 +2377,9 @@ void onPresent(IDirect3DDevice9* device) {
     // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
     // frame times when it ends starts a quiet period).
     // The video export likewise: its frames are slow on purpose.
-    if (!photo::active() && !g_exporting) g_autoQuality.onFrame(seconds(), g_shadedThisFrame, g_pipeline, settings);
+    // Gameplay frames only: the menus' 3D backgrounds are shaded too, but their frame rate says
+    // nothing about a race (it cut effects in the main menu before a map was loaded).
+    if (!photo::active() && !g_exporting) g_autoQuality.onFrame(seconds(), g_gameplayThisFrame, g_pipeline, settings);
     D3DDEVICE_CREATION_PARAMETERS cp{};
     device->GetCreationParameters(&cp);
     audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);

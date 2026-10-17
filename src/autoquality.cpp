@@ -10,7 +10,8 @@ constexpr double kWindow = 2.0;   // seconds of frames per decision
 constexpr double kSettle = 3.0;   // after a change, let the new frame rate show
 
 // What auto quality can turn down, in order: the most milliseconds for the least look
-// first, the glowing neon (the look itself) last. `share` = the part of the passes' time
+// first. The light shafts and the glowing neon (the look itself) keep their places but are
+// never turned off (keepsLook). `share` = the part of the passes' time
 // the knob saves (fewer samples make the same passes cheaper, long shadows are a part of
 // the AO/shadow pass); `whole` = passes the knob saves entirely. Exact pass names: the
 // lighting and spill passes have engine variants (SpillDownEngine), each listed.
@@ -73,6 +74,12 @@ bool matters(int knob, const Settings& s) {
         case 12: return s.neonLight > 0.0f;
         default: return false;
     }
+}
+// The light shafts and the neon light are the look itself: auto quality never turns them off.
+// They cost little (0.2 - 0.4 ms), and cut for a fraction of a millisecond (or for a target no
+// cut could reach: 240 FPS on a 144 Hz game) the presets lost what they are picked for.
+bool keepsLook(int knob) {
+    return knob == 10 || knob == 12;
 }
 } // namespace
 
@@ -201,10 +208,26 @@ void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, c
                      m_fps, target, need, m_pipelineMs);
             return;
         }
+        // Everything it may still turn off wouldn't win the missing time either (a target the
+        // GPU can't reach with these effects at all: 83 FPS, target 240, 7.8 ms missing, the
+        // effects 5.6 ms): cutting all of it would leave the plainest look and still miss.
+        if (timed) {
+            float available = 0.0f;
+            for (int k = 0; k < kKnobs; k++) {
+                if (!m_reduced[k] && !keepsLook(k) && matters(k, s) && m_cost[k] >= 0.05f) available += m_cost[k];
+            }
+            if (need > available) {
+                m_noCutUntil = now + 30.0;
+                m_lastChange = now;
+                TMVS_LOG("auto quality: %.0f FPS (target %.0f), %.1f ms missing but turning effects off could win only %.1f ms: target out of reach, nothing (more) turned off",
+                         m_fps, target, need, available);
+                return;
+            }
+        }
         float expected = 0.0f;
         m_lastCutCount = 0;
         for (int k = 0; k < kKnobs; k++) {
-            if (m_reduced[k] || !matters(k, s) || (timed && m_cost[k] < 0.05f)) continue;
+            if (m_reduced[k] || keepsLook(k) || !matters(k, s) || (timed && m_cost[k] < 0.05f)) continue;
             reduce(k, now);
             m_lastCut[m_lastCutCount++] = k;
             expected += m_cost[k];
