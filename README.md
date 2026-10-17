@@ -74,15 +74,7 @@ By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `M
 | **Extras** | A neon light trail behind your car for the whole run. Track reflections up to a mirror finish. Grass detail and mowing stripes. |
 | **Comfort** | `F8` menu with a gallery of every preset: a picture of each, its GPU load, and a live preview in the game while you point at it. *Customize* for the main settings, *Studio* for every setting in panels side by side, with a search box and a reset arrow for every changed setting. The menu tells you when a new version is out (one request to GitHub per game start, can be switched off). Auto quality holds your frame rate. A live per-effect cost panel. A preset per map mood (day, sunset, night). Your own presets as shareable text files. Map authors can ship a look inside their map ([Author's Shader](#authors-shader)). |
 
-![Original and Realistic](docs/images/compare-realistic.jpg)
-
-![Original and Storm](docs/images/compare-rain.jpg)
-
-| | |
-|---|---|
-| ![Sunset: original and Vibrant](docs/images/compare-sunset.jpg) | ![Day: original and Golden Hour](docs/images/compare-day.jpg) |
-| ![Night: original and Neon](docs/images/compare-night.jpg) | ![On the rings of a gas giant, with a black hole in the sky](docs/images/ring-world.jpg) |
-| ![Black hole](docs/images/black-hole.jpg) | ![Aurora](docs/images/aurora.jpg) |
+![Day: original and Golden Hour](docs/images/compare-day.jpg)
 
 ---
 

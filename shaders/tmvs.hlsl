@@ -1293,7 +1293,8 @@ float3 clearSky(float3 rd) {
     horizon *= lerp(0.15, 1.0, day);
     float3 col = lerp(horizon, zenith, pow(y, 0.45));
     float mu = dot(rd, sun);
-    col += u_SunColor.rgb * (henyeyGreenstein(mu, 0.75) * 0.25 + pow(saturate(mu), 8.0) * 0.4) * day;
+    // The glow around the sun follows Sun glow (1 = as it always was; only Golden Hour picks this sky).
+    col += u_SunColor.rgb * (henyeyGreenstein(mu, 0.75) * 0.25 + pow(saturate(mu), 8.0) * 0.4) * day * u_Rays.z;
     col += u_SunColor.rgb * smoothstep(0.9994, 0.99975, mu) * 3.0 * day;
     // Clouds on a plane.
     if (rd.y > 0.01) {
@@ -3038,18 +3039,18 @@ float4 PS_NeonGlow(float2 uv : TEXCOORD0) : COLOR0 {
             own[k] = neonMaterialAt(nuv);
             exN[k] = neonExcess(gn[k]) * own[k];
         }
-        [unroll] for (int k = 0; k < 4; k++) {
+        [unroll] for (int j = 0; j < 4; j++) {
             // Another material next door lends nothing (its blue is no strip's).
             // A strip on its own next door (the edge of a wide one): this pixel's share of its blue.
-            float3 cn = toLinear(gn[k]);
-            glow = max(glow, min(cn, 1.0) * neonStrip(cn, dist, mat) * saturate(exP / max(exN[k], 1e-3)) * own[k]);
+            float3 cn = toLinear(gn[j]);
+            glow = max(glow, min(cn, 1.0) * neonStrip(cn, dist, mat) * saturate(exP / max(exN[j], 1e-3)) * own[j]);
             // A thin one split over the two: their blue together, less the neighbour's grey (the
             // frame's share of it). Only with no blue on either side of the pair: inside a wide
             // blue band (the curbs) two pixels are just twice its colour.
-            float outside = max(exN[k % 2 == 0 ? k + 1 : k - 1], neonExcess(neonSurface(uv + neonStep(k) * 2.0 * u_Screen.zw)));
-            float alone = saturate(2.0 - 3.0 * outside / max(exP + exN[k], 1e-3));
-            float3 cs = toLinear(gp + gn[k] - min(gn[k].r, min(gn[k].g, gn[k].b)));
-            glow = max(glow, min(cs, 1.0) * neonStrip(cs, dist, mat) * saturate(exP / max(exP + exN[k], 1e-3)) * alone * own[k]);
+            float outside = max(exN[j % 2 == 0 ? j + 1 : j - 1], neonExcess(neonSurface(uv + neonStep(j) * 2.0 * u_Screen.zw)));
+            float alone = saturate(2.0 - 3.0 * outside / max(exP + exN[j], 1e-3));
+            float3 cs = toLinear(gp + gn[j] - min(gn[j].r, min(gn[j].g, gn[j].b)));
+            glow = max(glow, min(cs, 1.0) * neonStrip(cs, dist, mat) * saturate(exP / max(exP + exN[j], 1e-3)) * alone * own[j]);
         }
         // Inside a wide band (all four neighbours of a neon material and about as blue): the curb's
         // own blue, whatever white the game's sheen mixed in (neonBand), and only its blue glows
