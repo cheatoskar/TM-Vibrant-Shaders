@@ -167,8 +167,8 @@ jobs:
         run: |
           cd site
           git init -q -b gh-pages
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "cheatoskar"
+          git config user.email "140116603+cheatoskar@users.noreply.github.com"
           git add -A
           git commit -q -m "ModLoader server from ${GITHUB_REF_NAME} (${GITHUB_SHA::7})"
           git push -f -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
