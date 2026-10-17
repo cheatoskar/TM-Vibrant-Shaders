@@ -2196,10 +2196,12 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         vc[j][2] = V[2 * 4 + j];
         vc[j][3] = V[12 + j];
     }
+    // The drops go onto the image after TAA, which took the jitter out: without it here too
+    // (with it every drop and flake shook by up to half a pixel).
     vc[3][0] = P[0];
     vc[3][1] = P[5];
-    vc[3][2] = P[8];
-    vc[3][3] = P[9];
+    vc[3][2] = P[8] - 2.0f * in.jitter[0];
+    vc[3][3] = P[9] + 2.0f * in.jitter[1];
     vc[4][0] = P[10];
     vc[4][1] = P[14];
     vc[4][2] = 2.0f / in.width;

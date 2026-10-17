@@ -34,6 +34,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - *Picked preset applies to all maps of this type* is off: a preset you pick holds on every map until you choose presets per map type again on the *Maps* page.
 
 **Fixed**
+- *TAA jitter*: the image no longer trembles with the camera standing still (edges, thin masts, light rows, stars, rain and snow); edges stay smooth.
 - *Reflections*: the grass no longer mirrors the stadium like a lake in a low sun (A01 at sunset): the game's grass material is never glossy, whatever colour the light gives it.
 - Day maps: the road keeps the game's concrete texture (stains, tyre marks, cracks). Taming the sun glare darkened the bright concrete more than its marks, so the road came out flat grey; it now goes by the brightness around each pixel, and the road is as bright as before. *Clean highlights* off gives the old look.
 - Night maps: floodlit white comes out even instead of in frost-like patches; your car no longer counts as a lamp.
