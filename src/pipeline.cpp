@@ -23,7 +23,7 @@ const char* const kEntryPoints[] = {
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
     "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer", "PS_LampSource", "PS_LampDown", "PS_LampUp",
     "PS_LightingGameLight", "PS_FsrEasu", "PS_FsrRcas", "PS_SpillTemporal",
-    "PS_SpillSource", "PS_SpillSourceEngine", "PS_SpillDownSource",
+    "PS_SpillSource", "PS_SpillSourceEngine", "PS_SpillDownSource", "PS_SpillSourceNeon", "PS_NeonGlow", "PS_NeonAdd",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -320,6 +320,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     m_reflect.destroy();
     for (auto& t : m_spill) t.destroy();
     m_spillSource.destroy();
+    m_neon.destroy();
     for (auto& t : m_spillHistory) t.destroy();
     m_dof.destroy();
     m_dofFull.destroy();
@@ -2381,7 +2382,16 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // z the reflections' boost of bright hits (1: as before; 0: the light sources are known);
     // w the neon strips' glow (they are plain block material to the game: found by their colour).
     const bool engineLights = s.engineLights && in.hdr;
-    const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, s.borderGlow};
+    // Quality 2: the strips' glow by how much of a strip each pixel covers (PS_NeonGlow), added
+    // after the lighting pass (w 0 there) and taken by the spill. Found by each pixel alone, a
+    // strip 1-2 px high far away counted or not by where it fell between two rows, and its glow
+    // on the wall pulsed as the camera crept towards it (the owner, A01 at night).
+    const bool neonPass = engineLights && s.borderGlow > 0.0f && s.quality >= 2 &&
+                          (m_neon.valid() || m_neon.create(device, m_width, m_height, D3DFMT_A8R8G8B8));
+    // Its strength: the blended edges of wide strips count now, x 0.8 keeps A01's near strips and
+    // the light around them as bright as before (capture_108).
+    const float neonGlow = s.borderGlow * 0.8f;
+    const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, neonPass ? 0.0f : s.borderGlow};
     device->SetPixelShaderConstantF(46, engineConstants, 1);
     // c51 x (CleanWater): the reflection on the game's water skips what it can't see (the tops
     // of the ramps over the pools) and takes no dry-track blur. Only where the engine tells the
@@ -2707,6 +2717,14 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
 
     // 3b. Reflections and neon light spill.
+    if (neonPass) {
+        bind(device, 0, in.hdr, false);
+        bind(device, 1, m_nd.texture, false);
+        bind(device, 13, materials ? m_materialTexture : nullptr, false);
+        if (in.added) bind(device, 14, in.added, false);
+        runPass(device, kNeonGlow, m_neon);
+        device->SetTexture(14, nullptr);
+    }
     const bool reflect = s.wetness > 0.0f || s.reflections > 0.0f || s.waterSurfaces > 0.0f;
     if (reflect) {
         bind(device, 0, in.color, true);
@@ -2738,8 +2756,13 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         const bool perPixel = s.quality >= 2 &&
                               (m_spillSource.valid() || m_spillSource.create(device, m_width, m_height, D3DFMT_A16B16G16R16F));
         if (perPixel) {
-            runPass(device, engineLights ? kSpillSourceEngine : kSpillSource, m_spillSource);
+            if (neonPass) {
+                bind(device, 2, m_neon.texture, false);
+                passConstants(device, neonGlow, 0.0f);
+            }
+            runPass(device, neonPass ? kSpillSourceNeon : (engineLights ? kSpillSourceEngine : kSpillSource), m_spillSource);
             device->SetTexture(14, nullptr);
+            device->SetTexture(2, nullptr);
             bind(device, 0, m_spillSource.texture, true);
             runPass(device, kSpillDownSource, m_spill[0]);
         } else {
@@ -2792,6 +2815,17 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     device->SetTexture(11, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
+    if (neonPass) {
+        bind(device, 0, m_neon.texture, false);
+        bind(device, 1, m_nd.texture, false);
+        passConstants(device, neonGlow, 0.0f);
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+        runPass(device, kNeonAdd, m_hdr);
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    }
 
     // 4b. Neon trail behind the car, into the HDR image so it blooms.
     if (s.neonTrail > 0.0f && ensureTrail(device)) drawTrail(device, in, s, temporal ? dt : 0.0f);

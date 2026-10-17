@@ -330,6 +330,9 @@ private:
         kSpillSource,
         kSpillSourceEngine,
         kSpillDownSource,
+        kSpillSourceNeon,
+        kNeonGlow,
+        kNeonAdd,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
@@ -449,6 +452,7 @@ private:
     gfx::Target m_reflect;      // half: screen-space reflections
     gfx::Target m_spill[2];     // quarter: neon light spill
     gfx::Target m_spillSource;  // full: the spill's sources pixel by pixel (Quality 2), made when first used
+    gfx::Target m_neon;         // full: the neon strips' glow by their cover (Quality 2, EngineLights; its root, 8 bits), made when first used
     gfx::Target m_spillHistory[2]; // quarter: the spill over frames (rgb, view z in a), what the lighting uses
     int m_spillIndex = 0;
     bool m_spillValid = false;
