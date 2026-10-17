@@ -2848,6 +2848,77 @@ float4 PS_SpillDownEngine(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
 }
 
+// Quality 2: the spill's sources pixel by pixel (full res), the same tests as the two passes
+// above but on each pixel instead of the mean of 2x2 (PS_SpillDownSource then takes them down).
+// Far away a neon strip is 1-2 px high: averaged with the dark wall beside it first, it counted or
+// not by where it fell in the 4x4 block, and the blue light on the wall flickered as the camera
+// crept towards it (the owner, A01 at night). out.rgb = light (linear)
+float4 PS_SpillSource(float2 uv : TEXCOORD0) : COLOR0 {
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float3 c = toLinear(tex2Dlod(s0, float4(uv, 0, 0)).rgb);
+    float peak = max(c.r, max(c.g, c.b));
+    float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
+    float low = lerp(0.45, 0.28, saturate((z - 20.0) / 150.0));
+    float e = smoothstep(0.45, 0.8, sat) * smoothstep(low, low + 0.4, peak) * (z < SKY_Z ? 1.0 : 0.0);
+    // The car's paint is bright and coloured too, but it is no lamp.
+    [branch] if (e > 0.0) e *= 1.0 - onCar(worldPosition(viewPosition(uv, z)));
+    return float4(c * e, 0);
+}
+
+// EngineLights, as PS_SpillDownEngine. s0 = the game's float image, s14 = its added light, s1, s13
+float4 PS_SpillSourceEngine(float2 uv : TEXCOORD0) : COLOR0 {
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float3 cGame = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float3 c = toLinear(cGame);
+    float3 added = 0;
+    if (u_Engine.x > 0.5) {
+        float3 surface = toLinear(max(cGame - tex2Dlod(s14, float4(uv, 0, 0)).rgb, 0.0));
+        added = max(c - surface, 0.0);
+        c = surface;
+    }
+    float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
+    float peak = max(c.r, max(c.g, c.b));
+    float lamp = mat.r * saturate(peak * u_Clean.z + u_Clean.w);
+    float neon = neonStrip(c, length(viewPosition(uv, z)), mat) * u_Engine.w;
+    float3 light = max(min(added * u_Water2.w, 1.0), min(c, 1.0) * max(lamp, neon)) * (z < SKY_Z ? 1.0 : 0.0);
+    float lp = max(light.r, max(light.g, light.b));
+    light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-3)));
+    return float4(light, 0);
+}
+
+// The sources found above to quarter res: s0 = them (bilinear), s1 = full normal/depth. Half
+// the block's mean (its four 2x2 taps), half the brightest 2x2 over the block and half of each
+// neighbour's, by a tent (1 at 1 px from the centre, 0.5 at 3 px: the two blocks that see a 2x2
+// weigh it 1.5 together wherever it is), so a strip crossing from one block to the next hands its
+// light over instead of lighting both or switching. A plain brightest of the block's own four
+// still flickered at about three quarters of the old strength. Neighbours' light only from about
+// the block's depth: a strip in front gives the background behind it no light.
+float4 PS_SpillDownSource(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 sum = 0, strongest = 0;
+    float zmin = SKY_Z;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 suv = uv + (float2(k % 2, k / 2) * 2.0 - 1.0) * u_Screen.zw;
+        float3 light = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
+        sum += light;
+        strongest = max(strongest, light);
+        zmin = min(zmin, tex2Dlod(s1, float4(suv, 0, 0)).w);
+    }
+    [unroll] for (int j = 0; j < 4; j++) {
+        [unroll] for (int i = 0; i < 4; i++) {
+            float2 d = float2(i, j) * 2.0 - 3.0;
+            if (abs(d.x) < 2.0 && abs(d.y) < 2.0) continue; // the block's own, above
+            float2 suv = uv + d * u_Screen.zw;
+            float2 w = abs(d) < 2.0 ? 1.0 : 0.5;
+            float z = tex2Dlod(s1, float4(suv, 0, 0)).w;
+            float3 light = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
+            strongest = max(strongest, light * (w.x * w.y * exp(-abs(z - zmin) / (0.25 * zmin + 0.5))));
+        }
+    }
+    // A little less: the blocks beside a strip get its light too now (A01's wall came out 7 %
+    // brighter without it).
+    return float4(lerp(sum * 0.25, strongest, 0.5) * 0.93, zmin);
+}
+
 // s0 = light buffer, u_Pass0.xy = direction * texel. Radius scales with 1/z (about 3 m).
 float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
     float4 center = tex2Dlod(s0, float4(uv, 0, 0));
