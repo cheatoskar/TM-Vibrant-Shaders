@@ -47,8 +47,15 @@ float smoothstepf(float a, float b, float x) {
 
 bool Pipeline::init(IDirect3DDevice9* device, const std::wstring& shaderDir) {
     m_shaderDir = shaderDir;
+    // After a device reset the shaders are still there (releaseForReset): creating the 58 passes
+    // again took most of the 1.6 s the game stood still after every alt-tab. Another device
+    // (or none yet) gets everything new.
+    const bool kept = m_shaders[0] && m_shaderDevice == device;
+    if (!kept && m_shaderDevice) release();
     if (!m_quad.init(device)) return false;
-    if (!compileAll(device)) return false;
+    if (kept) TMVS_LOG("pipeline: %d passes kept through the device reset", kPassCount);
+    else if (!compileAll(device)) return false;
+    m_shaderDevice = device;
     if (!m_stateBlock) device->CreateStateBlock(D3DSBT_ALL, &m_stateBlock);
     m_ready = true;
     m_historyValid = false;
@@ -147,8 +154,16 @@ void Pipeline::releaseProfile() {
     m_currentProfile = nullptr;
 }
 
+void Pipeline::releaseForReset() {
+    m_ready = false;
+    releaseProfile();
+    gfx::release(m_stateBlock); // state blocks don't live through a reset
+    destroyTargets();
+}
+
 void Pipeline::release() {
     m_ready = false;
+    m_shaderDevice = nullptr;
     releaseProfile();
     for (auto& shader : m_shaders) gfx::release(shader);
     gfx::release(m_stateBlock);
@@ -181,6 +196,7 @@ bool Pipeline::compileAll(IDirect3DDevice9* device) {
     // fxc produced at build time.
     std::string source;
     const bool fromDisk = !m_shaderDir.empty() && readFile(m_shaderDir + L"\\tmvs.hlsl", source);
+    const DWORD started = GetTickCount();
 
     IDirect3DPixelShader9* compiled[kPassCount] = {};
     m_lastError.clear();
@@ -211,8 +227,8 @@ bool Pipeline::compileAll(IDirect3DDevice9* device) {
     }
     D3DCAPS9 caps{};
     device->GetDeviceCaps(&caps);
-    TMVS_LOG("pipeline: %d passes ready (%s, driver allows %lu pixel shader instruction slots)", kPassCount,
-             fromDisk ? "compiled from disk" : "precompiled", caps.MaxPixelShader30InstructionSlots);
+    TMVS_LOG("pipeline: %d passes ready (%s, driver allows %lu pixel shader instruction slots) in %lu ms", kPassCount,
+             fromDisk ? "compiled from disk" : "precompiled", caps.MaxPixelShader30InstructionSlots, GetTickCount() - started);
     return true;
 }
 

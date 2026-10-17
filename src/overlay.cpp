@@ -123,6 +123,47 @@ bool splitBarMouse(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     return msg != WM_MOUSEMOVE;
 }
 
+// Why the menu opened or closed this frame, for the log (null: its own close button).
+const char* g_menuWhy = nullptr;
+
+// A hotkey's window message (handleHotkeys does the action when polling sees the key). One nobody
+// pressed (scan code 0: dev.ini's key actions, posted) is never seen by polling: it is done from
+// here. For the log: how old the message is and when polling saw the key, so a late message
+// pump shows (the owner's report: in the replay viewer the menu came seconds late).
+void hotkeyMessage(unsigned vk, keys::Action action, LPARAM lparam) {
+    const bool posted = ((lparam >> 16) & 0xFF) == 0;
+    if (posted) keys::push(action);
+    static int s_lines = 0;
+    if (s_lines >= 100) return;
+    s_lines++;
+    const DWORD now = GetTickCount();
+    const long age = static_cast<long>(now - static_cast<DWORD>(GetMessageTime()));
+    const DWORD polled = keys::polledAt(vk);
+    char seen[64] = "not yet";
+    if (polled && now - polled < 60000) snprintf(seen, sizeof(seen), "%lu ms before", now - polled);
+    TMVS_LOG("keys: window message for %s (%s)%s, %ld ms old; polling saw the key %s", keys::name(keys::get(action)).c_str(),
+             keys::info(action).name, posted ? " nobody pressed (done from the message)" : "", age, seen);
+}
+
+// Once a frame (draw): the hotkeys polled, the menu, effects and photo ones done here; Capture,
+// Reload and Trace wait for plugin.cpp's take().
+void handleHotkeys() {
+    Config& config = Config::get();
+    const bool typing = g_initialized && config.showOverlay && ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
+    keys::poll(typing);
+    if (keys::take(keys::Action::Menu)) {
+        config.showOverlay = !config.showOverlay;
+        g_menuWhy = "its key";
+    }
+    if (keys::take(keys::Action::Effects)) {
+        config.settings.enabled = !config.settings.enabled;
+        config.markDirty();
+        TMVS_LOG("effects: %s (its key)", config.settings.enabled ? "on" : "off");
+    }
+    if (keys::take(keys::Action::PhotoSplit)) photo::toggleSplit();
+    if (keys::take(keys::Action::Photo)) photo::toggle();
+}
+
 
 // Our part of a message: true = we take it, the game must not see it.
 bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -151,30 +192,30 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         if (keys::feed(msg, wparam, lparam)) return true;
     }
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lparam & (1 << 30))) {
-        // The hotkeys that need no per-frame look (Capture, Reload and Trace are polled in plugin.cpp).
+        // The menu, effects and photo keys: done once a frame by polling (handleHotkeys), as Capture,
+        // Reload and Trace are; their messages are only kept from the game here. In the replay viewer
+        // the messages came seconds late (the owner's report), polling sees the key at the next frame.
         // With a text field in the menu focused only F keys count, so typing can't trigger them.
         const bool typing = config.showOverlay && ImGui::GetIO().WantTextInput;
-        switch (keys::resolve(static_cast<unsigned>(wparam), typing)) {
+        const keys::Action action = keys::resolve(static_cast<unsigned>(wparam), typing);
+        switch (action) {
         case keys::Action::Menu:
-            config.showOverlay = !config.showOverlay;
-            return true;
         case keys::Action::Effects:
-            config.settings.enabled = !config.settings.enabled;
-            config.markDirty();
-            return true;
         case keys::Action::PhotoSplit:
-            photo::toggleSplit();
-            return true;
         case keys::Action::Photo:
-            photo::toggle();
+            hotkeyMessage(static_cast<unsigned>(wparam), action, lparam);
             return true;
         default:
             break;
         }
         // Esc closes the menu first, then leaves photo mode; only then does the game get it.
         if (wparam == VK_ESCAPE && (config.showOverlay || photo::active())) {
-            if (config.showOverlay) config.showOverlay = false;
-            else photo::toggle();
+            if (config.showOverlay) {
+                config.showOverlay = false;
+                g_menuWhy = "Esc";
+            } else {
+                photo::toggle();
+            }
             engine::swallowEscape();
             return true;
         }
@@ -212,6 +253,16 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 }
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    if (msg == WM_ACTIVATEAPP) {
+        // F keys pressed in another program must not count when the game is back (polling reads
+        // the keyboard, not the game's messages). For the log: device resets follow these.
+        if (!wparam) keys::focusLost();
+        static int s_lines = 0;
+        if (s_lines < 100) {
+            s_lines++;
+            TMVS_LOG("window: the game %s", wparam ? "is in front again" : "lost the focus");
+        }
+    }
     bool up = false;
     const int button = mouseButton(msg, wparam, up);
     bool taken = ours(hwnd, msg, wparam, lparam);
@@ -322,9 +373,21 @@ void drawSplitBar() {
 
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
-    if (!g_initialized) {
-        init(device);
-        if (!g_initialized) return;
+    if (!g_initialized) init(device);
+    handleHotkeys(); // also without the overlay (Capture, Reload and Trace)
+    if (!g_initialized) return;
+    {
+        // The menu opening and closing, for the log (the owner's report: it closed by itself).
+        static bool s_shown = false;
+        if (Config::get().showOverlay != s_shown) {
+            s_shown = Config::get().showOverlay;
+            static int s_lines = 0;
+            if (s_lines < 200) {
+                s_lines++;
+                TMVS_LOG("menu: %s (%s)", s_shown ? "open" : "closed", g_menuWhy ? g_menuWhy : "its close button");
+            }
+        }
+        g_menuWhy = nullptr;
     }
     const bool menu = Config::get().showOverlay;
     const char* photoHint = photo::status();

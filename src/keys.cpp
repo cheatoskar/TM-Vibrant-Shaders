@@ -302,6 +302,79 @@ bool edge(Action a) {
     return fire && !g_capturing && resolveWith(vk, held, false) == a;
 }
 
+namespace {
+bool g_pending[kCount] = {};
+bool g_pollWas[256] = {};    // down at the last poll
+bool g_skipNext[256] = {};   // feed() just bound this key with the press that is still down
+DWORD g_polledAt[256] = {};
+DWORD g_lastPress = 0;
+DWORD g_lastPoll = 0;
+bool g_focusLost = false;
+int g_pressLines = 0;
+} // namespace
+
+void poll(bool typing) {
+    ensure();
+    const DWORD now = GetTickCount();
+    const DWORD gap = g_lastPoll ? now - g_lastPoll : 0;
+    g_lastPoll = now;
+    const bool focus = gameHasFocus();
+    const bool away = g_focusLost; // the game was in the back since the last poll
+    g_focusLost = false;
+    // The modifiers first, then the keys (see edge()).
+    const unsigned held = modsHeld();
+    bool read[256] = {};
+    for (int i = 0; i < kCount; i++) {
+        const unsigned vk = g_binding[i].vk;
+        if (!vk || vk > 255 || !kInfo[i].available || read[vk]) continue;
+        read[vk] = true;
+        const SHORT state = GetAsyncKeyState(static_cast<int>(vk));
+        const bool down = (state & 0x8000) != 0;
+        // Down now and not at the last look, or down and up again in between (the low bit: a tap
+        // between two frames, or while the game stood still). Held since the last look (the
+        // keyboard's repeat may set the low bit again): nothing.
+        const bool fire = !g_pollWas[vk] && (down || (state & 1) != 0);
+        g_pollWas[vk] = down;
+        const bool skip = g_skipNext[vk];
+        g_skipNext[vk] = false;
+        if (!fire || skip || !focus || away || g_capturing) continue;
+        const Action a = resolveWith(vk, held, typing);
+        if (a == Action::Count) continue;
+        g_pending[static_cast<int>(a)] = true;
+        g_polledAt[vk] = now;
+        g_lastPress = now;
+        if (g_pressLines < 200) {
+            g_pressLines++;
+            TMVS_LOG("keys: %s (%s)%s, %lu ms since the frame before", name(g_binding[static_cast<int>(a)]).c_str(), kInfo[static_cast<int>(a)].name,
+                     down ? "" : " pressed and let go between two frames", gap);
+        }
+    }
+}
+
+bool take(Action a) {
+    const int i = static_cast<int>(a);
+    const bool pending = g_pending[i];
+    g_pending[i] = false;
+    return pending;
+}
+
+void push(Action a) {
+    g_pending[static_cast<int>(a)] = true;
+    g_lastPress = GetTickCount();
+}
+
+DWORD polledAt(unsigned vk) {
+    return vk < 256 ? g_polledAt[vk] : 0;
+}
+
+DWORD lastPressAt() {
+    return g_lastPress;
+}
+
+void focusLost() {
+    g_focusLost = true;
+}
+
 bool used(unsigned vk) {
     ensure();
     for (int i = 0; i < kCount; i++)
@@ -357,6 +430,8 @@ bool feed(UINT msg, WPARAM wparam, LPARAM lparam) {
         Binding b;
         b.vk = vk;
         b.mods = modsHeld();
+        // The press that is bound here is still down at the next poll: it must not fire the action.
+        if (vk < 256) g_skipNext[vk] = true;
         // Only the capture ends on a key that works; else the player tries again.
         if (assign(g_target, b)) cancelCapture();
         return true;

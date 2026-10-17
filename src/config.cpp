@@ -1183,7 +1183,19 @@ void Config::markDirty() {
 
 void Config::tick() {
     if (keys::takeChanged()) markDirty(); // a hotkey was rebound
-    if (m_dirty && GetTickCount() - m_dirtySince > 1500) save();
+    if (m_dirty && GetTickCount() - m_dirtySince > 1500) {
+        // On the render thread: about 160 WritePrivateProfileString calls, each opening and
+        // rewriting the file (130 ms on the owner's machine outside the game). The game stands
+        // still meanwhile: the log says when it was long.
+        const DWORD started = GetTickCount();
+        save();
+        const DWORD took = GetTickCount() - started;
+        static int s_lines = 0;
+        if (took >= 50 && s_lines < 50) {
+            s_lines++;
+            TMVS_LOG("config: settings.ini written in %lu ms (the game waited)", took);
+        }
+    }
 }
 
 void applyPreset(Settings& s, Preset preset) {
