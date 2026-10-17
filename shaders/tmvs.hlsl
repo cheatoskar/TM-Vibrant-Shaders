@@ -2500,8 +2500,10 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
             if (u_SunView.w > 0.5) {
                 float mu = dot(rd, u_SunWorld.xyz);
                 c += sunScatter(rd, u_Rays.z * 0.5) * daylight;
-                // Sun disc and a tight halo (feeds the bloom).
-                c += u_SunColor.rgb * (smoothstep(0.9994, 0.99975, mu) * 1.8 + pow(saturate(mu), 900.0) * 0.35) * u_Rays.z * daylight;
+                // The sun as on the clear sky: a soft core that blooms and a wider glow, no disc with an
+                // edge (the game's own sun flare is hidden). All of it follows Sun glow (0 in storms).
+                float sunMu = saturate(mu);
+                c += u_SunColor.rgb * (pow(sunMu, 1500.0) * 16.0 + pow(sunMu, 250.0) * 2.5) * u_Rays.z * daylight;
             }
         }
         // Day-for-night on the game's own sky (storm, manual night setting).
