@@ -1213,21 +1213,6 @@ void* __fastcall moonColorDetour(void* light, void* edx, const float* rgb) {
         g_moonApplied = true;
         return g_setBaseRgb(light, edx, kNone);
     }
-    // Real night on a day or sunset map: the "moon" is the map mood's own, A01's a sunset orange
-    // (1.00 0.56 0.22, sun diag 2026-10-17). The race takes its night light from the lightmap baked
-    // in grey, but the end-of-race replay lights with this light directly and came out golden. Its
-    // brightness stays; its colour becomes a cool moonlight.
-    if (g_nightForced && rgb) {
-        float moon[3] = {};
-        __try {
-            const float luma = 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2];
-            const float tint[3] = {0.82f, 0.94f, 1.18f}; // luma 0.931
-            for (int i = 0; i < 3; i++) moon[i] = luma / 0.931f * tint[i];
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            return g_setBaseRgb(light, edx, rgb);
-        }
-        return g_setBaseRgb(light, edx, moon);
-    }
     return g_setBaseRgb(light, edx, rgb);
 }
 

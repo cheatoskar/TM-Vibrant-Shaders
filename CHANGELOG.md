@@ -54,7 +54,6 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - Big maps: *Long mesh shadows* cost about 0.5 ms of CPU a frame instead of up to 11 ms.
 - Auto quality measures what each effect costs on your GPU and turns off just enough of them, keeps the light shafts, the neon light and the long shadows (cut, a stand's shadow on the road stayed light in play but was dark in photo mode), decides nothing in the first 20 s after a map start, a loading screen, alt-tab or photo mode (a map's first seconds no longer turn effects off for the whole session), and no longer switches effects off and on in a loop.
 - Real night follows the look during a map (from a night to a day look and back).
-- Real night: the end-of-race replay of a sunset map (A01) is no longer golden: the game lit it with the map's own moon, a sunset orange; under Real night that moon is a cool moonlight of the same brightness.
 - Video export with supersampling: every sample gets the effects.
 - Photo mode: depth of field blurs the lamps of night maps too.
 - Author's Shader: leaving the map brings your own look back at once.
