@@ -1421,9 +1421,10 @@ void applyPreset(Settings& s, Preset preset) {
             s.planetType = 0;
             s.planetView = 1;
             // Saturn and the black hole, both in view from the start screen.
-            s.planetAzimuth = 150.0f;
+            s.planetAzimuth = 20.0f;    // 150 and sky rotation 263 until the owner's test of 2026-10-17
             s.planetElevation = 14.0f;
-            s.skyRotation = 263.0f;
+            s.skyRotation = 0.0f;
+            s.skyNight = 0.5f;          // a set darkening instead of automatic (-1)
             s.skyEffectSize = 3.0f;
             s.blackHoleAzimuth = 145.5f;
             s.blackHoleElevation = 12.8f;

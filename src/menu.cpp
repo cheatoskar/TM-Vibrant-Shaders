@@ -271,7 +271,10 @@ void applySkyDefaults(Settings& s, int sky) {
         s.godRays = 1.35f;
         s.godRayDecay = 0.9f;
         if (s.planetSize <= 0.0f) s.planetSize = 1.0f;
-        if (sky == 5) s.planetView = 1; // next to the rings
+        if (sky == 5) {
+            s.planetView = 1; // next to the rings
+            s.skyNight = 0.5f;
+        }
     } else if (sky == 2) {
         s.skyNight = 0.5f;
         s.skyBrightness = 1.0f;
@@ -279,6 +282,18 @@ void applySkyDefaults(Settings& s, int sky) {
     } else if (sky == 4) {
         s.skyRotation = 150.0f;
     }
+}
+
+// Ring world seen from on the rings: the planet and the black hole placed for that view (owner,
+// 2026-10-17).
+void applyOnTheRings(Settings& s) {
+    s.skyEffectSize = 4.5f;
+    s.planetSize = 1.15f;
+    s.planetAzimuth = 20.0f;
+    s.planetElevation = -4.0f;
+    s.skyRotation = 150.0f;
+    s.blackHoleElevation = 25.0f;
+    s.skyNight = 0.5f;
 }
 
 size_t fieldSize(const Field& f) {
@@ -536,7 +551,9 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
                 static const char* kLongQualities[] = {"Stepped", "Every cell"};
                 changed |= ImGui::Combo(label, value, kLongQualities, IM_ARRAYSIZE(kLongQualities));
             } else if (!strcmp(f.key, "PlanetView")) {
-                changed |= ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
+                const bool picked = ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
+                if (picked && *value == 2 && s.skyMode == 5) applyOnTheRings(s);
+                changed |= picked;
             } else {
                 changed |= ImGui::SliderInt(label, value, static_cast<int>(f.min), static_cast<int>(f.max));
             }

@@ -32,6 +32,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 **Changed defaults**
 - On: *Game HDR*, *Game light sources*, *Clean highlights*, *Long mesh shadows*, *Fence shadows*, *Gap-free long shadows*, *Clean water*, *Replay menu shading*, *Real night*, *Game moonlight* from the black hole, *Turn off game FX* (the game's own bloom and colour filter, from the next map on), temporal AA (not in *Performance*), MP4 for the video export and *Best export quality*.
 - *Lamp glare* 0.7 and *Lamp haze glow* 1. The night presets (Neon, Horizon, Aurora): neon borders glow at 3, the dry track has a sheen instead of a mirror. Neon's bounce light 1, Horizon's bloom 0.15, more neon light spill on Vibrant, Realistic, Competition and Performance. Snowstorm: no snow on the ground, thicker haze.
+- Horizon: sky rotation 0, planet direction 20°, *Night darkening* 0.5 (was automatic). The *Ring world* sky darkens the night by 0.5; its *On the rings* view places the planet and the black hole for that view (black hole size 4.5 at 25° height, planet size 1.15 at 20° and -4°, sky rotation 150).
 - *Picked preset applies to all maps of this type* is off: a preset you pick holds on every map until you choose presets per map type again on the *Maps* page.
 
 **Fixed**
