@@ -63,6 +63,7 @@ struct EngineView {
     const EngineCar* car = nullptr;       // the player's car (null: not seen this frame)
     double time = 0.0;                    // seconds (animated effects)
     bool photo = false;
+    bool video = false;                   // the replay editor's Shoot video renders this frame (VideoExportBest)
     float focus[2] = {-1.0f, -1.0f};      // photo mode: the focus point clicked (uv), -1 = auto focus
 };
 

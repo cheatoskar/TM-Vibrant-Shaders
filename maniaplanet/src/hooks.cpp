@@ -220,6 +220,104 @@ double nowSeconds() {
     return static_cast<double>(now.QuadPart - start.QuadPart) / static_cast<double>(frequency.QuadPart);
 }
 
+// ManiaPlanet's video export (replay editor, Shoot video: WebM, VP8, its own encoder), seen from the
+// D3D11 side only, nothing in the game's memory. To encode a frame the game must bring it to the
+// CPU, and in D3D11 the only way is Map(READ) of a staging texture on the immediate context. A
+// staging texture of picture size read back frame after frame is taken for the export (a
+// screenshot or the mod's own F12 reads one; the mod's other read-back is a buffer).
+// While it runs, with VideoExportBest on (TMNF's): the effects on the video's clock, one step of
+// 1/VideoFps (maniaplanet.ini) per video frame, spread evenly over the renders between two
+// read-backs (the game may render several per frame for its HQ options); full quality (auto
+// quality neither cuts nor measures) and the cinematic effects as in a replay. On the real clock
+// a frame that took half a second to render and encode moved the rain, the exposure, the focus
+// and the trail by half a second. After the export the clock goes on from where the video ended.
+// Unconfirmed in the game: the log says what was seen (size and format of the read-back, renders
+// per read-back and per Present).
+struct VideoWatch {
+    std::atomic<unsigned> readbacks{0}; // picture-sized read-backs since the last tone map
+    std::atomic<unsigned> lastW{0}, lastH{0}, lastFormat{0};
+    unsigned sinceReadback = 1000;      // tone maps since the last read-back
+    unsigned gap = 1;                   // tone maps between the last two read-backs
+    int streak = 0;                     // read-backs in a row with at most kMaxGap tone maps between
+    bool active = false;
+    double clock = 0.0;                 // the effects' clock while active (s)
+    double offset = 0.0;                // added to the real clock after an export
+    unsigned frames = 0;                // tone maps of this export
+    unsigned videoFrames = 0;           // read-backs of this export
+    unsigned perPresent = 0, mostPerPresent = 0; // tone maps between two Presents (most during it)
+    double startedAt = 0.0;
+    static constexpr unsigned kMaxGap = 16;
+};
+VideoWatch g_video;
+
+// The effects' clock (animated effects, history blends): the real one, or the video's.
+double effectTime() {
+    return g_video.active ? g_video.clock : nowSeconds() + g_video.offset;
+}
+
+bool videoExporting() {
+    return g_video.active;
+}
+
+// At Map on the immediate context (any thread: the game may encode on another one).
+void noteReadback(ID3D11Resource* res, D3D11_MAP type) {
+    if (type != D3D11_MAP_READ && type != D3D11_MAP_READ_WRITE) return;
+    D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    res->GetType(&dim);
+    if (dim != D3D11_RESOURCE_DIMENSION_TEXTURE2D) return;
+    D3D11_TEXTURE2D_DESC d;
+    static_cast<ID3D11Texture2D*>(res)->GetDesc(&d);
+    // A small video (480p) packed four pixels a texel is still 160 x 360; the engine's own small
+    // read-backs (picking in the editor) are a few texels.
+    if (d.Usage != D3D11_USAGE_STAGING || d.Width < 128 || d.Height < 96 || d.Width * d.Height < 160u * 120u) return;
+    g_video.lastW.store(d.Width, std::memory_order_relaxed);
+    g_video.lastH.store(d.Height, std::memory_order_relaxed);
+    g_video.lastFormat.store(d.Format, std::memory_order_relaxed);
+    g_video.readbacks.fetch_add(1, std::memory_order_relaxed);
+}
+
+// At each of the effects' tone maps (one per render), before the effects run.
+void videoTick(UINT w, UINT h) {
+    VideoWatch& v = g_video;
+    v.perPresent++;
+    const unsigned seen = v.readbacks.exchange(0, std::memory_order_relaxed);
+    const bool wanted = tmshaders::Config::get().settings.videoExportBest;
+    if (seen) {
+        v.streak = v.sinceReadback <= VideoWatch::kMaxGap ? v.streak + 1 : 1;
+        if (v.sinceReadback <= VideoWatch::kMaxGap) v.gap = std::max(1u, v.sinceReadback);
+        v.sinceReadback = 0;
+    }
+    v.sinceReadback++;
+    if (!v.active && wanted && v.streak >= 3 && v.sinceReadback <= VideoWatch::kMaxGap) {
+        v.active = true;
+        v.clock = nowSeconds() + v.offset;
+        v.frames = v.videoFrames = 0;
+        v.mostPerPresent = 0;
+        v.startedAt = nowSeconds();
+        TMVS_LOG("video: export seen (a %ux%u staging texture, format %u, read back after every %u render(s); renders %ux%u): "
+                 "effects on a %.0f fps clock at full quality",
+                 v.lastW.load(), v.lastH.load(), v.lastFormat.load(), v.gap, w, h, options::current().videoFps);
+    } else if (v.active && (!wanted || v.sinceReadback > 2 * v.gap + 8)) {
+        v.active = false;
+        v.offset = v.clock - nowSeconds();
+        v.streak = 0;
+        TMVS_LOG("video: export over after %u video frames (%u renders, at most %u per Present) in %.1f s; the clock goes on from %.2f s",
+                 v.videoFrames, v.frames, v.mostPerPresent, nowSeconds() - v.startedAt, v.clock);
+    }
+    if (!v.active) return;
+    if (seen) v.videoFrames++;
+    v.frames++;
+    const double fps = std::clamp(static_cast<double>(options::current().videoFps), 10.0, 240.0);
+    v.clock += 1.0 / (fps * v.gap);
+}
+
+// At Present: how many renders it showed (the export may render several frames per Present).
+void videoPresent() {
+    VideoWatch& v = g_video;
+    if (v.active) v.mostPerPresent = std::max(v.mostPerPresent, v.perPresent);
+    v.perPresent = 0;
+}
+
 // The engine's textures of this frame (owned references, kept until replaced) and its camera.
 ID3D11Resource* g_tex[kTexCount] = {};
 Camera g_camera;
@@ -516,7 +614,7 @@ void resolveCar() {
         if (!std::isfinite(car.world[0] + car.world[1] + car.world[2])) continue;
         index[usable++] = c;
     }
-    const double now = nowSeconds();
+    const double now = effectTime(); // the neon trail's clock
     const int pick = g_carTracker.pick(cars, usable, now);
     if (pick >= 0) {
         const float* m = g_carCandidates[index[pick]];
@@ -739,8 +837,9 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
     resolveCar();
     view.car = g_car.valid ? &g_car : nullptr;
-    view.time = nowSeconds();
+    view.time = effectTime();
     view.photo = photo::active();
+    view.video = videoExporting();
     photo::focusPoint(view.focus);
     // Compare split with a preset: its side first (only its half of the target), then yours on
     // the other half. If the preset's renderer can't run, yours draws all of it with the game's
@@ -833,8 +932,23 @@ bool onDraw(ID3D11DeviceContext* ctx) {
         f.postImage = f.rt;
         f.postRtv = f.rtv;
         f.toneMapSeen = true;
+        videoTick(f.rtW, f.rtH);
         f.toneMapped = replaceToneMap(ctx);
         return f.toneMapped;
+    }
+    if (role == Role::ToneMap && f.rt) {
+        // A tone map into a target not of the screen's shape: the effects leave it alone (a video
+        // export of another aspect than the window would be one). Logged per size, for the test.
+        static UINT logged[8][2] = {};
+        for (auto& l : logged) {
+            if (l[0] == f.rtW && l[1] == f.rtH) break;
+            if (l[0]) continue;
+            l[0] = f.rtW;
+            l[1] = f.rtH;
+            TMVS_LOG("hooks: a tone map into %ux%u (screen %ux%u): not the screen's shape, no effects there", f.rtW, f.rtH,
+                     g_stats.width, g_stats.height);
+            break;
+        }
     }
     if (f.phase == Phase::Scene) {
         // The scene's depth: the last screen-shaped depth buffer a scene draw used.
@@ -1051,6 +1165,7 @@ void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11
 HRESULT STDMETHODCALLTYPE mapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub, D3D11_MAP type, UINT flags,
                                     D3D11_MAPPED_SUBRESOURCE* out) {
     const HRESULT hr = g_map.get<MapFn>(ctx)(ctx, res, sub, type, flags, out);
+    if (SUCCEEDED(hr) && res && ctx == g_ctx && !t_inside) noteReadback(res, type);
     if (isMain(ctx)) repairDraws(ctx);
     if (SUCCEEDED(hr) && out && isMain(ctx) && sub == 0 && (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE)) {
         if (const UINT size = sceneBufferSize(res)) {
@@ -1226,8 +1341,8 @@ void prepareLook() {
     tmshaders::Config& config = tmshaders::Config::get();
     g_lookSettings = config.settings;
     if (config.showOverlay && config.hoverPreview) config.previewSettings(g_lookSettings);
-    // Photo mode is full quality: auto quality pauses (as in TMNF).
-    if (!photo::active()) g_autoQuality.apply(g_lookSettings);
+    // Photo mode and the video export are full quality: auto quality pauses (as in TMNF).
+    if (!photo::active() && !videoExporting()) g_autoQuality.apply(g_lookSettings);
     photo::adjust(g_lookSettings);
     float lutAmount = config.lutAmount;
     if (!config.settings.enabled && photo::active()) {
@@ -1381,7 +1496,9 @@ bool onPresent(IDXGISwapChain* sc) {
     // memory; the editors and replays count too, their frame rate is the GPU's as well.
     // Not in photo mode (as in TMNF): its frames are drawn at full quality, auto quality's cuts
     // aren't applied to them, and decisions on them cut effects for the race after it.
-    if (g_rendererReady && !photo::active())
+    // Nor in the video export: its frames take as long as the encoder needs.
+    videoPresent();
+    if (g_rendererReady && !photo::active() && !videoExporting())
         g_autoQuality.onFrame(nowSeconds(), g_stats.effectsRan, g_renderer.effects().profiler(), tmshaders::Config::get().settings);
     if (g_rendererReady && g_stats.effectsRan) logPerf(g_renderer.effects().profiler());
 

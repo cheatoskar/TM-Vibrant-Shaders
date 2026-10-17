@@ -283,6 +283,7 @@ bool Effects::wanted(const tmshaders::Settings& s) {
 }
 
 bool Effects::supports(const char* key) {
+    if (!strcmp(key, "VideoExportBest")) return true; // the replay editor's Shoot video (hooks.cpp, VideoWatch)
     for (const char* k : kSupported)
         if (!strcmp(k, key)) return true;
     return SkyStage::supports(key) || WeatherStage::supports(key) || CinemaStage::supports(key) || TrailStage::supports(key);

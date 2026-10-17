@@ -99,8 +99,8 @@ void CinemaStage::run(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     const bool history = fx.historyValid();
 
     // ManiaPlanet can't tell replays from driving yet: with "only in replays and video export"
-    // on, depth of field and motion blur run in photo mode only.
-    const bool cinematic = !s.cinematicOnlyInReplays || frame.photo;
+    // on, depth of field and motion blur run in photo mode and in the video export only.
+    const bool cinematic = !s.cinematicOnlyInReplays || frame.photo || !frame.driving;
     const bool dof = cinematic && s.depthOfField > 0.0f;
     // Motion blur needs this frame's motion (the engine's vectors, or the previous camera); after
     // a camera cut both would smear the whole picture for a frame.
