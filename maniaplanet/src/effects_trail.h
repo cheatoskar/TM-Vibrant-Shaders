@@ -37,6 +37,8 @@ public:
         m_time += dt;
         m_clock += dt;
     }
+    // The compare split's preset side draws `from`'s trail (null: its own), recording none.
+    void shareFrom(const TrailStage* from) { m_from = from != this ? from : nullptr; }
     UINT head() const { return m_head; }
     UINT count() const { return m_count; }
     const float* point(UINT i) const { return &m_points[(i % kPoints) * 4]; }
@@ -44,6 +46,8 @@ public:
 private:
     static constexpr UINT kPoints = 16384; // 4.5 min at 60 points a second, ~3 min at full speed
     void clear();
+    void drawPoints(ID3D11DeviceContext* ctx, Effects& fx, const tmshaders::Settings& s, ID3D11ShaderResourceView* pointsSrv, UINT points,
+                    UINT next, float time);
     static constexpr float kMinStep = 0.3f; // m: closer points are no line (the car shaking in place)
     static constexpr float kLift = 0.1f;    // m over the car's origin (on the road), see draw()
     ID3D11VertexShader* m_vs = nullptr;
@@ -66,6 +70,8 @@ private:
     int m_mapSerial = -1;
     unsigned m_track = 0; // the car's (EngineCar::track)
     bool m_ready = false;
+    const TrailStage* m_from = nullptr;     // shareFrom
+    UINT m_drawnPoints = 0, m_drawnNext = 0; // what the last draw showed (for a stage sharing it)
 };
 
 } // namespace tmvs_mp

@@ -112,7 +112,10 @@ bool TrailStage::record(float dt, const float* car, const float* up) {
     if (m_keptValid) {
         const float dx = car[0] - m_kept[0], dy = car[1] - m_kept[1], dz = car[2] - m_kept[2];
         moved = sqrtf(dx * dx + dy * dy + dz * dz);
-        if (moved > 25.0f) m_break = true;
+        // A respawn jumps more than 25 m. A frame hitch while driving fast covers that too (0.25 s
+        // at 250 m/s: 62 m) and is no respawn: the threshold grows with the frame's time (350 m/s
+        // is faster than any car drives), as TMNF's missed-restart rule.
+        if (moved > std::max(25.0f, dt * 350.0f)) m_break = true;
     }
     const float stamp = m_time + 1.0f; // never 0 (= no car)
     float* p = &m_points[m_head * 4];
@@ -148,6 +151,16 @@ bool TrailStage::record(float dt, const float* car, const float* up) {
 
 void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s) {
     if (!m_ready) return;
+    if (m_from) {
+        // The compare split's preset side: your trail, the other stage's points as of its last
+        // draw (its own ring starts empty when the split is shown, after the run was driven). The
+        // trail is a machine setting, the same on both sides.
+        const TrailStage& a = *m_from;
+        if (!a.m_ready || !a.m_pointsSrv || a.m_drawnPoints < 2 || s.neonTrail <= 0.0f) return;
+        drawPoints(ctx, fx, s, a.m_pointsSrv, a.m_drawnPoints, a.m_drawnNext, a.m_time);
+        return;
+    }
+    m_drawnPoints = 0;
     const float dt = m_lastTime >= 0.0 ? static_cast<float>(std::clamp(frame.time - m_lastTime, 0.0, 0.25)) : 0.0f;
     m_lastTime = frame.time;
     const EngineCar* car = frame.car;
@@ -190,6 +203,8 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     const UINT points = live ? std::min(m_count + 1, kPoints) : m_count;
     const UINT next = live ? (m_head + 1) % kPoints : m_head;
     if (points < 2) return;
+    m_drawnPoints = points;
+    m_drawnNext = next;
 
     // Only the slot written this frame (the whole ring was 256 KB a frame), all after a clear.
     if (m_dirty == -2) {
@@ -202,10 +217,15 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         }
     }
     m_dirty = -1;
+    drawPoints(ctx, fx, s, m_pointsSrv, points, next, m_time);
+}
+
+void TrailStage::drawPoints(ID3D11DeviceContext* ctx, Effects& fx, const tmshaders::Settings& s, ID3D11ShaderResourceView* pointsSrv,
+                            UINT points, UINT next, float time) {
     TrailConstants c = {};
     c.trail[0] = static_cast<float>(points);
     c.trail[1] = static_cast<float>(next + kPoints);
-    c.trail[2] = m_time + 1.0f;
+    c.trail[2] = time + 1.0f;
     c.trail[3] = s.trailDuration;
     c.trail2[1] = s.trailWidth * 0.5f;
     c.trail2[2] = static_cast<float>(kPoints);
@@ -221,7 +241,7 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ctx->VSSetShader(m_vs, nullptr, 0);
     ctx->PSSetShader(m_ps, nullptr, 0);
-    ctx->VSSetShaderResources(0, 1, &m_pointsSrv);
+    ctx->VSSetShaderResources(0, 1, &pointsSrv);
     // Two lines from the rear tyres, or one from the middle of the car.
     const float offsets[2] = {s.trailTyres ? -0.75f : 0.0f, 0.75f};
     for (int line = 0; line < (s.trailTyres ? 2 : 1); line++) {

@@ -673,6 +673,7 @@ bool ensureSideB() {
         return false;
     }
     g_rendererB.effects().setSound(false); // the weather sound stays your look's
+    g_rendererB.effects().shareTrail(&g_renderer.effects()); // and the neon trail yours (its own starts empty)
     TMVS_LOG("hooks: compare split with the preset %s (a second renderer)", g_sideBPreset.c_str());
     return true;
 }

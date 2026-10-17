@@ -739,6 +739,7 @@ int main(int argc, char** argv) {
         if (!rendererB.init(device)) return 2;
         rendererB.effects().setSound(false);
         rendererB.effects().setSpillHistory(spillHistory);
+        rendererB.effects().shareTrail(&renderer.effects());
     }
     const Look mineSide = comparing ? splitSide(look, splitAt, swapSides) : look;
     const Look presetSide = splitSide(lookB, splitAt, !swapSides);

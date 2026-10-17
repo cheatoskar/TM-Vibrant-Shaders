@@ -179,6 +179,8 @@ public:
     // The previewer's A/B of the neon spill over frames (--nospillhistory: each frame on its own,
     // as before 1.4.0).
     void setSpillHistory(bool on) { m_spillHistoryOn = on; }
+    // The compare split's preset side draws your neon trail (`from`'s), recording none.
+    void shareTrail(const Effects* from) { m_trail.shareFrom(from ? &from->m_trail : nullptr); }
 
 private:
     bool ensureTargets(UINT w, UINT h);
