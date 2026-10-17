@@ -261,6 +261,7 @@ public:
     // The previewer's A/B of the neon spill over frames (--nospillhistory: each frame on its own,
     // as before 1.4.0).
     void setSpillHistory(bool on) { m_spillHistoryOn = on; }
+    void setNeonHistory(bool on) { m_neonHistoryOn = on; }
     int passCount() const { return kProfileSlots; } // the passes, then the CasterShadows maps' drawing
     static const char* passName(int pass);
     float passTime(int pass) const { return m_passMs[pass]; } // smoothed milliseconds
@@ -336,6 +337,7 @@ private:
         kSpillSourceNeon,
         kNeonGlow,
         kNeonAdd,
+        kNeonTemporal,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
@@ -461,6 +463,10 @@ private:
     int m_spillIndex = 0;
     bool m_spillValid = false;
     bool m_spillHistoryOn = true;
+    gfx::Target m_neonHistory[2]; // full: the strips' glow over frames (its root) and depth, made when first used
+    int m_neonIndex = 0;
+    bool m_neonValid = false;
+    bool m_neonHistoryOn = true;
     gfx::Target m_focus[2];     // 1x1 auto focus ping-pong
     gfx::Target m_dof;          // half: depth of field blur
     gfx::Target m_dofFull;      // full: the same in photo mode

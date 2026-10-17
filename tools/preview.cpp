@@ -35,6 +35,7 @@
 //     --nohdr                 ignore capture_NNN.hdr16 next to the capture (the game's float
 //                             image, GameHdr): render from the 8-bit image only
 //     --nospillhistory        the neon spill of each frame on its own, not over frames (A/B)
+//     --noneonhistory         the neon strips' glow of each frame on its own, not over frames (A/B)
 //     --nomat                 ignore capture_NNN.mat next to the capture (which material drew
 //                             each pixel): no material masks, as before F12 wrote them
 //     --nogbuf                ignore capture_NNN.nrm16 and .lit16 next to the capture (the game's
@@ -373,6 +374,7 @@ int main(int argc, char** argv) {
     int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     bool useMaterials = true;            // capture_NNN.mat next to the capture (--nomat: no material masks)
+    bool neonHistory = true;             // --noneonhistory: the strips' glow of each frame on its own (A/B)
     bool spillHistory = true;            // --nospillhistory: the neon spill of each frame on its own (A/B)
     bool useNormals = true;              // capture_NNN.nrm16 next to the capture (--nogbuf: none)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
@@ -414,6 +416,8 @@ int main(int argc, char** argv) {
             useHdr = false;
         } else if (!strcmp(argv[i], "--nomat")) {
             useMaterials = false;
+        } else if (!strcmp(argv[i], "--noneonhistory")) {
+            neonHistory = false;
         } else if (!strcmp(argv[i], "--nospillhistory")) {
             spillHistory = false;
         } else if (!strcmp(argv[i], "--nogbuf")) {
@@ -634,6 +638,7 @@ int main(int argc, char** argv) {
 
     pipeline.setProfiling(bench);
     pipeline.setSpillHistory(spillHistory);
+    pipeline.setNeonHistory(neonHistory);
     int failures = 0;
     for (const Job& job : jobs) {
         LoadedCapture* loaded = loadCapture(job.capture);
