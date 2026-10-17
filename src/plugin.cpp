@@ -2638,7 +2638,9 @@ bool moonAtLoad(float dayTime, bool litAtNight, engine::MoonLight& moon) {
 // Real night switched in the menu, or a look picked with or without a night sky while a map
 // runs: the map is relit now, not at the next one. It follows the look that is on (also an
 // Author's Shader, read after the map's light was set up), once that has held for 1.5 s
-// (pointing at presets in the menu previews them; transitions glide). Only in gameplay (the
+// (transitions glide). The menu's hover preview never relights: it only changes the look drawn
+// (processScene's `effective`), not Config::settings (a relight is too costly to follow a
+// pointer, and the lightmap baked at load stays anyway). Only in gameplay (the
 // weather of a map that was left may be gone); F7 (shaders off to compare) doesn't relight.
 void relightOnSwitch(const Settings& s) {
     static double s_since = -1.0;
@@ -2658,6 +2660,9 @@ void relightOnSwitch(const Settings& s) {
     if (s_since < 0.0) s_since = seconds();
     if (seconds() - s_since < 1.5) return;
     s_since = -1.0;
+    // Why the map changes its light now (the engine's line says to which time of day).
+    TMVS_LOG("config: real night %s: the look on now (%s) has %s", want ? "on" : "off", Config::get().preset.c_str(),
+             want ? "a night sky" : (s.gameNight ? "no night sky" : "real night off"));
     if (!engine::relightNight(want)) {
         s_failed = true;
         TMVS_LOG("config: real night: this map can't be relit now (next map)");
