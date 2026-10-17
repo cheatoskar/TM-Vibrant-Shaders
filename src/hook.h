@@ -54,6 +54,11 @@ void remove();
 // logged by themselves).
 void logMemory(const char* when);
 
+// Once per engine frame (the engine's frame hook, independent of Direct3D): logs ("hook diag:")
+// when the game's device left our vtable or our Reset/Present slots, and when 120 frames pass
+// without a Present through our detour. Logging only.
+void diagFrame();
+
 // Calls made by the plugin itself between these are not traced or intercepted.
 void beginInternal();
 void endInternal();

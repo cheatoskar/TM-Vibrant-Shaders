@@ -2433,6 +2433,7 @@ void updateJitter() {
 
 void onFrameBegin() {
     tracer::event("## RenderFrameBegin");
+    hook::diagFrame();
     photo::beginFrame();
     {
         // The game's bloom and colour filter would work on the image the mod already graded.

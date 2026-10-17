@@ -62,6 +62,80 @@ IDirect3DDevice9* g_device = nullptr; // the game's device, for the memory repor
 IDirect3DDevice9* g_gameDevice = nullptr;
 bool foreignDevice(IDirect3DDevice9* device) { return g_gameDevice && device != g_gameDevice; }
 
+// --- Hook diagnostics ("hook diag:" in the log) -------------------------------
+// teout's hang with CenterSpeed (kiero + MinHook inline hooks): after the first frame no Present,
+// no lost device and no Reset reached our detours any more. Either the game's thread blocks in
+// the Present chain, or its calls go around our vtable entries. Logging only: nothing is re-patched.
+
+// Reads memory that may be gone (another mod's code, a freed table) without crashing.
+bool readPointer(const void* address, void** out) {
+    __try {
+        *out = *static_cast<void* const*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool readByte(const void* address, unsigned char* out) {
+    __try {
+        *out = *static_cast<const unsigned char*>(address);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// "d3d9.dll+0x1234" for an address in a module, else the kind of memory ("heap/private").
+void describeAddress(const void* address, char* out, size_t size) {
+    HMODULE module = nullptr;
+    if (address && GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                      static_cast<LPCWSTR>(address), &module) &&
+        module) {
+        char path[MAX_PATH] = {};
+        GetModuleFileNameA(module, path, MAX_PATH);
+        const char* name = strrchr(path, '\\');
+        name = name ? name + 1 : path;
+        snprintf(out, size, "%s+0x%lx", name,
+                 static_cast<unsigned long>(reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module)));
+        return;
+    }
+    MEMORY_BASIC_INFORMATION info{};
+    if (address && VirtualQuery(address, &info, sizeof(info)) == sizeof(info) && info.State == MEM_COMMIT) {
+        snprintf(out, size, "%p (%s, no module)", address,
+                 info.Type == MEM_PRIVATE ? "heap/private" : info.Type == MEM_MAPPED ? "mapped" : "image");
+        return;
+    }
+    snprintf(out, size, "%p (not readable)", address);
+}
+
+// A pointer with its first code byte: E9 (jmp) or FF 25 (jmp [ ]) there is someone's inline hook.
+void describeCode(const void* address, char* out, size_t size) {
+    char where[160];
+    describeAddress(address, where, sizeof(where));
+    unsigned char first = 0;
+    if (readByte(address, &first)) {
+        snprintf(out, size, "%s first byte %02X%s", where, first, first == 0xE9 || first == 0xFF ? " (a jump: hooked inline?)" : "");
+    } else {
+        snprintf(out, size, "%s (code not readable)", where);
+    }
+}
+
+// Presents of the game's device that reached presentDetour (counted at its entry).
+volatile LONG g_diagPresents = 0;
+
+// At most a few diagnostic lines a minute, so a broken state can't flood the log.
+bool diagLineAllowed() {
+    static DWORD s_windowStart = 0;
+    static int s_lines = 0;
+    const DWORD now = GetTickCount();
+    if (now - s_windowStart > 60000) {
+        s_windowStart = now;
+        s_lines = 0;
+    }
+    return ++s_lines <= 4;
+}
+
 // The game's draw calls: how many per frame, and how many with software vertex processing
 // (the device is a mixed one): is the CPU side of the game worth working on? Logged twice,
 // after about 1000 and 10000 frames, then no longer counted.
@@ -231,6 +305,7 @@ HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const 
         return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(kPresent)(
             device, src, dst, window, dirty);
     }
+    InterlockedIncrement(&g_diagPresents);
     g_device = device;
     if (g_callbacks.present) {
         g_internal++;
@@ -592,6 +667,15 @@ bool patchDevice(IDirect3DDevice9* device) {
         writePointer(&vtable[d.slot], d.function);
     }
     TMVS_LOG("hook: device vtable %p patched", vtable);
+    {
+        // Where the table lives (d3d9.dll's image, or the heap: one per device) and what the game's
+        // Reset and Present were before us: another mod's inline hook shows as a jump.
+        char table[160], reset[220], present[220];
+        describeAddress(vtable, table, sizeof(table));
+        describeCode(g_original[kReset], reset, sizeof(reset));
+        describeCode(g_original[kPresent], present, sizeof(present));
+        TMVS_LOG("hook diag: vtable %s; Reset was %s; Present was %s", table, reset, present);
+    }
     return true;
 }
 
@@ -753,6 +837,54 @@ void logMemory(const char* when) {
     char memory[200];
     formatMemory(memory, sizeof(memory), g_device);
     TMVS_LOG("memory %s: %s", when, memory);
+}
+
+void diagFrame() {
+    if (!g_gameDevice || !g_vtable) return;
+    // 1. Does the game's device still use our table, with our Reset and Present in it?
+    void* table = nullptr;
+    void* present = nullptr;
+    void* reset = nullptr;
+    const bool readable = readPointer(g_gameDevice, &table);
+    const bool sameTable = readable && table == static_cast<void*>(g_vtable);
+    const bool ourPresent = readPointer(&g_vtable[kPresent], &present) && present == reinterpret_cast<void*>(&presentDetour);
+    const bool ourReset = readPointer(&g_vtable[kReset], &reset) && reset == reinterpret_cast<void*>(&resetDetour);
+    const int state = (readable ? 0 : 1) | (sameTable ? 0 : 2) | (ourPresent ? 0 : 4) | (ourReset ? 0 : 8);
+    static int s_state = 0;
+    if (state != s_state && diagLineAllowed()) {
+        s_state = state;
+        if (state == 0) {
+            TMVS_LOG("hook diag: the game's device uses our vtable %p with our Reset and Present again", g_vtable);
+        } else {
+            char where[160] = "-", presentAt[220] = "-", resetAt[220] = "-";
+            if (readable && !sameTable) describeAddress(table, where, sizeof(where));
+            if (!ourPresent) describeCode(present, presentAt, sizeof(presentAt));
+            if (!ourReset) describeCode(reset, resetAt, sizeof(resetAt));
+            TMVS_LOG("hook diag: device %p %s (table now %s); slot Present %s; slot Reset %s", static_cast<void*>(g_gameDevice),
+                     !readable ? "not readable" : sameTable ? "still on our vtable" : "on another vtable", where,
+                     ourPresent ? "ours" : presentAt, ourReset ? "ours" : resetAt);
+        }
+    }
+    // 2. Engine frames without a Present through our detour: the game draws, but its Presents go
+    // around us (or never come).
+    static LONG s_lastPresents = -1;
+    static unsigned s_framesWithout = 0;
+    static bool s_silent = false;
+    const LONG presents = g_diagPresents;
+    if (presents != s_lastPresents) {
+        if (s_silent && diagLineAllowed()) {
+            TMVS_LOG("hook diag: Presents through our hook again after %u engine frames without (%ld so far)", s_framesWithout,
+                     static_cast<long>(presents));
+        }
+        s_lastPresents = presents;
+        s_framesWithout = 0;
+        s_silent = false;
+    } else if (++s_framesWithout == 120 && diagLineAllowed()) {
+        s_silent = true;
+        TMVS_LOG("hook diag: 120 engine frames without a Present through our hook (%ld so far): the game's Presents go around "
+                 "it, or it draws without presenting",
+                 static_cast<long>(presents));
+    }
 }
 
 void beginInternal() {
