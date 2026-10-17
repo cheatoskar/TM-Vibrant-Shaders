@@ -8,7 +8,7 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 
 **TM Vibrant Shaders now runs in ManiaPlanet 4: TrackMania² Stadium, Canyon, Valley and Lagoon**, natively on the game's Direct3D 11 renderer (tested in the game on Stadium). It provides the same mod experience with the same `F8` menu, presets and settings as in Nations and United Forever, built on what ManiaPlanet's engine knows: surface normals, material colours, sun shadow maps, motion vectors and HDR image.
 
-![TrackMania 2 Stadium in photo mode's compare split: left the game, right the mod with the black hole sky](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.4.0/docs/images/tm2-black-hole-split.jpg)
+![TrackMania 2 Stadium in photo mode's compare split: left the game, right the mod with the black hole sky](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/{{TAG}}/docs/images/tm2-black-hole-split.jpg)
 
 *TrackMania 2 Stadium, photo mode's compare split: left the game as it is, right with the mod (black hole sky).*
 
@@ -32,7 +32,7 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 
 ### Highlights for TrackMania Nations Forever & United Forever
 
-![The new F8 menu: every preset as a card with a picture](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/v1.4.0/docs/images/menu.jpg)
+![The new F8 menu: every preset as a card with a picture](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/{{TAG}}/docs/images/menu.jpg)
 
 **New `F8` Menu**
 - Every preset as an interactive card with a picture, brief description, and GPU load.

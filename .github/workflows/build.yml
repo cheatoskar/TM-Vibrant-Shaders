@@ -77,7 +77,8 @@ jobs:
         shell: pwsh
         run: |
           $body = @()
-          if (Test-Path RELEASE_NOTES.md) { $body += Get-Content RELEASE_NOTES.md -Encoding utf8; $body += "" }
+          # {{TAG}} in the notes: this build's tag (pictures from the tagged tree, also for a pre-release).
+          if (Test-Path RELEASE_NOTES.md) { $body += (Get-Content RELEASE_NOTES.md -Encoding utf8) -replace '\{\{TAG\}\}', $env:GITHUB_REF_NAME; $body += "" }
           $body += @("<details>", "<summary>SHA-256 checksums</summary>", "", "| File | SHA-256 |", "|---|---|")
           foreach ($line in Get-Content dist/SHA256SUMS.txt) {
             $h, $f = $line -split "  ", 2
