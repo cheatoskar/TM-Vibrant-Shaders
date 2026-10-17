@@ -2488,7 +2488,34 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
     // The game bakes a bright sun glare into the asphalt; tame it so the road doesn't
     // wash out to white (it's a reflection, it gets its sun highlight further down).
     // Below the tonemapper's knee the asphalt keeps its texture contrast.
-    float glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, luma(c)) * (1.0 - smoothstep(0.25, 0.5, sat));
+    // Clean highlights (EngineLights): how bright the surface is around the pixel, not the pixel
+    // itself. Keyed to each pixel, the tame took the most off the bright concrete and the least
+    // off its darker stains and tyre marks: the game's road texture came out flat grey (a third
+    // of its contrast, capture_105). The average of eight taps on a ring (2.2 % of the screen's
+    // height, 32 px at 1440p), those within 35 % of the pixel's brightness only: a dark seam, a
+    // tyre or a barrier next to the road leaves no lighter halo on it. The road's average stays
+    // as dark as before. Only in the EngineLights entry points (PS_Lighting has no slots left
+    // and is as it was); CleanHighlights off is the old look. Hard weights, not a ramp: the
+    // GameLight entry point is at its slot limit.
+    float glare = 0.0;
+    if (engine) {
+        float around = luma(c);
+        [branch] if (u_Clean.x > 0.5) {
+            float centre = luma(cGame);
+            float2 sum = float2(centre, 1.0);
+            float2 step = float2(u_Screen.y * u_Screen.z, 1.0) * 0.022; // a circle on screen
+            float2 dir = float2(0.92387953, 0.38268343); // 22.5 degrees, turned by 45 each tap
+            [loop] for (int k = 0; k < 8; k++) {
+                float t = luma(tex2Dlod(s0, float4(uv + dir * step, 0, 0)).rgb);
+                sum += float2(t, 1.0) * (abs(t - centre) < centre * 0.35 ? 1.0 : 0.0);
+                dir = float2(dir.x - dir.y, dir.x + dir.y) * 0.70710678;
+            }
+            around = toLinear(sum.x / sum.y).x; // grey: its luma
+        }
+        glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, around) * (1.0 - smoothstep(0.25, 0.5, sat));
+    } else {
+        glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, luma(c)) * (1.0 - smoothstep(0.25, 0.5, sat));
+    }
     // Clean highlights: only where the game baked a sun. Night maps (and day maps lit at
     // midnight) have none: floodlit white got x0.6 wherever the lamp guess said "no lamp" and
     // stayed where it said "lamp", so the same white of the game became a patchwork (frost on
@@ -2715,7 +2742,9 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
     // night map or a map lit at midnight: no sun baked in to pass for a lamp).
     float lamp = 0.0;
     if (gameLight && night > 0.0 && u_Light2.y < -0.5) lamp = lampLight(uv, dist);
-    if (lamp > 0.0) c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55 * (1.0 - lamp)) * lerp(lerp(1.0, 0.16, night), 1.0, lamp);
+    // (No "lamp > 0" test: with lamp 0 the line below is the else line, and the test cost the
+    // GameLight entry point the slots the glare tame's taps above needed.)
+    if (gameLight) c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55 * (1.0 - lamp)) * lerp(lerp(1.0, 0.16, night), 1.0, lamp);
     else c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55) * lerp(1.0, 0.16, night);
     // A black hole in the sky is the brightest light around: warm light on everything that
     // faces it, and the haze glows towards it.
