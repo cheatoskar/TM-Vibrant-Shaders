@@ -1,6 +1,7 @@
 #include "capture.h"
 #include "log.h"
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 namespace tmshaders {
@@ -45,7 +46,7 @@ IDirect3DSurface9* readback(IDirect3DDevice9* device, IDirect3DSurface9* surface
 
 } // namespace
 
-bool saveSurface(IDirect3DDevice9* device, IDirect3DSurface9* surface, const std::wstring& path) {
+bool readSurface(IDirect3DDevice9* device, IDirect3DSurface9* surface, Pixels& out) {
     D3DSURFACE_DESC desc{};
     IDirect3DSurface9* system = readback(device, surface, desc);
     if (!system) {
@@ -57,16 +58,34 @@ bool saveSurface(IDirect3DDevice9* device, IDirect3DSurface9* surface, const std
         system->Release();
         return false;
     }
+    out.format = desc.Format;
+    out.width = desc.Width;
+    out.height = desc.Height;
+    switch (desc.Format) {
+        case D3DFMT_A8R8G8B8:
+        case D3DFMT_X8R8G8B8:
+        case D3DFMT_A2R10G10B10: out.pitch = desc.Width * 4; break;
+        case D3DFMT_A16B16G16R16F: out.pitch = desc.Width * 8; break;
+        default: out.pitch = 0; break; // written black, as before
+    }
+    out.bytes.resize(out.pitch * desc.Height);
+    for (UINT y = 0; y < desc.Height && out.pitch; y++)
+        memcpy(&out.bytes[out.pitch * y], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(locked.Pitch) * y, out.pitch);
+    system->UnlockRect();
+    system->Release();
+    return true;
+}
 
-    const UINT w = desc.Width, h = desc.Height;
+bool writeBmp(const Pixels& image, const std::wstring& path) {
+    const UINT w = image.width, h = image.height;
     const UINT rowBytes = (w * 3 + 3) & ~3u;
     std::vector<unsigned char> pixels(rowBytes * h);
     for (UINT y = 0; y < h; y++) {
-        const BYTE* row = static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(locked.Pitch) * y;
+        const BYTE* row = image.pitch ? image.bytes.data() + image.pitch * y : nullptr;
         unsigned char* out = &pixels[static_cast<size_t>(rowBytes) * (h - 1 - y)];
         for (UINT x = 0; x < w; x++) {
             unsigned char r = 0, g = 0, b = 0;
-            switch (desc.Format) {
+            switch (image.format) {
                 case D3DFMT_A8R8G8B8:
                 case D3DFMT_X8R8G8B8:
                     b = row[x * 4 + 0]; g = row[x * 4 + 1]; r = row[x * 4 + 2];
@@ -89,8 +108,6 @@ bool saveSurface(IDirect3DDevice9* device, IDirect3DSurface9* surface, const std
             out[x * 3 + 0] = b; out[x * 3 + 1] = g; out[x * 3 + 2] = r;
         }
     }
-    system->UnlockRect();
-    system->Release();
 
     FILE* f = _wfopen(path.c_str(), L"wb");
     if (!f) return false;
@@ -110,6 +127,11 @@ bool saveSurface(IDirect3DDevice9* device, IDirect3DSurface9* surface, const std
     fwrite(pixels.data(), 1, pixels.size(), f);
     fclose(f);
     return true;
+}
+
+bool saveSurface(IDirect3DDevice9* device, IDirect3DSurface9* surface, const std::wstring& path) {
+    Pixels image;
+    return readSurface(device, surface, image) && writeBmp(image, path);
 }
 
 bool saveFloatSurface(IDirect3DDevice9* device, IDirect3DSurface9* surface, const std::wstring& path) {

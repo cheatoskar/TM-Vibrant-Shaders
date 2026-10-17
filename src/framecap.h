@@ -22,4 +22,8 @@ struct FrameCapture {
     bool load(const std::wstring& path);
 };
 
+// The float images next to a capture (.hdr16, .add16, .nrm16, .lit16): "TMH1", width, height,
+// then RGBA half floats, rows top-down (the previewer's --hdr).
+bool writeHalfFile(const std::wstring& path, uint32_t width, uint32_t height, const std::vector<uint16_t>& half);
+
 } // namespace tmshaders

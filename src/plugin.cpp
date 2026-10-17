@@ -1,6 +1,7 @@
 #include "plugin.h"
 #include "audio.h"
 #include "capture.h"
+#include "capwriter.h"
 #include "casters.h"
 #include "perflog.h"
 #include "config.h"
@@ -28,6 +29,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -61,7 +63,6 @@ struct DevOptions {
 } g_dev;
 float g_nextCaptureAt = 0.0f;
 float g_sceneStart = -1.0f; // first frame with a gameplay camera (near plane < 1 m)
-bool g_screenshotRequested = false;
 size_t g_nextKey = 0;
 size_t g_nextSceneKey = 0;
 
@@ -92,6 +93,7 @@ struct SceneState {
 } g_scene;
 
 bool g_captureRequested = false;
+bool g_capturePending = false; // F12 pressed, taken when the writer is free (g_captureRequested)
 // F12 with the material masks on: the next main camera tags every depth-writing draw with
 // its material's own id (1..255) instead of its class, and that frame is captured with the
 // ids (capture_NNN.mat): which material drew each pixel, by name.
@@ -252,7 +254,7 @@ void logHangs(double ms, double captureMs, bool racing) {
     if (s_logged < 60) {
         if (ms > 100.0) {
             s_logged++;
-            TMVS_LOG("cpu: one frame of the mod took %.0f ms (%.0f ms of it writing the F12 capture)", ms, captureMs);
+            TMVS_LOG("cpu: one frame of the mod took %.0f ms (%.0f ms of it reading back the F12 capture)", ms, captureMs);
         }
         if (racing && s_last >= 0.0f && now - s_last > 0.25f) {
             s_logged++;
@@ -318,7 +320,7 @@ void runDevAutomation(IDirect3DDevice9* device) {
     }
     if (g_dev.captureAt > 0.0f && sceneNow >= g_nextCaptureAt && g_capturesWritten < g_dev.captureCount) {
         g_nextCaptureAt = sceneNow + g_dev.captureInterval;
-        g_captureRequested = true;
+        g_capturePending = true;
     }
     const std::wstring* action = nullptr;
     if (g_nextKey < g_dev.keys.size() && now >= g_dev.keys[g_nextKey].first) {
@@ -544,12 +546,8 @@ float halfToFloat(uint16_t h) {
 
 // How much of the game's image lies above 1.0, i.e. what its own 8-bit target cut away.
 // `keep` receives the half floats (RGBA, rows top-down) when given.
-void logHdrStats(IDirect3DDevice9* device, const char* when, std::vector<uint16_t>* keep) {
-    std::vector<uint16_t> half;
-    if (!g_pipeline.readHalfColor(device, g_hdrScene.surface, half)) {
-        TMVS_LOG("hdr: readback failed");
-        return;
-    }
+// The numbers alone (any thread: the F12 capture's are counted on its writer).
+void hdrStats(const std::vector<uint16_t>& half, const char* when) {
     const size_t count = half.size() / 4;
     size_t above1 = 0, above125 = 0, above2 = 0, negative = 0;
     float brightest = 0.0f;
@@ -575,7 +573,15 @@ void logHdrStats(IDirect3DDevice9* device, const char* when, std::vector<uint16_
     const double n = count ? static_cast<double>(count) / 100.0 : 1.0;
     TMVS_LOG("hdr (%s): %.2f%% of the image above 1.0, %.2f%% above 1.25, %.2f%% above 2.0; brightest %.2f, 99.9%% at most %.2f; %.2f%% negative",
              when, above1 / n, above125 / n, above2 / n, brightest, (p999 + 1) / 16.0, negative / n);
-    if (keep) keep->swap(half);
+}
+
+void logHdrStats(IDirect3DDevice9* device, const char* when) {
+    std::vector<uint16_t> half;
+    if (!g_pipeline.readHalfColor(device, g_hdrScene.surface, half)) {
+        TMVS_LOG("hdr: readback failed");
+        return;
+    }
+    hdrStats(half, when);
 }
 
 // RenderScale: the main camera draws into GameHdr's float target made smaller, through a viewport
@@ -1537,7 +1543,7 @@ void endHdr(IDirect3DDevice9* device) {
         } else if (GetTickCount() - s_since > 8000) {
             s_map = engine::mapLoads();
             s_since = 0;
-            logHdrStats(device, "map", nullptr);
+            logHdrStats(device, "map");
         }
     }
 }
@@ -1560,31 +1566,9 @@ IDirect3DSurface9* onSetRenderTarget(DWORD index, IDirect3DSurface9* surface) {
     return surface;
 }
 
-// The float image next to the capture: "TMH1", width, height, then RGBA half floats, rows
-// top-down (the previewer's --hdr).
-void writeHalfFile(const std::wstring& path, UINT width, UINT height, const std::vector<uint16_t>& half) {
-    FILE* f = _wfopen(path.c_str(), L"wb");
-    if (!f) return;
-    const uint32_t header[3] = {0x31484D54u, width, height}; // "TMH1"
-    fwrite(header, sizeof(header), 1, f);
-    fwrite(half.data(), sizeof(uint16_t), half.size(), f);
-    fclose(f);
-}
-
-void writeHdrCapture(IDirect3DDevice9* device, const std::wstring& path) {
-    std::vector<uint16_t> half;
-    logHdrStats(device, "capture", &half);
-    if (half.empty()) return;
-    writeHalfFile(path, g_hdrScene.width, g_hdrScene.height, half);
-}
-
-// The light the game added on top, in the same format (capture_NNN.add16).
-void writeAddedCapture(IDirect3DDevice9* device, const std::wstring& path) {
-    std::vector<uint16_t> half;
-    if (!g_pipeline.readHalfColor(device, g_hdrAdded.surface, half)) {
-        TMVS_LOG("hdr: added light not read");
-        return;
-    }
+// The F12 capture's statistics of the light the game added on top (capture_NNN.add16), counted
+// on the capture's writer thread.
+void addedStats(const std::vector<uint16_t>& half) {
     const size_t count = half.size() / 4;
     size_t lit = 0, strong = 0;
     float brightest = 0.0f;
@@ -1596,7 +1580,6 @@ void writeAddedCapture(IDirect3DDevice9* device, const std::wstring& path) {
     }
     const double n = count ? static_cast<double>(count) / 100.0 : 1.0;
     TMVS_LOG("hdr (capture): added light on %.2f%% of the image, above 0.25 on %.2f%%, brightest %.2f", lit / n, strong / n, brightest);
-    writeHalfFile(path, g_hdrAdded.width, g_hdrAdded.height, half);
 }
 
 // One-one blending with the colour added (glows, halos, headlight pools) and no depth writes.
@@ -1643,33 +1626,22 @@ void onDrawDone(IDirect3DDevice9* device) {
     g_hdrAddedBound = false;
 }
 
-// GameGBuffer: the normals next to the capture (capture_NNN.nrm16, the same format: world normal
-// xyz, distance from the eye in w, 0 where no patched shader drew).
-void writeGBufferCapture(IDirect3DDevice9* device, const std::wstring& path) {
-    std::vector<uint16_t> half;
-    if (!g_pipeline.readHalfColor(device, g_gbuf.surface, half)) {
-        TMVS_LOG("gbuffer: normals not read");
-        return;
-    }
+// GameGBuffer: the statistics of the normals next to the capture (capture_NNN.nrm16, the same
+// format as the .hdr16: world normal xyz, distance from the eye in w, 0 where no patched shader
+// drew). On the writer thread, with the draw counts of the captured frame.
+void normalsStats(const std::vector<uint16_t>& half, const GBufferDraws& d) {
     const size_t count = half.size() / 4;
     size_t written = 0;
     for (size_t i = 0; i < count; i++) written += halfToFloat(half[i * 4 + 3]) > 0.0f;
-    const GBufferDraws& d = g_gbufDraws;
     TMVS_LOG("gbuffer (capture): normals on %.1f%% of the image; %u of %u opaque draws wrote them (%u with shaders that have none, %u "
              "without a pixel shader)",
              count ? 100.0 * written / count : 0.0, d.written, d.opaque, d.otherShader, d.noShader);
-    writeHalfFile(path, g_gbuf.width, g_gbuf.height, half);
 }
 
 // GameLight: the light next to the capture (capture_NNN.lit16, the same format: the light the
 // game's shader multiplied the surface's colour with, rgb, and the distance from the eye in w; 0
 // where no shader with its light drew). tools/gbuffer.py --light reads it against the depth.
-void writeLightCapture(IDirect3DDevice9* device, const std::wstring& path) {
-    std::vector<uint16_t> half;
-    if (!g_pipeline.readHalfColor(device, g_gbufLight.surface, half)) {
-        TMVS_LOG("gbuffer: light not read");
-        return;
-    }
+void lightStats(const std::vector<uint16_t>& half, const GBufferDraws& d) {
     const size_t count = half.size() / 4;
     size_t written = 0;
     float brightest = 0.0f;
@@ -1679,24 +1651,54 @@ void writeLightCapture(IDirect3DDevice9* device, const std::wstring& path) {
         brightest = std::max(brightest, std::max(halfToFloat(half[i * 4]), std::max(halfToFloat(half[i * 4 + 1]), halfToFloat(half[i * 4 + 2]))));
     }
     TMVS_LOG("gbuffer (capture): light on %.1f%% of the image, brightest %.2f; %u of %u opaque draws wrote it", count ? 100.0 * written / count : 0.0,
-             brightest, g_gbufDraws.light, g_gbufDraws.opaque);
-    writeHalfFile(path, g_gbufLight.width, g_gbufLight.height, half);
+             brightest, d.light, d.opaque);
 }
 
-// The material ids next to the capture: "TMM1", width, height, count, then per id (1..count)
-// class (engine::Material), flags (1 depth writes, 2 one-one blending), draws, the length
-// and UTF-8 bytes of its shader file; then one id byte per pixel, rows top-down (0: none).
-void writeMaterialCapture(IDirect3DDevice9* device, const std::wstring& path) {
-    std::vector<uint8_t> ids;
-    if (!g_pipeline.readMaterialIds(device, ids) || ids.size() != static_cast<size_t>(g_frameWidth) * g_frameHeight) {
-        TMVS_LOG("capture: material ids not read");
+// One F12 capture: what the game's thread read back, owned by the writer thread from then on
+// (capwriter; D3D9 and the game's memory stay on the game's thread).
+struct CaptureJob {
+    struct Half {
+        UINT width = 0, height = 0;
+        std::vector<uint16_t> pixels; // RGBA half floats, rows top-down (empty: not captured)
+    };
+    std::wstring base; // dataDir\capture_NNN, the extensions are added
+    FrameCapture frame;
+    Half hdr, added, normals, light;
+    GBufferDraws draws;
+    // The material ids (capture_NNN.mat): the header and the materials (their names read from the
+    // game here), then the ids.
+    std::vector<uint8_t> materialTable, ids;
+    int materials = 0, lights = 0;
+    double readMs = 0.0; // on the game's thread
+};
+
+// One float target of the capture; logs as before when it can't be read.
+void readHalf(IDirect3DDevice9* device, const gfx::Target& target, CaptureJob::Half& out, const char* failed) {
+    if (!g_pipeline.readHalfColor(device, target.surface, out.pixels)) {
+        TMVS_LOG("%s", failed);
+        out.pixels.clear();
         return;
     }
-    FILE* f = _wfopen(path.c_str(), L"wb");
-    if (!f) return;
+    out.width = target.width;
+    out.height = target.height;
+}
+
+// The material ids: "TMM1", width, height, count, then per id (1..count) class (engine::Material),
+// flags (1 depth writes, 2 one-one blending), draws, the length and UTF-8 bytes of its shader
+// file; then one id byte per pixel, rows top-down (0: none).
+void readMaterialCapture(IDirect3DDevice9* device, CaptureJob& job) {
+    if (!g_pipeline.readMaterialIds(device, job.ids) || job.ids.size() != static_cast<size_t>(g_frameWidth) * g_frameHeight) {
+        TMVS_LOG("capture: material ids not read");
+        job.ids.clear();
+        return;
+    }
+    std::vector<uint8_t>& out = job.materialTable;
+    const auto append = [&out](const void* data, size_t bytes) {
+        const uint8_t* p = static_cast<const uint8_t*>(data);
+        out.insert(out.end(), p, p + bytes);
+    };
     const uint32_t header[4] = {0x314D4D54u, g_frameWidth, g_frameHeight, static_cast<uint32_t>(g_idMaterials.size())}; // "TMM1"
-    fwrite(header, sizeof(header), 1, f);
-    int lights = 0;
+    append(header, sizeof(header));
     for (const IdMaterial& m : g_idMaterials) {
         wchar_t file[512] = {};
         char utf8[1024] = {};
@@ -1706,19 +1708,85 @@ void writeMaterialCapture(IDirect3DDevice9* device, const std::wstring& path) {
                                  static_cast<uint8_t>((m.depthWrite ? 1 : 0) | (m.additive ? 2 : 0))};
         const uint32_t draws = static_cast<uint32_t>(m.draws);
         const uint16_t length = static_cast<uint16_t>(bytes > 0 ? bytes - 1 : 0);
-        fwrite(kind, sizeof(kind), 1, f);
-        fwrite(&draws, sizeof(draws), 1, f);
-        fwrite(&length, sizeof(length), 1, f);
-        fwrite(utf8, 1, length, f);
-        if (kind[0] == static_cast<uint8_t>(engine::Material::Light)) lights++;
+        append(kind, sizeof(kind));
+        append(&draws, sizeof(draws));
+        append(&length, sizeof(length));
+        append(utf8, length);
+        if (kind[0] == static_cast<uint8_t>(engine::Material::Light)) job.lights++;
     }
-    fwrite(ids.data(), 1, ids.size(), f);
-    fclose(f);
-    TMVS_LOG("capture: material ids of %d materials (%d lights)", static_cast<int>(g_idMaterials.size()), lights);
+    job.materials = static_cast<int>(g_idMaterials.size());
 }
 
+// The writer thread's half: the statistics for the log and the files, each under a temporary
+// name until it is complete.
+void writeCaptureFiles(CaptureJob& job) {
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    static bool s_cleaned = false;
+    if (!s_cleaned) {
+        s_cleaned = true;
+        const int removed = capwriter::removeUnfinished(log::dataDir(), L"capture_*.part") + capwriter::removeUnfinished(log::dataDir(), L"screen_*.part");
+        if (removed) TMVS_LOG("capture: removed %d unfinished capture files of an earlier session (the game closed while writing)", removed);
+    }
+    const size_t slash = job.base.find_last_of(L"\\");
+    const std::wstring name = job.base.substr(slash + 1);
+    double megabytes = 0.0;
+    const auto count = [&megabytes](size_t bytes) { megabytes += static_cast<double>(bytes) / (1024.0 * 1024.0); };
+    TMVS_LOG("capture: writing %ls.tmcap", name.c_str());
+    const bool written = capwriter::writeVia(job.base + L".tmcap", [&job](const std::wstring& path) { return job.frame.save(path); });
+    count(job.frame.color.size() * 4 + job.frame.depth.size() * 4);
+    TMVS_LOG("capture: %s %ls.tmcap", written ? "wrote" : "could not write", name.c_str());
+    const auto writeHalf = [&](const CaptureJob::Half& half, const wchar_t* extension) {
+        capwriter::writeVia(job.base + extension, [&half](const std::wstring& path) { return writeHalfFile(path, half.width, half.height, half.pixels); });
+        count(half.pixels.size() * 2);
+    };
+    // GameHdr: the image before the game's target cut it, next to it (capture_NNN.hdr16).
+    if (!job.hdr.pixels.empty()) {
+        hdrStats(job.hdr.pixels, "capture");
+        writeHalf(job.hdr, L".hdr16");
+    }
+    // ... and the light the game added on top (capture_NNN.add16).
+    if (!job.added.pixels.empty()) {
+        addedStats(job.added.pixels);
+        writeHalf(job.added, L".add16");
+    }
+    // GameGBuffer: the game's normals (capture_NNN.nrm16).
+    if (!job.normals.pixels.empty()) {
+        normalsStats(job.normals.pixels, job.draws);
+        writeHalf(job.normals, L".nrm16");
+    }
+    // GameLight: the light the game's shaders lit each surface with (capture_NNN.lit16).
+    if (!job.light.pixels.empty()) {
+        lightStats(job.light.pixels, job.draws);
+        writeHalf(job.light, L".lit16");
+    }
+    // Which material drew each pixel (capture_NNN.mat).
+    if (!job.ids.empty()) {
+        const bool idsWritten = capwriter::writeVia(job.base + L".mat", [&job](const std::wstring& path) {
+            FILE* f = _wfopen(path.c_str(), L"wb");
+            if (!f) return false;
+            fwrite(job.materialTable.data(), 1, job.materialTable.size(), f);
+            fwrite(job.ids.data(), 1, job.ids.size(), f);
+            fclose(f);
+            return true;
+        });
+        count(job.materialTable.size() + job.ids.size());
+        if (idsWritten) TMVS_LOG("capture: material ids of %d materials (%d lights)", job.materials, job.lights);
+    }
+    QueryPerformanceCounter(&end);
+    TMVS_LOG("capture: %ls done, %.0f MB written in %.0f ms on the writer thread (the game's thread spent %.0f ms reading it back)", name.c_str(),
+             megabytes, static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart), job.readMs);
+}
+
+// The screenshot that goes with a capture (screen_NNN.bmp, effects and HUD) is read at the
+// frame's Present; -1 = none wanted.
+int g_screenshotNumber = -1;
+
 void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs, bool materialIds) {
-    FrameCapture cap;
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    auto job = std::make_shared<CaptureJob>();
+    FrameCapture& cap = job->frame;
     cap.width = inputs.width;
     cap.height = inputs.height;
     memcpy(cap.view, inputs.view, sizeof(cap.view));
@@ -1728,51 +1796,43 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs, bool
     memcpy(cap.sunColor, inputs.sunColor, sizeof(float) * 3);
     cap.sunColor[3] = inputs.sunColorKnown ? 1.0f : 0.0f;
     cap.time = inputs.time;
-    if (!g_pipeline.readColor(device, g_sceneCopy.surface, cap.color) || !g_pipeline.readDepth(device, inputs.depth, cap.depth)) {
-        TMVS_LOG("capture: readback failed");
+    // Only the copies here (the GPU's targets into memory): converting, counting and writing the
+    // 100-200 MB is the writer's.
+    try {
+        if (!g_pipeline.readColor(device, g_sceneCopy.surface, cap.color) || !g_pipeline.readDepth(device, inputs.depth, cap.depth)) {
+            TMVS_LOG("capture: readback failed");
+            return;
+        }
+        if (g_hdrValid && g_hdrScene.width == inputs.width && g_hdrScene.height == inputs.height)
+            readHalf(device, g_hdrScene, job->hdr, "hdr: readback failed");
+        if (g_hdrAddedValid && g_hdrAdded.width == inputs.width && g_hdrAdded.height == inputs.height)
+            readHalf(device, g_hdrAdded, job->added, "hdr: added light not read");
+        if (g_gbufValid && g_gbuf.width == inputs.width && g_gbuf.height == inputs.height)
+            readHalf(device, g_gbuf, job->normals, "gbuffer: normals not read");
+        if (g_gbufLightValid && g_gbufLight.width == inputs.width && g_gbufLight.height == inputs.height)
+            readHalf(device, g_gbufLight, job->light, "gbuffer: light not read");
+        if (materialIds) readMaterialCapture(device, *job);
+    } catch (const std::bad_alloc&) {
+        // A 32-bit game: the copies of a large capture may not fit next to it.
+        TMVS_LOG("capture: not enough memory for the copies, no capture");
         return;
     }
+    job->draws = g_gbufDraws;
     wchar_t name[64];
-    // The next free number: captures of earlier sessions are kept.
+    // The next free number: captures of earlier sessions are kept. The counter is past every
+    // capture of this session, also one the writer has not finished yet.
     for (;;) {
         swprintf(name, 64, L"\\capture_%03d.tmcap", g_capturesWritten);
         if (GetFileAttributesW((log::dataDir() + name).c_str()) == INVALID_FILE_ATTRIBUTES) break;
         g_capturesWritten++;
     }
+    g_screenshotNumber = g_capturesWritten;
     g_capturesWritten++;
-    cap.save(log::dataDir() + name);
-    TMVS_LOG("capture: wrote %ls", name + 1);
-    // GameHdr: the image before the game's target cut it, next to it (capture_NNN.hdr16).
-    if (g_hdrValid && g_hdrScene.width == inputs.width && g_hdrScene.height == inputs.height) {
-        std::wstring hdr = log::dataDir() + name;
-        hdr.replace(hdr.size() - 6, 6, L".hdr16");
-        writeHdrCapture(device, hdr);
-    }
-    // ... and the light the game added on top (capture_NNN.add16).
-    if (g_hdrAddedValid && g_hdrAdded.width == inputs.width && g_hdrAdded.height == inputs.height) {
-        std::wstring added = log::dataDir() + name;
-        added.replace(added.size() - 6, 6, L".add16");
-        writeAddedCapture(device, added);
-    }
-    // GameGBuffer: the game's normals (capture_NNN.nrm16).
-    if (g_gbufValid && g_gbuf.width == inputs.width && g_gbuf.height == inputs.height) {
-        std::wstring normals = log::dataDir() + name;
-        normals.replace(normals.size() - 6, 6, L".nrm16");
-        writeGBufferCapture(device, normals);
-    }
-    // GameLight: the light the game's shaders lit each surface with (capture_NNN.lit16).
-    if (g_gbufLightValid && g_gbufLight.width == inputs.width && g_gbufLight.height == inputs.height) {
-        std::wstring light = log::dataDir() + name;
-        light.replace(light.size() - 6, 6, L".lit16");
-        writeLightCapture(device, light);
-    }
-    // Which material drew each pixel (capture_NNN.mat).
-    if (materialIds) {
-        std::wstring mat = log::dataDir() + name;
-        mat.replace(mat.size() - 6, 6, L".mat");
-        writeMaterialCapture(device, mat);
-    }
-    g_screenshotRequested = true;
+    job->base = log::dataDir() + name;
+    job->base.resize(job->base.size() - 6); // without ".tmcap"
+    QueryPerformanceCounter(&end);
+    job->readMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+    capwriter::post([job] { writeCaptureFiles(*job); });
 }
 
 // Switching presets (or a map bringing its own look) glides over about a second instead of
@@ -2912,17 +2972,45 @@ void onPresent(IDirect3DDevice9* device) {
         releaseSideB(); // starts again from the reloaded shaders
     }
 
-    if (tracer::tracing() || g_screenshotRequested) {
+    if (tracer::tracing() || g_screenshotNumber >= 0) {
         // Screenshot of the final frame (effects + HUD), for checking results in game.
         hook::InternalScope internal;
         IDirect3DSurface9* backBuffer = nullptr;
         if (SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) && backBuffer) {
-            wchar_t name[64];
-            swprintf(name, 64, L"\\screen_%03d.bmp", g_capturesWritten - 1);
-            capture::saveSurface(device, backBuffer, log::dataDir() + (g_screenshotRequested ? name : L"\\present.bmp"));
+            if (g_screenshotNumber >= 0) {
+                // The capture's: read back here, written after the capture's files by its writer.
+                LARGE_INTEGER start, end;
+                QueryPerformanceCounter(&start);
+                auto pixels = std::make_shared<capture::Pixels>();
+                bool read = false;
+                try {
+                    read = capture::readSurface(device, backBuffer, *pixels);
+                } catch (const std::bad_alloc&) {
+                    TMVS_LOG("capture: not enough memory for the screenshot");
+                }
+                QueryPerformanceCounter(&end);
+                if (read) {
+                    wchar_t name[64];
+                    swprintf(name, 64, L"screen_%03d.bmp", g_screenshotNumber);
+                    const std::wstring file = name;
+                    const double readMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+                    capwriter::post([pixels, file, readMs] {
+                        LARGE_INTEGER writeStart, writeEnd;
+                        QueryPerformanceCounter(&writeStart);
+                        const bool ok = capwriter::writeVia(log::dataDir() + L"\\" + file,
+                                                            [&pixels](const std::wstring& path) { return capture::writeBmp(*pixels, path); });
+                        QueryPerformanceCounter(&writeEnd);
+                        TMVS_LOG("capture: %s %ls in %.0f ms on the writer thread (read back in %.0f ms on the game's thread)", ok ? "wrote" : "could not write",
+                                 file.c_str(), static_cast<double>(writeEnd.QuadPart - writeStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart),
+                                 readMs);
+                    });
+                }
+            } else {
+                capture::saveSurface(device, backBuffer, log::dataDir() + L"\\present.bmp");
+            }
             backBuffer->Release();
         }
-        g_screenshotRequested = false;
+        g_screenshotNumber = -1;
     }
     runDevAutomation(device);
     {
@@ -2952,7 +3040,20 @@ void onPresent(IDirect3DDevice9* device) {
     if (keys::take(keys::Action::Capture)) {
         // Photo mode: a photo without the HUD (Shift: hi-res) instead of a .tmcap capture.
         if (photo::active()) photo::request(keys::shiftHeld());
-        else g_captureRequested = true;
+        else g_capturePending = true;
+    }
+    // One capture in flight (its copies are 100-200 MB): the next is taken once the writer has
+    // the last one on disk. Pressed again meanwhile: still one more.
+    if (g_capturePending) {
+        static bool s_waitLogged = false;
+        if (!capwriter::busy()) {
+            g_capturePending = false;
+            g_captureRequested = true;
+            s_waitLogged = false;
+        } else if (!s_waitLogged) {
+            s_waitLogged = true;
+            TMVS_LOG("capture: F12 waits until the last capture is written");
+        }
     }
 }
 
@@ -3171,6 +3272,7 @@ void boot() {
 }
 
 void shutdown() {
+    capwriter::shutdown();
     overlay::shutdown();
     audio::shutdown();
     hook::remove();
