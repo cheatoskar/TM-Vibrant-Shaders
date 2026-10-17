@@ -248,6 +248,9 @@ public:
         m_outerDisjoint = outerDisjoint;
     }
     void collectProfile(bool wait); // wait = block until every issued frame is resolved
+    // The previewer's A/B of the neon spill over frames (--nospillhistory: each frame on its own,
+    // as before 1.4.0).
+    void setSpillHistory(bool on) { m_spillHistoryOn = on; }
     int passCount() const { return kProfileSlots; } // the passes, then the CasterShadows maps' drawing
     static const char* passName(int pass);
     float passTime(int pass) const { return m_passMs[pass]; } // smoothed milliseconds
@@ -313,6 +316,7 @@ private:
         kLightingGameLight,
         kFsrEasu,
         kFsrRcas,
+        kSpillTemporal,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
@@ -428,6 +432,10 @@ private:
     gfx::Target m_clouds;       // half: volumetric clouds (in-scatter, transmittance)
     gfx::Target m_reflect;      // half: screen-space reflections
     gfx::Target m_spill[2];     // quarter: neon light spill
+    gfx::Target m_spillHistory[2]; // quarter: the spill over frames (rgb, view z in a), what the lighting uses
+    int m_spillIndex = 0;
+    bool m_spillValid = false;
+    bool m_spillHistoryOn = true;
     gfx::Target m_focus[2];     // 1x1 auto focus ping-pong
     gfx::Target m_dof;          // half: depth of field blur
     gfx::Target m_dofFull;      // full: the same in photo mode

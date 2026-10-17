@@ -2839,6 +2839,37 @@ float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(sum / 6.4, center.a);
 }
 
+// The spill over frames: s0 = this frame's (blurred, view z in a), s1 = the last result,
+// u_Pass0.x = history valid. Each frame finds its sources anew in a quarter-res image: a strip
+// that crosses a texel edge, a highlight on it that changes its colour, the car passing in front
+// of it switched light on the wall on and off from one frame to the next (the owner: "the blue
+// light flickers a bit on the wall" driving along it). Averaged over about four frames, where the
+// history is the same surface; it may only differ from this frame's light by a third, so a light
+// that goes (or moves with a car) leaves no trail. A still image comes out as before.
+float4 PS_SpillTemporal(float2 uv : TEXCOORD0) : COLOR0 {
+    float4 current = tex2Dlod(s0, float4(uv, 0, 0));
+    float z = current.a;
+    if (u_Pass0.x < 0.5 || z >= SKY_Z) return current;
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return current;
+    float4 history = tex2Dlod(s1, float4(prevUV, 0, 0));
+    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
+    float weight = lerp(0.3, 1.0, smoothstep(0.04, 0.12, error));
+    // As far as this frame's neighbourhood reaches, and a third of its light around that.
+    float2 t = u_Screen.zw * 4.0 * 1.5; // quarter res
+    float3 lo = current.rgb, hi = current.rgb;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 o = k == 0 ? float2(t.x, 0) : (k == 1 ? float2(-t.x, 0) : (k == 2 ? float2(0, t.y) : float2(0, -t.y)));
+        float3 n = tex2Dlod(s0, float4(uv + o, 0, 0)).rgb;
+        lo = min(lo, n);
+        hi = max(hi, n);
+    }
+    float3 margin = (hi - lo) * 0.25 + current.rgb * 0.33 + 0.002;
+    history.rgb = clamp(history.rgb, lo - margin, hi + margin);
+    return float4(lerp(history.rgb, current.rgb, weight), z);
+}
+
 // ---------------------------------------------------------------------------------
 // Cinematic: depth of field and camera motion blur (HDR, before bloom).
 // ---------------------------------------------------------------------------------

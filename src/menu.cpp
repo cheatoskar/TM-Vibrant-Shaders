@@ -65,7 +65,7 @@ void drawPerformance() {
         {"Custom sky", {"Sky*", "AuroraHalf", nullptr}},
         {"Volumetric clouds", {"Clouds", nullptr, nullptr}},
         {"Reflections", {"Reflect", nullptr, nullptr}},
-        {"Neon light", {"SpillDown*", "SpillBlur", nullptr}},
+        {"Neon light", {"Spill*", nullptr, nullptr}},
         {"Lamp glare and haze", {"Lamp*", nullptr, nullptr}},
         {"Lighting, grass, weather, fog", {"Lighting*", nullptr, nullptr}},
         {"Rain and snow particles", {"RainDrop", "RainSplash", "SnowFlake"}},
