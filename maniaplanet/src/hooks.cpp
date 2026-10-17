@@ -1268,6 +1268,42 @@ void prepareLook() {
     g_sideBWanted = true;
 }
 
+// A perf line every 2000 shaded frames in a row (TMNF's perflog, shorter): the frame rate and the
+// effects' GPU time with their three most expensive passes, so a report about the frame rate
+// comes with numbers without a capture. A gap (a menu, loading) starts the count over.
+void logPerf(const Profiler& profiler) {
+    static unsigned frames = 0;
+    static double since = -1.0, last = -1.0;
+    static int lines = 0;
+    const double now = nowSeconds();
+    if (last < 0.0 || now - last > 0.25) {
+        frames = 0;
+        since = now;
+    }
+    last = now;
+    if (++frames < 2000 || lines >= 200) return;
+    const double ms = (now - since) * 1000.0 / (frames - 1);
+    int top[3] = {-1, -1, -1};
+    for (int p = 0; p < kPassCount; p++) {
+        for (int k = 0; k < 3; k++) {
+            if (top[k] < 0 || profiler.time(p) > profiler.time(top[k])) {
+                for (int j = 2; j > k; j--) top[j] = top[j - 1];
+                top[k] = p;
+                break;
+            }
+        }
+    }
+    char passes[160] = {};
+    int used = 0;
+    for (int k = 0; k < 3 && top[k] >= 0 && used >= 0 && used < static_cast<int>(sizeof(passes)); k++)
+        used += snprintf(passes + used, sizeof(passes) - used, "%s%s %.2f", k ? ", " : "", passName(top[k]), profiler.time(top[k]));
+    lines++;
+    TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames; mod GPU %.2f ms a frame (most: %s)", ms > 0.0 ? 1000.0 / ms : 0.0,
+             ms, frames, profiler.total(), passes);
+    frames = 0;
+    since = now;
+}
+
 // True: the frame isn't shown (its draws went past the mod: the engine's own look, a flash).
 bool onPresent(IDXGISwapChain* sc) {
     if (!g_swapChain) beginWith(sc);
@@ -1324,6 +1360,7 @@ bool onPresent(IDXGISwapChain* sc) {
     // memory; the editors and replays count too, their frame rate is the GPU's as well.
     if (g_rendererReady)
         g_autoQuality.onFrame(nowSeconds(), g_stats.effectsRan, g_renderer.effects().profiler(), tmshaders::Config::get().settings);
+    if (g_rendererReady && g_stats.effectsRan) logPerf(g_renderer.effects().profiler());
 
     {
         Inside guard;
