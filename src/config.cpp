@@ -277,10 +277,14 @@ void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, 
         } else if (f.kind == Field::Int) {
             *reinterpret_cast<int*>(base + f.offset) = _wtoi(value);
         } else if (f.kind == Field::Color) {
-            float* c = reinterpret_cast<float*>(base + f.offset);
-            swscanf(value, L"%f,%f,%f", &c[0], &c[1], &c[2]);
+            // A hand-edited file: a value that isn't a number keeps the one before.
+            float c[3] = {};
+            if (swscanf(value, L"%f,%f,%f", &c[0], &c[1], &c[2]) == 3 && std::isfinite(c[0]) && std::isfinite(c[1]) && std::isfinite(c[2])) {
+                memcpy(base + f.offset, c, sizeof(c));
+            }
         } else {
-            *reinterpret_cast<float*>(base + f.offset) = static_cast<float>(_wtof(value));
+            const float v = static_cast<float>(_wtof(value));
+            if (std::isfinite(v)) *reinterpret_cast<float*>(base + f.offset) = v;
         }
     }
 }
@@ -347,6 +351,7 @@ bool sameValue(const Field& f, const Settings& a, const Settings& b) {
 }
 
 float clampTo(const Field& f, float v) {
+    if (!std::isfinite(v)) return f.min; // "nan" and "inf" parse; they would pass both comparisons
     return v < f.min ? f.min : (v > f.max ? f.max : v);
 }
 
@@ -359,10 +364,15 @@ void parseValue(const Field& f, const std::string& value, Settings& s) {
         case Field::Color: {
             float c[3] = {};
             if (sscanf(value.c_str(), "%f,%f,%f", &c[0], &c[1], &c[2]) != 3) break;
+            if (!std::isfinite(c[0]) || !std::isfinite(c[1]) || !std::isfinite(c[2])) break;
             for (int i = 0; i < 3; i++) reinterpret_cast<float*>(p)[i] = c[i] < 0.0f ? 0.0f : (c[i] > 1.0f ? 1.0f : c[i]);
             break;
         }
-        default: *reinterpret_cast<float*>(p) = clampTo(f, static_cast<float>(atof(value.c_str()))); break;
+        default: {
+            const float v = static_cast<float>(atof(value.c_str()));
+            if (std::isfinite(v)) *reinterpret_cast<float*>(p) = clampTo(f, v);
+            break;
+        }
     }
 }
 

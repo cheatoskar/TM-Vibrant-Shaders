@@ -993,7 +993,9 @@ bool Pipeline::updateLightGrid(IDirect3DDevice9* device, const Settings& s) {
     runPass(device, kLightGridInit, m_lightGrid[0]);
     // Sweeps of four: each cell takes the best of the 4 windows after it, so the window grows
     // x4 a sweep; the last one is cut to the range (its windows overlap: a maximum doesn't mind).
-    const int cells = static_cast<int>(ceilf(s.longShadowRange * ch / texel));
+    // Capped: an absurd range from a hand-edited file would overflow window * 4 and never end.
+    const float wanted = ceilf(s.longShadowRange * ch / texel);
+    const int cells = wanted < 1048576.0f ? static_cast<int>(wanted) : 1048576;
     int window = 1, index = 0;
     while (window < cells) {
         const int next = window * 4 < cells ? window * 4 : cells;
