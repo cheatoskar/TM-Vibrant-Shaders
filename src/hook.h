@@ -41,6 +41,10 @@ struct DeviceCallbacks {
     // scaled target is repeated at the full size.
     const D3DRECT* (*clearRects)(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, float z, DWORD stencil) = nullptr;
     void (*stretchRects)(IDirect3DSurface9* src, const RECT** srcRect, IDirect3DSurface9* dst, const RECT** dstRect) = nullptr;
+    // GetRenderTarget(0) called from another mod's DLL (not the game, not this plugin, not a system
+    // DLL): the surface to report instead of `bound` (null: `bound`). GameHdr: the game's own
+    // target while the float one stands in, so CenterSpeed finds the car drawn into the back buffer.
+    IDirect3DSurface9* (*otherModRenderTarget)(IDirect3DSurface9* bound) = nullptr;
 };
 
 bool install(const DeviceCallbacks& callbacks);

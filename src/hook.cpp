@@ -8,6 +8,8 @@
 #include <d3d9.h>
 #include <cstdint>
 #include <cstring>
+#include <cwchar>
+#include <intrin.h>
 #include <vector>
 
 #pragma comment(lib, "d3d9.lib")
@@ -460,6 +462,69 @@ HRESULT APIENTRY setRenderTargetDetour(IDirect3DDevice9* device, DWORD index, ID
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*)>(device, kSetRenderTarget)(device, index, surface);
 }
 
+// Whether code at `address` belongs to another mod's DLL: not the game's exe, not this plugin, not
+// Windows' own DLLs (d3d9, D3DX and the rest under the Windows folder) and not a d3d* DLL next to
+// the game. Code outside any module (another hooker's trampoline) doesn't count. Cached per module
+// (CenterSpeed asks on every indexed draw); each module is logged once.
+bool otherModCode(const void* address) {
+    struct Range {
+        uintptr_t begin, end;
+        bool otherMod;
+    };
+    static Range s_ranges[24];
+    static volatile LONG s_count = 0;
+    static SRWLOCK s_lock = SRWLOCK_INIT;
+    const uintptr_t a = reinterpret_cast<uintptr_t>(address);
+    const LONG n = s_count;
+    for (LONG i = 0; i < n; i++) {
+        if (a >= s_ranges[i].begin && a < s_ranges[i].end) return s_ranges[i].otherMod;
+    }
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            static_cast<LPCWSTR>(address), &module) ||
+        !module) {
+        return false;
+    }
+    HMODULE self = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&otherModCode), &self);
+    wchar_t path[MAX_PATH] = {}, windows[MAX_PATH] = {};
+    GetModuleFileNameW(module, path, MAX_PATH);
+    const UINT w = GetSystemWindowsDirectoryW(windows, MAX_PATH);
+    const wchar_t* name = wcsrchr(path, L'\\');
+    name = name ? name + 1 : path;
+    const bool system = w && w < MAX_PATH && _wcsnicmp(path, windows, w) == 0;
+    const bool other = module != GetModuleHandleW(nullptr) && module != self && !system && _wcsnicmp(name, L"d3d", 3) != 0;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const BYTE*>(module) + dos->e_lfanew);
+    AcquireSRWLockExclusive(&s_lock);
+    const LONG at = s_count;
+    if (at < static_cast<LONG>(sizeof(s_ranges) / sizeof(s_ranges[0]))) {
+        s_ranges[at] = {reinterpret_cast<uintptr_t>(module), reinterpret_cast<uintptr_t>(module) + nt->OptionalHeader.SizeOfImage, other};
+        InterlockedExchange(&s_count, at + 1);
+        if (other) TMVS_LOG("hook: another mod (%ls) asks for the render target: while the game's camera draws into the float one, it is told the game's own", name);
+    }
+    ReleaseSRWLockExclusive(&s_lock);
+    return other;
+}
+
+HRESULT APIENTRY getRenderTargetDetour(IDirect3DDevice9* device, DWORD index, IDirect3DSurface9** out) {
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, IDirect3DSurface9**)>(device, kGetRenderTarget)(device, index, out);
+    // Another mod asking during the camera finds the target the game bound, not the float one
+    // standing in for it (CenterSpeed only recognises the car drawn into the back buffer). The
+    // game and this plugin keep getting the real one.
+    if (SUCCEEDED(hr) && index == 0 && out && *out && g_callbacks.otherModRenderTarget && gameCall(device) &&
+        otherModCode(_ReturnAddress())) {
+        IDirect3DSurface9* shown = g_callbacks.otherModRenderTarget(*out);
+        if (shown && shown != *out) {
+            shown->AddRef();
+            (*out)->Release();
+            *out = shown;
+        }
+    }
+    return hr;
+}
+
 HRESULT APIENTRY setDepthStencilDetour(IDirect3DDevice9* device, IDirect3DSurface9* surface) {
     if (tracingGame(device)) tracer::event("SetDepthStencilSurface %s", tracer::describe(surface));
     if (gameCall(device) && g_callbacks.setDepthStencil) surface = g_callbacks.setDepthStencil(surface);
@@ -650,6 +715,7 @@ const Detour kDetours[] = {
     {kCreateDepthStencilSurface, reinterpret_cast<void*>(&createDepthStencilDetour)},
     {kStretchRect, reinterpret_cast<void*>(&stretchRectDetour)},
     {kSetRenderTarget, reinterpret_cast<void*>(&setRenderTargetDetour)},
+    {kGetRenderTarget, reinterpret_cast<void*>(&getRenderTargetDetour)},
     {kSetDepthStencilSurface, reinterpret_cast<void*>(&setDepthStencilDetour)},
     {kBeginScene, reinterpret_cast<void*>(&beginSceneDetour)},
     {kEndScene, reinterpret_cast<void*>(&endSceneDetour)},
