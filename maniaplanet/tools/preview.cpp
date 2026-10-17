@@ -22,6 +22,8 @@
 // in as a photo of the split gets them (SplitPhotoLabels).
 //
 // --nospillhistory: the neon light spill of each frame on its own (A/B of PS_SpillTemporal).
+// --perf (with --hdr): the GPU time of each scene pass after the frames, as the menu's
+// Performance page shows it (smoothed over frames: give it --frames 200 or so).
 // --runs R (with --car): the frames are R + 1 runs of that drive, each R before the last 2 m
 // further along -x, the car back at the start for each (a restart: TrailKeepRuns).
 // An output ending in .jpg is a preset picture for the menu (384 x 216, tools/make-thumbnails.ps1).
@@ -555,6 +557,7 @@ int main(int argc, char** argv) {
     float splitAt = 0.5f;             // --split
     bool swapSides = false;           // --swap: the preset on the right
     bool spillHistory = true;         // --nospillhistory: the neon spill of each frame on its own (A/B)
+    bool perf = false;                // --perf: the GPU time per pass after the frames
     std::string labels;               // --labels "left|right"
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
@@ -578,6 +581,10 @@ int main(int argc, char** argv) {
         }
         if (opt == "--nospillhistory") {
             spillHistory = false;
+            continue;
+        }
+        if (opt == "--perf") {
+            perf = true;
             continue;
         }
         if (i + 1 >= argc) {
@@ -824,6 +831,14 @@ int main(int argc, char** argv) {
                 printf("the HDR stage failed\n");
                 return 1;
             }
+            // No present here: the timestamps only arrive when the commands reach the GPU.
+            if (perf) ctx->Flush();
+        }
+        if (perf) {
+            const Profiler& profiler = renderer.effects().profiler();
+            for (int p = 0; p < kPassCount; p++)
+                if (profiler.time(p) > 0.0005f) printf("  %-16s %.3f ms\n", passName(p), profiler.time(p));
+            printf("  %-16s %.3f ms\n", "total", profiler.total());
         }
         printf("  HDR stage: preset %s, curve %d, bloom %.2f, scene effects %s\n", config.preset.c_str(),
                config.settings.toneCurve, config.settings.bloom, renderer.effectsRan() ? "ran" : "off");

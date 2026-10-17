@@ -6,9 +6,10 @@
 //
 // Per frame (effects.cpp):
 //   PS_DownsampleND (half, 2 targets) -> PS_OcclusionShadow (half) -> PS_BilateralBlur x2
-//   -> PS_GI (quarter) -> PS_GITemporal -> PS_SpillDown (quarter) -> PS_SpillBlur x2 -> PS_SpillTemporal
+//   -> PS_GI (quarter) -> PS_GITemporal -> PS_SpillDown (quarter; Quality 2: PS_SpillSource (full)
+//   -> PS_SpillDownSource) -> PS_SpillBlur x2 -> PS_SpillTemporal
 //   -> [sky, clouds: sky.hlsl] -> PS_Lighting (full, the result) -> [weather, cinema]
-// entries: PS_DownsampleND:ps_5_0 PS_OcclusionShadow:ps_5_0 PS_BilateralBlur:ps_5_0 PS_GI:ps_5_0 PS_GITemporal:ps_5_0 PS_SpillDown:ps_5_0 PS_SpillBlur:ps_5_0 PS_SpillTemporal:ps_5_0 PS_Lighting:ps_5_0 PS_LightingMoon:ps_5_0
+// entries: PS_DownsampleND:ps_5_0 PS_OcclusionShadow:ps_5_0 PS_BilateralBlur:ps_5_0 PS_GI:ps_5_0 PS_GITemporal:ps_5_0 PS_SpillDown:ps_5_0 PS_SpillSource:ps_5_0 PS_SpillDownSource:ps_5_0 PS_SpillBlur:ps_5_0 PS_SpillTemporal:ps_5_0 PS_Lighting:ps_5_0 PS_LightingMoon:ps_5_0
 #include "common.hlsli"
 #include "sky.hlsli"
 #include "weather.hlsli"
@@ -301,6 +302,39 @@ float3 emissiveOf(float3 rest, float3 albedo, float e, float3 nWorld, float3 rd)
 // Neon light spill (quarter res): coloured lights light up the surfaces around them.
 //   out.rgb = light, out.a = view z
 // ---------------------------------------------------------------------------------
+// The light one pixel gives its surroundings (z: its view z, not the sky's; e: the exposure).
+float3 spillLightAt(float2 suv, float z, float e)
+{
+    float3 c = engineColour(suv);
+    float3 light;
+    if (u_Mat.x > 0.5)
+    {
+        // EngineLightDraws: the sources are what the engine drew as light, each in its own
+        // colour. White lamps light things too (white paint and glints are no source any
+        // more), a little less than coloured ones, as in TMNF's EngineLights.
+        light = min(engineLightsAt(suv, e), c);
+        float lp = max(light.r, max(light.g, light.b));
+        light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-4)));
+    }
+    else
+    {
+        float3 albedo = u_Engine.y > 0.5 ? engineAlbedo(suv) : c;
+        float3 n = surfaceNormal(suv, z);
+        float3 sunPart, ambPart;
+        float shadow;
+        engineLight(suv, n, albedo, sunPart, ambPart, shadow);
+        float3 rd = viewToWorldDir(normalize(viewPosition(suv, 1.0)));
+        light = emissiveOf(max(c - sunPart - ambPart, 0.0), albedo, e, viewToWorldDir(n), rd);
+        // Coloured light lights its surroundings most; white lamps a little (white is also
+        // the sun's glint on chrome and glass).
+        float peak = max(light.r, max(light.g, light.b));
+        float sat = (peak - min(light.r, min(light.g, light.b))) / max(peak, 1e-4);
+        light *= lerp(0.35, 1.0, smoothstep(0.3, 0.7, sat));
+    }
+    return min(light, 8.0);
+}
+
+// Quality below 2: four pixels of each 4x4 block, one in each corner of its middle.
 float4 PS_SpillDown(VSOut i) : SV_Target
 {
     float3 sum = 0, strongest = 0;
@@ -311,36 +345,64 @@ float4 PS_SpillDown(VSOut i) : SV_Target
         float2 suv = i.uv + (float2(k & 1, k >> 1) * 2.0 - 1.0) * u_Screen.zw;
         float z = engineZ(suv);
         if (z >= SKY_Z) continue;
-        float3 c = engineColour(suv);
-        float3 light;
-        if (u_Mat.x > 0.5)
-        {
-            // EngineLightDraws: the sources are what the engine drew as light, each in its own
-            // colour. White lamps light things too (white paint and glints are no source any
-            // more), a little less than coloured ones, as in TMNF's EngineLights.
-            light = min(engineLightsAt(suv, e), c);
-            float lp = max(light.r, max(light.g, light.b));
-            light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-4)));
-        }
-        else
-        {
-            float3 albedo = u_Engine.y > 0.5 ? engineAlbedo(suv) : c;
-            float3 n = surfaceNormal(suv, z);
-            float3 sunPart, ambPart;
-            float shadow;
-            engineLight(suv, n, albedo, sunPart, ambPart, shadow);
-            float3 rd = viewToWorldDir(normalize(viewPosition(suv, 1.0)));
-            light = emissiveOf(max(c - sunPart - ambPart, 0.0), albedo, e, viewToWorldDir(n), rd);
-            // Coloured light lights its surroundings most; white lamps a little (white is also
-            // the sun's glint on chrome and glass).
-            float peak = max(light.r, max(light.g, light.b));
-            float sat = (peak - min(light.r, min(light.g, light.b))) / max(peak, 1e-4);
-            light *= lerp(0.35, 1.0, smoothstep(0.3, 0.7, sat));
-        }
-        light = min(light, 8.0);
+        float3 light = spillLightAt(suv, z, e);
         sum += light;
         strongest = max(strongest, light);
         zmin = min(zmin, z);
+    }
+    return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
+}
+
+// Quality 2 (TMNF's PS_SpillSource): the spill's sources pixel by pixel (full res), taken down by
+// PS_SpillDownSource. PS_SpillDown reads 4 of the 16 pixels of its block: far away a neon strip is
+// 1-2 px high and was seen or not by where it fell in the block, so the blue light on the wall next
+// to it pulsed as the camera crept towards it.
+//   out.rgb = light, out.a = its view z times r+g+b (a bilinear tap of it over r+g+b of the tap's
+//   light: the depth of the light in those 2x2 pixels, without a read of the depth buffer)
+float4 PS_SpillSource(VSOut i) : SV_Target
+{
+    // EngineLightDraws: where the engine drew no light there is none (the same 0, without the
+    // reads below, most of what four times PS_SpillDown's pixels cost).
+    [branch] if (u_Mat.x > 0.5 && !any(t_engineLights.SampleLevel(g_point, i.uv, 0).rgb > 0.0)) return 0;
+    float z = engineZ(i.uv);
+    if (z >= SKY_Z) return 0;
+    float e = u_Misc.x > 0.5 ? 1.0 : engineExposure();
+    float3 light = spillLightAt(i.uv, z, e);
+    // At most 24 * 2000 in a half float (PS_SpillBlur takes no more than 2000 m either).
+    return float4(light, dot(light, 1.0) * min(z, 2000.0));
+}
+
+// The sources found above to quarter res: t0 = them (bilinear: each tap the mean of 2x2 pixels).
+// Half the block's mean (its four taps), half the brightest 2x2 over the block and half of each
+// neighbour's, by a tent (1 at 1 px from the centre, 0.5 at 3 px: the two blocks that see a 2x2
+// weigh it 1.5 together wherever it is), so a strip crossing from one block to the next hands its
+// light over instead of lighting both or switching. Neighbours' light only from about the block's
+// depth: a strip in front gives the background behind it no light. As TMNF's PS_SpillDownSource.
+float4 PS_SpillDownSource(VSOut i) : SV_Target
+{
+    float3 sum = 0, strongest = 0;
+    float zmin = SKY_Z;
+    [unroll] for (int k = 0; k < 4; k++)
+    {
+        float2 suv = i.uv + (float2(k & 1, k >> 1) * 2.0 - 1.0) * u_Screen.zw;
+        float3 light = t0_texL(suv).rgb;
+        sum += light;
+        strongest = max(strongest, light);
+        zmin = min(zmin, engineZ(suv));
+    }
+    float zc = min(zmin, 2000.0); // as the light's depth in out.a above
+    [unroll] for (int y = 0; y < 4; y++)
+    {
+        [unroll] for (int x = 0; x < 4; x++)
+        {
+            float2 d = float2(x, y) * 2.0 - 3.0;
+            if (abs(d.x) < 2.0 && abs(d.y) < 2.0) continue; // the block's own, above
+            float2 suv = i.uv + d * u_Screen.zw;
+            float2 w = abs(d) < 2.0 ? 1.0 : 0.5;
+            float4 s = t0_texL(suv);
+            float z = s.a / max(dot(s.rgb, 1.0), 1e-6);
+            strongest = max(strongest, s.rgb * (w.x * w.y * exp(-abs(z - zc) / (0.25 * zc + 0.5))));
+        }
     }
     return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
 }

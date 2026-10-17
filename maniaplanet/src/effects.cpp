@@ -14,6 +14,8 @@
 #include "shaders/PS_OcclusionShadow.h"
 #include "shaders/PS_SpillBlur.h"
 #include "shaders/PS_SpillDown.h"
+#include "shaders/PS_SpillDownSource.h"
+#include "shaders/PS_SpillSource.h"
 #include "shaders/PS_SpillTemporal.h"
 #include "shaders/PS_Volumetric.h"
 #include "shaders/VS_Full.h"
@@ -184,6 +186,8 @@ bool Effects::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_GI, sizeof(g_PS_GI), nullptr, &m_gi));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_GITemporal, sizeof(g_PS_GITemporal), nullptr, &m_giTemporal));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillDown, sizeof(g_PS_SpillDown), nullptr, &m_spillDown));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillSource, sizeof(g_PS_SpillSource), nullptr, &m_spillSource));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillDownSource, sizeof(g_PS_SpillDownSource), nullptr, &m_spillDownSource));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillBlur, sizeof(g_PS_SpillBlur), nullptr, &m_spillBlur));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillTemporal, sizeof(g_PS_SpillTemporal), nullptr, &m_spillTemporal));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Lighting, sizeof(g_PS_Lighting), nullptr, &m_lighting));
@@ -235,6 +239,7 @@ void Effects::releaseTargets() {
     for (auto& t : m_gi_) t.release();
     for (auto& t : m_giHistory) t.release();
     for (auto& t : m_spill) t.release();
+    m_spillSource_.release();
     for (auto& t : m_spillHistory) t.release();
     for (auto& t : m_volume) t.release();
     for (auto& t : m_hdr) t.release();
@@ -260,6 +265,8 @@ void Effects::release() {
     safeRelease(m_gi);
     safeRelease(m_giTemporal);
     safeRelease(m_spillDown);
+    safeRelease(m_spillSource);
+    safeRelease(m_spillDownSource);
     safeRelease(m_spillBlur);
     safeRelease(m_spillTemporal);
     safeRelease(m_lighting);
@@ -773,7 +780,18 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     // Neon light.
     ID3D11ShaderResourceView* spill = nullptr;
     if (s.neonLight > 0.0f) {
-        run(ctx, kSpillDown, m_spillDown, m_spill[0], nullptr, 0);
+        // Quality 2: the sources found pixel by pixel first (full res), then taken down to quarter
+        // res. PS_SpillDown reads 4 of the 16 pixels of each block: a far strip 1-2 px high was
+        // seen or not by where it fell, and the light on the wall next to it pulsed as the camera
+        // crept towards it. Lower quality (auto quality's fewer samples too): the cheaper way.
+        // Both passes count as SpillDown (the menu's times, auto quality's neon light).
+        const bool perPixel = s.quality >= 2 && (m_spillSource_.ready() || m_spillSource_.create(m_device, m_w, m_h, DXGI_FORMAT_R16G16B16A16_FLOAT));
+        if (perPixel) {
+            run(ctx, kSpillDown, m_spillSource, m_spillSource_, nullptr, 0);
+            run(ctx, kSpillDown, m_spillDownSource, m_spill[0], &m_spillSource_.srv, 1);
+        } else {
+            run(ctx, kSpillDown, m_spillDown, m_spill[0], nullptr, 0);
+        }
         const float dirH[4] = {qx, 0, 0, 0}, dirV[4] = {0, qy, 0, 0};
         run(ctx, kSpillBlur, m_spillBlur, m_spill[1], &m_spill[0].srv, 1, dirH);
         run(ctx, kSpillBlur, m_spillBlur, m_spill[0], &m_spill[1].srv, 1, dirV);
