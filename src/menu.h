@@ -55,6 +55,9 @@ struct Host {
     bool reloadShaders = true;
     // The debug views (value of Settings::debugView, name); empty: TMNF's list.
     std::vector<std::pair<int, const char*>> debugViews;
+    // This game's own tooltips (key, text), ahead of the shared ones: settings that work
+    // differently there (ManiaPlanet's real night, its moon, replays it can't tell from driving).
+    std::vector<std::pair<const char*, const char*>> tips;
     // The game's own options, a panel first on the Settings page (null: none).
     const char* gamePanelTitle = nullptr;
     std::function<void()> gamePanel;

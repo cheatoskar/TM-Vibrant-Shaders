@@ -294,6 +294,9 @@ bool toggle(const char* id, bool* value); // below, with the other widgets
 // What a setting does, shown when the mouse rests on it: the labels stay short, the detail is here.
 // "(restart)" / "(next map)" say when a change takes effect.
 const char* tooltipFor(const char* key) {
+    if (g_host)
+        for (const auto& t : g_host->tips)
+            if (!strcmp(t.first, key)) return t.second;
     static const struct {
         const char* key;
         const char* tip;

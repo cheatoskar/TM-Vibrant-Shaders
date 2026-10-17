@@ -14,6 +14,7 @@
 #include "shaders/PS_OcclusionShadow.h"
 #include "shaders/PS_SpillBlur.h"
 #include "shaders/PS_SpillDown.h"
+#include "shaders/PS_SpillTemporal.h"
 #include "shaders/PS_Volumetric.h"
 #include "shaders/VS_Full.h"
 #include <algorithm>
@@ -36,12 +37,13 @@ float smoothstepf(float a, float b, float x) {
 const char* const kPassNames[kPassCount] = {
     "DownsampleND", "OcclusionShadow", "BilateralBlur", "GI",       "GITemporal", "SkyClear",   "SkyStars", "SkyBlackHole",
     "SkyAurora",    "SkyRing",         "AuroraHalf",    "SkyAverage", "Clouds",   "Reflect",    "SpillDown", "SpillBlur",
-    "Lighting",     "RainDrop",        "RainSplash",    "Spray",    "SnowFlake",  "Trail",      "Focus",    "DofBlur",
+    "SpillTemporal", "Lighting",     "RainDrop",        "RainSplash",    "Spray",    "SnowFlake",  "Trail",      "Focus",    "DofBlur",
     "Cinematic",    "RayMask",         "RayBlur",       "BloomDown", "BloomUp",   "Final",      "TAA",      "Sharpen",
     "Volumetric"};
 
 // The settings ManiaPlanet can do so far (the menu shows only these). The look (hdr.hlsl), then
-// the scene effects (scene.hlsl), then the stages as they come.
+// the scene effects (scene.hlsl), then the stages as they come. Not DisableGameFX: the engine's
+// bloom stays (hooks.cpp skipEngineBloom), so it changed nothing here.
 const char* const kSupported[] = {
     // look and tone map
     "Exposure", "Contrast", "ToneKnee", "ToneCurve", "Saturation", "Vibrance", "Temperature", "Tint", "Lift", "Gamma", "Gain",
@@ -49,7 +51,7 @@ const char* const kSupported[] = {
     // scene
     "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "NeonLight", "GlobalIllumination", "SunLight", "AmbientTint",
     "SunColor", "GameSunColor", "SkyColor", "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter",
-    "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
+    "HazeDistance", "HighlightBoost", "Quality", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
     "VolumetricLight", "GameNight", "EngineMoon"};
 
 } // namespace
@@ -183,6 +185,7 @@ bool Effects::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_GITemporal, sizeof(g_PS_GITemporal), nullptr, &m_giTemporal));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillDown, sizeof(g_PS_SpillDown), nullptr, &m_spillDown));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillBlur, sizeof(g_PS_SpillBlur), nullptr, &m_spillBlur));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillTemporal, sizeof(g_PS_SpillTemporal), nullptr, &m_spillTemporal));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Lighting, sizeof(g_PS_Lighting), nullptr, &m_lighting));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_LightingMoon, sizeof(g_PS_LightingMoon), nullptr, &m_lightingMoon));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Volumetric, sizeof(g_PS_Volumetric), nullptr, &m_volumetric));
@@ -232,6 +235,7 @@ void Effects::releaseTargets() {
     for (auto& t : m_gi_) t.release();
     for (auto& t : m_giHistory) t.release();
     for (auto& t : m_spill) t.release();
+    for (auto& t : m_spillHistory) t.release();
     for (auto& t : m_volume) t.release();
     for (auto& t : m_hdr) t.release();
     m_result = nullptr;
@@ -257,6 +261,7 @@ void Effects::release() {
     safeRelease(m_giTemporal);
     safeRelease(m_spillDown);
     safeRelease(m_spillBlur);
+    safeRelease(m_spillTemporal);
     safeRelease(m_lighting);
     safeRelease(m_lightingMoon);
     safeRelease(m_volumetric);
@@ -294,6 +299,8 @@ bool Effects::ensureTargets(UINT w, UINT h) {
     for (auto& t : m_gi_) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R11G11B10_FLOAT);
     for (auto& t : m_giHistory) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT);
     for (auto& t : m_spill) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    for (auto& t : m_spillHistory) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    m_spillValid = false;
     for (auto& t : m_volume) ok &= t.create(m_device, hw, hh, DXGI_FORMAT_R16G16B16A16_FLOAT);
     for (auto& t : m_hdr) ok &= t.create(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT);
     if (!ok) {
@@ -769,7 +776,17 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
         const float dirH[4] = {qx, 0, 0, 0}, dirV[4] = {0, qy, 0, 0};
         run(ctx, kSpillBlur, m_spillBlur, m_spill[1], &m_spill[0].srv, 1, dirH);
         run(ctx, kSpillBlur, m_spillBlur, m_spill[0], &m_spill[1].srv, 1, dirV);
-        spill = m_spill[0].srv;
+        // Over frames: found anew in every frame, the light flickered on the walls next to a
+        // strip as the car or the camera moved.
+        const int prev = m_spillIndex, next = 1 - m_spillIndex;
+        const float t0[4] = {m_spillValid && m_temporalValid && m_spillHistoryOn ? 1.0f : 0.0f, 0, 0, 0};
+        ID3D11ShaderResourceView* tin[2] = {m_spill[0].srv, m_spillHistory[prev].srv};
+        run(ctx, kSpillTemporal, m_spillTemporal, m_spillHistory[next], tin, 2, t0);
+        m_spillIndex = next;
+        m_spillValid = true;
+        spill = m_spillHistory[next].srv;
+    } else {
+        m_spillValid = false;
     }
 
     // Volumetric light: the view rays through the engine's own shadow maps. Only with the engine's

@@ -37,7 +37,7 @@ constexpr Knob kKnobTable[AutoQuality::kKnobs] = {
     {"light shafts", {"RayMask", "RayBlur"}, 1.0f},
     {"rain and snow", {"RainDrop", "RainSplash", "SnowFlake"}, 0.5f},
     {"contact shadows", {"OcclusionShadow"}, 0.4f},
-    {"neon light", {"SpillDown", "SpillBlur"}, 1.0f},
+    {"neon light", {"SpillDown", "SpillBlur", "SpillTemporal"}, 1.0f},
 };
 
 void applyKnob(int knob, tmshaders::Settings& s) {

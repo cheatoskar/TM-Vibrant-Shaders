@@ -20,6 +20,9 @@
 // in the game (hooks.cpp: a second Renderer, each look on its side): --split <0..1> moves the
 // line (default 0.5), --swap puts the preset on the right, --labels "left|right" burns the names
 // in as a photo of the split gets them (SplitPhotoLabels).
+//
+// --nospillhistory: the neon light spill of each frame on its own (A/B of PS_SpillTemporal).
+// An output ending in .jpg is a preset picture for the menu (384 x 216, tools/make-thumbnails.ps1).
 #include "effects_trail.h"
 #include "image.h"
 #include "engine_frame.h"
@@ -126,6 +129,22 @@ bool writeBmp(const std::string& path, const D3D11_MAPPED_SUBRESOURCE& m, UINT w
     }
     fclose(f);
     return true;
+}
+
+// out.jpg: a preset picture for the menu (the middle 16:9, 384 x 216, as the game saves your
+// presets' pictures): maniaplanet/tools/make-thumbnails.ps1.
+bool writeThumbnailJpeg(const std::string& path, const D3D11_MAPPED_SUBRESOURCE& m, UINT w, UINT h, bool bgra) {
+    std::vector<uint32_t> pixels(static_cast<size_t>(w) * h);
+    for (UINT y = 0; y < h; y++) {
+        const auto* src = static_cast<const unsigned char*>(m.pData) + static_cast<size_t>(y) * m.RowPitch;
+        for (UINT x = 0; x < w; x++) {
+            const unsigned char* p = src + x * 4;
+            const uint32_t r = bgra ? p[2] : p[0], g = p[1], b = bgra ? p[0] : p[2];
+            pixels[static_cast<size_t>(y) * w + x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+        }
+    }
+    return tmshaders::image::writeThumbnail(std::wstring(path.begin(), path.end()), pixels.data(), static_cast<int>(w),
+                                            static_cast<int>(h), static_cast<int>(w));
 }
 
 
@@ -532,6 +551,7 @@ int main(int argc, char** argv) {
     std::string compare;              // --compare: the preset on the split's other side
     float splitAt = 0.5f;             // --split
     bool swapSides = false;           // --swap: the preset on the right
+    bool spillHistory = true;         // --nospillhistory: the neon spill of each frame on its own (A/B)
     std::string labels;               // --labels "left|right"
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
@@ -551,6 +571,10 @@ int main(int argc, char** argv) {
         }
         if (opt == "--swap") {
             swapSides = true;
+            continue;
+        }
+        if (opt == "--nospillhistory") {
+            spillHistory = false;
             continue;
         }
         if (i + 1 >= argc) {
@@ -713,6 +737,7 @@ int main(int argc, char** argv) {
 
     Renderer renderer;
     if (!renderer.init(device)) return 2;
+    renderer.effects().setSpillHistory(spillHistory);
     // --compare: the preset's look as hooks.cpp prepareLook makes it (your machine settings with
     // the preset's look), from a renderer of its own; each look draws its side of the line.
     const bool comparing = !compare.empty();
@@ -730,6 +755,8 @@ int main(int argc, char** argv) {
         lookB.lutAmount = config.lutAmount;
         if (!rendererB.init(device)) return 2;
         rendererB.effects().setSound(false);
+        rendererB.effects().setSpillHistory(spillHistory);
+        rendererB.effects().shareTrail(&renderer.effects());
     }
     const Look mineSide = comparing ? splitSide(look, splitAt, swapSides) : look;
     const Look presetSide = splitSide(lookB, splitAt, !swapSides);
@@ -823,7 +850,9 @@ int main(int argc, char** argv) {
                                           presetSide.line, left, right);
         out.pData = pixels.data();
     }
-    const bool ok = writeBmp(argv[2], out, sd.Width, sd.Height, bgra);
+    const std::string outPath = argv[2];
+    const bool jpeg = outPath.size() > 4 && _stricmp(outPath.c_str() + outPath.size() - 4, ".jpg") == 0;
+    const bool ok = jpeg ? writeThumbnailJpeg(outPath, out, sd.Width, sd.Height, bgra) : writeBmp(outPath, out, sd.Width, sd.Height, bgra);
     ctx->Unmap(staging, 0);
     printf("%s %s\n", ok ? "wrote" : "cannot write", argv[2]);
     return ok ? 0 : 1;

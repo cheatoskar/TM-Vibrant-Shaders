@@ -28,7 +28,8 @@ float2 previousUV(float2 uv, float z, out float prevZ)
 // ahead), smoothed over time. ManiaPlanet's chase cameras show the car lower than TMNF's (its
 // middle at about 0.7 of the height, TMNF 0.56): measured there. t0 = previous focus.
 //   u_Pass0.x = blend, u_Pass0.y = reset, u_Pass0.zw = the point clicked in the photo mode (uv),
-//   negative = the car / the road ahead.
+//   negative = the car / the road ahead. u_Pass1: DofAutofocus Car, the player's car (world, about
+//   its middle), w = 1.
 // ---------------------------------------------------------------------------------
 float4 PS_Focus(VSOut i) : SV_Target
 {
@@ -51,6 +52,35 @@ float4 PS_Focus(VSOut i) : SV_Target
         // A clicked point: the mean around it. Auto focus: the nearest thing in the window, the
         // car (the mean took the road behind it in too: the car came out blurred).
         focus = clicked ? 9.0 / inv : max(nearest, 1.5);
+        // DofAutofocus Car (TMNF's): projected with this frame's camera; off screen or behind the
+        // camera the middle above stays. The car's own pixels: a 5x5 grid over a metre each side
+        // of its middle, only depths close to the car's distance count (the road beside it, the
+        // sky, a pillar in front don't). None of them (all of it hidden): the car's distance
+        // itself, so it is sharp when it comes out.
+        if (!clicked && u_Pass1.w > 0.5)
+        {
+            float3 car = worldToViewDir(u_Pass1.xyz - cameraWorld());
+            float2 carAt = projectToUV(car);
+            if (car.z > 0.5 && all(abs(carAt - 0.5) < 0.47))
+            {
+                float2 step = float2(u_Proj.x, u_Proj.y) * 0.25 / car.z; // 0.5 m in uv
+                float tolerance = max(2.5, 0.1 * car.z);
+                float carInv = 0.0, count = 0.0;
+                [unroll] for (int cj = -2; cj <= 2; cj++)
+                {
+                    [unroll] for (int ci = -2; ci <= 2; ci++)
+                    {
+                        float z = engineZ(saturate(carAt + float2(ci, cj) * step));
+                        if (abs(z - car.z) < tolerance)
+                        {
+                            carInv += 1.0 / z;
+                            count += 1.0;
+                        }
+                    }
+                }
+                focus = count > 0.0 ? count / carInv : car.z;
+            }
+        }
     }
     float previous = t0_tex(float2(0.5, 0.5)).r;
     if (u_Pass0.y > 0.5 || !(previous > 0.0 && previous < 1e5)) previous = focus;

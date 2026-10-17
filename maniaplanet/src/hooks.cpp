@@ -673,6 +673,7 @@ bool ensureSideB() {
         return false;
     }
     g_rendererB.effects().setSound(false); // the weather sound stays your look's
+    g_rendererB.effects().shareTrail(&g_renderer.effects()); // and the neon trail yours (its own starts empty)
     TMVS_LOG("hooks: compare split with the preset %s (a second renderer)", g_sideBPreset.c_str());
     return true;
 }
@@ -1240,8 +1241,23 @@ void prepareLook() {
         if (g_rendererBReady || g_rendererBFailed) releaseSideB();
         g_sideBPreset = name;
     }
-    tmshaders::Settings b = config.settings;
-    if (!config.presetSettings(name, b)) return; // a preset deleted meanwhile: the game's image
+    // Your own preset is a file read field by field (about 100 GetPrivateProfileString calls, several
+    // ms): read once, again when another preset is picked, its file is written or your settings
+    // change (the machine settings are yours), not every frame (TMNF's renderSideB).
+    static std::string s_name;
+    static unsigned long long s_written = 0;
+    static tmshaders::Settings s_mine, s_look;
+    static bool s_known = false;
+    const unsigned long long written = config.presetWritten(name);
+    if (s_name != name || s_written != written || memcmp(&s_mine, &config.settings, sizeof(tmshaders::Settings)) != 0) {
+        s_name = name;
+        s_written = written;
+        memcpy(&s_mine, &config.settings, sizeof(tmshaders::Settings));
+        s_look = config.settings;
+        s_known = config.presetSettings(name, s_look);
+    }
+    if (!s_known) return; // a preset deleted meanwhile: the game's image
+    tmshaders::Settings b = s_look;
     b.enabled = true; // with the shaders off (F5): the preset next to the game's image
     b.debugView = g_lookSettings.debugView;
     photo::adjust(b);
@@ -1250,6 +1266,42 @@ void prepareLook() {
     g_lookB.settings = &g_lookSettingsB;
     g_lookB.lutAmount = config.lutAmount;
     g_sideBWanted = true;
+}
+
+// A perf line every 2000 shaded frames in a row (TMNF's perflog, shorter): the frame rate and the
+// effects' GPU time with their three most expensive passes, so a report about the frame rate
+// comes with numbers without a capture. A gap (a menu, loading) starts the count over.
+void logPerf(const Profiler& profiler) {
+    static unsigned frames = 0;
+    static double since = -1.0, last = -1.0;
+    static int lines = 0;
+    const double now = nowSeconds();
+    if (last < 0.0 || now - last > 0.25) {
+        frames = 0;
+        since = now;
+    }
+    last = now;
+    if (++frames < 2000 || lines >= 200) return;
+    const double ms = (now - since) * 1000.0 / (frames - 1);
+    int top[3] = {-1, -1, -1};
+    for (int p = 0; p < kPassCount; p++) {
+        for (int k = 0; k < 3; k++) {
+            if (top[k] < 0 || profiler.time(p) > profiler.time(top[k])) {
+                for (int j = 2; j > k; j--) top[j] = top[j - 1];
+                top[k] = p;
+                break;
+            }
+        }
+    }
+    char passes[160] = {};
+    int used = 0;
+    for (int k = 0; k < 3 && top[k] >= 0 && used >= 0 && used < static_cast<int>(sizeof(passes)); k++)
+        used += snprintf(passes + used, sizeof(passes) - used, "%s%s %.2f", k ? ", " : "", passName(top[k]), profiler.time(top[k]));
+    lines++;
+    TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames; mod GPU %.2f ms a frame (most: %s)", ms > 0.0 ? 1000.0 / ms : 0.0,
+             ms, frames, profiler.total(), passes);
+    frames = 0;
+    since = now;
 }
 
 // True: the frame isn't shown (its draws went past the mod: the engine's own look, a flash).
@@ -1308,6 +1360,7 @@ bool onPresent(IDXGISwapChain* sc) {
     // memory; the editors and replays count too, their frame rate is the GPU's as well.
     if (g_rendererReady)
         g_autoQuality.onFrame(nowSeconds(), g_stats.effectsRan, g_renderer.effects().profiler(), tmshaders::Config::get().settings);
+    if (g_rendererReady && g_stats.effectsRan) logPerf(g_renderer.effects().profiler());
 
     {
         Inside guard;

@@ -56,6 +56,13 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - *Game light sources* (on, `EngineLightDraws` in `maniaplanet.ini`): lamps, light strips, screens, halos and the car's lights glow as the engine draws them; grass no longer glows.
 - *Black hole moon* (off): on night maps under the black hole, the black hole lights the scene instead of the game's moon (in the mod's shaders only).
 - Night maps are recognised by the engine's time of day. Auto quality works as in TrackMania Nations/United and can also turn off the volumetric light.
+- Neon light spill is smoothed over a few frames, as in TMNF: the coloured light a neon strip throws on a wall next to it no longer flickers when the car or the camera moves. A still image comes out as before.
+- Neon trail: a frame hitch while driving fast no longer breaks the line as if the car had respawned.
+- Photo mode's compare split with a preset: the preset's side shows your neon trail too, and comparing with one of your own presets no longer reads its file every frame.
+- *Focus on* (`DofAutofocus`, *Cinematic* panel): *Car* keeps your car sharp while the camera moves around it, as in TMNF (the depth of field runs in photo mode in TrackMania 2).
+- The preset gallery shows TrackMania 2 pictures (Stadium at night, rendered from a capture) instead of the TMNF ones.
+- Tooltips say what *Real night*, *Game moonlight* and *In replays only* do in TrackMania 2; *Turn off game FX*, which changed nothing there, is no longer shown.
+- `tmvs-mp.log` gets a *perf* line every 2000 frames in a race: FPS, the shaders' GPU time and their most expensive passes.
 
 ## 1.3.0
 

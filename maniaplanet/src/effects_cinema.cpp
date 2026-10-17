@@ -18,7 +18,7 @@ template <typename T> void safeRelease(T*& p) {
     p = nullptr;
 }
 
-const char* const kSupported[] = {"MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "CinematicOnlyInReplays", "TAA"};
+const char* const kSupported[] = {"MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "CinematicOnlyInReplays", "TAA", "DofAutofocus"};
 
 } // namespace
 
@@ -38,6 +38,9 @@ struct CinemaStage::State {
     int historyIndex = 0;
     bool historyValid = false;
     double lastTime = -1.0;
+    float lastCar[3] = {}; // DofAutofocus: where the car was last seen (photo mode keeps it)
+    bool lastCarKnown = false;
+    int focusOnCar = -2;   // what the log said last (-1 not wanted, 0 the middle, 1 the car)
 
     void releaseTargets() {
         for (auto& t : focusTarget) t.release();
@@ -121,7 +124,22 @@ void CinemaStage::run(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
             if (ok) {
                 const int next = 1 - st.focusIndex;
                 const float f0[4] = {1.0f - expf(-dt * 4.0f), (st.focusValid && history) ? 0.0f : 1.0f, frame.focus[0], frame.focus[1]};
-                fx.run(ctx, kFocus, st.focus, st.focusTarget[next], &st.focusTarget[st.focusIndex].srv, 1, f0);
+                // DofAutofocus Car (TMNF's): the player's car from the engine (the neon trail's), about
+                // its middle; PS_Focus projects it and averages its own pixels' depths. A click in
+                // the photo mode and a set focus distance win. Photo mode keeps the last position
+                // (a paused game may draw no car). Off screen or unknown: the middle, as before.
+                if (frame.car && frame.car->valid) {
+                    for (int i = 0; i < 3; i++) st.lastCar[i] = frame.car->position[i] + frame.car->up[i] * 0.4f;
+                    st.lastCarKnown = true;
+                }
+                const bool wanted = s.dofAutofocus == 1 && s.focusDistance <= 0.0f && frame.focus[0] < 0.0f;
+                const bool onCar = wanted && st.lastCarKnown && ((frame.car && frame.car->valid) || frame.photo);
+                const float f1[4] = {st.lastCar[0], st.lastCar[1], st.lastCar[2], onCar ? 1.0f : 0.0f};
+                const int state = !wanted ? -1 : (onCar ? 1 : 0);
+                if (wanted && state != st.focusOnCar)
+                    TMVS_LOG("cinema: depth of field focuses %s", onCar ? "on the car (engine position)" : "on the middle (no car from the engine)");
+                st.focusOnCar = state;
+                fx.run(ctx, kFocus, st.focus, st.focusTarget[next], &st.focusTarget[st.focusIndex].srv, 1, f0, f1);
                 st.focusIndex = next;
                 st.focusValid = true;
                 focus = st.focusTarget[next].srv;
