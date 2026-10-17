@@ -210,7 +210,7 @@ are bound again right after it. Nothing in the game's memory changes.
   `soft shadows: the mod's PCSS shader draws the engine's sun shadow pass (...)`. The menu's
   status line says which.
 - Cost: about 1 ms at 2560 x 1440 on a GTX 1080 Ti (the engine's pass: 0.2 ms).
-- Online: whether ManiaPlanet's anti-cheat minds a replaced shader is not known. That is why it is off by default.
+- Online: whether ManiaPlanet's anti-cheat minds a replaced shader is not known. It is on by default; set it to 0 to keep the engine's own shader online.
 
 `mp_shadowtest` checks it offline on the inputs of the pass (an F12 capture now saves the atlas,
 `engine_shadowsplits.dds`, and the face normal, `engine_shadownormal.dds`). The engine's shader
