@@ -23,6 +23,7 @@ const char* const kEntryPoints[] = {
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
     "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer", "PS_LampSource", "PS_LampDown", "PS_LampUp",
     "PS_LightingGameLight", "PS_FsrEasu", "PS_FsrRcas", "PS_SpillTemporal",
+    "PS_SpillSource", "PS_SpillSourceEngine", "PS_SpillDownSource",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -318,6 +319,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     m_clouds.destroy();
     m_reflect.destroy();
     for (auto& t : m_spill) t.destroy();
+    m_spillSource.destroy();
     for (auto& t : m_spillHistory) t.destroy();
     m_dof.destroy();
     m_dofFull.destroy();
@@ -2727,7 +2729,22 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             bind(device, 0, in.hdr, true);
             if (in.added) bind(device, 14, in.added, true);
         }
-        runPass(device, engineLights ? kSpillDownEngine : kSpillDown, m_spill[0]);
+        // Quality 2: the sources found pixel by pixel first (full res), then taken down to quarter
+        // res by the four bilinear taps. Found in the taps themselves (the mean of 2x2 pixels), a
+        // strip 1-2 px high far away, averaged with the dark wall beside it, counted or not by
+        // where it fell, and the blue light on the wall flickered as the camera crept towards it
+        // (the owner, A01 at night). The mean of light already found is the same wherever it falls.
+        // Lower quality (and auto quality's fewer samples): the cheaper way, as before.
+        const bool perPixel = s.quality >= 2 &&
+                              (m_spillSource.valid() || m_spillSource.create(device, m_width, m_height, D3DFMT_A16B16G16R16F));
+        if (perPixel) {
+            runPass(device, engineLights ? kSpillSourceEngine : kSpillSource, m_spillSource);
+            device->SetTexture(14, nullptr);
+            bind(device, 0, m_spillSource.texture, true);
+            runPass(device, kSpillDownSource, m_spill[0]);
+        } else {
+            runPass(device, engineLights ? kSpillDownEngine : kSpillDown, m_spill[0]);
+        }
         device->SetTexture(14, nullptr);
         bind(device, 0, m_spill[0].texture, true);
         passConstants(device, 1.0f / m_spill[0].width, 0.0f);

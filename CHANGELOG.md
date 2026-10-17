@@ -41,6 +41,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - Water: the stands, floodlight masts, gates and ramps across a pool are mirrored in it (*Far water reflections*). The reflection used to end 40 to 120 m out and showed the plain sky where they stood.
 - Long shadows: no bright boxes around the car under a low light, smooth edges, no grain without TAA.
 - TAA no longer leaves see-through copies behind the car; the car's bounce light no longer trails behind it.
+- Neon light spill: the blue light on a wall next to a far-away neon strip no longer flickers as you drive towards it (TrackMania Nations/United, *Effect quality* high): the strips are now found pixel by pixel.
 - Snow: cars keep their paint with every camera, the car on the start podium no longer turns white.
 - Replay menu: the shaded replay under its bars instead of leftover strips. In the replay viewer the menu shows properly and its keys react at once.
 - No hang when the effects start, after alt-tab or when the compare split shows a preset; after alt-tab the effects are back sooner.
