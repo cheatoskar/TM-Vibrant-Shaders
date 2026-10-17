@@ -1490,8 +1490,16 @@ void endHdr(IDirect3DDevice9* device) {
     device->SetViewport(scaled ? &g_rs.logical : &viewport);
     device->SetScissorRect(scaled ? &g_rs.logicalScissor : &scissor);
     if (scaled) {
+        // Only where the bias is still the mod's: the game sets it with its materials, through a
+        // cache of what it set last (CDx9StateBlock::FilterSamplerState); a value it set itself in
+        // the camera stays, or its cache and the device would disagree after the camera.
+        const float bias = log2f(static_cast<float>(g_rs.width) / static_cast<float>(g_rs.fullWidth));
+        DWORD ours = 0;
+        memcpy(&ours, &bias, sizeof(ours));
         for (DWORD i = 0; i < 16; i++) {
-            DWORD saved = 0;
+            DWORD now = 0, saved = 0;
+            device->GetSamplerState(i, D3DSAMP_MIPMAPLODBIAS, &now);
+            if (now != ours) continue;
             memcpy(&saved, &g_rs.biasSaved[i], sizeof(saved));
             device->SetSamplerState(i, D3DSAMP_MIPMAPLODBIAS, saved);
         }
