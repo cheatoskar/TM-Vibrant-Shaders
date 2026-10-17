@@ -572,6 +572,9 @@ int main(int argc, char** argv) {
     ID3D11ShaderResourceView* selfIllumSrv = nullptr;
     ID3D11Buffer* selfIllumCb[2] = {};
     ID3D11DepthStencilState* greaterEqual = nullptr;
+    ID3D11DepthStencilState* greater = nullptr; // strict, like a forward draw: its redraw must still land
+    ID3D11DepthStencilState* siDepth = nullptr;  // the one the frames draw it with
+    bool siStateKept = true;                     // the engine's depth state and ref are bound after its draw
     if (selfIllum) {
         ID3DBlob* code = compile("VS_SI", "vs_4_0");
         if (code) {
@@ -607,6 +610,9 @@ int main(int argc, char** argv) {
         dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
         dd.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
         device->CreateDepthStencilState(&dd, &greaterEqual);
+        dd.DepthFunc = D3D11_COMPARISON_GREATER;
+        device->CreateDepthStencilState(&dd, &greater);
+        siDepth = greaterEqual;
     }
 
     auto frame = [&](bool withInterface, unsigned char* centre, unsigned char* hud) {
@@ -651,10 +657,15 @@ int main(int argc, char** argv) {
             ctx->PSSetShaderResources(5, 1, &selfIllumSrv);
             ctx->PSSetConstantBuffers(0, 1, &selfIllumCb[0]);
             ctx->PSSetConstantBuffers(13, 1, &selfIllumCb[1]);
-            ctx->OMSetDepthStencilState(greaterEqual, 0);
+            ctx->OMSetDepthStencilState(siDepth, 3);
             ctx->VSSetShader(vsSelfIllum, nullptr, 0);
             ctx->PSSetShader(selfIllum, nullptr, 0);
             ctx->Draw(3, 0);
+            ID3D11DepthStencilState* bound = nullptr;
+            UINT ref = 0;
+            ctx->OMGetDepthStencilState(&bound, &ref);
+            if (bound != siDepth || ref != 3) siStateKept = false;
+            if (bound) bound->Release();
             ctx->VSSetShader(vs, nullptr, 0);
             ctx->OMSetDepthStencilState(nullptr, 0);
             ID3D11ShaderResourceView* noSi = nullptr;
@@ -984,6 +995,24 @@ int main(int argc, char** argv) {
             lit = lit && hdrOn[i] - light[i] > 0.1f; // its lit surface (about 0.126) stayed out
         }
         check(own && lit, "the light buffer holds the material's own light, not its lit surface");
+
+        // Drawn with a strict depth test that writes its depth: the redraws let the draw's own
+        // depth through (and write none), the engine's state is bound again afterwards.
+        withSelfIllum = true;
+        siDepth = greater;
+        set("EngineLightDraws", "1");
+        requestCapture();
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        const std::string strict = newestCapture();
+        float lightStrict[3] = {};
+        bool ownStrict = strict != on && firstTexel(strict + "\\engine_lights.dds", lightStrict);
+        set("EngineLightDraws", "0");
+        withSelfIllum = false;
+        siDepth = greaterEqual;
+        for (int i = 0; i < 3; i++) ownStrict = ownStrict && std::fabs(lightStrict[i] - want[i]) < 0.004f;
+        printf("  self-illuminated, strict depth test: light buffer %.4f %.4f %.4f\n", lightStrict[0], lightStrict[1], lightStrict[2]);
+        check(ownStrict, "a light drawn with a strict depth test that writes its depth is in the light buffer too");
+        check(siStateKept, "the engine's depth-stencil state and reference are bound again after the redraws");
     }
 
     // Resize like a resolution change.

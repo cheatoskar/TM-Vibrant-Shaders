@@ -291,7 +291,8 @@ It checks that:
 - the G-buffer and motion are found by name;
 - with `--decomp`: after a map change (new engine targets, the face-normal pass first) the light mask is the new one;
 - with `--selfillum`: with EngineLightDraws the engine's image stays the same and the light buffer holds the
-  material's own light, not its lit surface;
+  material's own light, not its lit surface, also for a draw with a strict depth test that writes its depth
+  (the redraws let its own depth through), and the engine's depth-stencil state is bound again afterwards;
 - with `--shadow`: soft shadows off, the engine's sun shadow pass draws; on, the mod's shader draws a
   penumbra at a shadow's edge and the same light and shadow elsewhere, says so in the log, and the
   engine's shader and slots are bound again after the draw; off again, the engine's light mask to the bit;
