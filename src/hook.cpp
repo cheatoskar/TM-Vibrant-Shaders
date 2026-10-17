@@ -580,8 +580,11 @@ bool patchDevice(IDirect3DDevice9* device) {
     if (g_vtable) {
         // Vertex-processing modes get different driver vtables: the probe device's table is
         // not the game's. Move the hooks to the device the game actually renders with.
-        TMVS_LOG("hook: moving hooks from probe vtable %p to game vtable %p", g_vtable, vtable);
-        for (const Detour& d : kDetours) restoreSlot(g_vtable, d);
+        // The probe device is released by now, and with it (on drivers that give each device its
+        // own table on the heap) the old table: writing our saved pointers back there wrote into
+        // freed memory, maybe another mod's by then (CenterSpeed allocates in the same moment).
+        // The old table is left alone.
+        TMVS_LOG("hook: moving hooks from probe vtable %p to game vtable %p (the old one left alone)", g_vtable, vtable);
     }
     g_vtable = vtable;
     for (const Detour& d : kDetours) {
