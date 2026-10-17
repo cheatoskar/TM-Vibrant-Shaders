@@ -53,6 +53,13 @@
 - **TrackMania 2:** new setting *Soft sun shadows* (`SoftShadows` in `maniaplanet.ini`, Settings page, panel "ManiaPlanet", off by default): the sun's shadows sharp where a thing touches the ground and wider the farther they fall from it (PCSS on the engine's own shadow maps), the value is the sun's size in the sky (real sun 0.5 degrees). The mod's shader draws the engine's sun shadow pass in its place, for that one draw; nothing in the game's memory changes, but whether the anti-cheat minds is not known. Costs about 1 ms at 1440p. Only the engine's 40 known shadow variants are replaced, else the log says why and the game's shadows stay. F12 captures now include the shadow atlas and face normal (`mp_shadowtest`).
 - TrackMania 2, neon trail: its start right behind the car stands still (the points near the car slid along the line every frame and the fade-in behind the car jumped by up to 120 px at 400 km/h), and it lies 10 cm over the road (the car's origin is on the road and dips under it as the car rides). It follows the car the camera follows: after a camera switch next to a ghost it no longer goes over to the ghost.
 - New setting *The game's moon under the black hole* (`EngineMoon`, *Game* panel, off by default): on night maps under the black hole the game's own moon (its baked light and shadows, glints, the car's light) shines from the black hole instead of from the side, or is taken out. From the next map on.
+- ManiaPlanet: neon light spill is smoothed over a few frames, as in TMNF: the coloured light a neon strip throws on a wall next to it no longer flickers when the car or the camera moves. A still image comes out as before.
+- ManiaPlanet: neon trail: a frame hitch while driving fast no longer breaks the line as if the car had respawned.
+- ManiaPlanet: photo mode's compare split with a preset: the preset's side shows your neon trail too, and comparing with one of your own presets no longer reads its file every frame.
+- ManiaPlanet: *Focus on* (`DofAutofocus`, *Cinematic* panel): *Car* keeps your car sharp while the camera moves around it, as in TMNF (the depth of field runs in photo mode in TrackMania 2).
+- ManiaPlanet: the preset gallery shows TrackMania 2 pictures (Stadium at night, rendered from a capture) instead of the TMNF ones.
+- ManiaPlanet: tooltips say what *Real night*, *Game moonlight* and *In replays only* do in TrackMania 2; *Turn off game FX*, which changed nothing there, is no longer shown.
+- ManiaPlanet: `tmvs-mp.log` gets a *perf* line every 2000 frames in a race: FPS, the shaders' GPU time and their most expensive passes.
 
 ### 1.4.0-preview (2026-10-12)
 
