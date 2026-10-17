@@ -6,9 +6,9 @@
 //
 // Per frame (effects.cpp):
 //   PS_DownsampleND (half, 2 targets) -> PS_OcclusionShadow (half) -> PS_BilateralBlur x2
-//   -> PS_GI (quarter) -> PS_GITemporal -> PS_SpillDown (quarter) -> PS_SpillBlur x2
+//   -> PS_GI (quarter) -> PS_GITemporal -> PS_SpillDown (quarter) -> PS_SpillBlur x2 -> PS_SpillTemporal
 //   -> [sky, clouds: sky.hlsl] -> PS_Lighting (full, the result) -> [weather, cinema]
-// entries: PS_DownsampleND:ps_5_0 PS_OcclusionShadow:ps_5_0 PS_BilateralBlur:ps_5_0 PS_GI:ps_5_0 PS_GITemporal:ps_5_0 PS_SpillDown:ps_5_0 PS_SpillBlur:ps_5_0 PS_Lighting:ps_5_0 PS_LightingMoon:ps_5_0
+// entries: PS_DownsampleND:ps_5_0 PS_OcclusionShadow:ps_5_0 PS_BilateralBlur:ps_5_0 PS_GI:ps_5_0 PS_GITemporal:ps_5_0 PS_SpillDown:ps_5_0 PS_SpillBlur:ps_5_0 PS_SpillTemporal:ps_5_0 PS_Lighting:ps_5_0 PS_LightingMoon:ps_5_0
 #include "common.hlsli"
 #include "sky.hlsli"
 #include "weather.hlsli"
@@ -360,6 +360,50 @@ float4 PS_SpillBlur(VSOut i) : SV_Target
         sum += s.rgb * w;
     }
     return float4(sum / 6.4, centre.a);
+}
+
+// The spill over frames (TMNF's PS_SpillTemporal): t0 = this frame's (blurred, view z in a),
+// t1 = the last result, u_Pass0.x = history valid. Each frame finds its sources anew in a
+// quarter-res image: a strip that crosses a texel edge, or the car passing in front of it, switched
+// the light on the wall next to it on and off from one frame to the next. Averaged over about four
+// frames where the history is the same surface; it may only differ from this frame's light by a
+// third, so a light that goes (or moves with a car) leaves no trail. A still image comes out as before.
+float4 PS_SpillTemporal(VSOut i) : SV_Target
+{
+    float2 uv = i.uv;
+    float4 current = t0_tex(uv);
+    float z = current.a;
+    if (u_Pass0.x < 0.5 || z >= SKY_Z) return current;
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
+    // Moving things (the car, the camera fixed to it): the engine's motion vectors, as PS_GITemporal.
+    if (u_Engine.w > 0.5)
+    {
+        float2 motion = t_motion.SampleLevel(g_point, uv, 0).xy;
+        float2 moved = uv - motion;
+        if (distance(moved, prevUV) * u_Screen.y > 2.0)
+        {
+            prevUV = moved;
+            prevZ = z;
+        }
+    }
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return current;
+    float4 history = t1_texL(prevUV);
+    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
+    float weight = lerp(0.3, 1.0, smoothstep(0.04, 0.12, error));
+    // As far as this frame's neighbourhood reaches, and a third of its light around that.
+    float2 t = u_Screen.zw * 4.0 * 1.5; // quarter res
+    float3 lo = current.rgb, hi = current.rgb;
+    [unroll] for (int k = 0; k < 4; k++)
+    {
+        float2 o = k == 0 ? float2(t.x, 0) : (k == 1 ? float2(-t.x, 0) : (k == 2 ? float2(0, t.y) : float2(0, -t.y)));
+        float3 n = t0_tex(uv + o).rgb;
+        lo = min(lo, n);
+        hi = max(hi, n);
+    }
+    float3 margin = (hi - lo) * 0.25 + current.rgb * 0.33 + 0.002;
+    history.rgb = clamp(history.rgb, lo - margin, hi + margin);
+    return float4(lerp(history.rgb, current.rgb, weight), z);
 }
 
 // ---------------------------------------------------------------------------------

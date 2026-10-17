@@ -20,6 +20,8 @@
 // in the game (hooks.cpp: a second Renderer, each look on its side): --split <0..1> moves the
 // line (default 0.5), --swap puts the preset on the right, --labels "left|right" burns the names
 // in as a photo of the split gets them (SplitPhotoLabels).
+//
+// --nospillhistory: the neon light spill of each frame on its own (A/B of PS_SpillTemporal).
 #include "effects_trail.h"
 #include "image.h"
 #include "engine_frame.h"
@@ -532,6 +534,7 @@ int main(int argc, char** argv) {
     std::string compare;              // --compare: the preset on the split's other side
     float splitAt = 0.5f;             // --split
     bool swapSides = false;           // --swap: the preset on the right
+    bool spillHistory = true;         // --nospillhistory: the neon spill of each frame on its own (A/B)
     std::string labels;               // --labels "left|right"
     std::string toneCbPath = folder + "/tonemap_cb.bin";
 
@@ -551,6 +554,10 @@ int main(int argc, char** argv) {
         }
         if (opt == "--swap") {
             swapSides = true;
+            continue;
+        }
+        if (opt == "--nospillhistory") {
+            spillHistory = false;
             continue;
         }
         if (i + 1 >= argc) {
@@ -713,6 +720,7 @@ int main(int argc, char** argv) {
 
     Renderer renderer;
     if (!renderer.init(device)) return 2;
+    renderer.effects().setSpillHistory(spillHistory);
     // --compare: the preset's look as hooks.cpp prepareLook makes it (your machine settings with
     // the preset's look), from a renderer of its own; each look draws its side of the line.
     const bool comparing = !compare.empty();
@@ -730,6 +738,7 @@ int main(int argc, char** argv) {
         lookB.lutAmount = config.lutAmount;
         if (!rendererB.init(device)) return 2;
         rendererB.effects().setSound(false);
+        rendererB.effects().setSpillHistory(spillHistory);
     }
     const Look mineSide = comparing ? splitSide(look, splitAt, swapSides) : look;
     const Look presetSide = splitSide(lookB, splitAt, !swapSides);
