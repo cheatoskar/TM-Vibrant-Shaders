@@ -2711,6 +2711,9 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 1, m_nd.texture, false);
         bind(device, 2, m_ndHalf.texture, false);
         bind(device, 13, materials ? m_materialTexture : nullptr, false);
+        // x (WaterFarReflections): with Clean water, the water's reflection is traced to the
+        // screen's edge instead of 40-120 m (the stands across a pool showed as plain sky).
+        passConstants(device, s.waterFarReflections ? 1.0f : 0.0f, 0.0f);
         runPass(device, kReflect, m_reflect);
     }
     const bool spill = s.neonLight > 0.0f;

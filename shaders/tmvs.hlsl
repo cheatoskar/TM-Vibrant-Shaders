@@ -2068,6 +2068,70 @@ float3 skyReflection(float3 r, float4 skyAvg, float daylight) {
     return lerp(skyAvg.rgb, zenith, saturate(r.y * 1.5));
 }
 
+// Far water reflections (WaterFarReflections, u_Pass0.x of PS_Reflect): the reflection on the
+// game's water (Clean water, on the exact plane), traced to the screen's edge. The general trace
+// below ends after 120 m, and after only 40 m on water 10 m from the camera: the stands, the
+// floodlight masts and the gates across a pool were never reached, and the water showed the
+// plain sky where they stood. Here the ray runs up to 1.5 km and is clipped to the screen, then
+// stepped evenly on screen (1 / z interpolated): far objects get as many steps as near ones.
+// p = start on the water (view), r = mirrored direction (view).
+float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
+    float tMax = 1500.0 * u_Water.w;
+    // Ending short of the camera's near plane (looking steeply down, the ray comes back).
+    if (r.z < 0.0) tMax = min(tMax, (p.z - 0.3) / -r.z);
+    float3 e = p + r * tMax;
+    float2 uv0 = projectToUV(p);
+    float2 dir = projectToUV(e) - uv0;
+    float k0 = 1.0 / p.z, k1 = 1.0 / e.z;
+    // Clipped to the screen: past its edge there is nothing to mirror (the sky takes over).
+    float2 room = abs(dir) > 1e-6 ? (step(0.0, dir) - uv0) / dir : 1e6;
+    float sEnd = saturate(min(room.x, room.y));
+    dir *= sEnd;
+    k1 = lerp(k0, k1, sEnd);
+    float sPrev = 0.0;
+    [loop] for (int i = 1; i <= (int)steps; i++) {
+        float x = (i - 1 + noise) / steps;
+        // Somewhat finer near the start: where things stand in the water, their mirror image
+        // meets them.
+        float s = x * (0.5 + 0.5 * x);
+        float2 quv = uv0 + dir * s;
+        float rayZ = 1.0 / lerp(k0, k1, s);
+        float sceneZ = tex2Dlod(s1, float4(quv, 0, 0)).w;
+        float delta = rayZ - sceneZ;
+        // Only what stands above the water can be mirrored in it (as below).
+        float level;
+        if (delta > 0.0 && waterLevelMatch(worldPosition(viewPosition(quv, sceneZ)), level) > 0.1) delta = -1.0;
+        float t = length(viewPosition(quv, rayZ) - p);
+        if (delta > 0.0 && delta < 0.4 + t * 0.1) {
+            // Refine between the last two steps.
+            float a = sPrev, b = s;
+            [unroll] for (int k = 0; k < 6; k++) {
+                float m = (a + b) * 0.5;
+                if (1.0 / lerp(k0, k1, m) - tex2Dlod(s1, float4(uv0 + dir * m, 0, 0)).w > 0.0) b = m; else a = m;
+            }
+            quv = uv0 + dir * b;
+            rayZ = 1.0 / lerp(k0, k1, b);
+            t = length(viewPosition(quv, rayZ) - p);
+            // Clean water: only what faces the ray, met without a jump in the depth (else the
+            // ray passed behind it and goes on).
+            float4 hitNd = tex2Dlod(s1, float4(quv, 0, 0));
+            if (dot(hitNd.xyz, r) > 0.0 || rayZ - hitNd.w > 0.1 + t * 0.03) {
+                sPrev = s;
+                continue;
+            }
+            float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
+            float confidence = saturate(edge * 10.0) * saturate((1.0 - t / tMax) * 3.0);
+            float3 hit = toLinear(tex2Dlod(s0, float4(quv, 0, 0)).rgb);
+            // Light sources stay bright in the reflection.
+            float peak = max(hit.r, max(hit.g, hit.b));
+            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak) * u_Engine.z;
+            return float4(hit, confidence);
+        }
+        sPrev = s;
+    }
+    return 0;
+}
+
 // ---------------------------------------------------------------------------------
 // Screen-space reflections (half res) for wet roads, puddles and water.
 //   s0 = scene colour (sRGB), s1 = full normal/depth, s2 = half normal/depth
@@ -2115,6 +2179,7 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float tPrev = 0.05;
     // A polished dry track is a mirror: finer steps so the reflection holds together.
     float steps = (u_Nature.w > 1.0 ? 48.0 : 32.0) * (photo ? 2.0 : 1.0);
+    [branch] if (onWater && u_Water2.x > 0.5 && u_Pass0.x > 0.5) return traceWaterFar(p, r, noise, steps);
     [loop] for (int i = 1; i <= (int)steps; i++) {
         float t = (i - 1 + noise) / steps;
         t = t * t * maxDist + 0.1;

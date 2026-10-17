@@ -37,6 +37,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - Night maps: floodlit white comes out even instead of in frost-like patches; your car no longer counts as a lamp.
 - *Game HDR*: no huge white blobs over the sky on some day maps (B13) after a while on the map.
 - Water: a clear mirror instead of blotches of the ramps over it, the sky you picked in the reflection, the United Island sea gets waves; roads at Rally's sea level and Stadium dirt at water height are no longer water.
+- Water: the stands, floodlight masts, gates and ramps across a pool are mirrored in it (*Far water reflections*). The reflection used to end 40 to 120 m out and showed the plain sky where they stood.
 - Long shadows: no bright boxes around the car under a low light, smooth edges, no grain without TAA.
 - TAA no longer leaves see-through copies behind the car; the car's bounce light no longer trails behind it.
 - Snow: cars keep their paint with every camera, the car on the start podium no longer turns white.

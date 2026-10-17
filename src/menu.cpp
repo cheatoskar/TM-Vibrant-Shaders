@@ -220,7 +220,7 @@ bool isMachineSetting(const Field& f) {
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
-           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "GameGBuffer") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
            !strcmp(f.key, "FsrSharpness");
 }
@@ -250,6 +250,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("Spray")) return s.wetness > 0.0f || s.snowCover > 0.0f;
     if (is("LensDrops")) return s.rain > 0.0f || s.snow > 0.0f;
     if (is("ReflectionBlur")) return s.reflections > 0.0f;
+    if (is("WaterFarReflections")) return s.cleanWater && s.waterSurfaces > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it
     if (is("TargetFPS")) return s.autoQuality;
@@ -398,6 +399,7 @@ const char* tooltipFor(const char* key) {
         {"CasterShadows", "Long shadows from the game's own meshes, cast from the sun or black hole. Needs Long shadows."},
         {"CasterAlphaTest", "Fences, grids and lattice towers cast their pattern into the long mesh shadows, holes included. Off: they cast none."},
         {"CleanWater", "Pools mirror only what they can see, sharp. Off shows blotches of the ramps over them."},
+        {"WaterFarReflections", "Pools and the sea mirror the stands and masts across them, not only what is near. Off: as before."},
         {"GameGBuffer", "Surface normals from the game's shaders, so AO, shadows, reflections and light follow bump maps and the car's real shape. Needs Game HDR. (restart the first time)"},
         {"GameLight", "Under night skies, darkens and cools the light the game lit each surface with instead of the whole image: paint keeps its colour, and what the game's lamps light stays as bright as the game drew it. Needs Game HDR and Game light sources. (restart the first time)"},
         {"ShadeMenuBars", "Shades the image under the replay menu's bars. Off shows leftovers of earlier frames."},
