@@ -42,7 +42,8 @@ const char* const kPassNames[kPassCount] = {
     "Volumetric"};
 
 // The settings ManiaPlanet can do so far (the menu shows only these). The look (hdr.hlsl), then
-// the scene effects (scene.hlsl), then the stages as they come.
+// the scene effects (scene.hlsl), then the stages as they come. Not DisableGameFX: the engine's
+// bloom stays (hooks.cpp skipEngineBloom), so it changed nothing here.
 const char* const kSupported[] = {
     // look and tone map
     "Exposure", "Contrast", "ToneKnee", "ToneCurve", "Saturation", "Vibrance", "Temperature", "Tint", "Lift", "Gamma", "Gain",
@@ -50,7 +51,7 @@ const char* const kSupported[] = {
     // scene
     "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "NeonLight", "GlobalIllumination", "SunLight", "AmbientTint",
     "SunColor", "GameSunColor", "SkyColor", "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter",
-    "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
+    "HazeDistance", "HighlightBoost", "Quality", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
     "VolumetricLight", "GameNight", "EngineMoon"};
 
 } // namespace

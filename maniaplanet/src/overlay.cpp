@@ -441,6 +441,17 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {25, "Volumetric light (lit haze)"},
                             {40, "Depth of field: blur size"},
                             {41, "Motion"}};
+            // What works differently here than in TMNF (the shared tooltips describe TMNF's).
+            h.tips = {{"GameNight", "Under night skies the mod brings a day map's sunlight and sky light down to moonlight itself "
+                                    "(TrackMania 2's time of day can't be changed). Lamps and neon stay."},
+                      {"EngineMoon", "Night maps under the black hole: TrackMania 2's moon can't be moved, so Game's and Black hole "
+                                     "both keep it as the game has it; Off takes its light and glint out. For the black hole's "
+                                     "light instead see Black hole moon (Settings page, ManiaPlanet panel)."},
+                      {"CinematicOnlyInReplays", "Motion blur and depth of field only in photo mode (TrackMania 2's replays can't "
+                                                 "be told from driving yet). Off: always."},
+                      {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, "
+                                       "wherever the camera puts it; the middle again while the car is off screen. A click in "
+                                       "the photo mode still wins."}};
             h.fNumber = photo::fNumber;
             h.splitOn = &photo::splitOn();
             h.splitPosition = &photo::splitPosition();
