@@ -1426,8 +1426,9 @@ bool drawStudio(Config& config, Settings& s) {
     const bool searching = query[0] != 0;
     for (const Field& f : fields()) {
         const bool match = !searching || containsNoCase(f.label, query) || containsNoCase(f.key, query) || containsNoCase(f.category, query);
-        // A hidden setting found by the search would open an empty panel.
-        if (!match || hiddenFromMenu(f) || (!searching && !isRelevant(f, s))) continue;
+        // A hidden setting found by the search would open an empty panel (so would one this game
+        // can't do: "FSR" in TrackMania 2).
+        if (!match || !supported(f) || (!searching && !isRelevant(f, s))) continue;
         if (panels.empty() || panels.back().title != f.category) {
             const char* category = f.category;
             // Changed settings in this group (a dot on its title).
@@ -1645,13 +1646,10 @@ bool drawSettings(Config& config, Settings& s) {
                           drawHotkeys();
                           return false;
                       }});
-    // Its own panel: in the long Game panel the owner didn't find it.
-    panels.push_back({"Video export", 3.0f, [&s] {
-                          bool l = drawKey(s, "VideoCodec");
-                          l |= drawKey(s, "VideoBitrate");
-                          l |= drawKey(s, "VideoExportBest");
-                          return l;
-                      }});
+    // Its own panel: in the long Game panel the owner didn't find it. Left out where the game
+    // can't export (TrackMania 2 showed its title over nothing).
+    panels.push_back(settingsPanel("Video export", s, {{"VideoCodec", nullptr}, {"VideoBitrate", nullptr}, {"VideoExportBest", nullptr}}));
+    if (panels.back().rows <= 0.0f) panels.pop_back();
     panels.push_back(settingsPanel("Effects", s, {{"CinematicOnlyInReplays", nullptr}, {"WeatherSound", nullptr}, {"TAA", nullptr}, {"TAAJitter", nullptr}}));
     // How the mod works with the game itself, as in Studio's group of the same name (same order).
     Entries game;
