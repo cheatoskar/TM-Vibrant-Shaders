@@ -91,6 +91,76 @@ void publishMouseOwner(bool want) {
     else if (!want && owner == selfHandle()) RemovePropW(g_hwnd, kMouseOwner);
 }
 
+// ImGui's DX9 renderer draws with the fixed-function pipeline and sets only part of its state.
+// The rest is whatever the game's last draw left. In the replay viewer that looks like a
+// projected texture transform on stage 0 (the owner's screen 106: the preset pictures smeared
+// into a fan from their corner, every fill and every letter, which all sample the font texture,
+// gone); the log line below names what was found. The
+// states below are set to their defaults for our draw and given back afterwards: the game may
+// remember what it set and not set it again.
+struct CleanFixedFunction {
+    struct Value {
+        int kind; // 0 render state, 1 stage 0, 2 sampler 0
+        DWORD state, clean, saved;
+        const char* name;
+    };
+    Value values[13] = {
+        {1, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE, 0, "TEXTURETRANSFORMFLAGS"},
+        {1, D3DTSS_TEXCOORDINDEX, 0, 0, "TEXCOORDINDEX"},
+        {1, D3DTSS_RESULTARG, D3DTA_CURRENT, 0, "RESULTARG"},
+        {2, D3DSAMP_SRGBTEXTURE, FALSE, 0, "SRGBTEXTURE"},
+        {2, D3DSAMP_MIPFILTER, D3DTEXF_NONE, 0, "MIPFILTER"},
+        {2, D3DSAMP_MAXMIPLEVEL, 0, 0, "MAXMIPLEVEL"},
+        {2, D3DSAMP_MIPMAPLODBIAS, 0, 0, "MIPMAPLODBIAS"},
+        {0, D3DRS_SRGBWRITEENABLE, FALSE, 0, "SRGBWRITEENABLE"},
+        {0, D3DRS_COLORWRITEENABLE, 0xF, 0, "COLORWRITEENABLE"},
+        {0, D3DRS_VERTEXBLEND, D3DVBF_DISABLE, 0, "VERTEXBLEND"},
+        {0, D3DRS_INDEXEDVERTEXBLENDENABLE, FALSE, 0, "INDEXEDVERTEXBLENDENABLE"},
+        {0, D3DRS_CLIPPLANEENABLE, 0, 0, "CLIPPLANEENABLE"},
+        {0, D3DRS_WRAP0, 0, 0, "WRAP0"},
+    };
+    UINT frequency = 1; // stream 0 (instancing)
+    IDirect3DDevice9* device;
+
+    explicit CleanFixedFunction(IDirect3DDevice9* d) : device(d) {
+        char found[400] = "";
+        int n = 0;
+        for (Value& v : values) {
+            if (v.kind == 0) device->GetRenderState(static_cast<D3DRENDERSTATETYPE>(v.state), &v.saved);
+            else if (v.kind == 1) device->GetTextureStageState(0, static_cast<D3DTEXTURESTAGESTATETYPE>(v.state), &v.saved);
+            else device->GetSamplerState(0, static_cast<D3DSAMPLERSTATETYPE>(v.state), &v.saved);
+            if (v.saved == v.clean) continue;
+            if (n < 340) n += snprintf(found + n, sizeof(found) - n, " %s=0x%lx", v.name, v.saved);
+            set(v, v.clean);
+        }
+        if (FAILED(device->GetStreamSourceFreq(0, &frequency))) frequency = 1;
+        if (frequency != 1) {
+            if (n < 340) n += snprintf(found + n, sizeof(found) - n, " stream 0 frequency=0x%x", frequency);
+            device->SetStreamSourceFreq(0, 1);
+        }
+        // For the log: what the game left, each time it changes (the replay viewer's is the one
+        // that broke the menu; which state it was, the log tells).
+        static char s_last[400] = "";
+        static int s_lines = 0;
+        if (strcmp(found, s_last) != 0 && s_lines < 40) {
+            s_lines++;
+            strcpy_s(s_last, found);
+            TMVS_LOG("menu: drawn with the game's fixed-function state set back to defaults:%s", *found ? found : " (nothing to set back)");
+        }
+    }
+    ~CleanFixedFunction() {
+        for (const Value& v : values) {
+            if (v.saved != v.clean) set(v, v.saved);
+        }
+        if (frequency != 1) device->SetStreamSourceFreq(0, frequency);
+    }
+    void set(const Value& v, DWORD value) {
+        if (v.kind == 0) device->SetRenderState(static_cast<D3DRENDERSTATETYPE>(v.state), value);
+        else if (v.kind == 1) device->SetTextureStageState(0, static_cast<D3DTEXTURESTAGESTATETYPE>(v.state), value);
+        else device->SetSamplerState(0, static_cast<D3DSAMPLERSTATETYPE>(v.state), value);
+    }
+};
+
 // Which button a mouse message is about (0 left, 1 right, 2 middle, 3/4 X1/X2), -1 for others;
 // up = it is the release.
 int mouseButton(UINT msg, WPARAM wparam, bool& up) {
@@ -463,7 +533,10 @@ void draw(IDirect3DDevice9* device) {
     publishMouseOwner((menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse);
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
-        ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+        {
+            CleanFixedFunction clean(device); // given back to the game at the end of this block
+            ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+        }
         if (ImGui::GetDrawData()->TotalVtxCount > 0) SetPropW(g_hwnd, kTopOverlay, selfHandle()); // drawn last: on top
         device->EndScene();
     }
