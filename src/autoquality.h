@@ -8,8 +8,11 @@ class Pipeline;
 // Adapts the effects to the GPU so the target FPS holds. The pipeline measures every pass
 // on the GPU; when the frame is too slow, auto quality works out how many milliseconds are
 // missing and turns off just enough effects - the ones that cost the most for the least
-// look first - to win them back, all in one step. With time to spare it brings them back,
-// one at a time, when the measured cost fits. Your settings and presets stay as they are:
+// look first - to win them back, all in one step (never the light shafts or the neon light,
+// nothing when even all of it couldn't reach the target). With time to spare for a few
+// windows in a row it brings them back, one at a time, when the measured cost fits; each
+// stays off a while, and one that comes back and is too slow again stays off longer (no
+// loop of effects popping off and on). Your settings and presets stay as they are:
 // the reductions only go into the copy that is rendered.
 class AutoQuality {
 public:
@@ -38,6 +41,7 @@ private:
     float m_cost[kKnobs] = {};     // measured ms while the knob was on
     double m_blockUntil[kKnobs] = {}; // brought back and too slow again: leave it off a while
     double m_restoredAt[kKnobs] = {};
+    double m_cutAt[kKnobs] = {};   // when each knob was last turned off (it stays off a while)
     int m_passes[kKnobs][8] = {};  // pass indices per knob (-1 = none), looked up by name: the shared, then the whole ones
     bool m_passesKnown = false;
 
@@ -61,6 +65,10 @@ private:
     // nothing about the GPU: no decisions until this time.
     double m_quietUntil = -1.0;
     bool m_wasGameplay = false;
+    // Decision windows in a row with time to spare, and the least spare among them: a knob comes
+    // back only when it fits that.
+    int m_calm = 0;
+    float m_worstSpare = 0.0f;
     mutable char m_summary[320] = {};
 };
 
