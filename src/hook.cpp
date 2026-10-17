@@ -284,6 +284,8 @@ const char* resultName(HRESULT hr) {
         case D3DERR_INVALIDCALL: return "D3DERR_INVALIDCALL";
         case D3DERR_NOTAVAILABLE: return "D3DERR_NOTAVAILABLE";
         case D3DERR_DEVICELOST: return "D3DERR_DEVICELOST";
+        case D3DERR_DEVICENOTRESET: return "D3DERR_DEVICENOTRESET";
+        case D3DERR_DRIVERINTERNALERROR: return "D3DERR_DRIVERINTERNALERROR";
         default: return "error";
     }
 }
@@ -323,10 +325,33 @@ HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* pa
     if (foreignDevice(device)) return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*)>(device, kReset)(device, params);
     if (g_callbacks.preReset) g_callbacks.preReset();
     if (params && g_callbacks.adjustPresentParams) g_callbacks.adjustPresentParams(params);
+    // The call goes on through every hook on Reset: with CenterSpeed, ours then its (or the other
+    // way round), each freeing its own D3DPOOL_DEFAULT resources before d3d9 resets. One left
+    // alive (a hook the call went around) makes every Reset fail: the game keeps retrying, the
+    // window stays white or black.
     HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*)>(device, kReset)(device, params);
+    static unsigned s_failed = 0; // failed Resets in a row
+    if (FAILED(hr) && s_failed++ > 0) return hr; // logged at the first of the series
     TMVS_LOG("Reset -> 0x%08lx (%ux%u fmt=%s ms=%d autoDepth=%d %s windowed=%d)", hr, params->BackBufferWidth,
              params->BackBufferHeight, tracer::formatName(params->BackBufferFormat), params->MultiSampleType,
              params->EnableAutoDepthStencil, tracer::formatName(params->AutoDepthStencilFormat), params->Windowed);
+    if (FAILED(hr)) {
+        const HRESULT coop = device->TestCooperativeLevel();
+        char entry[220] = "-";
+        const SlotHooks& r = g_slots[kReset];
+        if (r.count) {
+            if (inlinehook::intact(r.hooks[0])) snprintf(entry, sizeof(entry), "our jump");
+            else describeCode(r.hooks[0].site, entry, sizeof(entry));
+        }
+        TMVS_LOG("Reset failed: 0x%08lx %s, TestCooperativeLevel 0x%08lx (%s); Reset's entry: %s. Usually a D3DPOOL_DEFAULT "
+                 "resource still alive (this mod's or another's); the next failures in a row are not logged",
+                 hr, resultName(hr), coop, coop == D3DERR_DEVICENOTRESET ? "not reset" : coop == D3DERR_DEVICELOST ? "lost" : coop == D3D_OK ? "ok" : "other",
+                 entry);
+        logMemory("after the failed reset");
+        return hr;
+    }
+    if (s_failed) TMVS_LOG("Reset: worked again after %u failed in a row", s_failed);
+    s_failed = 0;
     g_device = device; // the first reset comes before the first Present
     logMemory("after reset");
     if (SUCCEEDED(hr) && g_callbacks.postReset) {
