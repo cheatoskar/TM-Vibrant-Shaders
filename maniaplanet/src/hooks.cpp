@@ -22,6 +22,7 @@
 #include "shaderdb.h"
 #include "softshadow.h"
 #include <windows.h>
+#include <atomic>
 #include <dxgi1_2.h>
 #include <d3d11_4.h>
 #include <mutex>
@@ -344,13 +345,20 @@ std::unordered_map<ID3D11Resource*, UINT> g_isSceneV;
 
 // The size of the engine's per-camera constant buffer this is (SceneV 704, SceneP 672), else 0.
 UINT sceneBufferSize(ID3D11Resource* res) {
-    auto it = g_isSceneV.find(res);
-    if (it != g_isSceneV.end()) return it->second;
     D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    D3D11_BUFFER_DESC d = {};
+    auto it = g_isSceneV.find(res);
+    if (it != g_isSceneV.end()) {
+        if (!it->second) return 0;
+        // The pointer is not held: a freed buffer's address can come back as a smaller buffer,
+        // which must not be copied with the old size.
+        res->GetType(&dim);
+        if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) static_cast<ID3D11Buffer*>(res)->GetDesc(&d);
+        if (d.ByteWidth == it->second) return it->second;
+    }
     res->GetType(&dim);
     UINT size = 0;
     if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
-        D3D11_BUFFER_DESC d;
         static_cast<ID3D11Buffer*>(res)->GetDesc(&d);
         if ((d.ByteWidth == kSceneVSize || d.ByteWidth == kScenePSize || d.ByteWidth == kObjectVCarSize) &&
             (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER))
@@ -626,8 +634,20 @@ ID3D11Resource* resourceOf(ID3D11View* view) {
     return res;
 }
 
+// The thread that presents. While the game streams it turns on multithread protection and a loader
+// thread may use the immediate context too; the camera copies and draw bookkeeping are not locked,
+// so they only follow the presenting thread.
+std::atomic<DWORD> g_renderThread{0};
+
 bool isMain(ID3D11DeviceContext* ctx) {
-    return ctx == g_ctx && !t_inside;
+    if (ctx != g_ctx || t_inside) return false;
+    const DWORD render = g_renderThread.load(std::memory_order_relaxed);
+    if (render && render != GetCurrentThreadId()) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true)) TMVS_LOG("hooks: the immediate context is used from thread %lu too (presents on %lu): its calls are left alone", GetCurrentThreadId(), render);
+        return false;
+    }
+    return true;
 }
 
 // A render target big enough and with the screen's shape to be the game's view (not a shadow map,
@@ -1308,6 +1328,7 @@ void logPerf(const Profiler& profiler) {
 bool onPresent(IDXGISwapChain* sc) {
     if (!g_swapChain) beginWith(sc);
     if (sc != g_swapChain || !g_ctx) return false;
+    g_renderThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     bool drop = false;
     static bool lastToneMapped = false;
     static int dropsInARow = 0;
