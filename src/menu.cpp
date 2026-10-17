@@ -373,7 +373,7 @@ const char* tooltipFor(const char* key) {
         {"TAA", "Smooths edges by blending frames. Costs a little sharpness."},
         {"TAAJitter", "Shifts the image by sub-pixels each frame for finer edges."},
         {"Sharpen", "Contrast-adaptive sharpening (CAS)."},
-        {"AutoQuality", "Below the target FPS it switches off the effects that cost most for least look, and back on when there is room. The light shafts and the neon light always stay. Your settings stay as they are."},
+        {"AutoQuality", "Below the target FPS it switches off the effects that cost most for least look, and back on when there is room. The light shafts, the neon light and the long shadows always stay. Your settings stay as they are."},
         {"TargetFPS", "The frame rate auto quality aims for."},
         {"RenderScale", "Draws the game's 3D image and every effect at this fraction of your screen's resolution and scales it back up with AMD FSR 1 before the HUD, which stays sharp. 1.00 is off. 0.77 costs a little sharpness, 0.67 more, for clearly more FPS when the graphics card is the limit. Photo mode, captures and the video export always use the full resolution. Needs Game HDR."},
         {"FsrSharpness", "How much FSR sharpens the scaled-up image. 1 is AMD's strongest, 0 none. Takes the place of Sharpening while the render scale is below 1."},

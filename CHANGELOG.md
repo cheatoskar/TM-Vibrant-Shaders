@@ -43,7 +43,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - Replay menu: the shaded replay under its bars instead of leftover strips. In the replay viewer the menu shows properly and its keys react at once.
 - No hang when the effects start, after alt-tab or when the compare split shows a preset; after alt-tab the effects are back sooner.
 - Big maps: *Long mesh shadows* cost about 0.5 ms of CPU a frame instead of up to 11 ms.
-- Auto quality measures what each effect costs on your GPU and turns off just enough of them, keeps the light shafts and neon light, and no longer switches effects off and on in a loop.
+- Auto quality measures what each effect costs on your GPU and turns off just enough of them, keeps the light shafts, the neon light and the long shadows (cut, a stand's shadow on the road stayed light in play but was dark in photo mode), and no longer switches effects off and on in a loop.
 - Real night follows the look during a map (from a night to a day look and back), and the sun no longer comes back in end-of-race replays.
 - Video export with supersampling: every sample gets the effects.
 - Photo mode: depth of field blurs the lamps of night maps too.

@@ -87,13 +87,16 @@ bool matters(int knob, const Settings& s) {
 // The light shafts and the neon light are the look itself: auto quality never turns them off.
 // They cost little (0.2 - 0.4 ms), and cut for a fraction of a millisecond (or for a target no
 // cut could reach: 240 FPS on a 144 Hz game) the presets lost what they are picked for.
+// The long shadows stay too: cut, a stand's shadow on the road is only the game's light tint
+// far off and turns dark as the car drives up to it, and photo mode (never cut) shows it dark
+// (the owner, Mini Hunt #27, target 109: cut at a map start's 76 FPS, and as 98 FPS never
+// reached the target they stayed off for the rest of the session). Their cost is small
+// (light grid and height map, ~0.3 ms on a GTX 1080 Ti at 1440p).
 bool keepsLook(int knob) {
-    return knob == 10 || knob == 12;
+    return knob == 3 || knob == 10 || knob == 12;
 }
-// The order cuts go in (restores in reverse): the table's, but the long shadows late, after
-// TAA, FXAA and the lowest samples. Turned off and on they pop: a stand's shadow on the road
-// goes bright, and dark again as the car drives up to it. The look knobs aren't in it.
-constexpr int kCutOrder[] = {0, 1, 2, 4, 5, 6, 7, 8, 9, 3, 11};
+// The order cuts go in (restores in reverse): the table's. The look knobs aren't in it.
+constexpr int kCutOrder[] = {0, 1, 2, 4, 5, 6, 7, 8, 9, 11};
 constexpr int kCutKnobs = static_cast<int>(sizeof(kCutOrder) / sizeof(kCutOrder[0]));
 } // namespace
 
