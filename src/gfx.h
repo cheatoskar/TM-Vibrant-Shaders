@@ -18,8 +18,10 @@ void release(T*& p) {
 // Compiles an HLSL source string. Errors go to the log; returns nullptr on failure.
 IDirect3DPixelShader9* compilePixelShader(IDirect3DDevice9* device, const std::string& source, const char* entry,
                                           const char* name, std::string* errors = nullptr);
+// vs_3_0 unless `profile` says otherwise (vs_2_0 goes with the fixed-function pixel stage and the
+// game's ps_2_x shaders).
 IDirect3DVertexShader9* compileVertexShader(IDirect3DDevice9* device, const std::string& source, const char* entry,
-                                            const char* name, std::string* errors = nullptr);
+                                            const char* name, std::string* errors = nullptr, const char* profile = "vs_3_0");
 
 // HLSL compiled once a session: compilePixelShader / compileVertexShader keep what they compiled,
 // a pipeline created again (after a device reset, the compare split's second one) gets its shaders

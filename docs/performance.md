@@ -98,7 +98,8 @@ passes included: 0.24 ms to upscale, 0.08 ms to sharpen):
 | 0.5 | 1280×720 | 1.98 ms | 2.03 ms | 1.31 ms |
 
 The game's own drawing gets cheaper too, but less than in proportion: its pixels shrink with the scale (0.67: 45 % of
-them), its draw calls, vertices and shadow maps don't. Not measured yet; at 0.67 expect its ~4 ms (the perf line's
+them), its draw calls, vertices and shadow maps don't, nor (Stadium by day) the full-size depth pass for its shadow mask.
+Not measured yet; at 0.67 expect its ~4 ms (the perf line's
 *game 3D*) to drop to about 2 – 3 ms. On the GTX 1080 Ti at 1440p that would take the frame from ~12.8 ms (~78 FPS) to
 roughly 8 – 9 ms at 0.77 and 7 – 8 ms at 0.67, until the CPU becomes the limit.
 
@@ -111,14 +112,16 @@ Every 2000 frames in a race `tmvs.log` gets a line like
 
     perf: 80 FPS (12.50 ms a frame) over 2000 shaded frames; GPU ms a frame: game 3D 4.10, mod 6.80 (passes 6.50:
     LightingEngine 1.43, Reflect 1.41, ...; caster maps 0.05), rest of the GPU frame 1.20; CPU ms a frame: mod 0.40,
-    caster recording 0.45
+    caster recording 0.45, game 3D drawing calls 3.20
 
 - **game 3D**: the game drawing its scene (with GameHdr and GameGBuffer: into the mod's targets).
 - **mod**: from the end of the scene to the shaded image, the copies around the passes included; **passes**: the
   most expensive passes by name; **caster maps**: drawing the CasterShadows maps.
 - **rest of the GPU frame**: shadow maps of the game, HUD, menus and idle time. Near 0: the GPU is the limit.
   Large: the CPU is (then GPU times may include waiting for it).
-- **CPU**: the mod's work on the game's render thread.
+- **CPU**: the mod's work on the game's render thread; **game 3D drawing calls**: how long the game took to issue its scene's
+  drawing (the mod's hooks in it included). About as long as *game 3D* on the GPU: the GPU was waiting for the calls, a
+  render scale can't make that part faster. With a render scale the line ends with how many frames were drawn scaled.
 
 ## Auto quality
 

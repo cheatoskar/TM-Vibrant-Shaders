@@ -583,10 +583,17 @@ void logHdrStats(IDirect3DDevice9* device, const char* when, std::vector<uint16_
 // in the smaller target at the lower resolution; the depth buffer stays the game's (a larger one
 // is allowed), the image in its top left corner. The effects run at that size and FSR 1 brings the
 // shaded image up into the game's target before the HUD, which the game then draws at full size.
-// The game reads back its own numbers (GetViewport, GetScissorRect). What the scaling can't
-// follow falls back to the full size: draws in screen pixels (pre-transformed, no viewport applies)
-// for the rest of the map, a camera into part of the screen (the MediaTracker editor, the replay
-// menu's band) for a few seconds, and photo mode, captures and the video export always.
+// The game reads back its own numbers (GetViewport, GetScissorRect). Draws in screen pixels
+// (pre-transformed vertices, no viewport applies: the sun's sprite, lens flares) get a vertex
+// shader that scales them (scaleScreenDraw). The game's passes into full-size targets in the same
+// camera (Stadium: the depth for its shadow mask) share the depth buffer with the scaled image:
+// its depth clears are repeated at the full size, and the scaled image's corner of the depth is
+// cleared before the scaled drawing starts on it (scaledDepthBeforeDraw). A second camera into
+// the same target in a frame (a small 3D view in a corner) is drawn at full size straight into the
+// game's target. What the scaling still can't follow falls back to the full size: draws in screen
+// pixels it can't scale and depth written at both sizes for the rest of the map, the first camera
+// into part of the screen (the MediaTracker editor, the replay menu's band) for a few seconds, and
+// photo mode, captures and the video export always.
 struct RenderScaleState {
     bool active = false;      // the main camera being drawn is scaled (beginHdr .. endHdr)
     bool pending = false;     // the last one was and nothing has filled the game's target yet
@@ -599,14 +606,22 @@ struct RenderScaleState {
     RECT deviceScissor{};
     RECT area{};              // the camera's viewport in the scaled target (at its end)
     int offMap = -1;          // engine::mapLoads() of a map it was turned off for
+    const char* offWhy = nullptr; // ... and why (for the log)
     DWORD partUntil = 0;      // a camera into part of the screen was seen: full size until then
     float biasSaved[16] = {}; // the samplers' mip bias before the camera (DWORDs as floats)
+    // The game's depth buffer during the scaled camera (only compared, not held).
+    IDirect3DSurface9* depth = nullptr;
+    bool fullDepth = false;   // depth written through a full-size target since the scaled corner was clean
+    bool scaledDepth = false; // depth written by the scaled image since its corner was cleared
+    float clearZ = 1.0f;      // the game's last depth clear value
     // What the game did with the scaled target (this map; the log tells once, a few seconds in).
     struct Counts {
         unsigned cameras = 0, viewports = 0, scissors = 0, readBacks = 0, rectClears = 0, rectStretches = 0, sized = 0,
-                 pretransformed = 0, fallbacks = 0;
+                 pretransformed = 0, fallbacks = 0, screenScaled = 0, fullClears = 0, cornerClears = 0, secondCameras = 0;
     } counts;
-    unsigned cameraPretransformed = 0; // in the camera being drawn
+    unsigned cameraPretransformed = 0; // in the camera being drawn: draws in screen pixels left unscaled
+    const char* cameraPretransformedWhy = nullptr; // ... why
+    unsigned cameraMixed = 0;          // ... depth written at the full size after the scaled image's
 } g_rs;
 
 // The scale for the main camera starting now: 1 = the full size.
@@ -616,7 +631,7 @@ float renderScaleNow(const Settings& s, const char** why) {
     if (photo::active()) *why = "photo mode";
     else if (g_exporting) *why = "the video export";
     else if (g_captureRequested) *why = "a capture (F12)";
-    else if (g_rs.offMap == engine::mapLoads()) *why = "off for this map (see above)";
+    else if (g_rs.offMap == engine::mapLoads()) *why = g_rs.offWhy ? g_rs.offWhy : "off for this map (see above)";
     else if (g_rs.partUntil && static_cast<LONG>(GetTickCount() - g_rs.partUntil) < 0) *why = "a camera into part of the screen";
     if (*why) return 1.0f;
     return s.renderScale < 0.5f ? 0.5f : s.renderScale;
@@ -709,8 +724,60 @@ void onGetScissorRect(IDirect3DDevice9* device, RECT* rect) {
     *rect = {unscaleX(rect->left), unscaleY(rect->top), unscaleX(rect->right), unscaleY(rect->bottom)};
 }
 
-const D3DRECT* onClearRects(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects) {
-    if (!count || !rects || !onScaledTarget(device)) return rects;
+// A depth or stencil clear of the game's whole screen while the scaled target is bound: D3D9 clears
+// the viewport, which can't be larger than the bound target, so only the scaled image's corner of
+// the depth buffer would be cleared. The game's passes into full-size targets in this camera use
+// the rest (Stadium: the depth for its shadow mask, drawn right after such a clear; with last
+// frame's depth around the corner its shadows would break up): the same clear over the whole
+// buffer, through the game's own target.
+void clearDepthFullSize(IDirect3DDevice9* device, DWORD flags, float z, DWORD stencil) {
+    hook::InternalScope internal;
+    IDirect3DSurface9* ds = nullptr;
+    device->GetDepthStencilSurface(&ds);
+    if (!ds) return;
+    D3DSURFACE_DESC desc{};
+    ds->GetDesc(&desc);
+    ds->Release();
+    if (!g_hdrGame || desc.Width < g_rs.fullWidth || desc.Height < g_rs.fullHeight) return;
+    IDirect3DSurface9* rt = nullptr;
+    device->GetRenderTarget(0, &rt);
+    if (!rt) return;
+    D3DVIEWPORT9 viewport{};
+    RECT scissor{};
+    DWORD scissorTest = FALSE;
+    device->GetViewport(&viewport);
+    device->GetScissorRect(&scissor);
+    device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
+    if (SUCCEEDED(device->SetRenderTarget(0, g_hdrGame))) {
+        const D3DVIEWPORT9 all = {0, 0, g_rs.fullWidth, g_rs.fullHeight, 0.0f, 1.0f};
+        device->SetViewport(&all);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+        if (SUCCEEDED(device->Clear(0, nullptr, flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL), 0, z, stencil))) g_rs.counts.fullClears++;
+        device->SetRenderTarget(0, rt);
+        device->SetViewport(&viewport);
+        device->SetScissorRect(&scissor);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissorTest);
+    }
+    rt->Release();
+}
+
+const D3DRECT* onClearRects(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, float z, DWORD stencil) {
+    if (!onScaledTarget(device)) return rects;
+    if (flags & D3DCLEAR_ZBUFFER) g_rs.clearZ = z;
+    const D3DVIEWPORT9& v = g_rs.logical;
+    bool wholeScreen = v.X == 0 && v.Y == 0 && v.Width >= g_rs.fullWidth && v.Height >= g_rs.fullHeight;
+    DWORD scissorTest = FALSE;
+    device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
+    const RECT& r = g_rs.logicalScissor;
+    if (scissorTest && (r.left > 0 || r.top > 0 || r.right < static_cast<LONG>(g_rs.fullWidth) || r.bottom < static_cast<LONG>(g_rs.fullHeight))) {
+        wholeScreen = false;
+    }
+    if ((flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL)) && !count && wholeScreen) {
+        clearDepthFullSize(device, flags, z, stencil);
+        // The whole depth is clean again: neither size has drawn into it.
+        if (flags & D3DCLEAR_ZBUFFER) g_rs.scaledDepth = g_rs.fullDepth = false;
+    }
+    if (!count || !rects) return rects;
     static std::vector<D3DRECT> s_scaled;
     s_scaled.assign(rects, rects + count);
     for (D3DRECT& r : s_scaled) r = {scaleX(r.x1), scaleY(r.y1), scaleX(r.x2), scaleY(r.y2)};
@@ -735,32 +802,303 @@ void onStretchRects(IDirect3DSurface9* src, const RECT** srcRect, IDirect3DSurfa
     }
 }
 
-// A draw of the scaled camera in screen pixels: pre-transformed vertices (XYZRHW, or a declaration
-// with POSITIONT) take no viewport, they land at the full-size spot in the smaller target.
-void onDrawScaled(IDirect3DDevice9* device) {
-    if (!g_rs.active || !g_scene.inMainCamera) return;
+// RenderScale: draws in screen pixels. Pre-transformed vertices (a declaration with POSITIONT, or
+// the FVF XYZRHW) take no viewport: as they come they land at their full-size spot in the smaller
+// image. In the Stadium's main camera these are the sun's sprite, the lens flares and, at the
+// camera's end, two quads that mark the sky in the alpha channel (CVisionViewportDx9::RasterizeQuads:
+// quads in pixels of the full size the engine knows). For that one draw a vertex shader of the mod
+// takes over: the same vertices read as POSITION, their pixels scaled into the smaller image, 1/rhw
+// back as w (the interpolation stays perspective-correct), colours and texture coordinates passed on.
+struct ScreenLayout {
+    std::vector<D3DVERTEXELEMENT9> elements;     // the game's vertices (with POSITIONT)
+    IDirect3DVertexDeclaration9* decl = nullptr; // the same read as POSITION
+    IDirect3DVertexShader9* vs = nullptr;
+    const char* failed = nullptr;                // why its draws can't be scaled
+};
+std::vector<ScreenLayout> g_screenLayouts;
+
+// What scaleScreenDraw changed for the draw, given back after it (screenDrawDone).
+struct ScreenDrawSaved {
+    bool active = false;
+    IDirect3DVertexDeclaration9* decl = nullptr; // held
+    DWORD fvf = 0;
+    float constants[8] = {};
+    DWORD clipPlanes = 0;
+} g_screenSaved;
+
+void releaseScreenLayouts() {
+    for (ScreenLayout& l : g_screenLayouts) {
+        gfx::release(l.decl);
+        gfx::release(l.vs);
+    }
+    g_screenLayouts.clear();
+}
+
+// The vertices of the draw about to happen, if they are in screen pixels.
+bool screenElements(IDirect3DDevice9* device, std::vector<D3DVERTEXELEMENT9>& elements) {
+    elements.clear();
+    IDirect3DVertexDeclaration9* decl = nullptr;
+    device->GetVertexDeclaration(&decl);
+    if (decl) {
+        D3DVERTEXELEMENT9 e[MAXD3DDECLLENGTH + 1] = {};
+        UINT n = MAXD3DDECLLENGTH + 1;
+        if (SUCCEEDED(decl->GetDeclaration(e, &n))) {
+            for (UINT i = 0; i < n && e[i].Stream != 0xFF; i++) elements.push_back(e[i]);
+        }
+        decl->Release();
+    } else {
+        // An FVF and no declaration to read: its layout, as D3D9 defines it.
+        DWORD fvf = 0;
+        device->GetFVF(&fvf);
+        if ((fvf & D3DFVF_POSITION_MASK) != D3DFVF_XYZRHW) return false;
+        WORD offset = 0;
+        auto add = [&](BYTE type, BYTE usage, BYTE index, WORD size) {
+            elements.push_back({0, offset, type, static_cast<BYTE>(D3DDECLMETHOD_DEFAULT), usage, index});
+            offset = static_cast<WORD>(offset + size);
+        };
+        add(D3DDECLTYPE_FLOAT4, D3DDECLUSAGE_POSITIONT, 0, 16);
+        if (fvf & D3DFVF_PSIZE) add(D3DDECLTYPE_FLOAT1, D3DDECLUSAGE_PSIZE, 0, 4);
+        if (fvf & D3DFVF_DIFFUSE) add(D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 0, 4);
+        if (fvf & D3DFVF_SPECULAR) add(D3DDECLTYPE_D3DCOLOR, D3DDECLUSAGE_COLOR, 1, 4);
+        const DWORD count = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+        for (DWORD i = 0; i < count && i < 8; i++) {
+            // D3DFVF_TEXCOORDSIZEn: 0 = 2 floats, 1 = 3, 2 = 4, 3 = 1.
+            static const BYTE kTypes[4] = {D3DDECLTYPE_FLOAT2, D3DDECLTYPE_FLOAT3, D3DDECLTYPE_FLOAT4, D3DDECLTYPE_FLOAT1};
+            static const WORD kSizes[4] = {8, 12, 16, 4};
+            const DWORD format = (fvf >> (16 + i * 2)) & 3;
+            add(kTypes[format], D3DDECLUSAGE_TEXCOORD, static_cast<BYTE>(i), kSizes[format]);
+        }
+    }
+    for (const D3DVERTEXELEMENT9& e : elements) {
+        if (e.Usage == D3DDECLUSAGE_POSITIONT) return true;
+    }
+    return false;
+}
+
+// The declaration and vertex shader for one layout of screen-pixel vertices (made once).
+ScreenLayout& screenLayout(IDirect3DDevice9* device, const std::vector<D3DVERTEXELEMENT9>& elements) {
+    for (ScreenLayout& l : g_screenLayouts) {
+        if (l.elements.size() == elements.size() && !memcmp(l.elements.data(), elements.data(), elements.size() * sizeof(D3DVERTEXELEMENT9))) {
+            return l;
+        }
+    }
+    g_screenLayouts.push_back(ScreenLayout());
+    ScreenLayout& l = g_screenLayouts.back();
+    l.elements = elements;
+    std::vector<D3DVERTEXELEMENT9> mine = elements;
+    std::string inputs, outputs, copies, fog = "    o.fog = 1.0;\n";
+    char line[160];
+    for (size_t i = 0; i < mine.size() && !l.failed; i++) {
+        D3DVERTEXELEMENT9& e = mine[i];
+        if (e.Usage == D3DDECLUSAGE_POSITIONT) {
+            if (e.Type != D3DDECLTYPE_FLOAT4 || e.UsageIndex != 0) l.failed = "their pixel positions aren't 4 floats";
+            e.Usage = D3DDECLUSAGE_POSITION;
+            continue;
+        }
+        if (e.Usage == D3DDECLUSAGE_PSIZE && e.UsageIndex == 0) {
+            // Point sprites: their size in pixels scales too.
+            inputs += "    float size : PSIZE;\n";
+            outputs += "    float size : PSIZE;\n";
+            copies += "    o.size = v.size * u_Depth.z;\n";
+            continue;
+        }
+        const char* semantic = (e.Usage == D3DDECLUSAGE_COLOR && e.UsageIndex < 2)      ? "COLOR"
+                               : (e.Usage == D3DDECLUSAGE_TEXCOORD && e.UsageIndex < 8) ? "TEXCOORD"
+                                                                                        : nullptr;
+        if (!semantic) {
+            l.failed = "their vertices carry more than colours and texture coordinates";
+            break;
+        }
+        snprintf(line, sizeof(line), "    float4 a%u : %s%u;\n", static_cast<unsigned>(i), semantic, static_cast<unsigned>(e.UsageIndex));
+        inputs += line;
+        outputs += line;
+        snprintf(line, sizeof(line), "    o.a%u = v.a%u;\n", static_cast<unsigned>(i), static_cast<unsigned>(i));
+        copies += line;
+        // Vertex fog of pre-transformed vertices is the specular colour's alpha.
+        if (e.Usage == D3DDECLUSAGE_COLOR && e.UsageIndex == 1) {
+            snprintf(line, sizeof(line), "    o.fog = v.a%u.a;\n", static_cast<unsigned>(i));
+            fog = line;
+        }
+    }
+    if (l.failed) return l;
+    mine.push_back(D3DDECL_END());
+    if (FAILED(device->CreateVertexDeclaration(mine.data(), &l.decl)) || !l.decl) {
+        l.failed = "no vertex declaration for them";
+        return l;
+    }
+    const std::string source = std::string(
+                                   "// RenderScale: the game's vertices in pixels of the full size, into the scaled image.\n"
+                                   "float4 u_Pixels : register(c0); // pixels -> clip space: x, y scale, x, y offset\n"
+                                   "float4 u_Depth : register(c1);  // depth in the viewport's range: scale, offset; point size scale\n"
+                                   "struct VSIn {\n"
+                                   "    float4 pos : POSITION0;\n") +
+                               inputs + "};\nstruct VSOut {\n    float4 pos : POSITION;\n" + outputs +
+                               "    float fog : FOG;\n};\n"
+                               "VSOut main(VSIn v) {\n"
+                               "    VSOut o;\n"
+                               "    float w = v.pos.w > 0.0 ? 1.0 / v.pos.w : 1.0;\n"
+                               "    o.pos = float4((v.pos.x * u_Pixels.x + u_Pixels.z) * w, (v.pos.y * u_Pixels.y + u_Pixels.w) * w,\n"
+                               "                   (v.pos.z * u_Depth.x + u_Depth.y) * w, w);\n" +
+                               copies + fog + "    return o;\n}\n";
+    // vs_2_0: with the fixed-function pixel stage or the game's ps_2_x shaders.
+    l.vs = gfx::compileVertexShader(device, source, "main", "RenderScaleScreenVS", nullptr, "vs_2_0");
+    if (!l.vs) l.failed = "their vertex shader didn't compile (see above)";
+    static int s_lines = 0;
+    if (s_lines++ < 8) {
+        TMVS_LOG("render scale: draws in screen pixels (%u vertex elements): %s", static_cast<unsigned>(elements.size()),
+                 l.failed ? l.failed : "scaled into the smaller image by a vertex shader of the mod");
+    }
+    return l;
+}
+
+// The major version of the bound pixel shader (0: none, the fixed-function stage).
+int pixelShaderMajor(IDirect3DDevice9* device) {
+    IDirect3DPixelShader9* ps = nullptr;
+    device->GetPixelShader(&ps);
+    if (!ps) return 0;
+    static IDirect3DPixelShader9* s_last = nullptr;
+    static int s_major = 0;
+    if (ps != s_last) {
+        s_last = ps;
+        s_major = 0;
+        UINT size = 0;
+        if (SUCCEEDED(ps->GetFunction(nullptr, &size)) && size >= sizeof(DWORD)) {
+            std::vector<DWORD> code(size / sizeof(DWORD) + 1);
+            if (SUCCEEDED(ps->GetFunction(code.data(), &size))) s_major = static_cast<int>((code[0] >> 8) & 0xFF);
+        }
+    }
+    ps->Release();
+    return s_major;
+}
+
+// Before a draw into the scaled image: screen-pixel vertices get the mod's vertex shader for it.
+void scaleScreenDraw(IDirect3DDevice9* device) {
     IDirect3DVertexShader9* vs = nullptr;
     device->GetVertexShader(&vs);
     if (vs) {
         vs->Release();
         return;
     }
-    DWORD fvf = 0;
-    device->GetFVF(&fvf);
-    bool screen = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
-    if (!fvf) {
-        IDirect3DVertexDeclaration9* decl = nullptr;
-        device->GetVertexDeclaration(&decl);
-        if (decl) {
-            D3DVERTEXELEMENT9 elements[MAXD3DDECLLENGTH + 1] = {};
-            UINT n = MAXD3DDECLLENGTH + 1;
-            if (SUCCEEDED(decl->GetDeclaration(elements, &n))) {
-                for (UINT i = 0; i < n && elements[i].Stream != 0xFF; i++) screen = screen || elements[i].Usage == D3DDECLUSAGE_POSITIONT;
-            }
-            decl->Release();
-        }
+    static std::vector<D3DVERTEXELEMENT9> s_elements;
+    if (!screenElements(device, s_elements)) return;
+    const char* why = nullptr;
+    ScreenLayout* layout = nullptr;
+    // A vs_2_0 shader works in hardware vertex processing and with pixel shaders before ps_3_0.
+    if (device->GetSoftwareVertexProcessing()) {
+        why = "software vertex processing";
+    } else if (pixelShaderMajor(device) >= 3) {
+        why = "a ps_3_0 pixel shader";
+    } else {
+        layout = &screenLayout(device, s_elements);
+        why = layout->failed;
     }
-    if (screen) g_rs.cameraPretransformed++;
+    if (why) {
+        g_rs.cameraPretransformed++;
+        g_rs.cameraPretransformedWhy = why;
+        return;
+    }
+    hook::InternalScope internal;
+    D3DVIEWPORT9 vp{};
+    device->GetViewport(&vp); // the scaled one (the game's numbers are only handed to the game)
+    ScreenDrawSaved& s = g_screenSaved;
+    device->GetVertexDeclaration(&s.decl);
+    device->GetFVF(&s.fvf);
+    device->GetVertexShaderConstantF(0, s.constants, 2);
+    device->GetRenderState(D3DRS_CLIPPLANEENABLE, &s.clipPlanes);
+    // A pixel x of the full size is (x + 0.5) * sx - 0.5 in the scaled image (pixel edges meet);
+    // D3D9 puts clip space -1 on the viewport's first pixel centre: ndc = (x - vp.X) * 2 / vp.Width - 1.
+    const float sx = static_cast<float>(g_rs.width) / static_cast<float>(g_rs.fullWidth);
+    const float sy = static_cast<float>(g_rs.height) / static_cast<float>(g_rs.fullHeight);
+    const float w = vp.Width ? static_cast<float>(vp.Width) : 1.0f, h = vp.Height ? static_cast<float>(vp.Height) : 1.0f;
+    const float range = vp.MaxZ - vp.MinZ;
+    const bool flat = fabsf(range) < 1e-6f;
+    const float constants[8] = {2.0f * sx / w,
+                                -2.0f * sy / h,
+                                (0.5f * sx - 0.5f - static_cast<float>(vp.X)) * 2.0f / w - 1.0f,
+                                1.0f - (0.5f * sy - 0.5f - static_cast<float>(vp.Y)) * 2.0f / h,
+                                flat ? 1.0f : 1.0f / range,
+                                flat ? 0.0f : -vp.MinZ / range,
+                                sx,
+                                0.0f};
+    device->SetVertexDeclaration(layout->decl);
+    device->SetVertexShader(layout->vs);
+    device->SetVertexShaderConstantF(0, constants, 2);
+    // User clip planes apply to transformed vertices only (in clip space): not to these.
+    if (s.clipPlanes) device->SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+    s.active = true;
+    g_rs.counts.screenScaled++;
+}
+
+// After the draw: the game's vertex state as it was (its state caches stay true).
+void screenDrawDone(IDirect3DDevice9* device) {
+    ScreenDrawSaved& s = g_screenSaved;
+    if (!s.active) return;
+    s.active = false;
+    hook::InternalScope internal;
+    device->SetVertexShader(nullptr);
+    if (s.fvf) device->SetFVF(s.fvf);
+    else device->SetVertexDeclaration(s.decl);
+    gfx::release(s.decl);
+    device->SetVertexShaderConstantF(0, s.constants, 2);
+    if (s.clipPlanes) device->SetRenderState(D3DRS_CLIPPLANEENABLE, s.clipPlanes);
+}
+
+// Before the scaled image draws over depth the game wrote at the full size: its corner of the depth
+// buffer cleared (and of the stencil, while the material masks are the mod's).
+void clearScaledCorner(IDirect3DDevice9* device) {
+    hook::InternalScope internal;
+    D3DVIEWPORT9 viewport{};
+    DWORD scissorTest = FALSE;
+    device->GetViewport(&viewport);
+    device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
+    const D3DVIEWPORT9 corner = {0, 0, g_rs.width, g_rs.height, 0.0f, 1.0f};
+    device->SetViewport(&corner);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    bool ok = materialsWanted() && SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0, g_rs.clearZ, 0));
+    if (!ok) ok = SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, g_rs.clearZ, 0)); // no stencil in the format
+    if (ok) g_rs.counts.cornerClears++;
+    device->SetViewport(&viewport);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissorTest);
+}
+
+// RenderScale and the game's depth buffer. The scaled image uses its top left corner; the game's
+// passes into full-size targets in the same camera write the whole buffer at the full size
+// (Stadium, by day: the depth for its shadow mask, which the scene's drawing then tests against, as
+// a depth pre-pass). There the full-size depth belongs to other pixels and would cut holes into the
+// scaled scene, so the corner is cleared before the scaled image draws over it. Depth written at the
+// full size after the scaled image's own can't be undone: counted, that map goes to the full size.
+void scaledDepthBeforeDraw(IDirect3DDevice9* device, bool scaledTarget) {
+    DWORD z = FALSE, zwrite = FALSE;
+    device->GetRenderState(D3DRS_ZENABLE, &z);
+    device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+    const bool writes = z != FALSE && zwrite != FALSE;
+    if (!scaledTarget) {
+        if (writes && !g_rs.fullDepth) {
+            IDirect3DSurface9* ds = nullptr;
+            device->GetDepthStencilSurface(&ds);
+            if (ds) ds->Release();
+            g_rs.fullDepth = ds && ds == g_rs.depth;
+        }
+        return;
+    }
+    if (g_rs.fullDepth) {
+        g_rs.fullDepth = false;
+        if (g_rs.scaledDepth) g_rs.cameraMixed++;
+        else clearScaledCorner(device);
+    }
+    if (writes) g_rs.scaledDepth = true;
+}
+
+// Every draw of the scaled camera (before the game's draw).
+void onDrawScaled(IDirect3DDevice9* device) {
+    if (!g_rs.active || !g_scene.inMainCamera) return;
+    IDirect3DSurface9* rt = nullptr;
+    device->GetRenderTarget(0, &rt);
+    if (rt) rt->Release();
+    const bool scaledTarget = rt && (rt == g_hdrScene.surface || rt == g_hdrAdded.surface);
+    scaledDepthBeforeDraw(device, scaledTarget);
+    // Screen pixels into a full-size target in the camera are right as they are.
+    if (scaledTarget) scaleScreenDraw(device);
 }
 
 // Float targets with blending: the game blends glows and particles into the scene.
@@ -929,6 +1267,21 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_rs.active = false;
     const Settings& s = Config::get().settings;
     if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
+    // RenderScale: a second camera into the same target in this frame (at a map's start a small 3D
+    // view in the corner, 480x272 at 2039,1138 on a 1440p screen) draws straight into the game's
+    // target at full size: the first camera's image is already shaded there (the effects don't run
+    // twice on one target), and the float target keeps the scaled size instead of switching back
+    // and forth (which turned the scaling off for seconds at every map start).
+    if (s.renderScale < 0.99f && g_rs.sceneScaled && g_scene.mainRenders > 1 && rt == g_hdrLastGame) {
+        g_rs.counts.secondCameras++;
+        static int s_map = -1;
+        if (s_map != engine::mapLoads()) {
+            s_map = engine::mapLoads();
+            TMVS_LOG("render scale: a second camera into the screen in the same frame: drawn at full size straight into the game's image, the "
+                     "main camera stays scaled");
+        }
+        return;
+    }
     D3DSURFACE_DESC desc{};
     rt->GetDesc(&desc);
     // RenderScale: the float target at the scaled size (at least 320 x 200, as a main camera).
@@ -999,7 +1352,16 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
         g_rs.logicalScissor = scissor;
         g_rs.deviceScissor = scaledRect(scissor);
         g_rs.cameraPretransformed = 0;
+        g_rs.cameraPretransformedWhy = nullptr;
+        g_rs.cameraMixed = 0;
+        IDirect3DSurface9* ds = nullptr;
+        device->GetDepthStencilSurface(&ds);
+        if (ds) ds->Release();
+        g_rs.depth = ds;
+        g_rs.fullDepth = false;
+        g_rs.scaledDepth = false;
         g_rs.counts.cameras++;
+        if (g_scene.mainRenders == 1) perflog::renderScaled(static_cast<float>(width) / desc.Width);
         device->SetViewport(&g_rs.device);
         device->SetScissorRect(&g_rs.deviceScissor);
         // Textures as sharp as at the full size: the GPU picks mip levels by the pixels' size on
@@ -1057,11 +1419,22 @@ void endScaledCamera(IDirect3DDevice9* device) {
     if (g_rs.cameraPretransformed > 0) {
         g_rs.counts.pretransformed += g_rs.cameraPretransformed;
         g_rs.offMap = engine::mapLoads();
+        g_rs.offWhy = "off for this map: draws in screen pixels it can't scale";
         if (s_lines < 20) {
             s_lines++;
-            TMVS_LOG("render scale: the game drew %u draws in screen pixels in the main camera (pre-transformed, no viewport applies): "
-                     "they don't scale, full size for the rest of this map",
-                     g_rs.cameraPretransformed);
+            TMVS_LOG("render scale: the game drew %u draws in screen pixels in the main camera that can't be scaled (%s): full size for the "
+                     "rest of this map",
+                     g_rs.cameraPretransformed, g_rs.cameraPretransformedWhy ? g_rs.cameraPretransformedWhy : "?");
+        }
+    }
+    if (g_rs.cameraMixed > 0) {
+        g_rs.offMap = engine::mapLoads();
+        g_rs.offWhy = "off for this map: the game's depth written at both sizes";
+        if (s_lines < 20) {
+            s_lines++;
+            TMVS_LOG("render scale: the game wrote its depth through a full-size target after the scaled image's own (%u times in the camera): "
+                     "full size for the rest of this map",
+                     g_rs.cameraMixed);
         }
     }
     // A camera into part of the screen: as processScene's test, a part is under 95% of the target.
@@ -1083,9 +1456,12 @@ void endScaledCamera(IDirect3DDevice9* device) {
     if (!s_summed && GetTickCount() - s_since > 8000) {
         s_summed = true;
         const RenderScaleState::Counts& c = g_rs.counts;
-        TMVS_LOG("render scale: %u scaled cameras on this map; the game set %u viewports, %u scissor rects (scaled), read them back %u times, "
-                 "%u viewports of the scaled target's own size; %u clears and %u copies with rects; %u draws in screen pixels; %u fallbacks",
-                 c.cameras, c.viewports, c.scissors, c.readBacks, c.sized, c.rectClears, c.rectStretches, c.pretransformed, c.fallbacks);
+        TMVS_LOG("render scale (map): %ux%u of %ux%u in %u cameras; the game set %u viewports, %u scissor rects (scaled), read them back %u "
+                 "times, %u viewports of the scaled target's own size; %u clears and %u copies with rects; %u draws in screen pixels scaled, "
+                 "%u not; its depth cleared %u times at the full size too, the scaled corner %u times before drawing over full-size depth; "
+                 "%u second cameras at full size; %u fallbacks",
+                 g_rs.width, g_rs.height, g_rs.fullWidth, g_rs.fullHeight, c.cameras, c.viewports, c.scissors, c.readBacks, c.sized,
+                 c.rectClears, c.rectStretches, c.screenScaled, c.pretransformed, c.fullClears, c.cornerClears, c.secondCameras, c.fallbacks);
     }
 }
 
@@ -1232,6 +1608,7 @@ void onDrawAdded(IDirect3DDevice9* device) {
 }
 
 void onDrawDone(IDirect3DDevice9* device) {
+    screenDrawDone(device); // RenderScale: the game's vertex state back after a draw in screen pixels
     if (!g_hdrAddedBound) return;
     hook::InternalScope internal;
     device->SetRenderTarget(0, g_hdrScene.surface);
@@ -2270,6 +2647,10 @@ void onPreReset() {
     g_gbufLightActive = g_gbufLightValid = false;
     g_gbufLight.destroy();
     g_rs.active = g_rs.pending = g_rs.sceneScaled = false;
+    g_rs.depth = nullptr;
+    gfx::release(g_screenSaved.decl);
+    g_screenSaved.active = false;
+    releaseScreenLayouts(); // made again when needed (the shader from the compile cache)
     casters::releaseDevice();
     depth::onPreReset();
     overlay::preReset();

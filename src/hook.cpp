@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <d3d9.h>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #pragma comment(lib, "d3d9.lib")
@@ -132,6 +133,25 @@ void traceDrawState(IDirect3DDevice9* device, const char* kind, UINT primitives)
     device->GetRenderState(D3DRS_ALPHAFUNC, &alphaFunc);
     char alpha[40] = "";
     if (alphaTest) snprintf(alpha, sizeof(alpha), " alphatest=%lu/%lu", alphaRef, alphaFunc);
+    // Vertices in screen pixels (XYZRHW, or POSITIONT in the declaration) are marked: no viewport
+    // applies to them (RenderScale has to scale them itself).
+    bool screen = false;
+    if (!vs) {
+        DWORD fvf = 0;
+        device->GetFVF(&fvf);
+        screen = (fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW;
+        IDirect3DVertexDeclaration9* decl = nullptr;
+        device->GetVertexDeclaration(&decl);
+        if (decl) {
+            D3DVERTEXELEMENT9 elements[MAXD3DDECLLENGTH + 1] = {};
+            UINT n = MAXD3DDECLLENGTH + 1;
+            if (SUCCEEDED(decl->GetDeclaration(elements, &n))) {
+                for (UINT i = 0; i < n && elements[i].Stream != 0xFF; i++) screen = screen || elements[i].Usage == D3DDECLUSAGE_POSITIONT;
+            }
+            decl->Release();
+        }
+    }
+    if (screen) strncat(alpha, " screen", sizeof(alpha) - strlen(alpha) - 1);
     // With the bytecode hashes the draws can be matched to the dumped sources (gameshaders).
     tracer::event("  %s prims=%u z=%lu zw=%lu blend=%lu cw=%lx%s vs=%p#%016llx ps=%p#%016llx", kind, primitives, z, zw, blend, cw, alpha,
                   static_cast<void*>(vs), static_cast<unsigned long long>(shaderHash(vs)), static_cast<void*>(ps),
@@ -352,7 +372,7 @@ HRESULT APIENTRY clearDetour(IDirect3DDevice9* device, DWORD count, const D3DREC
                              DWORD stencil) {
     if (tracingGame()) tracer::event("Clear rects=%lu flags=%lx color=%08lx z=%.3f s=%lu", count, flags, color, z, stencil);
     if (g_internal == 0 && g_callbacks.clear) g_callbacks.clear(device, count, rects, flags, color);
-    if (g_internal == 0 && g_callbacks.clearRects) rects = g_callbacks.clearRects(device, count, rects);
+    if (g_internal == 0 && g_callbacks.clearRects) rects = g_callbacks.clearRects(device, count, rects, flags, z, stencil);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD)>(kClear)(
         device, count, rects, flags, color, z, stencil);
 }
