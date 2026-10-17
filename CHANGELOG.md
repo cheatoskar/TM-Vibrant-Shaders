@@ -64,6 +64,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - The preset gallery shows TrackMania 2 pictures (the Stadium start by day, rendered from a capture) instead of the TMNF ones.
 - Tooltips say what *Real night*, *Game moonlight* and *Cinematic in replays only* do in TrackMania 2; *Turn off game FX*, which changed nothing there, is no longer shown.
 - `tmvs-mp.log` gets a *perf* line every 2000 frames in a race: FPS, the shaders' GPU time and their most expensive passes.
+- *Best export quality* (on) for the replay editor's *Shoot video* (ManiaPlanet writes the WebM itself): while the game reads its frames back for the video, slower than real time (a recorder such as OBS's memory capture is left alone), the effects run on the video's clock (`VideoFps` in `maniaplanet.ini`, 30 by default: set it to the video's frame rate) at full quality, with depth of field and motion blur as in a replay. Seen from the graphics side only; not yet tested in the game.
 
 ## 1.3.0
 

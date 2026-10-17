@@ -101,6 +101,22 @@ page, panel "ManiaPlanet":
   as the two directions agree (Horizon: 18° apart, almost fully), else only the contact shadows
   toward the black hole. Nothing in the game's memory changes. Debug view "The moon's glint" shows the rebuilt glint. Not on day or
   sunset maps, not under other skies.
+- **Video export** (`VideoFps`, 30 by default): the replay editor's *Shoot video* writes a WebM
+  (VP8) with ManiaPlanet's own encoder; the mod adds no encoder. With *Best export quality*
+  (`VideoExportBest`, settings.ini, on) the mod notices the export from the graphics side only: a
+  staging texture of picture size read back (`Map` with read access) after frame after frame, which
+  is how the game must get each frame to its encoder, and a second of it clearly slower than real
+  time (fewer than 0.7 x the Presents a second before the read-backs, or none). A recorder that
+  reads frames back while the game runs at full speed (OBS's memory capture) is logged and left
+  alone; the mod's own read-backs (captures, photos, preset pictures) don't count. TM2 has no
+  replay signal to limit it to the replay editor. While that lasts the effects run on the
+  video's clock (one step of 1 / `VideoFps` per video frame, spread over the renders between two
+  read-backs), auto quality neither cuts nor measures, and depth of field and motion blur run as in
+  a replay. Nothing the game doesn't hand to D3D11 is read: the video's frame rate isn't, so set
+  `VideoFps` to the one chosen in *Shoot video*. The log says when it starts and ends (`video:`),
+  the read-back's size and how many renders came per read-back and per Present. Not yet tested in
+  the game; a tone map into a target not of the window's shape (an export of another aspect) gets
+  no effects and is logged.
 - **Placement**, and the **compare and check views**.
 - **Status lines.**
 - **Compare (split)** shows the game's image left and the mod's right.

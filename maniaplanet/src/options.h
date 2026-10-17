@@ -34,6 +34,9 @@ struct Options {
     // taken out of the image and the black hole lights the scene instead, at this strength (1 = as
     // bright as the game's moon; 0 = off, the default). Shader side only (scene.hlsl).
     float blackHoleMoon = 0.0f;
+    // The frame rate of the replay editor's Shoot video, for the effects' clock while it renders
+    // (VideoExportBest, hooks.cpp). The game doesn't tell it on the D3D11 side: set it to match.
+    float videoFps = 30.0f;
 };
 
 namespace options {
