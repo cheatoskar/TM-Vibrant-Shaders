@@ -3210,6 +3210,36 @@ bool Pipeline::addScene(IDirect3DDevice9* device, IDirect3DTexture9* added, IDir
     return copyScene(device, added, target, area, true);
 }
 
+bool Pipeline::capScene(IDirect3DDevice9* device, IDirect3DSurface9* target, const RECT& area) {
+    if (!m_ready || !target) return false;
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
+    if (!m_solidPS) return false;
+    D3DSURFACE_DESC desc{};
+    target->GetDesc(&desc);
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target); // resets the scissor rect: set it after
+    device->SetScissorRect(&area);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    // The smaller of what is there and the ceiling (the blend factors don't count for MIN); the
+    // colour only, the game's alpha stays.
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_MIN);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+    const float ceiling[4] = {kSceneCeiling, kSceneCeiling, kSceneCeiling, kSceneCeiling};
+    device->SetPixelShaderConstantF(32, ceiling, 1);
+    device->SetPixelShader(m_solidPS);
+    m_quad.draw(device, desc.Width, desc.Height);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
 bool Pipeline::fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom) {
     if (!m_ready || !band || !target) return false;
     D3DSURFACE_DESC desc{};

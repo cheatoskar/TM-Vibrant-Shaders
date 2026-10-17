@@ -988,6 +988,21 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
         g_gbufLightActive = false;
         return;
     }
+    // The float target starts the camera as the game's own did. The game clears its target before
+    // the camera begins (opaque black), so that clear never reached the float one, which kept the
+    // last frames where nothing opaque is drawn: the sky. Some skies (B13-Obstacle, owner
+    // 2026-10-17) blend over what is there by its alpha, and the float target doesn't cut the alpha
+    // at 1 as the 8-bit one does: the sky added up frame after frame into the hundreds (its alpha
+    // counted the frames since the map loaded) and Bloom made white blobs of it. Without a clear of
+    // the game's this frame: opaque black, as the game's.
+    {
+        const bool cleared = g_clearedTop.target == rt && g_clearedTop.frame == g_frame;
+        DWORD scissorTest = FALSE;
+        device->GetRenderState(D3DRS_SCISSORTESTENABLE, &scissorTest);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, cleared ? g_clearedTop.color : D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0);
+        device->SetRenderState(D3DRS_SCISSORTESTENABLE, scissorTest);
+    }
     if (scaled) {
         g_rs.active = true;
         g_rs.fullWidth = desc.Width;
@@ -1105,6 +1120,9 @@ void endHdr(IDirect3DDevice9* device) {
     // into the game's target. RenderScale: processScene brings it up there (or fillFromScaled).
     g_hdrAddedValid = g_hdrAddedActive && g_pipeline.addScene(device, g_hdrAdded.texture, g_hdrScene.surface, area);
     g_hdrAddedActive = false;
+    // Nothing above a ceiling the game's real light never reaches (Pipeline::capScene): what
+    // went wrong in the float target can't blow up into Bloom, the light shafts and the exposure.
+    g_pipeline.capScene(device, g_hdrScene.surface, area);
     const bool scaled = g_rs.active;
     g_hdrValid = scaled || g_pipeline.resolveScene(device, g_hdrScene.texture, g_hdrGame, area);
     g_pipeline.endStateSave(device);

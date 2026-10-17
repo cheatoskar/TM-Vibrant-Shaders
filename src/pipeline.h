@@ -208,6 +208,12 @@ public:
     // Adds `added` (the light the game's additive draws put into a target of their own) into
     // the float scene `target`, inside `area`, as it is.
     bool addScene(IDirect3DDevice9* device, IDirect3DTexture9* added, IDirect3DSurface9* target, const RECT& area);
+    // The float scene's colour no higher than kSceneCeiling inside `area` (in place, MIN blending).
+    // A safety net: the game's real light stays far below it (45 captures of 2026-10: at most 3.13
+    // with its added light), so the image only changes where something went wrong (a sky that
+    // added up over frames reached 495 on B13-Obstacle: Bloom made white blobs of it).
+    bool capScene(IDirect3DDevice9* device, IDirect3DSurface9* target, const RECT& area);
+    static constexpr float kSceneCeiling = 4.0f;
     // The rows above (top) and below (bottom) a full-width `area` of `target` (the replay menu's
     // band): the area's shaded image `band` (its size), mirrored at the area's edges. Rows farther
     // out than the band is high stay as they are.

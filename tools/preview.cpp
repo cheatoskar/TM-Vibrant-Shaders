@@ -63,6 +63,14 @@ using namespace tmshaders;
 
 namespace {
 
+// A float in the half floats' normal range as their bits (rounded down; exact for the ceiling).
+uint16_t floatToHalfBits(float value) {
+    uint32_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    const int exponent = static_cast<int>((bits >> 23) & 0xFF) - 127 + 15;
+    return static_cast<uint16_t>(((bits >> 16) & 0x8000u) | (static_cast<uint32_t>(exponent) << 10) | ((bits >> 13) & 0x3FFu));
+}
+
 std::wstring widen(const char* s) {
     int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0);
     std::wstring w(static_cast<size_t>(n > 0 ? n - 1 : 0), L'\0');
@@ -548,6 +556,24 @@ int main(int argc, char** argv) {
             std::vector<uint16_t> half(static_cast<size_t>(c->cap.width) * c->cap.height * 4);
             if (fread(header, sizeof(header), 1, f) == 1 && header[0] == 0x31484D54u && header[1] == c->cap.width &&
                 header[2] == c->cap.height && fread(half.data(), sizeof(uint16_t), half.size(), f) == half.size()) {
+                // The game's float image as the pipeline gets it in game since 1.4.0: its colour no
+                // higher than Pipeline::kSceneCeiling (capScene at the camera's end; older captures
+                // can hold more, B13-Obstacle's sky that added up over frames). Infinity and NaN
+                // become the ceiling as the GPU's MIN blending gives it (IEEE minNum).
+                if (!strcmp(extension, ".hdr16")) {
+                    const uint16_t ceiling = floatToHalfBits(Pipeline::kSceneCeiling);
+                    size_t capped = 0;
+                    for (size_t i = 0; i < half.size(); i++) {
+                        if ((i & 3) == 3) continue; // alpha as it is
+                        const uint16_t h = half[i];
+                        const bool nan = (h & 0x7FFFu) > 0x7C00u;
+                        if (nan || (!(h & 0x8000u) && h > ceiling)) {
+                            half[i] = ceiling;
+                            capped++;
+                        }
+                    }
+                    if (capped) printf("%s: %zu colour values of the game's HDR above %.1f (or not finite) capped\n", path.c_str(), capped, Pipeline::kSceneCeiling);
+                }
                 std::vector<uint64_t> texels(half.size() / 4);
                 memcpy(texels.data(), half.data(), half.size() * sizeof(uint16_t));
                 texture = upload(device, c->cap.width, c->cap.height, D3DFMT_A16B16G16R16F, texels);
