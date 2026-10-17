@@ -103,7 +103,11 @@ page, panel "ManiaPlanet":
   (VP8) with ManiaPlanet's own encoder; the mod adds no encoder. With *Best export quality*
   (`VideoExportBest`, settings.ini, on) the mod notices the export from the graphics side only: a
   staging texture of picture size read back (`Map` with read access) after frame after frame, which
-  is how the game must get each frame to its encoder. While that lasts the effects run on the
+  is how the game must get each frame to its encoder, and a second of it clearly slower than real
+  time (fewer than 0.7 x the Presents a second before the read-backs, or none). A recorder that
+  reads frames back while the game runs at full speed (OBS's memory capture) is logged and left
+  alone; the mod's own read-backs (captures, photos, preset pictures) don't count. TM2 has no
+  replay signal to limit it to the replay editor. While that lasts the effects run on the
   video's clock (one step of 1 / `VideoFps` per video frame, spread over the renders between two
   read-backs), auto quality neither cuts nor measures, and depth of field and motion blur run as in
   a replay. Nothing the game doesn't hand to D3D11 is read: the video's frame rate isn't, so set

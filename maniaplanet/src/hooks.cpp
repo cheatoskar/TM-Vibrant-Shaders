@@ -246,6 +246,16 @@ struct VideoWatch {
     unsigned videoFrames = 0;           // read-backs of this export
     unsigned perPresent = 0, mostPerPresent = 0; // tone maps between two Presents (most during it)
     double startedAt = 0.0;
+    // Recorders (OBS's memory capture and the like) read the frame back every frame too, also in a
+    // race; TM2 has no replay signal to rule that out. An export renders far slower than real time
+    // (encoding, the HQ samples) or doesn't present at all, a recorder doesn't slow the game much:
+    // the Present rate over a second of read-backs against the second before them decides.
+    enum class Verdict { Unknown, Export, Recorder };
+    Verdict verdict = Verdict::Unknown;
+    bool winReading = false;            // the current one-second window has read-backs
+    double winStart = -1.0;
+    unsigned winPresents = 0;
+    double baseFps = 0.0;               // Presents a second without read-backs (0: not measured yet)
     static constexpr unsigned kMaxGap = 16;
 };
 VideoWatch g_video;
@@ -276,6 +286,47 @@ void noteReadback(ID3D11Resource* res, D3D11_MAP type) {
     g_video.readbacks.fetch_add(1, std::memory_order_relaxed);
 }
 
+void videoStop(const char* why) {
+    VideoWatch& v = g_video;
+    if (!v.active) return;
+    v.active = false;
+    v.offset = v.clock - nowSeconds();
+    TMVS_LOG("video: export %s after %u video frames (%u renders, at most %u per Present) in %.1f s; the clock goes on from %.2f s", why,
+             v.videoFrames, v.frames, v.mostPerPresent, nowSeconds() - v.startedAt, v.clock);
+}
+
+// The Present rate in one-second windows, with and without read-backs (VideoWatch::Verdict).
+// Called at every render and every Present: an export that doesn't present still gets a verdict.
+void videoPacing() {
+    VideoWatch& v = g_video;
+    const double now = nowSeconds();
+    const bool reading = v.streak > 0 && v.sinceReadback <= VideoWatch::kMaxGap;
+    if (reading != v.winReading || v.winStart < 0.0) {
+        if (!reading) v.verdict = VideoWatch::Verdict::Unknown;
+        v.winReading = reading;
+        v.winStart = now;
+        v.winPresents = 0;
+        return;
+    }
+    const double elapsed = now - v.winStart;
+    if (elapsed < 1.0) return;
+    const double fps = v.winPresents / elapsed;
+    if (!reading) {
+        if (elapsed < 2.0) v.baseFps = fps; // longer: a loading screen or a pause, not a rate
+    } else if (v.verdict != VideoWatch::Verdict::Recorder) {
+        // Without a rate from before (read-backs since the start), 30 Presents a second is real time.
+        const bool realTime = v.baseFps > 0.0 ? fps >= 0.7 * v.baseFps : fps >= 30.0;
+        if (realTime) {
+            TMVS_LOG("video: frames read back every frame at %.0f Presents/s (%.0f before): a recorder, not the game's export; "
+                     "the effects stay on the real clock", fps, v.baseFps);
+            videoStop("taken for a recorder");
+        }
+        v.verdict = realTime ? VideoWatch::Verdict::Recorder : VideoWatch::Verdict::Export;
+    }
+    v.winStart = now;
+    v.winPresents = 0;
+}
+
 // At each of the effects' tone maps (one per render), before the effects run.
 void videoTick(UINT w, UINT h) {
     VideoWatch& v = g_video;
@@ -288,7 +339,10 @@ void videoTick(UINT w, UINT h) {
         v.sinceReadback = 0;
     }
     v.sinceReadback++;
-    if (!v.active && wanted && v.streak >= 3 && v.sinceReadback <= VideoWatch::kMaxGap) {
+    videoPacing();
+    // Only once a second of read-backs ran clearly slower than real time (the first second of an
+    // export stays on the real clock).
+    if (!v.active && wanted && v.streak >= 3 && v.sinceReadback <= VideoWatch::kMaxGap && v.verdict == VideoWatch::Verdict::Export) {
         v.active = true;
         v.clock = nowSeconds() + v.offset;
         v.frames = v.videoFrames = 0;
@@ -298,11 +352,8 @@ void videoTick(UINT w, UINT h) {
                  "effects on a %.0f fps clock at full quality",
                  v.lastW.load(), v.lastH.load(), v.lastFormat.load(), v.gap, w, h, options::current().videoFps);
     } else if (v.active && (!wanted || v.sinceReadback > 2 * v.gap + 8)) {
-        v.active = false;
-        v.offset = v.clock - nowSeconds();
         v.streak = 0;
-        TMVS_LOG("video: export over after %u video frames (%u renders, at most %u per Present) in %.1f s; the clock goes on from %.2f s",
-                 v.videoFrames, v.frames, v.mostPerPresent, nowSeconds() - v.startedAt, v.clock);
+        videoStop("over");
     }
     if (!v.active) return;
     if (seen) v.videoFrames++;
@@ -316,6 +367,8 @@ void videoPresent() {
     VideoWatch& v = g_video;
     if (v.active) v.mostPerPresent = std::max(v.mostPerPresent, v.perPresent);
     v.perPresent = 0;
+    v.winPresents++;
+    videoPacing();
 }
 
 // The engine's textures of this frame (owned references, kept until replaced) and its camera.
@@ -813,6 +866,8 @@ void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed whe
     if (!g_renderer.apply(ctx, target, view, sideB ? sideLook(g_look, false) : g_look, options::current(), g_frame.toneMapped)) return;
     if (sideB) g_rendererB.apply(ctx, target, view, sideLook(g_lookB, true), options::current(), g_frame.toneMapped);
     g_frame.placed = where;
+    // The mod's own read-backs (captures, preset pictures, photos) are not the game's (VideoWatch).
+    Inside own;
     if (capture::active()) capture::onGraded(g_device, ctx, g_renderer.lastInput(), g_renderer.lastViewFormat(), view);
     // A picture for a preset you saved: the finished frame without the interface.
     tmshaders::Config& config = tmshaders::Config::get();
@@ -914,7 +969,10 @@ bool onDraw(ID3D11DeviceContext* ctx) {
         takeCar(ctx);
 
     if (role == Role::ToneMap && f.rt && screenSized(f.rtW, f.rtH)) {
-        if (capture::active() && !f.toneMapSeen) capture::onToneMap(g_device, ctx);
+        if (capture::active() && !f.toneMapSeen) {
+            Inside own; // its read-backs are the mod's, not the game's (VideoWatch)
+            capture::onToneMap(g_device, ctx);
+        }
         // The tone map reads the HDR image (t0) and the exposure (t1).
         ID3D11ShaderResourceView* in[2] = {};
         ctx->PSGetShaderResources(0, 2, in);
@@ -1508,7 +1566,10 @@ bool onPresent(IDXGISwapChain* sc) {
     }
     // The frame as it is shown (with the menu when it's open).
     if (capture::active()) {
-        capture::onPresent(g_device, g_ctx, g_backBuffer);
+        {
+            Inside own; // its read-backs are the mod's, not the game's (VideoWatch)
+            capture::onPresent(g_device, g_ctx, g_backBuffer);
+        }
         // The car in the last frames (neon trail: an even step from frame to frame?).
         std::string text = "# time (s), dt (ms), car found, candidates, position, step (m), camera eye, track, picked, "
                            "the candidates in camera space (x,y,z ...)\n";
