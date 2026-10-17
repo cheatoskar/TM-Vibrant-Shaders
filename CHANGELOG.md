@@ -51,6 +51,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - Photo mode: depth of field blurs the lamps of night maps too.
 - Author's Shader: leaving the map brings your own look back at once.
 - Text fields in the menu take typing.
+- Saving the settings (a moment after a change in the menu, and when a map switches the look) no longer stalls the game for 0.1 to 1.3 s: `settings.ini` is written in one go instead of once per setting, and never left half written.
 - F12 frame capture: the game no longer freezes for half a second (on a busy disk for seconds) while the files are written; they are written in the background.
 
 **TrackMania 2 (ManiaPlanet 4)**

@@ -123,6 +123,7 @@ add_library(tmvs_mp_core STATIC
   # The TMNF mod's settings, presets and menu, shared.
   ${TMVS_ROOT}/src/config.cpp
   ${TMVS_ROOT}/src/keys.cpp
+  ${TMVS_ROOT}/src/inifile.cpp
   ${TMVS_ROOT}/src/menu.cpp
   ${TMVS_ROOT}/src/image.cpp
   ${TMVS_ROOT}/src/update.cpp
@@ -195,6 +196,13 @@ target_compile_options(mp_shadowtest PRIVATE /W4 /EHsc /permissive- /utf-8)
 add_executable(mp_sharetest ${TMVS_ROOT}/tools/sharetest.cpp)
 target_link_libraries(mp_sharetest PRIVATE tmvs_mp_core d3d11)
 target_compile_options(mp_sharetest PRIVATE /W4 /EHsc /permissive- /utf-8)
+
+# The settings.ini writer against WritePrivateProfileString (the same test as tmvs_initest, tools/initest.cpp).
+add_executable(mp_initest ${TMVS_ROOT}/tools/initest.cpp)
+target_link_libraries(mp_initest PRIVATE tmvs_mp_core d3d11)
+# Also Config::save itself, in the folder TMVS_MP_DATA names.
+target_compile_definitions(mp_initest PRIVATE TMVS_INITEST_CONFIG)
+target_compile_options(mp_initest PRIVATE /W4 /EHsc /permissive- /utf-8)
 
 # Offline test: a small D3D11 program that draws like the game (scene with depth, the engine's own
 # tone-map pixel shader, then an interface draw) through the proxy and checks where the effects land.

@@ -118,6 +118,7 @@ add_library(tmvs_core STATIC
   src/capwriter.cpp
   src/config.cpp
   src/keys.cpp
+  src/inifile.cpp
   src/gbx.cpp
   src/log.cpp
   src/weather.cpp
@@ -201,6 +202,11 @@ target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_keystest tools/keystest.cpp)
 target_link_libraries(tmvs_keystest PRIVATE tmvs_core)
 target_compile_options(tmvs_keystest PRIVATE ${TMVS_OPTIONS})
+
+# settings.ini writer test: the same bytes as WritePrivateProfileString, in one write (development tool).
+add_executable(tmvs_initest tools/initest.cpp)
+target_link_libraries(tmvs_initest PRIVATE tmvs_core)
+target_compile_options(tmvs_initest PRIVATE ${TMVS_OPTIONS})
 
 # Auto quality test: the grace after a map start, a hitch and a pause (development tool).
 add_executable(tmvs_aqtest tools/aqtest.cpp src/autoquality.cpp)
