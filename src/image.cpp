@@ -1,11 +1,13 @@
 #include "image.h"
 #include <windows.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
-// stb (public domain / MIT): only the JPEG reader and writer.
+// stb (public domain / MIT): the JPEG reader and writer, the PNG reader (the menu's icon).
 #pragma warning(push, 0)
 #define STBI_ONLY_JPEG
+#define STBI_ONLY_PNG
 #define STBI_NO_STDIO
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -198,6 +200,62 @@ bool readJpeg(const std::wstring& path, std::vector<uint32_t>& pixels, int& widt
     while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0) data.insert(data.end(), buffer, buffer + n);
     fclose(f);
     return !data.empty() && decodeJpeg(data.data(), data.size(), pixels, width, height);
+}
+
+bool menuIcon(int size, std::vector<uint32_t>& pixels) {
+    if (size <= 0 || size > 512) return false;
+    static const int s_anchor = 0; // any address inside this module (the mod's DLL)
+    HMODULE module = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&s_anchor), &module);
+    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(kIconResource), MAKEINTRESOURCEW(10)); // RT_RCDATA
+    HGLOBAL handle = resource ? LoadResource(module, resource) : nullptr;
+    const void* data = handle ? LockResource(handle) : nullptr;
+    if (!data) return false;
+    int width = 0, height = 0, channels = 0;
+    unsigned char* rgba = stbi_load_from_memory(static_cast<const unsigned char*>(data), static_cast<int>(SizeofResource(module, resource)), &width,
+                                                &height, &channels, 4);
+    if (!rgba) return false;
+    // Area averaging (premultiplied by alpha) from the embedded size to the one it is drawn at, so
+    // the menu can draw it texel for pixel: no shimmer from a bilinear minification, any font size.
+    std::vector<float> sum(static_cast<size_t>(size) * size * 4, 0.0f);
+    const float sx = static_cast<float>(width) / size, sy = static_cast<float>(height) / size;
+    for (int oy = 0; oy < size; oy++) {
+        const float y0 = oy * sy, y1 = y0 + sy;
+        for (int ox = 0; ox < size; ox++) {
+            const float x0 = ox * sx, x1 = x0 + sx;
+            float* out = &sum[(static_cast<size_t>(oy) * size + ox) * 4];
+            float area = 0.0f;
+            for (int y = static_cast<int>(y0); y < height && y < y1; y++) {
+                const float wy = std::min(y1, y + 1.0f) - std::max(y0, static_cast<float>(y));
+                for (int x = static_cast<int>(x0); x < width && x < x1; x++) {
+                    const float w = wy * (std::min(x1, x + 1.0f) - std::max(x0, static_cast<float>(x)));
+                    const unsigned char* p = rgba + (static_cast<size_t>(y) * width + x) * 4;
+                    const float a = p[3] / 255.0f;
+                    out[0] += w * a * p[0];
+                    out[1] += w * a * p[1];
+                    out[2] += w * a * p[2];
+                    out[3] += w * a;
+                    area += w;
+                }
+            }
+            if (area > 0.0f) {
+                for (int c = 0; c < 4; c++) out[c] /= area;
+            }
+        }
+    }
+    stbi_image_free(rgba);
+    pixels.resize(static_cast<size_t>(size) * size);
+    for (size_t i = 0; i < pixels.size(); i++) {
+        const float* s = &sum[i * 4];
+        const float a = s[3];
+        auto channel = [a](float premultiplied) {
+            return static_cast<uint32_t>(std::clamp(a > 0.0f ? premultiplied / a : 0.0f, 0.0f, 255.0f) + 0.5f);
+        };
+        const uint32_t alpha = static_cast<uint32_t>(std::clamp(a * 255.0f, 0.0f, 255.0f) + 0.5f);
+        pixels[i] = (alpha << 24) | (channel(s[0]) << 16) | (channel(s[1]) << 8) | channel(s[2]);
+    }
+    return true;
 }
 
 } // namespace image

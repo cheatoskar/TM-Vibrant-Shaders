@@ -30,6 +30,8 @@ struct Host {
     const PassTimings* timings = nullptr;
     // The picture of a preset (0 = none).
     std::function<ImTextureID(const std::string&)> picture;
+    // The mod's icon for the header, as a square texture of that many pixels (0 = none).
+    std::function<ImTextureID(int)> icon;
     // What auto quality turned off right now (null: nothing, or no auto quality in this game).
     std::function<const char*()> autoQualityReduced;
     // The comments of the map open in the editor (Author's Shader).

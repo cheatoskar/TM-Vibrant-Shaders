@@ -24,6 +24,8 @@ struct Entry {
 
 std::map<std::string, Entry> g_cache;
 ID3D11Device* g_device = nullptr;
+ID3D11ShaderResourceView* g_icon = nullptr;
+int g_iconSize = 0; // the size g_icon was made for (also when that failed: tried once per size)
 
 ULONGLONG writeTime(const std::wstring& path) {
     WIN32_FILE_ATTRIBUTE_DATA data{};
@@ -71,7 +73,24 @@ void release() {
         if (entry.second.view) entry.second.view->Release();
     }
     g_cache.clear();
+    if (g_icon) g_icon->Release();
+    g_icon = nullptr;
+    g_iconSize = 0;
     g_device = nullptr;
+}
+
+ID3D11ShaderResourceView* icon(ID3D11Device* device, int size) {
+    if (device != g_device) {
+        release();
+        g_device = device;
+    }
+    if (size == g_iconSize) return g_icon;
+    if (g_icon) g_icon->Release();
+    g_icon = nullptr;
+    g_iconSize = size;
+    std::vector<uint32_t> pixels;
+    if (tmshaders::image::menuIcon(size, pixels)) g_icon = upload(device, pixels, size, size);
+    return g_icon;
 }
 
 ID3D11ShaderResourceView* get(ID3D11Device* device, const std::string& preset) {

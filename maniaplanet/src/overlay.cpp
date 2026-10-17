@@ -418,6 +418,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             h.picture = [](const std::string& preset) {
                 return reinterpret_cast<ImTextureID>(thumbnails::get(g_device, preset));
             };
+            h.icon = [](int size) { return reinterpret_cast<ImTextureID>(thumbnails::icon(g_device, size)); };
             h.supports = supports;
             h.timings = &timings;
             h.reloadShaders = false;

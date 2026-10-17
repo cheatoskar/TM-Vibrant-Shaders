@@ -1831,6 +1831,18 @@ bool layoutButton(bool full) {
 }
 
 void drawHeader(Config& config, Settings& s) {
+    // The mod's icon left of the name, as tall as the title font. It is made at exactly that many
+    // pixels and drawn on whole pixels, texel for pixel: sharp at every menu size.
+    const int iconSize = static_cast<int>(g_fontTitle->FontSize + 0.5f);
+    const ImTextureID icon = g_host->icon ? g_host->icon(iconSize) : ImTextureID{};
+    if (icon) {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const ImVec2 at(std::floor(p.x), std::floor(p.y));
+        ImGui::Dummy(ImVec2(static_cast<float>(iconSize), static_cast<float>(iconSize)));
+        ImGui::GetWindowDrawList()->AddImageRounded(icon, at, ImVec2(at.x + iconSize, at.y + iconSize), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                                                    IM_COL32_WHITE, iconSize * 0.18f);
+        ImGui::SameLine(0.0f, 8.0f * g_scale);
+    }
     ImGui::PushFont(g_fontTitle);
     ImGui::TextColored(kAccent, "TM VIBRANT SHADERS");
     ImGui::PopFont();

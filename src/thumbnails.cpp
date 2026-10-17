@@ -26,6 +26,8 @@ ULONGLONG writeTime(const std::wstring& path) {
 }
 std::map<std::string, Entry> g_cache;
 IDirect3DDevice9* g_device = nullptr;
+IDirect3DTexture9* g_icon = nullptr;
+int g_iconSize = 0; // the size g_icon was made for (also when that failed: tried once per size)
 
 IDirect3DTexture9* upload(IDirect3DDevice9* device, const std::vector<uint32_t>& pixels, int width, int height) {
     IDirect3DTexture9* texture = nullptr;
@@ -53,17 +55,23 @@ bool loadEmbedded(int index, std::vector<uint32_t>& pixels, int& width, int& hei
     const void* data = handle ? LockResource(handle) : nullptr;
     return data && image::decodeJpeg(data, SizeofResource(module, resource), pixels, width, height);
 }
+
+void useDevice(IDirect3DDevice9* device) {
+    if (device == g_device) return;
+    // A new device (the game recreated it): the old textures belong to the old one.
+    for (auto& entry : g_cache) {
+        if (entry.second.texture) entry.second.texture->Release();
+    }
+    g_cache.clear();
+    if (g_icon) g_icon->Release();
+    g_icon = nullptr;
+    g_iconSize = 0;
+    g_device = device;
+}
 } // namespace
 
 IDirect3DTexture9* get(IDirect3DDevice9* device, const std::string& preset) {
-    if (device != g_device) {
-        // A new device (the game recreated it): the old textures belong to the old one.
-        for (auto& entry : g_cache) {
-            if (entry.second.texture) entry.second.texture->Release();
-        }
-        g_cache.clear();
-        g_device = device;
-    }
+    useDevice(device);
     Config& config = Config::get();
     Entry& entry = g_cache[preset];
     const bool own = config.isUserPreset(preset);
@@ -94,6 +102,17 @@ IDirect3DTexture9* get(IDirect3DDevice9* device, const std::string& preset) {
     }
     if (loaded) entry.texture = upload(device, pixels, width, height);
     return entry.texture;
+}
+
+IDirect3DTexture9* icon(IDirect3DDevice9* device, int size) {
+    useDevice(device);
+    if (size == g_iconSize) return g_icon;
+    if (g_icon) g_icon->Release();
+    g_icon = nullptr;
+    g_iconSize = size;
+    std::vector<uint32_t> pixels;
+    if (image::menuIcon(size, pixels)) g_icon = upload(device, pixels, size, size);
+    return g_icon;
 }
 
 bool savePicture(IDirect3DDevice9* device, IDirect3DSurface9* frame, const std::wstring& path) {
