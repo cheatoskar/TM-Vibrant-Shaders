@@ -65,6 +65,22 @@ Action resolve(unsigned vk, bool typing = false);
 // True once when the action's key goes down (for polling every frame). Never while a key is
 // being captured.
 bool edge(Action a);
+// TMNF: every hotkey is read here once a frame, not from the window messages (in the replay
+// viewer those reached the menu key seconds late). Each key is read once even when two actions
+// share it (F6 and Shift+F6 share its "pressed since the last look" bit); the actions that fired
+// wait for take(). `typing`: a text field of the menu has the keyboard, only F keys count.
+// Not mixed with edge(): both would read the same "pressed since" bits.
+void poll(bool typing);
+bool take(Action a);
+// An action that came as a window message nobody pressed (scan code 0: dev.ini's key actions,
+// posted): polling never sees those, so they wait for take() too.
+void push(Action a);
+// GetTickCount() when poll() last saw `vk` fire, 0 = never; lastPressAt: of any hotkey.
+DWORD polledAt(unsigned vk);
+DWORD lastPressAt();
+// The game window lost the focus (WM_ACTIVATEAPP): what the keys did until the next poll was
+// not meant for us (an F key pressed in another program).
+void focusLost();
 // A key some action uses (the ManiaPlanet window procedure lets those through to the game).
 bool used(unsigned vk);
 bool shiftHeld();

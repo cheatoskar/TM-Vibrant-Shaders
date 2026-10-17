@@ -180,6 +180,10 @@ public:
         return wanted;
     }
     void release();
+    // Before a device reset: what the reset loses (render targets, default-pool buffers, the
+    // state block, queries). The shaders and vertex declarations live through a reset and are
+    // kept, so init() afterwards doesn't create the passes again.
+    void releaseForReset();
     bool reloadShaders(IDirect3DDevice9* device);
     const std::string& lastError() const { return m_lastError; }
 
@@ -375,6 +379,9 @@ private:
     std::string m_lastError;
     gfx::Quad m_quad;
     IDirect3DPixelShader9* m_shaders[kPassCount] = {};
+    // The device m_shaders belong to (they hold a reference to it, so it can't be freed and its
+    // address reused while they are kept): a new device needs its own.
+    IDirect3DDevice9* m_shaderDevice = nullptr;
     IDirect3DStateBlock9* m_stateBlock = nullptr;
     IDirect3DPixelShader9* m_solidPS = nullptr; // one colour (c32): the "Materials" debug view
     IDirect3DPixelShader9* m_paletteLookupPS = nullptr; // material id -> its class's colour

@@ -2158,7 +2158,9 @@ void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UI
 // while they are kept), and only while the setting is on.
 void castersTick() {
     const Settings& s = Config::get().settings;
-    const bool on = s.enabled && s.casterShadows && engine::active();
+    // Not with the effects (F7): switched off to compare, the meshes stay (the recording pauses
+    // below, nothing uses the maps) and the shadows are back at once, not rebuilt over seconds.
+    const bool on = s.casterShadows && engine::active();
     static int s_loads = -1, s_closes = -1, s_removed = -1;
     if (engine::mapLoads() != s_loads || engine::mapCloses() != s_closes) {
         s_loads = engine::mapLoads();
@@ -2250,9 +2252,21 @@ void onDeviceCreated(IDirect3DDevice9* device) {
 }
 
 void onPreReset() {
+    {
+        // Who wanted the reset: a lost device (alt-tab, another window in front, a mode switch)
+        // or the game on its own with the device fine. And how long since our last hotkey, so a
+        // reset after F7 / F8 shows in the log.
+        const HRESULT coop = g_device ? g_device->TestCooperativeLevel() : D3D_OK;
+        const DWORD key = keys::lastPressAt();
+        char since[48] = "no hotkey yet";
+        if (key) snprintf(since, sizeof(since), "last hotkey %lu ms ago", GetTickCount() - key);
+        TMVS_LOG("device: reset by the game, %s; %s", coop == D3DERR_DEVICENOTRESET ? "the device was lost (focus or mode change)"
+                                                     : coop == D3D_OK ? "the device was fine (not lost)" : "the device is still lost",
+                 since);
+    }
     perflog::release();
     g_pipeline.setProfiling(true, false); // perflog's bracket is gone until the next Present
-    g_pipeline.release();
+    g_pipeline.releaseForReset(); // the shaders stay (they live through the reset)
     releaseSideB();
     g_sceneCopy.destroy();
     g_partDepth.destroy();
@@ -2275,7 +2289,10 @@ void onPreReset() {
     overlay::preReset();
 }
 
+DWORD g_resetAt = 0; // a device reset, until the first shaded frame after it (the log)
+
 void onPostReset(IDirect3DDevice9* device) {
+    g_resetAt = GetTickCount();
     depth::onDeviceReady(device);
     overlay::postReset();
 }
@@ -2358,11 +2375,57 @@ void onSetLight(DWORD, const D3DLIGHT9* light) {
 
 void relightOnSwitch(const Settings& s);
 
+// The device was lost (the game resets it later, reloading everything: seconds): which program
+// had the front then (the exe name and window class only, no titles), and our last hotkey.
+void logDeviceLost(HRESULT coop) {
+    static int s_lines = 0;
+    if (s_lines >= 50) return;
+    s_lines++;
+    const HWND front = GetForegroundWindow();
+    DWORD pid = 0;
+    if (front) GetWindowThreadProcessId(front, &pid);
+    wchar_t program[MAX_PATH] = L"nothing";
+    if (pid == GetCurrentProcessId()) {
+        wcscpy_s(program, L"the game");
+    } else if (pid) {
+        wcscpy_s(program, L"?");
+        if (HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+            wchar_t path[MAX_PATH] = {};
+            DWORD size = MAX_PATH;
+            if (QueryFullProcessImageNameW(process, 0, path, &size)) {
+                const wchar_t* slash = wcsrchr(path, L'\\');
+                wcscpy_s(program, slash ? slash + 1 : path);
+            }
+            CloseHandle(process);
+        }
+    }
+    wchar_t windowClass[64] = L"";
+    if (front) GetClassNameW(front, windowClass, 64);
+    const DWORD key = keys::lastPressAt();
+    char since[48] = "no hotkey yet";
+    if (key) snprintf(since, sizeof(since), "last hotkey %lu ms ago", GetTickCount() - key);
+    TMVS_LOG("device: lost (0x%08lx); in front: %ls (window class %ls); %s", static_cast<unsigned long>(coop), program, windowClass, since);
+}
+
 void onPresent(IDirect3DDevice9* device) {
     g_device = device;
     g_frame++;
     // Device lost (alt-tab, mode switch): nothing can be drawn until the game resets it.
-    if (device->TestCooperativeLevel() != D3D_OK) return;
+    static bool s_lost = false;
+    const HRESULT coop = device->TestCooperativeLevel();
+    if (coop != D3D_OK) {
+        if (!s_lost) logDeviceLost(coop);
+        s_lost = true;
+        return;
+    }
+    if (s_lost) TMVS_LOG("device: usable again");
+    s_lost = false;
+    if (g_resetAt && g_shadedThisFrame) {
+        // The game's own reload and ours (the passes, the render targets) until the effects run again.
+        const DWORD after = GetTickCount() - g_resetAt;
+        if (after < 30000) TMVS_LOG("device: first shaded frame %lu ms after the reset", after); // else the effects were off
+        g_resetAt = 0;
+    }
 
     // Fallback when the engine hooks are unavailable: process at Present (HUD included).
     if (!engine::active() && g_scene.haveView) processScene(device);
@@ -2420,7 +2483,8 @@ void onPresent(IDirect3DDevice9* device) {
     status.shaderError = g_pipeline.lastError().empty() ? nullptr : g_pipeline.lastError().c_str();
     overlay::setStatus(status);
     overlay::draw(device);
-    const bool reload = overlay::consumeReloadRequest() | keys::edge(keys::Action::Reload);
+    // overlay::draw polled the hotkeys (keys::poll, once a frame).
+    const bool reload = overlay::consumeReloadRequest() | keys::take(keys::Action::Reload);
     if (reload) {
         g_pipelineFailed = false;
         g_pipeline.reloadShaders(device);
@@ -2463,8 +2527,8 @@ void onPresent(IDirect3DDevice9* device) {
         }
     }
     Config::get().tick();
-    if (keys::edge(keys::Action::Trace)) tracer::arm();
-    if (keys::edge(keys::Action::Capture)) {
+    if (keys::take(keys::Action::Trace)) tracer::arm();
+    if (keys::take(keys::Action::Capture)) {
         // Photo mode: a photo without the HUD (Shift: hi-res) instead of a .tmcap capture.
         if (photo::active()) photo::request(keys::shiftHeld());
         else g_captureRequested = true;
