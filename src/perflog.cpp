@@ -45,11 +45,29 @@ struct Window {
     double cpuMs = 0.0;              // the pipeline's render calls
     double castersFrom = -1.0;       // casters::cpuMs at the window's start
     double pipelineMs = 0.0;
+    double gameCpuMs = 0.0;          // the main camera on the CPU (frames that have it)
+    unsigned gameCpu = 0;
+    unsigned scaledFrames = 0;       // RenderScale below 1 in the main camera
+    double scaleSum = 0.0;
     std::vector<double> passes;
 } g_window;
 LARGE_INTEGER g_lastFrame{};
 double g_toMs = 0.0;
 double g_frameCpu = 0.0; // this frame's addCpu
+// This frame's main camera on the CPU: from GameBegin to GameEnd (the first camera only).
+LARGE_INTEGER g_gameCpuBegin{};
+bool g_gameCpuOpen = false, g_gameCpuDone = false;
+double g_frameGameCpu = -1.0; // ms, -1 none
+float g_frameScale = 0.0f;    // RenderScale of this frame's main camera, 0 full size
+
+double qpcToMs() {
+    if (g_toMs == 0.0) {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        g_toMs = 1000.0 / static_cast<double>(f.QuadPart);
+    }
+    return g_toMs;
+}
 
 void releaseSet(QuerySet& s) {
     gfx::release(s.disjoint);
@@ -126,20 +144,38 @@ void logWindow(const Pipeline& pipeline, double castersCpuMs) {
     const double game = w.game ? w.gameMs / w.game : 0.0, mod = w.mod ? w.modMs / w.mod : 0.0;
     const double gpuFrame = w.gpuFrames ? w.gpuFrameMs / w.gpuFrames : 0.0;
     const double recording = w.castersFrom >= 0.0 ? (castersCpuMs - w.castersFrom) / n : 0.0;
+    // The game's main camera on the CPU, and the frames drawn with a render scale (only then).
+    char extra[160];
+    int used = snprintf(extra, sizeof(extra), ", game 3D drawing calls %.2f", w.gameCpu ? w.gameCpuMs / w.gameCpu : 0.0);
+    if (w.scaledFrames > 0 && used > 0 && used < static_cast<int>(sizeof(extra))) {
+        snprintf(extra + used, sizeof(extra) - used, "; render scale %.2f on %u of %u frames", w.scaleSum / w.scaledFrames, w.scaledFrames,
+                 w.shaded);
+    }
     if (w.game == 0 && w.mod == 0) {
-        TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames; no GPU timestamps; CPU ms a frame: mod %.2f, caster recording %.2f",
-                 frameMs > 0.0 ? 1000.0 / frameMs : 0.0, frameMs, w.shaded, w.cpuMs / n, recording);
+        TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames; no GPU timestamps; CPU ms a frame: mod %.2f, caster recording %.2f%s",
+                 frameMs > 0.0 ? 1000.0 / frameMs : 0.0, frameMs, w.shaded, w.cpuMs / n, recording, extra);
         return;
     }
     TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames; GPU ms a frame: game 3D %.2f, mod %.2f (passes %.2f: %s; "
-             "caster maps %.2f), rest of the GPU frame %.2f; CPU ms a frame: mod %.2f, caster recording %.2f",
+             "caster maps %.2f), rest of the GPU frame %.2f; CPU ms a frame: mod %.2f, caster recording %.2f%s",
              frameMs > 0.0 ? 1000.0 / frameMs : 0.0, frameMs, w.shaded, game, mod, w.pipelineMs / n, top.c_str(), casters,
-             gpuFrame > 0.0 ? std::max(0.0, gpuFrame - game - mod) : 0.0, w.cpuMs / n, recording);
+             gpuFrame > 0.0 ? std::max(0.0, gpuFrame - game - mod) : 0.0, w.cpuMs / n, recording, extra);
 }
 
 } // namespace
 
 void mark(IDirect3DDevice9*, Mark which) {
+    // On the CPU: the frame's first main camera (also while the GPU timestamps skip a frame).
+    if (which == Mark::GameBegin && !g_gameCpuOpen && !g_gameCpuDone) {
+        QueryPerformanceCounter(&g_gameCpuBegin);
+        g_gameCpuOpen = true;
+    } else if (which == Mark::GameEnd && g_gameCpuOpen) {
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        g_frameGameCpu = static_cast<double>(now.QuadPart - g_gameCpuBegin.QuadPart) * qpcToMs();
+        g_gameCpuOpen = false;
+        g_gameCpuDone = true;
+    }
     if (g_current < 0) return;
     QuerySet& s = g_sets[g_current];
     const int i = static_cast<int>(which);
@@ -155,15 +191,14 @@ void addCpu(double ms) {
     g_frameCpu += ms;
 }
 
+void renderScaled(float scale) {
+    g_frameScale = scale;
+}
+
 void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, double castersCpuMs) {
-    if (g_toMs == 0.0) {
-        LARGE_INTEGER f;
-        QueryPerformanceFrequency(&f);
-        g_toMs = 1000.0 / static_cast<double>(f.QuadPart);
-    }
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
-    const double frameMs = g_lastFrame.QuadPart ? static_cast<double>(now.QuadPart - g_lastFrame.QuadPart) * g_toMs : 0.0;
+    const double frameMs = g_lastFrame.QuadPart ? static_cast<double>(now.QuadPart - g_lastFrame.QuadPart) * qpcToMs() : 0.0;
     g_lastFrame = now;
 
     // This frame's set: Present closes it.
@@ -188,12 +223,23 @@ void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, doub
         w.pipelineMs += pipeline.totalTime();
         w.passes.resize(static_cast<size_t>(pipeline.passCount()), 0.0);
         for (int p = 0; p < pipeline.passCount(); p++) w.passes[p] += pipeline.passTime(p);
+        if (g_frameGameCpu >= 0.0) {
+            w.gameCpuMs += g_frameGameCpu;
+            w.gameCpu++;
+        }
+        if (g_frameScale > 0.0f) {
+            w.scaledFrames++;
+            w.scaleSum += g_frameScale;
+        }
         if (w.shaded >= kWindow) {
             logWindow(pipeline, castersCpuMs);
             g_window = Window();
         }
     }
     g_frameCpu = 0.0;
+    g_frameGameCpu = -1.0;
+    g_gameCpuOpen = g_gameCpuDone = false;
+    g_frameScale = 0.0f;
 
     // The next frame's set, unless the GPU is that far behind (then this frame isn't measured).
     if (g_failed) return;

@@ -37,8 +37,9 @@ struct DeviceCallbacks {
     const RECT* (*setScissorRect)(IDirect3DDevice9* device, const RECT* rect) = nullptr;
     void (*getScissorRect)(IDirect3DDevice9* device, RECT* rect) = nullptr;
     // RenderScale: the game's Clear rects and StretchRect rects (null = the whole surface); returns the
-    // rects to use instead, or the given ones.
-    const D3DRECT* (*clearRects)(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects) = nullptr;
+    // rects to use instead, or the given ones. The Clear's flags and values: a depth clear of the
+    // scaled target is repeated at the full size.
+    const D3DRECT* (*clearRects)(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, float z, DWORD stencil) = nullptr;
     void (*stretchRects)(IDirect3DSurface9* src, const RECT** srcRect, IDirect3DSurface9* dst, const RECT** dstRect) = nullptr;
 };
 

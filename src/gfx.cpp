@@ -129,8 +129,8 @@ IDirect3DPixelShader9* compilePixelShader(IDirect3DDevice9* device, const std::s
 }
 
 IDirect3DVertexShader9* compileVertexShader(IDirect3DDevice9* device, const std::string& source, const char* entry,
-                                            const char* name, std::string* errors) {
-    ID3DBlob* code = compile(source, entry, "vs_3_0", name, errors);
+                                            const char* name, std::string* errors, const char* profile) {
+    ID3DBlob* code = compile(source, entry, profile, name, errors);
     if (!code) return nullptr;
     IDirect3DVertexShader9* shader = nullptr;
     device->CreateVertexShader(static_cast<const DWORD*>(code->GetBufferPointer()), &shader);
