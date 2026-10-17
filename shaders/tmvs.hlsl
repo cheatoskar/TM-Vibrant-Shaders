@@ -2591,15 +2591,25 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
 
     // --- Grass ---
     float grass = grassMask(c, nWorld, emissive);
+    // The game's grass material (g .25): no mirror, gloss, puddle or water on it, whatever its
+    // colour. The colour guess above loses the grass in a low sun (orange light: A01 at sunset,
+    // capture_112, 98 % of the lawn under half) and the dry track's reflection turned the lawn
+    // into a lake mirroring the supports. Only the reflections take it: the grass's look
+    // (detail, back light, wet sheen) keeps the guess as before.
+    float grassMat = abs(mat.g - 0.25) < 0.1 ? 1.0 : 0.0;
     if (u_Nature.x + u_Nature.y > 0.0 && grass > 0.0) c = grassDetail(c, world, rd, dist, grass);
 
     // --- Wet surfaces, puddles, water ---
     float wet = u_Weather.x * (1.0 - grass * 0.5) * (1.0 - emissive);
-    float puddle = puddleMask(world, flatness, grass) * (1.0 - emissive);
+    float puddle = puddleMask(world, flatness, engine ? max(grass, grassMat) : grass) * (1.0 - emissive);
     float water = waterMask(c, nWorld, world, nd.w, emissive);
     // The game's own water material (the TMUF sea, which reports no height): water wherever
     // it is flat, at any distance.
     water = max(water, mat.b * smoothstep(0.9, 0.98, nWorld.y) * u_Weather.w);
+    // Grass at the water's height (Island shores, the Stadium lawn 1 m above its water blocks)
+    // is no water. Puddles and this only in the EngineLights entry points: PS_Lighting has
+    // no slots left (3900).
+    if (engine) water *= 1.0 - grassMat;
     // Stadium water blocks (u_Water.z 2-3): only their height is known (8 m), and dirt lies
     // there too. Once the map's water was seen as the water material, only on it; before,
     // no dark brown (dirt).
@@ -2630,7 +2640,7 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
     // Clean water (u_Water2.x): the game's water is no dry track either. It took the dry track's
     // reflection blur (ReflectionBlur, a disc of 8 taps) and polish: what it mirrored came out
     // soft and grainy.
-    dry *= saturate(1.0 - 0.85 * dirt - water * u_Water2.x);
+    dry *= saturate(1.0 - 0.85 * dirt - water * u_Water2.x) * (1.0 - grassMat);
     reflectivity = max(reflectivity, min(u_Nature.w, 1.0) * dry * lerp(0.35, 1.0, polish));
     polish *= dry;
     float2 slope = 0;
