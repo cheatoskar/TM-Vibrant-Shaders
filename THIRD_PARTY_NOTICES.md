@@ -4,7 +4,7 @@ TM Vibrant Shaders includes or builds on the following work.
 
 ## Dear ImGui
 
-The in-game menu. Compiled into `TMVibrantShaders.dll`.
+The in-game menu. Compiled into `TMVibrantShaders.dll` and the ManiaPlanet `d3d11.dll`.
 
 ```
 The MIT License (MIT)
@@ -36,7 +36,7 @@ MP3 decoder for the weather sounds (https://github.com/lieff/minimp3). Compiled 
 
 ## stb_image, stb_image_write
 
-JPEG reader and writer for the preset pictures in the menu (https://github.com/nothings/stb), by Sean Barrett. Compiled into `TMVibrantShaders.dll` and the previewer. Dual-licensed as public domain (Unlicense) or MIT; used here under the public domain terms, no conditions.
+JPEG reader and writer for the preset pictures in the menu (https://github.com/nothings/stb), by Sean Barrett. Compiled into `TMVibrantShaders.dll`, the ManiaPlanet `d3d11.dll` and the previewers. Dual-licensed as public domain (Unlicense) or MIT; used here under the public domain terms, no conditions.
 
 ## Weather recordings
 
@@ -44,10 +44,11 @@ The rain, thunder and snow storm sounds embedded in `TMVibrantShaders.dll` and i
 
 ## AMD FidelityFX Contrast Adaptive Sharpening (CAS) and Super Resolution 1 (FSR 1)
 
-The sharpening pass follows the CAS algorithm. The render scale's upscaling (EASU) and sharpening (RCAS), and the half-resolution aurora's upscaling, are ports of FSR 1 (`ffx_fsr1.h`), Copyright (c) 2021 Advanced Micro Devices, Inc., under the same licence; the notice is also in `shaders/tmvs.hlsl`.
+The sharpening pass follows the CAS algorithm. The render scale's upscaling (EASU) and sharpening (RCAS), and the half-resolution aurora's upscaling, are ports of FSR 1 (`ffx_fsr1.h`), Copyright (c) 2021 Advanced Micro Devices, Inc., under the same licence; the notice is also in `shaders/tmvs.hlsl`. The ManiaPlanet `d3d11.dll` carries the same EASU port (`maniaplanet/shaders/sky.hlsl`).
 
 ```
 Copyright (c) 2020 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
