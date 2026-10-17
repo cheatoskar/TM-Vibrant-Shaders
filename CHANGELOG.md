@@ -66,6 +66,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - *Game light sources*: the engine's light draws are drawn again into the mod's light buffer with a depth test that lets their own depth through and writes nothing, so a light drawn with a strict depth test keeps its glow and stencil counts stay the game's (ManiaPlanet's own light draws in capture 034 were not affected).
 - *Set as Author's Shader* in the map editor also checks that the editor is the map editor (its class: Free, Puzzle or Simple) before it writes the map's comments; with the MediaTracker or another editor open nothing is written.
 - Photo mode's compare split: the list at the line (bottom of the screen) switches the other side between the game's image and any preset without the menu, as in TrackMania Nations/United; never in the photos.
+- Neon trail: *Earlier runs kept* (`TrailKeepRuns`) works in TrackMania 2 too: after a restart (the car back at the run's start) the last runs stay, dimmer, as in TrackMania Nations/United; a new map clears them.
 - `tmvs-mp.log` gets a *perf* line every 2000 frames in a race: FPS, the shaders' GPU time and their most expensive passes.
 
 ## 1.3.0

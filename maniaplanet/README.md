@@ -16,7 +16,8 @@ knows (its normals, material colours, sun shadow maps, motion vectors and HDR im
   lightning, drops on the lens, the weather sound.
 - **Cinema:** depth of field, motion blur (the engine's motion vectors), TAA, photo mode with the
   compare split.
-- **Neon trail** behind the car (the car's position from the engine's own constants).
+- **Neon trail** behind the car (the car's position from the engine's own constants); *Earlier runs kept*
+  (`TrailKeepRuns`) keeps the last runs after a restart (the car back at the run's start), dimmer.
 - **Look:** the HDR stage in place of the engine's tone map (curves, bloom), grading, LUT looks.
 - **Auto quality** (the TMNF mod's, on the effects' GPU times) and the Performance page.
 
@@ -253,6 +254,7 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 build-mp/Release/mp_preview.exe <capture folder> out.bmp [--preset Punchy] [--view 6] [--set Exposure=0.5]
 build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr [--set ToneCurve=1] [--set Bloom=0.3] [--tonecb file]
 build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 40 --car x,y,z [--carfrom x,y,z]   # the neon trail of a car driving there
+build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 120 --runs 2 --car x,y,z --carfrom x,y,z --set TrailKeepRuns=3   # restarts: earlier runs 2 m apart, dimmer
 build-mp/Release/mp_preview.exe --trailtest   # the trail's recording: how evenly its end and its start behind the car move
 build-mp/Release/mp_preview.exe --cartest     # which car the trail follows with a ghost around (chase, cockpit, respawn)
 ```

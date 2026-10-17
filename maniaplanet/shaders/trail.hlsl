@@ -5,7 +5,9 @@
 //   t0 = points (xyz, time stamp; < 0: a new line starts here, 0 = none) in row 0, the car's up at
 //        each point in row 1
 //   b4: g_trail (points, next index + count of the ring, now (s), fade after (s, 0 = never)),
-//       g_trail2 (sideways offset (m), half width (m), ring size, 0), g_trailColour (rgb * strength)
+//       g_trail2 (sideways offset (m), half width (m), ring size, 0), g_trailColour (rgb * strength),
+//       g_runs (TrailKeepRuns: the first stamp of this run and of the 3 before it, -1e30 = none),
+//       g_runs2 (x the first stamp 4 runs back, y the last run's brightness, z less per run further back)
 // entries: VS_Trail:vs_5_0 PS_Trail:ps_5_0
 #include "common.hlsli"
 
@@ -14,6 +16,8 @@ cbuffer TrailParams : register(b4)
     float4 g_trail;
     float4 g_trail2;
     float4 g_trailColour;
+    float4 g_runs;
+    float4 g_runs2;
 };
 
 Texture2D<float4> g_points : register(t0);
@@ -163,8 +167,12 @@ TrailOut VS_Trail(uint id : SV_VertexID)
     float3 d = trailTangent(j, pj, s, fromCar, near);
     float len = length(d);
     if (len < 1e-3) return o;
-    float age = g_trail.z - (corner.y > 0.5 ? b.w : abs(a.w));
+    float stamp = corner.y > 0.5 ? b.w : abs(a.w);
+    float age = g_trail.z - stamp;
     float fade = g_trail.w > 0.0 ? saturate(1.0 - age / g_trail.w) : 1.0;
+    // An earlier run (TrailKeepRuns) is drawn dimmer, the older the dimmer (as TMNF's).
+    float run = dot(step(stamp + 1e-3, g_runs), float4(1, 1, 1, 1)) + step(stamp + 1e-3, g_runs2.x);
+    if (run > 0.5) fade *= g_runs2.y - (run - 1.0) * g_runs2.z;
     if (fade <= 0.0) return o;
     // It comes out behind the car (through the body it would flicker). The way back to the car
     // along the line goes to the pixels (data.w), the fade-in lies 1.6 to 2.6 m behind the car at

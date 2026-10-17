@@ -22,6 +22,8 @@
 // in as a photo of the split gets them (SplitPhotoLabels).
 //
 // --nospillhistory: the neon light spill of each frame on its own (A/B of PS_SpillTemporal).
+// --runs R (with --car): the frames are R + 1 runs of that drive, each R before the last 2 m
+// further along -x, the car back at the start for each (a restart: TrailKeepRuns).
 // An output ending in .jpg is a preset picture for the menu (384 x 216, tools/make-thumbnails.ps1).
 #include "effects_trail.h"
 #include "image.h"
@@ -547,6 +549,7 @@ int main(int argc, char** argv) {
     float trailFrom[3] = {}; // --carfrom x,y,z: where it starts (default: from the camera's side, at --car's height)
     bool haveTrailFrom = false;
     float trailUp[3] = {0.0f, 1.0f, 0.0f}; // --carup x,y,z: the car's up (a banked curve: the line tilts with it)
+    int trailRuns = 0; // --runs: earlier runs of the drive before the last (restarts)
     float focus[2] = {-1.0f, -1.0f}; // --focus u,v: the photo mode's focus point
     std::string compare;              // --compare: the preset on the split's other side
     float splitAt = 0.5f;             // --split
@@ -594,6 +597,7 @@ int main(int argc, char** argv) {
         else if (opt == "--labels") labels = value;
         else if (opt == "--time") time = atof(value.c_str());
         else if (opt == "--frames") frames = std::max(1, atoi(value.c_str()));
+        else if (opt == "--runs") trailRuns = std::max(0, atoi(value.c_str()));
         else if (opt == "--car") haveTrailCar = sscanf(value.c_str(), "%f,%f,%f", &trailCar[0], &trailCar[1], &trailCar[2]) == 3;
         else if (opt == "--carfrom") haveTrailFrom = sscanf(value.c_str(), "%f,%f,%f", &trailFrom[0], &trailFrom[1], &trailFrom[2]) == 3;
         else if (opt == "--carup") {
@@ -799,11 +803,15 @@ int main(int argc, char** argv) {
             // The car: from the camera's side (or --carfrom) towards --car, arriving in the last frame.
             EngineCar car;
             if (haveTrailCar && haveCamera) {
-                const float k = frames > 1 ? static_cast<float>(f) / (frames - 1) : 1.0f;
+                const int perRun = std::max(2, frames / (trailRuns + 1));
+                const int run = std::min(f / perRun, trailRuns), inRun = f - run * perRun;
+                const int runFrames = run == trailRuns ? frames - run * perRun : perRun;
+                const float k = runFrames > 1 ? static_cast<float>(inRun) / (runFrames - 1) : 1.0f;
                 for (int i = 0; i < 3; i++) car.position[i] = camera.eye[i] + (trailCar[i] - camera.eye[i]) * (0.3f + 0.7f * k);
                 car.position[1] = trailCar[1];
                 if (haveTrailFrom)
                     for (int i = 0; i < 3; i++) car.position[i] = trailFrom[i] + (trailCar[i] - trailFrom[i]) * k;
+                car.position[0] -= 2.0f * static_cast<float>(trailRuns - run);
                 car.valid = true;
                 for (int i = 0; i < 3; i++) car.up[i] = trailUp[i];
                 engine.car = &car;
