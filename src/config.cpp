@@ -1256,7 +1256,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRays = 2.0f;
             s.godRayDecay = 0.9f;
             s.fogDensity = 0.05f;
-            s.neonLight = 0.15f;
+            s.neonLight = 0.45f;
             s.ambientTint = 0.0f;
             s.volumetricClouds = 0.5f;
             s.reflections = 0.65f;
@@ -1285,7 +1285,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.fogDensity = 0.2f;
             s.fogSunScatter = 0.5f;
             s.godRays = 1.55f;
-            s.neonLight = 0.05f;
+            s.neonLight = 0.4f;
             s.highlightBoost = 2.5f;
             s.bloom = 0.05f;
             s.lensFlare = 0.0f;
@@ -1355,7 +1355,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRays = 2.0f;
             s.exposure = 1.5f;
             s.bloomRadius = 0.65f;
-            s.globalIllumination = 2.0f;
+            s.globalIllumination = 1.0f; // 2 left grain around the car (owner, 2026-10-17)
             s.skyNight = 0.5f;
             s.skyBrightness = 1.0f;
             s.fogDensity = 0.6f;
@@ -1447,7 +1447,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.temperature = 0.0f;
             s.shadowTint = 0.0f;
             s.sharpen = 0.5f;
-            s.neonLight = 0.35f;
+            s.neonLight = 0.45f;
             break;
         case Preset::Performance:
             s.volumetricLight = 0.0f;
@@ -1460,7 +1460,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.filmGrain = 0.0f;
             s.sharpen = 0.0f;
             s.longShadows = 0.0f;
-            s.neonLight = 0.35f;
+            s.neonLight = 0.45f;
             s.grassDetail = 0.0f;
             s.taa = false;
             break;

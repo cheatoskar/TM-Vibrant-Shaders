@@ -113,8 +113,8 @@ struct Settings {
     float bloomRadius = 0.85f;
     float highlightBoost = 3.5f;   // LDR -> HDR expansion of light sources
     float borderGlow = 1.0f;       // EngineLights: the neon strips' (road borders') glow, 1 = as the guess let them glow
-    float lampGlare = 0.0f;        // EngineLights: this part of the lamps' light leaves their core and spreads wide and soft around them (0 = off)
-    float lampHaze = 0.0f;         // EngineLights: the light the haze takes from the lamps glows in the air around them (1 = all of it, 0 = off)
+    float lampGlare = 0.7f;        // EngineLights: this part of the lamps' light leaves their core and spreads wide and soft around them (0 = off)
+    float lampHaze = 1.0f;         // EngineLights: the light the haze takes from the lamps glows in the air around them (1 = all of it, 0 = off)
     bool lampSkyHalos = false;     // EngineLights at night: the lamps' halos also over the sky, not cut at the edge of what the lamp sits on
     float floodlights = 1.0f;      // EngineLights: the strength of floodlights and lamps (the game's glows) and the light they spill, apart from the neon borders and HighlightBoost (1 = as before)
     float lensFlare = 0.25f;

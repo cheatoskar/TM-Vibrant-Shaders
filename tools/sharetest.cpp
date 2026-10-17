@@ -42,7 +42,8 @@ static bool isMachine(const Field& f) {
 
 // Look fields added after share code version 1. A new field is safe: a code that doesn't name it gets its
 // default, and the default is the look from before the field. Add it here once you've checked that; a
-// changed default of an older field still fails the fingerprint below.
+// changed default of an older field still fails the fingerprint below. (Version 1 ships with 1.4.0, so until
+// then the defaults of these may still change: LampGlare and LampHaze got theirs from the owner's test.)
 static bool isAddedSinceV1(const Field& f) {
     static const char* const kAdded[] = {"LampGlare", "LampHaze", "LampSkyHalos", "Floodlights", "DofAutofocus"};
     for (const char* key : kAdded) {

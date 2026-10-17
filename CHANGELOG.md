@@ -8,6 +8,7 @@
 - Neon trail: the car's up is found again on every map, so a car on its roof when it was first seen no longer turns the trail's up over for the whole session.
 - Photo mode's compare split: the preset's side shows your neon trail too, and comparing with one of your own presets no longer reads its file every frame.
 - *Performance* page and auto quality: the lighting, neon light, long-shadow (light grid, caster maps) and lamp passes are counted to their effect again (with *Game HDR* on they were left out).
+- Defaults after the owner's in-game test: Lamp glare 0.7 and Lamp haze glow 1 (were off), Neon's bounce light 1 (2 left grain around the car), neon light spill 0.4-0.45 on the day presets Vibrant, Realistic, Competition and Performance.
 - Lamp glare and haze: if their render targets can't be created, the lamps keep their full light (they came out dimmer) and the log says so once.
 - Real night: putting the weather back to midnight happens at most once a second and is counted in the log once per map.
 - *The game's moon under the black hole*: a lightmap baked with the changed moon is never saved to the game's cache, also when real night is switched off during the map.
