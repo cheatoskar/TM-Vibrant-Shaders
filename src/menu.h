@@ -8,6 +8,7 @@
 
 namespace tmshaders {
 struct Field;
+struct Settings;
 
 // The F8 menu, shared by the TMNF and the ManiaPlanet builds. The game side fills a Host.
 namespace menu {
@@ -58,6 +59,9 @@ struct Host {
     // This game's own tooltips (key, text), ahead of the shared ones: settings that work
     // differently there (ManiaPlanet's real night, its moon, replays it can't tell from driving).
     std::vector<std::pair<const char*, const char*>> tips;
+    // This game's own widget for Game moonlight (EngineMoon), with the menu's label; returns
+    // whether it changed (null: TMNF's three choices). TrackMania 2 can't move its moon.
+    std::function<bool(Settings&, const char*)> engineMoon;
     // The game's own options, a panel first on the Settings page (null: none).
     const char* gamePanelTitle = nullptr;
     std::function<void()> gamePanel;

@@ -112,7 +112,7 @@ You can also write a readable line by hand into the comments, with the preset an
 [TMVS] Preset=Snowstorm Snow=1.5 SnowCover=0.8 SkyMode=3
 ```
 
-Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (auto quality, target FPS, sound volume, the neon trail, *Only in replays and video export*, TAA jitter, the MSAA and depth options) are never taken from a map.
+Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (auto quality, target FPS, sound volume, the neon trail, *Cinematic in replays only*, TAA jitter, the MSAA and depth options) are never taken from a map.
 
 ---
 

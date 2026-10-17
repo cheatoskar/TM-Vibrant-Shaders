@@ -84,8 +84,11 @@ page, panel "ManiaPlanet":
   time into a float buffer of their own (a self-illuminated one twice: the second time with its
   light texture black, subtracted, so only its own light stays); later draws over them take their
   share away again. The debug view "Light sources" shows what counts as light.
-- **Black hole moon** (`BlackHoleMoon`, 0 – 2, **off by default**; TMNF's *Game moonlight* from the
-  black hole, done in the shaders): on night maps under a sky with the black hole, the game's moon
+- **Black hole light** (`BlackHoleMoon`, 0.25 – 2, 0 = not chosen, the default): TrackMania 2's
+  *Game moonlight* → *Black hole* (Settings page, *Game integration*; this slider, its brightness,
+  shows only while it is chosen). ManiaPlanet's moon can't be moved without writing into the game,
+  so *Game moonlight* has its own three choices here: *Game's* keeps the moon, *Off* takes its light
+  and glint out (`EngineMoon=2`), *Black hole* does it in the shaders: on night maps under a sky with the black hole, the game's moon
   (its blue glint on chrome, glass and the ring sculptures, and its light) is taken out of the
   picture and the black hole lights the scene instead, warm, as bright as the moon was (1) or
   brighter. The engine's lighting pass (`Block_DefReadP1_p`) lights with light x N.L x shadow
@@ -96,8 +99,7 @@ page, panel "ManiaPlanet":
   and brightest), taken out, and drawn again from the black hole's direction with the same
   formula. Shadows: the engine's shadow map is the moon's; it counts as the black hole's as far
   as the two directions agree (Horizon: 18° apart, almost fully), else only the contact shadows
-  toward the black hole. Nothing in the game's memory changes; EngineMoon doesn't matter on those
-  maps while it is on. Debug view "The moon's glint" shows the rebuilt glint. Not on day or
+  toward the black hole. Nothing in the game's memory changes. Debug view "The moon's glint" shows the rebuilt glint. Not on day or
   sunset maps, not under other skies.
 - **Placement**, and the **compare and check views**.
 - **Status lines.**

@@ -442,9 +442,10 @@ const char* tooltipFor(const char* key) {
         // Photo mode (General, not a look setting).
         {"SplitPhotoLabels", "Photos of the compare split get both sides' names burnt in at the bottom, at the line (the list on the screen is never in them)."},
         // TrackMania 2 (maniaplanet.ini, the host's own panel).
-        {"BlackHoleMoon", "Night maps under the black hole: the game's moon (its blue glint on chrome and the sculptures, its light) is taken out\n"
-                          "of the picture and the black hole lights the scene instead, warm, with the game's own shine on each material.\n"
-                          "1 = as bright as the moon was, 0 = off. Shadows: the game's moon shadows where the black hole stands near the moon,\n"
+        {"BlackHoleMoon", "With Game moonlight Black hole (Game integration), how bright the black hole lights night maps under it:\n"
+                          "the game's moon (its blue glint on chrome and the sculptures, its light) is taken out of the picture and the\n"
+                          "black hole lights the scene instead, warm, with the game's own shine on each material.\n"
+                          "1 = as bright as the moon was. Shadows: the game's moon shadows where the black hole stands near the moon,\n"
                           "else only short contact shadows. Only the mod's shaders change, nothing in the game."},
     };
     for (const auto& t : kTips)
@@ -521,6 +522,9 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             } else if (!strcmp(f.key, "DofAutofocus")) {
                 static const char* kFocusModes[] = {"Middle", "Car"};
                 changed |= ImGui::Combo(label, value, kFocusModes, IM_ARRAYSIZE(kFocusModes));
+            } else if (!strcmp(f.key, "EngineMoon") && g_host && g_host->engineMoon) {
+                // TrackMania 2: what its choices can do there (maniaplanet/src/overlay.cpp).
+                changed |= g_host->engineMoon(s, label);
             } else if (!strcmp(f.key, "EngineMoon")) {
                 static const char* kMoons[] = {"Game's", "Black hole", "Off"};
                 changed |= ImGui::Combo(label, value, kMoons, IM_ARRAYSIZE(kMoons));
@@ -1315,7 +1319,7 @@ bool drawCustomize(Config& config, Settings& s) {
                                    {{"MotionBlur", "Motion blur"},
                                     {"DepthOfField", "Depth of field"},
                                     {"DofAutofocus", "Focus on"},
-                                    {"CinematicOnlyInReplays", "Cinematic in replays only"}}));
+                                    {"CinematicOnlyInReplays", nullptr}}));
     panels.push_back(settingsPanel("Image quality", s,
                                    {{"TAA", "Temporal AA"},
                                     {"FXAA", "FXAA"},
