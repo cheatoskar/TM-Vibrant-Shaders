@@ -1882,9 +1882,11 @@ void smoothLook(Settings& s, float now) {
 // shrinking band left there, a strip of each frame: in capture 075 the image jumps exactly at
 // rows 38, 56, 72, 88, ... 180 and 1402, 1384, ... 1260, the band's edges frame by frame. A
 // stepped, blocky copy, each strip from another frame, scaled differently and shaded on its own
-// (the pipeline's targets were new every frame: no history). The shaded band, mirrored at its
-// edges, fills those rows instead. Not where the game cleared them itself this frame (bars it
-// wants black), not for parts that leave columns free (the MediaTracker editor's panels).
+// (the pipeline's targets were new every frame: no history). Those rows are cleared black
+// instead, as the game's own bars. (The shaded band mirrored at its edges filled them before:
+// under the half-transparent bars it looked like the road reflecting the menu.) Not where the
+// game cleared them itself this frame, not for parts that leave columns free (the MediaTracker
+// editor's panels).
 void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3DSURFACE_DESC& desc, const RECT& area, bool wanted) {
     // Every change of what happens to the rows goes into the log (a limited number of lines): the
     // replay menu's bars came back with leftovers in a build where the log had only said it once.
@@ -1909,10 +1911,10 @@ void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3D
     const bool top = area.top > 0 && !clearedTop;
     const bool bottom = area.bottom < static_cast<LONG>(desc.Height) && !clearedBottom;
     int state = 0; // 0 left alone (cleared by the game), 1 filled, 2 failed
-    if (top || bottom) state = g_pipeline.fillBars(device, g_partOut.texture, target, area, top, bottom) ? 1 : 2;
+    if (top || bottom) state = g_pipeline.fillBars(device, target, area, top, bottom) ? 1 : 2;
     if (!note(state * 4 + (top ? 1 : 0) + (bottom ? 2 : 0))) return;
     if (state == 1) {
-        TMVS_LOG("scene: rows outside the camera's band (%ld above, %ld below; band %ldx%ld at %ld) hold earlier frames: filled with the shaded band, mirrored",
+        TMVS_LOG("scene: rows outside the camera's band (%ld above, %ld below; band %ldx%ld at %ld) hold earlier frames: cleared black",
                  top ? area.top : 0L, bottom ? static_cast<LONG>(desc.Height) - area.bottom : 0L, area.right - area.left, area.bottom - area.top, area.top);
     } else if (state == 2) {
         TMVS_LOG("scene: filling the rows outside the camera's band (%ld..%ld) failed: left as the game had them", area.top, area.bottom);
