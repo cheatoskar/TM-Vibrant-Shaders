@@ -62,7 +62,6 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 - Realistic storm audio: recorded winter storm wind for snowstorms.
 
 **Known issues**
-- Real night: the end-of-race replay still shows the map's own sunlight (the race and photo mode are at night).
 - Night presets: some blue printed signs (the blue "d" of the Trackmania United banner) glow like neon strips; the game draws them with the same material as the strips.
 
 **Install (TrackMania Nations Forever / United Forever):**
