@@ -1303,6 +1303,9 @@ bool onPresent(IDXGISwapChain* sc) {
     for (int i = 0; i < kTexCount; i++)
         if (g_tex[i]) g_stats.textures |= 1u << i;
     if (g_cameraThisFrame) memcpy(g_stats.eye, g_camera.eye, sizeof(g_stats.eye));
+    // Gameplay = the scene effects ran (the engine's tone map replaced with a camera found): the
+    // menus have no such frame. ManiaPlanet has no better "in a race" signal that needs no game
+    // memory; the editors and replays count too, their frame rate is the GPU's as well.
     if (g_rendererReady)
         g_autoQuality.onFrame(nowSeconds(), g_stats.effectsRan, g_renderer.effects().profiler(), tmshaders::Config::get().settings);
 
