@@ -4,9 +4,10 @@
 #
 #   powershell -File maniaplanet/tools/make-thumbnails.ps1 -Capture <capture folder> [-Preview build-mp/Release/mp_preview.exe]
 #
-# The pictures in the repo come from capture_029 of the owner's 2026-10-16 session (Stadium at
-# night, behind the car at a checkpoint, the sky over the ring sculptures in view, 2560x1440):
-# every preset shows its sky (the black hole, the aurora, clouds, stars), light and weather there.
+# The pictures in the repo come from capture_034 of the owner's 2026-10-17 session (Stadium by
+# day, behind the car at the start, the sky above the start arch in view, 2560x1440): the day
+# presets show the map as it is played; the black hole stands outside that view and the aurora
+# is faint over it (capture_029, at night, showed those two better).
 param(
     [Parameter(Mandatory = $true)][string]$Capture,
     [string]$Preview = ''

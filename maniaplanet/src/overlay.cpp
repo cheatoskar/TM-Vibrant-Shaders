@@ -304,12 +304,15 @@ void gamePanel() {
                           "Off: the game's own shadows.\n"
                           "The mod draws the game's shadow pass with its own shader (nothing in the game's memory changes).\n"
                           "Whether ManiaPlanet's anti-cheat minds that is not known.");
-    ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
-    ImGui::SliderFloat("Black hole moon", &o.blackHoleMoon, 0.0f, 2.0f, o.blackHoleMoon > 0.0f ? "%.2f" : "Off");
-    if (o.blackHoleMoon < 0.05f) o.blackHoleMoon = 0.0f;
-    changed |= ImGui::IsItemDeactivatedAfterEdit();
-    if (ImGui::IsItemHovered())
-        if (const char* tip = tmshaders::menu::tooltip("BlackHoleMoon")) ImGui::SetTooltip("%s", tip);
+    // Only while Game moonlight is Black hole (engineMoonChoice): its brightness. Off is that choice's job.
+    if (o.blackHoleMoon > 0.0f) {
+        ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+        ImGui::SliderFloat("Black hole light", &o.blackHoleMoon, 0.25f, 2.0f, "%.2f");
+        if (o.blackHoleMoon < 0.25f) o.blackHoleMoon = 0.25f;
+        changed |= ImGui::IsItemDeactivatedAfterEdit();
+        if (ImGui::IsItemHovered())
+            if (const char* tip = tmshaders::menu::tooltip("BlackHoleMoon")) ImGui::SetTooltip("%s", tip);
+    }
     if (changed) options::save();
     int view = static_cast<int>(o.view);
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
@@ -348,6 +351,24 @@ void gamePanel() {
     ImGui::TextDisabled("Soft shadows: %s", softshadow::status());
     ImGui::TextDisabled("Shaders recognised: %u of %u, %u draws, %ux%u", st.shadersKnown, st.shadersCreated, st.drawsLastFrame,
                         st.width, st.height);
+}
+
+// Game moonlight (EngineMoon) in TrackMania 2. Its moon can't be moved (TMNF's Black hole moves it
+// when the map's light is built, a write into the game), so EngineMoon 0 and 1 did the same here and
+// the menu's "Black hole" changed nothing. The three choices are what this build can do: Game's keeps
+// the moon; Black hole is BlackHoleMoon (maniaplanet.ini: the shaders take the moon out and the black
+// hole lights the scene instead, at the last brightness); Off takes the moon's light out (EngineMoon 2).
+bool engineMoonChoice(tmshaders::Settings& s, const char* label) {
+    Options& o = options::current();
+    static float brightness = 1.0f; // the black hole's last brightness, for choosing it again
+    if (o.blackHoleMoon > 0.0f) brightness = o.blackHoleMoon;
+    int choice = o.blackHoleMoon > 0.0f ? 1 : (s.engineMoon == 2 ? 2 : 0);
+    static const char* kMoons[] = {"Game's", "Black hole", "Off"};
+    if (!ImGui::Combo(label, &choice, kMoons, IM_ARRAYSIZE(kMoons))) return false;
+    s.engineMoon = choice == 2 ? 2 : 1;
+    o.blackHoleMoon = choice == 1 ? brightness : 0.0f;
+    options::save();
+    return true;
 }
 
 } // namespace
@@ -433,7 +454,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {10, "Engine light: ambient"},
                             {11, "Engine light: the rest"},
                             {12, "Light sources (lamps, neon)"},
-                            {13, "The moon's glint (with Black hole moon)"},
+                            {13, "The moon's glint (Game moonlight: Black hole)"},
                             {20, "Light shafts"},
                             {21, "Volumetric clouds"},
                             {22, "Sky"},
@@ -443,16 +464,22 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {40, "Depth of field: blur size"},
                             {41, "Motion"}};
             // What works differently here than in TMNF (the shared tooltips describe TMNF's).
-            h.tips = {{"GameNight", "Under night skies the mod brings a day map's sunlight and sky light down to moonlight itself "
-                                    "(TrackMania 2's time of day can't be changed). Lamps and neon stay."},
-                      {"EngineMoon", "Night maps under the black hole: TrackMania 2's moon can't be moved, so Game's and Black hole "
-                                     "both keep it as the game has it; Off takes its light and glint out. For the black hole's "
-                                     "light instead see Black hole moon (Settings page, ManiaPlanet panel)."},
+            h.tips = {{"GameNight", "Day and sunset maps under a night sky (Starry night, Black hole, Aurora): TrackMania 2's time "
+                                    "of day can't be changed, so the mod brings the map's sky light, light maps and reflections "
+                                    "down to moonlight itself (the sun goes either way). Lamps and neon stay. Nothing on night "
+                                    "maps, which are night already (only with Game moonlight Off it darkens their sky light too)."},
+                      {"EngineMoon", "Night maps under a night sky (Starry night, Black hole, Aurora). TrackMania 2's moon can't be "
+                                     "moved. Game's: the moon stays as the game has it. Black hole: under the black hole the mod "
+                                     "takes the moon's light and its blue glint out and the black hole lights the scene instead, "
+                                     "warm (brightness: Black hole light, ManiaPlanet panel); under the other skies the moon stays. "
+                                     "Off: the moon's light and glint go (with Real night on, the sky light comes down too); "
+                                     "lamps and neon stay. At once, no map reload."},
                       {"CinematicOnlyInReplays", "Motion blur and depth of field only in photo mode (TrackMania 2's replays can't "
                                                  "be told from driving yet). Off: always."},
                       {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, "
                                        "wherever the camera puts it; the middle again while the car is off screen. A click in "
                                        "the photo mode still wins."}};
+            h.engineMoon = engineMoonChoice;
             h.fNumber = photo::fNumber;
             h.splitOn = &photo::splitOn();
             h.splitPosition = &photo::splitPosition();
