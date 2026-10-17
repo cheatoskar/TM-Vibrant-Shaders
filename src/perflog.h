@@ -9,7 +9,9 @@
 //
 // The GPU times are spans on the GPU's clock: while the GPU waits for the CPU (a CPU-bound
 // frame) the game's span includes that wait. "rest" is the GPU frame less both spans: the
-// game's shadow maps, HUD and menus, and idle time; near zero means the GPU is the limit.
+// game's shadow maps, HUD and menus, and idle time; near zero means the GPU is the limit. The
+// game's main camera is also timed on the CPU (its drawing calls, the mod's hooks in them): when
+// that is about as long as its GPU span, the GPU was waiting for the calls.
 namespace tmshaders {
 class Pipeline;
 namespace perflog {
@@ -25,6 +27,9 @@ enum class Mark {
 void mark(IDirect3DDevice9* device, Mark mark);
 // CPU time the mod spent this frame outside the game (the pipeline's render calls).
 void addCpu(double ms);
+// RenderScale: this frame's main camera is drawn at that scale (the line says on how many frames:
+// a window mixes scaled and full-size frames when the scale switches, e.g. for an F12 capture).
+void renderScaled(float scale);
 // Once a frame, at Present. `pipeline`: its smoothed per-pass GPU times. `castersCpuMs`: the
 // recording's cumulative CPU time (casters::cpuMs).
 void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, double castersCpuMs);
