@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cwchar>
+#include <cstdio>
+#include <intrin.h>
 
 namespace tmshaders {
 namespace engine {
@@ -20,7 +22,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kBaseRgb, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -54,14 +56,14 @@ constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
      {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0,
-      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0},
+      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0},
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
      0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
-      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190},
+      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0},
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
      0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0},
@@ -224,6 +226,13 @@ constexpr InlineSite kAviDestroySite = {kAviDestroy, {0x56, 0x8b, 0xf1, 0x8b, 0x
 // puzzle editors, undo, replacing a block; only the editor and the map's clip update call it).
 // CasterShadows keeps the meshes it saw: a removed block would keep casting its shadow.
 constexpr InlineSite kRemoveBlockSite = {kRemoveBlock, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnChallenge::RemoveBlock"};
+// GxLight::SetBaseRGB(rgb), every writer of a light's colour (21 call sites in each build: the
+// weather's sun and moon, CFuncLightColor, CSceneFxSuperSample::FxRender, CSceneLight::Create*,
+// CPlugLight::Make*, ...). Hooked for the log only (sun diag): which one lights the end-of-race
+// replay under Real night. A leaf function; its first two instructions (mov eax,[esp+4];
+// fld [eax]) run unchanged in the trampoline. GxLight: +0x14 flags, +0x18 base rgb, +0x24 and
+// +0x28 the intensity factors, +0x2c rgb * both (what the shaders get).
+constexpr InlineSite kBaseRgbSite = {kBaseRgb, {0x8b, 0x44, 0x24, 0x04, 0xd9, 0x00}, 6, -1, "GxLight::SetBaseRGB"};
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
 
@@ -487,8 +496,196 @@ void* patchCall(uintptr_t site, uintptr_t callee, void* detour, const char* name
     return reinterpret_cast<void*>(expected);
 }
 
+// --- Sun diag (log only) ----------------------------------------------------
+// Under Real night the end-of-race replay of A01 is lit by a warm directional light although
+// the map's only weather stays at midnight (capture_117/118 against capture_120). Which code
+// gives the light the replay draws its colour? Read-only: per "epoch" (a scene load, then every
+// start of a cinematic) the sun light the lens flares see is logged next to the weather's own
+// GxLight (+0xc4), at the first sun flare and again 2 s later, and the first callers of
+// GxLight::SetBaseRGB (de-duplicated by return address) with the light and colour they set.
+// When the epoch ends, how often each of them was called. Nothing in the game is written.
+bool weatherClock(float& async, float& timed, int& mode, float& speed);
+constexpr size_t kWeatherLight = 0xc4;   // GxLight* of the weather's directional light
+constexpr int kSunDiagCallers = 8;       // distinct SetBaseRGB callers logged per epoch
+constexpr int kSunDiagEpochsPerMap = 12; // cinematic starts logged per scene load
+volatile LONG g_sunDiagBusy = 0;         // one writer at a time (the others pass untouched)
+LONG g_sunDiagEpoch = 0;
+int g_sunDiagEpochsThisMap = 0;
+bool g_sunDiagOn = false;                // within the epochs of this map
+DWORD g_sunDiagTick = 0;                 // the epoch's start
+int g_sunFlareLogged = 0;                // this epoch: 0 none, 1 the first sun flare, 2 also 2 s later
+const void* g_sunFlareLight = nullptr;   // the sun's GxLight as the flares saw it last
+struct RgbCaller {
+    uintptr_t ret;
+    unsigned calls;
+};
+RgbCaller g_rgbCallers[kSunDiagCallers] = {};
+int g_rgbCallerCount = 0;
+unsigned g_rgbOtherCalls = 0;            // by callers beyond the logged ones
+using BaseRgbFn = void(__fastcall*)(void*, void*, const float*);
+BaseRgbFn g_baseRgb = nullptr;           // the trampoline
+
+bool sunDiagLock() {
+    return InterlockedCompareExchange(&g_sunDiagBusy, 1, 0) == 0;
+}
+
+void sunDiagUnlock() {
+    InterlockedExchange(&g_sunDiagBusy, 0);
+}
+
+// A code address as Ghidra and TmForever.map name it (link time, base 0x00400000), or the
+// module and offset outside the game (the mod's own moon colour call).
+void describeCode(uintptr_t address, char* out, size_t size) {
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(address), &module) || !module) {
+        sprintf_s(out, size, "%08x (no module)", static_cast<unsigned>(address));
+        return;
+    }
+    if (module == GetModuleHandleW(nullptr)) {
+        sprintf_s(out, size, "TmForever %08x", static_cast<unsigned>(address - reinterpret_cast<uintptr_t>(module) + kPreferredBase));
+        return;
+    }
+    char path[MAX_PATH] = {};
+    GetModuleFileNameA(module, path, MAX_PATH);
+    const char* name = strrchr(path, '\\');
+    sprintf_s(out, size, "%s+%x", name ? name + 1 : path, static_cast<unsigned>(address - reinterpret_cast<uintptr_t>(module)));
+}
+
+// A GxLight as text: flags, base rgb, the two intensity factors, rgb * both.
+void describeLight(const void* light, char* out, size_t size) {
+    __try {
+        const BYTE* l = static_cast<const BYTE*>(light);
+        if (!l || !readable(l, 0x38)) {
+            sprintf_s(out, size, "gx %p (unreadable)", light);
+            return;
+        }
+        const float* f = reinterpret_cast<const float*>(l);
+        sprintf_s(out, size, "gx %p flags 0x%x rgb %.3f %.3f %.3f int %.3f x %.3f final %.3f %.3f %.3f", light,
+                  *reinterpret_cast<const unsigned*>(l + 0x14), f[0x18 / 4], f[0x1c / 4], f[0x20 / 4], f[0x24 / 4], f[0x28 / 4],
+                  f[0x2c / 4], f[0x30 / 4], f[0x34 / 4]);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        sprintf_s(out, size, "gx %p (fault)", light);
+    }
+}
+
+const void* weatherLight() {
+    __try {
+        const BYTE* weather = static_cast<const BYTE*>(g_weather);
+        if (!weather || !readable(weather + kWeatherLight, sizeof(void*))) return nullptr;
+        return *reinterpret_cast<const void* const*>(weather + kWeatherLight);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+// How often the logged callers were called in the epoch that ends (one line).
+void reportRgbCallers() {
+    if (!g_baseRgb || (g_rgbCallerCount == 0 && g_rgbOtherCalls == 0)) return;
+    char line[768] = {};
+    size_t used = 0;
+    for (int i = 0; i < g_rgbCallerCount && used < sizeof(line) - 64; i++) {
+        char where[96];
+        describeCode(g_rgbCallers[i].ret, where, sizeof(where));
+        const int n = sprintf_s(line + used, sizeof(line) - used, "%s%s x%u", i ? ", " : "", where, g_rgbCallers[i].calls);
+        if (n > 0) used += static_cast<size_t>(n);
+    }
+    TMVS_LOG("engine: sun diag: epoch %ld SetBaseRGB calls: %s; others x%u", g_sunDiagEpoch, line, g_rgbOtherCalls);
+}
+
+// A new epoch: a scene load (map: true) or the start of a cinematic.
+void sunDiagEpoch(bool map, unsigned source) {
+    if (!map && (!g_sunDiagOn || g_sunDiagEpochsThisMap >= kSunDiagEpochsPerMap)) return;
+    int tries = 0;
+    while (!sunDiagLock()) {
+        if (++tries > 100) return; // another thread is stuck in its log line: this epoch goes unlogged
+        Sleep(0);
+    }
+    reportRgbCallers();
+    g_sunDiagEpoch++;
+    g_sunDiagEpochsThisMap = map ? 0 : g_sunDiagEpochsThisMap + 1;
+    g_sunDiagOn = true;
+    g_sunDiagTick = GetTickCount();
+    g_sunFlareLogged = 0;
+    g_rgbCallerCount = 0;
+    g_rgbOtherCalls = 0;
+    TMVS_LOG("engine: sun diag: epoch %ld: %s", g_sunDiagEpoch, map ? "scene load" : source == 1 ? "cinematic on (clip player)" : source == 2 ? "cinematic on (clip viewer)" : "cinematic on (video export)");
+    sunDiagUnlock();
+}
+
+// The lens flares' sun light (and the weather's) at the first sun flare of an epoch and 2 s later.
+void sunDiagFlare(const void* corpusLight) {
+    if (!g_sunDiagOn || g_sunFlareLogged >= 2) return;
+    const DWORD age = GetTickCount() - g_sunDiagTick;
+    if (g_sunFlareLogged == 1 && age < 2000) return;
+    if (!sunDiagLock()) return;
+    if (g_sunFlareLogged >= 2) {
+        sunDiagUnlock();
+        return;
+    }
+    const char* when = g_sunFlareLogged == 0 ? "first sun flare" : "+2 s";
+    g_sunFlareLogged++;
+    const void* item = nullptr;
+    const void* light = nullptr;
+    __try {
+        item = *reinterpret_cast<const void* const*>(static_cast<const BYTE*>(corpusLight) + 0x48);
+        light = item ? *reinterpret_cast<const void* const*>(static_cast<const BYTE*>(item) + 0x88) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    g_sunFlareLight = light;
+    const void* weatherGx = weatherLight();
+    char sun[192], weather[192];
+    describeLight(light, sun, sizeof(sun));
+    if (weatherGx) describeLight(weatherGx, weather, sizeof(weather));
+    else strcpy_s(weather, "gx none");
+    float async = -1.0f, timed = -1.0f, speed = 0.0f;
+    int mode = 0;
+    const bool clock = g_weatherVtable && weatherClock(async, timed, mode, speed);
+    TMVS_LOG("engine: sun diag: epoch %ld %s (%u ms, cinematic %d): flare light %p item %p %s", g_sunDiagEpoch, when, age, cinematicActive() ? 1 : 0,
+             corpusLight, item, sun);
+    TMVS_LOG("engine: sun diag: epoch %ld %s: weather %p %s, clock %.3f/%.3f%s; %s", g_sunDiagEpoch, when, g_weather, weather, timed, async,
+             clock ? "" : " (not known)", light && light == weatherGx ? "SAME light" : "DIFFERENT lights");
+    sunDiagUnlock();
+}
+
+// Who sets a light's colour: the first distinct callers of the epoch, then only counted.
+void sunDiagBaseRgb(uintptr_t ret, const void* light, const float* rgb) {
+    if (!g_sunDiagOn || !sunDiagLock()) return;
+    for (int i = 0; i < g_rgbCallerCount; i++) {
+        if (g_rgbCallers[i].ret == ret) {
+            g_rgbCallers[i].calls++;
+            sunDiagUnlock();
+            return;
+        }
+    }
+    if (g_rgbCallerCount >= kSunDiagCallers) {
+        g_rgbOtherCalls++;
+        sunDiagUnlock();
+        return;
+    }
+    g_rgbCallers[g_rgbCallerCount++] = {ret, 1};
+    char where[96];
+    describeCode(ret, where, sizeof(where));
+    float c[3] = {-1.0f, -1.0f, -1.0f};
+    __try {
+        if (rgb && readable(rgb, sizeof(c))) memcpy(c, rgb, sizeof(c));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    const void* weatherGx = weatherLight();
+    TMVS_LOG("engine: sun diag: epoch %ld SetBaseRGB from %s: gx %p rgb %.3f %.3f %.3f%s%s", g_sunDiagEpoch, where, light, c[0], c[1], c[2],
+             light && light == weatherGx ? " (the weather's light)" : "", light && light == g_sunFlareLight ? " (the flares' sun)" : "");
+    sunDiagUnlock();
+}
+
+void __fastcall baseRgbDetour(void* light, void* edx, const float* rgb) {
+    sunDiagBaseRgb(reinterpret_cast<uintptr_t>(_ReturnAddress()), light, rgb);
+    g_baseRgb(light, edx, rgb);
+}
+
 void markCinematic(unsigned source) {
-    g_lastCinematic = GetTickCount();
+    const DWORD now = GetTickCount();
+    if (g_lastCinematic == 0 || now - g_lastCinematic >= 500) sunDiagEpoch(false, source);
+    g_lastCinematic = now;
     g_cinematicSources |= source;
     if (source != 1) g_lastNotClip = g_lastCinematic;
 }
@@ -758,6 +955,7 @@ void __fastcall lensFlareDetour(void* self, void* edx, void* light, const void* 
     // Counted for the log (the sun came back in end-of-race replays: is it its flare?).
     const bool sun = isSunLight(light);
     g_flares[sun ? 1 : 0]++;
+    if (sun) sunDiagFlare(light);
     if (g_hideSunFlare && testVisible && sun) {
         testVisible = 0;
         g_flares[2]++;
@@ -1064,6 +1262,7 @@ void __fastcall loadSceneDetour(void* self, void* edx) {
     float* time = mood && readable(static_cast<BYTE*>(mood) + kMoodDayTime, sizeof(float)) ? reinterpret_cast<float*>(static_cast<BYTE*>(mood) + kMoodDayTime) : nullptr;
     // A map's load (null: the editor changing the decoration, a menu scene).
     g_sceneChallenge = g_loadingChallenge;
+    sunDiagEpoch(true, 0);
     if (!time || !(*time >= 0.0f && *time <= 1.0f)) {
         // Nothing of the last map carries over (its forced midnight, its time of day).
         g_weather = nullptr;
@@ -1288,6 +1487,7 @@ bool install(const Callbacks& callbacks) {
     g_raceTriggers = reinterpret_cast<RaceTriggersFn>(inlineHook(kRaceTriggersSite, reinterpret_cast<void*>(&raceTriggersDetour)));
     g_cacheUpToDate = reinterpret_cast<CacheFn>(inlineHook(kCacheUpToDateSite, reinterpret_cast<void*>(&cacheUpToDateDetour)));
     g_cacheSave = reinterpret_cast<CacheFn>(inlineHook(kCacheSaveSite, reinterpret_cast<void*>(&cacheSaveDetour)));
+    g_baseRgb = reinterpret_cast<BaseRgbFn>(inlineHook(kBaseRgbSite, reinterpret_cast<void*>(&baseRgbDetour)));
     // The export's file: all six or none (a frame written without the open would go nowhere).
     {
         const struct {
