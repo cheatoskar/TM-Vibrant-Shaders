@@ -31,18 +31,24 @@ INSTALL - by hand, no .exe
     Copy "TM Vibrant Shaders\<version>\TMVibrantShaders.dll" into your
     TrackMania folder (next to TmForever.exe) and rename it to d3d9.dll.
     Use only one of the two ways at a time.
+  TrackMania 2 / ManiaPlanet:
+    Copy d3d11.dll from this zip next to ManiaPlanet.exe and start
+    ManiaPlanet 64-bit (the mod is 64-bit only).
 
 IN GAME
   F8   shader menu (presets, every setting, your own presets)
-  F7   shaders on/off
+  F7   shaders on/off (TrackMania 2: F5, F7 is its friends list)
+  F6   photo mode (Shift+F6: compare split)
   F12  screenshot and frame capture (for bug reports)
   Everything you change is saved automatically, in
-  Documents\TrackMania\TMVS.
+  Documents\TrackMania\TMVS (TrackMania 2:
+  Documents\ManiaPlanet\TMVS).
 
 UNINSTALL
   Run TM-Vibrant-Shaders-Setup.exe and choose "Uninstall",
   or delete the "TM Vibrant Shaders" folder from the ModLoader products /
-  the d3d9.dll from the game folder.
+  the d3d9.dll from the game folder / the d3d11.dll from the
+  ManiaPlanet folder.
 
 VIRUS WARNING?
   The setup is not code-signed, so Windows SmartScreen may warn about it
@@ -79,17 +85,23 @@ INSTALLIEREN - von Hand, ohne .exe
     "TM Vibrant Shaders\<Version>\TMVibrantShaders.dll" in den
     TrackMania-Ordner kopieren (neben TmForever.exe) und in d3d9.dll
     umbenennen. Bitte nur einen der beiden Wege gleichzeitig nutzen.
+  TrackMania 2 / ManiaPlanet:
+    d3d11.dll aus dieser ZIP neben die ManiaPlanet.exe kopieren und
+    ManiaPlanet 64-bit starten (der Mod gibt es nur in 64-bit).
 
 IM SPIEL
   F8   Shader-Menü (Presets, alle Einstellungen, eigene Presets)
-  F7   Shader an/aus
+  F7   Shader an/aus (TrackMania 2: F5, F7 ist dort die Freundesliste)
+  F6   Fotomodus (Shift+F6: Vergleichsansicht)
   F12  Screenshot und Frame-Capture (für Fehlerberichte)
-  Alles wird automatisch gespeichert, in Dokumente\TrackMania\TMVS.
+  Alles wird automatisch gespeichert, in Dokumente\TrackMania\TMVS
+  (TrackMania 2: Dokumente\ManiaPlanet\TMVS).
 
 DEINSTALLIEREN
   TM-Vibrant-Shaders-Setup.exe starten und "Uninstall" wählen,
   oder den Ordner "TM Vibrant Shaders" aus den ModLoader-Products bzw. die
-  d3d9.dll aus dem Spielordner löschen.
+  d3d9.dll aus dem Spielordner bzw. die d3d11.dll aus dem
+  ManiaPlanet-Ordner löschen.
 
 VIRENWARNUNG?
   Das Setup ist nicht signiert, deshalb kann Windows SmartScreen warnen
