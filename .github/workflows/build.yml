@@ -152,6 +152,9 @@ jobs:
           python3 tools/modloader_server.py index --out-dir site/modloader
           python3 tools/modloader_server.py check site/modloader/index.json site/modloader/beta/index.json
           touch site/.nojekyll
+          # The icon both indexes and packaging/description.yaml point at: served with the index,
+          # so it shows in the ModLoader from the first release on (not only once it is on main).
+          cp packaging/icons/icon_a.png site/modloader/icon.png
           for dir in site/modloader site/modloader/beta; do
             printf '<!doctype html><meta charset="utf-8"><title>TM Vibrant Shaders ModLoader server</title><p>TrackMania ModLoader update server for <a href="https://github.com/%s">TM Vibrant Shaders</a>. Add <code>https://%s.github.io/%s/%s/</code> under <code>servers:</code> in <code>%%LOCALAPPDATA%%\\TMLoader\\config.yaml</code>. Versions: <a href="index.json">index.json</a>.</p>\n' \
               "$GITHUB_REPOSITORY" "${GITHUB_REPOSITORY_OWNER,,}" "${GITHUB_REPOSITORY#*/}" "${dir#site/}" > "$dir/index.html"
