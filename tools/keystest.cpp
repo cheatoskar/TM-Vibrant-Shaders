@@ -120,6 +120,37 @@ int main() {
     DeleteFileW(ini);
     load(ini);
     CHECK(get(Action::Reload) == Binding{VK_F9, kCtrl});
+    // CenterSpeed loaded: the default F8 menu moves to F5 once, stamped; an F8 chosen afterwards
+    // stays; CenterSpeed gone: back to F8, stamp cleared. A key the player chose is never touched.
+    DeleteFileW(ini);
+    load(ini);
+    takeChanged();
+    centerSpeed(false);
+    CHECK(get(Action::Menu) == Binding{VK_F8, 0} && !takeChanged());
+    centerSpeed(true);
+    CHECK(get(Action::Menu) == Binding{VK_F5, 0} && takeChanged());
+    save(ini);
+    CHECK(GetPrivateProfileIntW(L"Keys", L"MenuMovedForCenterSpeed", 0, ini) == 1);
+    load(ini);
+    CHECK(get(Action::Menu) == Binding{VK_F5, 0});
+    CHECK(assign(Action::Menu, Binding{VK_F8, 0}));
+    save(ini);
+    load(ini);
+    centerSpeed(true);
+    CHECK(get(Action::Menu) == Binding{VK_F8, 0});
+    assign(Action::Menu, Binding{VK_F5, 0});
+    centerSpeed(false);
+    CHECK(get(Action::Menu) == Binding{VK_F8, 0});
+    save(ini);
+    CHECK(GetPrivateProfileIntW(L"Keys", L"MenuMovedForCenterSpeed", 1, ini) == 0);
+    DeleteFileW(ini);
+    WritePrivateProfileStringW(L"Keys", L"Menu", L"Insert", ini);
+    load(ini);
+    centerSpeed(true);
+    CHECK(get(Action::Menu) == Binding{VK_INSERT, 0});
+    DeleteFileW(ini);
+    load(ini);
+    takeChanged();
     // Hotkeys only react while the game window is in front: with a window that isn't, nothing fires.
     setGameWindow(CreateWindowW(L"STATIC", L"x", 0, 0, 0, 1, 1, nullptr, nullptr, nullptr, nullptr));
     CHECK(!gameHasFocus());

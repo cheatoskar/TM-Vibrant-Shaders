@@ -1572,6 +1572,17 @@ IDirect3DSurface9* onSetRenderTarget(DWORD index, IDirect3DSurface9* surface) {
     return surface;
 }
 
+// Another mod's GetRenderTarget(0) (hook.cpp tells which caller is one): during the camera it is
+// told the game's own target, not the float one (or the added light's) standing in for it.
+// CenterSpeed recognises the car's draws only while the back buffer is bound. Risk: a mod that
+// saves this target and binds it again mid-camera gets the float one back (onSetRenderTarget), but
+// one that draws into it with its own device calls (StretchRect, GetRenderTargetData) touches the
+// game's 8-bit target, which the camera's end overwrites.
+IDirect3DSurface9* onOtherModRenderTarget(IDirect3DSurface9* bound) {
+    if (!g_hdrGame || !bound) return nullptr;
+    return bound == g_hdrScene.surface || bound == g_hdrAdded.surface ? g_hdrGame : nullptr;
+}
+
 // The F12 capture's statistics of the light the game added on top (capture_NNN.add16), counted
 // on the capture's writer thread.
 void addedStats(const std::vector<uint16_t>& half) {
@@ -2938,6 +2949,9 @@ void logDeviceLost(HRESULT coop) {
 void onPresent(IDirect3DDevice9* device) {
     g_device = device;
     g_frame++;
+    // CenterSpeed's menu key is F8 too (keys::centerSpeed). The ModLoader has loaded it by the first
+    // frame; once more some seconds later, should it come late.
+    if (g_frame == 1 || g_frame == 600) keys::centerSpeed(GetModuleHandleW(L"CenterSpeed.dll") != nullptr);
     // Device lost (alt-tab, mode switch): nothing can be drawn until the game resets it.
     static bool s_lost = false;
     const HRESULT coop = device->TestCooperativeLevel();
@@ -3263,6 +3277,7 @@ void bootOnce() {
     deviceCallbacks.getScissorRect = onGetScissorRect;
     deviceCallbacks.clearRects = onClearRects;
     deviceCallbacks.stretchRects = onStretchRects;
+    deviceCallbacks.otherModRenderTarget = onOtherModRenderTarget;
     g_deviceCallbacks = deviceCallbacks;
     // Never block the caller (possibly the game's main thread) on retries.
     if (!hook::install(deviceCallbacks)) {

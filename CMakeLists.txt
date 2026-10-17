@@ -121,6 +121,7 @@ add_library(tmvs_core STATIC
   src/capwriter.cpp
   src/config.cpp
   src/keys.cpp
+  src/inlinehook.cpp
   src/inifile.cpp
   src/gbx.cpp
   src/log.cpp
@@ -205,6 +206,11 @@ target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_keystest tools/keystest.cpp)
 target_link_libraries(tmvs_keystest PRIVATE tmvs_core)
 target_compile_options(tmvs_keystest PRIVATE ${TMVS_OPTIONS})
+
+# Inline hooker test: instruction lengths, chaining onto another hook's jump, removal (development tool).
+add_executable(tmvs_inlinehooktest tools/inlinehooktest.cpp)
+target_link_libraries(tmvs_inlinehooktest PRIVATE tmvs_core)
+target_compile_options(tmvs_inlinehooktest PRIVATE ${TMVS_OPTIONS})
 
 # settings.ini writer test: the same bytes as WritePrivateProfileString, in one write (development tool).
 add_executable(tmvs_initest tools/initest.cpp)
