@@ -40,7 +40,15 @@ ImTextureID picture(const std::string& preset) {
     return g_host->picture ? g_host->picture(preset) : ImTextureID{};
 }
 
+// Settings that work from settings.ini but are not in the menu (no page, no search): Night on
+// game light is an experiment that needs a game restart and changes little, and players took it
+// for a switch for the night presets. GameLight=1 in settings.ini still turns it on.
+bool hiddenFromMenu(const Field& f) {
+    return !strcmp(f.key, "GameLight");
+}
+
 bool supported(const Field& f) {
+    if (hiddenFromMenu(f)) return false;
     return !g_host || !g_host->supports || g_host->supports(f);
 }
 
@@ -1414,7 +1422,8 @@ bool drawStudio(Config& config, Settings& s) {
     const bool searching = query[0] != 0;
     for (const Field& f : fields()) {
         const bool match = !searching || containsNoCase(f.label, query) || containsNoCase(f.key, query) || containsNoCase(f.category, query);
-        if (!match || (!searching && !isRelevant(f, s))) continue;
+        // A hidden setting found by the search would open an empty panel.
+        if (!match || hiddenFromMenu(f) || (!searching && !isRelevant(f, s))) continue;
         if (panels.empty() || panels.back().title != f.category) {
             const char* category = f.category;
             // Changed settings in this group (a dot on its title).
@@ -1425,7 +1434,7 @@ bool drawStudio(Config& config, Settings& s) {
             panels.push_back({category, 0.0f, [&s, category, searching] {
                                   bool l = false;
                                   for (const Field& g : fields()) {
-                                      if (strcmp(g.category, category) != 0) continue;
+                                      if (strcmp(g.category, category) != 0 || hiddenFromMenu(g)) continue;
                                       const bool hit = !searching || containsNoCase(g.label, query) || containsNoCase(g.key, query) ||
                                                        containsNoCase(g.category, query);
                                       const bool relevant = isRelevant(g, s);

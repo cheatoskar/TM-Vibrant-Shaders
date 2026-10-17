@@ -296,14 +296,14 @@ Measured in the previewer on captures 004 (A13, night), 011 and 041, preset Hori
 
 ### Owner test of GameLight
 
-1. Menu, *Game* page: *Night on game light* on (`GameLight=1`), *Game HDR* and *Game light sources*
-   on. Restart the game.
+1. `GameLight=1` in `settings.ini` (not in the menu since 2026-10-17), *Game HDR* and *Game light
+   sources* on. Restart the game.
 2. Log at the start: `gbuffer: on with the light (GameLight), ...`. After a map: `gbuffer: N pixel
    shaders patched (L with their light), ...` (Stadium: L about 10-30), `gbuffer: the patched
    shaders' light goes into a third target (2560x1440)`, after 8 s `gbuffer: X of those draws wrote
    their light (GameLight)`. Not expected: `kept after a failed patch` > 0, `two targets at a time`.
-3. A night map (A13 or C12) with the night preset (Horizon): switch *Night on game light* off and on
-   in the menu at one spot. Expected: lamp-lit asphalt, the floodlit stands and the area right under
+3. A night map (A13 or C12) with the night preset (Horizon): switch `GameLight` off and on
+   in `settings.ini` (game closed: the mod reads it at the start) and compare F12 at one spot. Expected: lamp-lit asphalt, the floodlit stands and the area right under
    the masts brighter and warmer with it on; dark, moonlit parts unchanged. Too bright or a whole
    floodlit field lifted: say so (the threshold is a guess).
 4. F12 at the same spot, once with it on: the capture gets `capture_NNN.lit16`; the log says
