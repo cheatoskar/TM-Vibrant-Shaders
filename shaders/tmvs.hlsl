@@ -1295,7 +1295,11 @@ float3 clearSky(float3 rd) {
     float mu = dot(rd, sun);
     // The glow around the sun follows Sun glow (1 = as it always was; only Golden Hour picks this sky).
     col += u_SunColor.rgb * (henyeyGreenstein(mu, 0.75) * 0.25 + pow(saturate(mu), 8.0) * 0.4) * day * u_Rays.z;
-    col += u_SunColor.rgb * smoothstep(0.9994, 0.99975, mu) * 3.0 * day;
+    // The sun as the game draws it: a soft bright core that blooms into a wide glow, no disc
+    // with an edge (owner's vanilla screen, 2026-10-17). pow(mu, n) ~ exp(-n a^2 / 2): the core
+    // falls to half at about 1.7 degrees, the glow at about 4.3; bright enough to bloom.
+    float sunMu = saturate(mu);
+    col += u_SunColor.rgb * (pow(sunMu, 1500.0) * 16.0 + pow(sunMu, 250.0) * 2.5 * u_Rays.z) * day;
     // Clouds on a plane.
     if (rd.y > 0.01) {
         float2 cp = rd.xz / rd.y * 2.0 + float2(u_Proj2.z * 0.01, u_Proj2.z * 0.004);
