@@ -4,7 +4,7 @@
 
 ## What you need
 
-- TrackMania Nations Forever or TrackMania United Forever, on Windows 10 or 11.
+- TrackMania Nations Forever or TrackMania United Forever, or TrackMania 2 (ManiaPlanet 4, 64-bit, see [TrackMania 2](#trackmania-2-maniaplanet-4)), on Windows 10 or 11.
 - A GPU with Shader Model 3.0 (practically every GPU since 2008).
 - Optional: the [TrackMania ModLoader (TMLoader)](https://tomashu.dev/software/tmloader/).
 
@@ -27,7 +27,8 @@ There are two ways to load the mod. Use one of them, not both.
 3. Close TrackMania and run **`TM-Vibrant-Shaders-Setup.exe`**. It shows what is installed and offers:
    - **Install for the TrackMania ModLoader.** Copies the mod into `%LOCALAPPDATA%\TMLoader\database\TmForever\products\`. Then open the ModLoader, tick *TM Vibrant Shaders* in your profile and start the game. If the ModLoader isn't installed, the setup offers its download page.
    - **Install into TrackMania Nations Forever** or **Install into TrackMania United Forever.** One button per game the setup finds (it looks at the Windows uninstall entries, Steam and the usual folders). It copies the mod as `d3d9.dll` next to `TmForever.exe`. A `d3d9.dll` that was there before is kept as `d3d9.dll.tmvs-backup` and restored when you uninstall.
-   - **Install into another game folder.** For a game the setup didn't find. Pick the folder that contains `TmForever.exe`.
+   - **Install into TrackMania 2 (ManiaPlanet).** Copies the 64-bit `d3d11.dll` next to `ManiaPlanet.exe` (see [TrackMania 2](#trackmania-2-maniaplanet-4)).
+   - **Install into another game folder.** For a game the setup didn't find. Pick the folder that contains `TmForever.exe` or `ManiaPlanet.exe`.
    - **Uninstall.** Removes the mod from the ModLoader and from every game folder it finds.
 4. Start the game and press `F8`.
 
@@ -56,13 +57,22 @@ Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256
 1. Copy `TM Vibrant Shaders\<version>\TMVibrantShaders.dll` from the zip into your TrackMania folder, next to `TmForever.exe`.
 2. Rename it to **`d3d9.dll`**.
 
+## TrackMania 2 (ManiaPlanet 4)
+
+The same zip carries a `d3d11.dll` for ManiaPlanet's Direct3D 11 renderer (64-bit only). The ModLoader is not involved.
+
+- **Install:** close ManiaPlanet and run the setup, button **Install into TrackMania 2 (ManiaPlanet)**. Or by hand: copy `d3d11.dll` from the zip next to `ManiaPlanet.exe`. Start ManiaPlanet **64-bit**; a message at the top says the mod is running. If the launcher starts `ManiaPlanet32.exe`, switch it to 64-bit. A `d3d11.dll` that was there before (ReShade, another mod) is kept as `d3d11.dll.tmvs-backup` by the setup and restored on uninstall.
+- **Keys:** `F8` menu, `F6` photo mode, `F12` capture, but **`F5`** turns the effects on or off: `F7` is ManiaPlanet's friends list. The keys can be changed in the menu (*Settings*, *Hotkeys*).
+- **Uninstall:** run the setup again and choose *Uninstall*, or delete `d3d11.dll` from the game folder. Settings stay in `Documents\ManiaPlanet\TMVS\`.
+- **Online:** the mod changes the picture. It reads the camera, the sun, the car's position and the map's comments, and writes nothing into the game's memory except the map comments in the map editor when you press *Set as Author's Shader*. Whether a server or competition allows a `d3d11.dll` mod is not confirmed: check its rules. Details and the *Soft sun shadows* note: [maniaplanet/README.md](../maniaplanet/README.md#online-openplanet).
+
 ## Updating
 
 Run the setup of the new version and pick the same button as before. It replaces the old version. Your settings and presets in `Documents\TrackMania\TMVS\` stay.
 
 ## Uninstalling
 
-Run the setup and choose *Uninstall*. Or by hand: delete the `TM Vibrant Shaders` folder from the ModLoader products, or `d3d9.dll` from the game folder.
+Run the setup and choose *Uninstall*. Or by hand: delete the `TM Vibrant Shaders` folder from the ModLoader products, `d3d9.dll` from the game folder, or `d3d11.dll` from the ManiaPlanet folder.
 
 Your settings stay in `Documents\TrackMania\TMVS\`. Delete that folder to remove them too.
 
