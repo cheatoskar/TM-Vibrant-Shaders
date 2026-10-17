@@ -22,6 +22,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - **Neon trail** from the car's real position in the game: no flicker at speed, no gaps, it lies along banked roads, walls and loops and keeps going through the map's clips. *Earlier runs kept* shows the last runs, dimmer.
 - **Rain and snow stay outside:** nothing falls under roofs, bridges and in buildings, and the lens dries off under a wide roof.
 - **Update check:** the menu says when a new release is out (nothing is downloaded; it can be switched off).
+- **ModLoader update server:** with one line in the ModLoader's `config.yaml` the ModLoader installs the mod and every new version itself ([install](docs/install.md#with-the-modloaders-update-server)). The *About* page tells ModLoader users about it.
 - The snowstorm's wind is a real recording.
 - New settings *Haze distance*, *Highlight roll-off*, *Floodlit surfaces* and *Game sunset clouds*.
 - Experimental, off: *Game normals* (the game's own shaders hand the mod their normals). *Night on game light* (their light) is not in the menu: `GameLight=1` in `settings.ini`.

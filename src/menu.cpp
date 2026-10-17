@@ -1781,7 +1781,10 @@ void drawAbout(Config& config) {
     pageTitle("About", "TM Vibrant Shaders " TM_SHADERS_VERSION_A " - updates, help and credits.");
     const update::Info info = update::latest();
     std::vector<PanelDef> panels;
-    panels.push_back({"Updates", info.state == update::State::Available ? 14.0f : 4.0f, [&config, info] {
+    const update::Install install = update::install();
+    const float updatesHeight =
+        info.state != update::State::Available ? 4.0f : (install == update::Install::ModLoader ? 16.0f : 14.0f);
+    panels.push_back({"Updates", updatesHeight, [&config, info, install] {
                           switch (info.state) {
                               case update::State::Checking: ImGui::TextDisabled("Checking for updates..."); break;
                               case update::State::UpToDate: ImGui::Text("You're up to date (%s).", TM_SHADERS_VERSION_A); break;
@@ -1791,9 +1794,22 @@ void drawAbout(Config& config) {
                                   ImGui::PushFont(g_fontTitle);
                                   ImGui::TextColored(kAccent, "Update available: %s", info.version.c_str());
                                   ImGui::PopFont();
-                                  ImGui::TextDisabled("Installed: %s. Download the new version and run its Setup.", TM_SHADERS_VERSION_A);
-                                  if (ImGui::Button("Download")) openLink(info.url);
+                                  if (install == update::Install::ModLoaderServer) {
+                                      // The ModLoader's own auto update fetches it from our server.
+                                      ImGui::TextDisabled("Installed: %s. The ModLoader installs the update by itself.", TM_SHADERS_VERSION_A);
+                                      if (ImGui::Button("Release page")) openLink(info.url);
+                                  } else {
+                                      ImGui::TextDisabled("Installed: %s. Download the new version and run its Setup.", TM_SHADERS_VERSION_A);
+                                      if (ImGui::Button("Download")) openLink(info.url);
+                                  }
                                   if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the release page in your browser. In fullscreen the game may minimise.");
+                                  if (install == update::Install::ModLoader) {
+                                      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                                      ImGui::TextWrapped("Or let the ModLoader update the mod by itself: add our server under servers: in its config.yaml.");
+                                      ImGui::PopStyleColor();
+                                      if (ImGui::Button("Copy server address")) ImGui::SetClipboardText(update::kModLoaderServer);
+                                      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", update::kModLoaderServer);
+                                  }
                                   if (!info.notes.empty()) {
                                       ImGui::Spacing();
                                       ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.25f));
