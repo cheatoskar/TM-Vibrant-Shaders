@@ -17,6 +17,13 @@ constexpr double kHold = 20.0;
 constexpr int kCalmWindows = 3;
 constexpr double kBounce = 60.0;
 constexpr double kBlocked = 300.0;
+// No decisions for a while after a map start or a pause of the frames (loading, device reset,
+// alt-tab, photo mode), and after a hitch: the game compiles shaders and the caster maps record
+// new meshes, the frame rate says nothing about the effects. The owner's log (2026-10-17): hitches
+// of 0.3 - 0.75 s up to 16 s after a map's first 3D frame (5 map starts: 7, 8, 11, 12, 16 s);
+// the 8 s grace ended into that and cut nine effects at 76 FPS.
+constexpr double kRestartGrace = 20.0;
+constexpr double kHitchGrace = 4.0;
 
 // What auto quality can turn down, in order: the most milliseconds for the least look
 // first. The light shafts and the glowing neon (the look itself) keep their places but are
@@ -147,6 +154,13 @@ void AutoQuality::restore(int knob, double now) {
     m_restoredAt[knob] = now;
 }
 
+void AutoQuality::startGrace(double now, double seconds, const char* reason) {
+    if (now + seconds <= m_quietUntil) return; // a longer grace already runs
+    if (now >= m_quietUntil) m_graceStart = now;
+    m_quietUntil = now + seconds;
+    m_graceReason = reason;
+}
+
 void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, const Settings& s) {
     if (!s.autoQuality || !s.enabled) {
         for (bool& r : m_reduced) r = false;
@@ -163,16 +177,47 @@ void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, c
         if (dt > 0.0 && dt < 0.25) {
             m_frames++;
             m_frameTime += dt;
+            if (now < m_quietUntil && gameplay) {
+                m_graceFrames++;
+                m_graceTime += dt;
+            }
         } else if (dt >= 0.25) {
-            m_quietUntil = now + 4.0;
+            // A second or more without frames: a loading screen, a device reset, alt-tab or
+            // photo mode (auto quality doesn't run in it); after it the game settles like at
+            // a map start. A shorter hitch (a shader compiled) needs less.
+            if (dt >= 1.0) {
+                startGrace(now, kRestartGrace, "a pause of the frames (loading, device reset, alt-tab, photo mode)");
+            } else {
+                startGrace(now, kHitchGrace, "a hitch");
+            }
         }
     }
     m_lastFrame = now;
-    if (gameplay && !m_wasGameplay) m_quietUntil = now + 8.0; // a map just started
+    if (gameplay && !m_wasGameplay) startGrace(now, kRestartGrace, "a map start");
     m_wasGameplay = gameplay;
     if (gameplay) {
         m_gameplayFrames++;
         m_pipelineSum += pipeline.totalTime();
+    }
+    // In the grace no frame counts: the first window starts when it ends, so a map's first
+    // seconds never decide a cut (16:59:07 the window still held frames of the grace: 76 FPS,
+    // nine effects off for the rest of the session at 92 - 98 FPS).
+    if (now < m_quietUntil) {
+        m_windowStart = now;
+        m_frames = 0;
+        m_frameTime = 0.0;
+        m_gameplayFrames = 0;
+        m_pipelineSum = 0.0;
+        return;
+    }
+    if (m_graceFrames > 0) {
+        const float graceFps = m_graceTime > 0.0 ? static_cast<float>(m_graceFrames / m_graceTime) : 0.0f;
+        if (m_graceFrames > 10 && graceFps < s.targetFps * 0.95f) {
+            TMVS_LOG("auto quality: %.0f FPS (target %.0f) in the %.0f s after %s: no decision on them, measuring starts now", graceFps,
+                     s.targetFps, m_quietUntil - m_graceStart, m_graceReason);
+        }
+        m_graceFrames = 0;
+        m_graceTime = 0.0;
     }
     if (m_windowStart < 0.0) m_windowStart = now;
     if (now - m_windowStart < kWindow) return;

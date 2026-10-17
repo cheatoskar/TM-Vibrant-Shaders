@@ -201,6 +201,11 @@ add_executable(tmvs_keystest tools/keystest.cpp)
 target_link_libraries(tmvs_keystest PRIVATE tmvs_core)
 target_compile_options(tmvs_keystest PRIVATE ${TMVS_OPTIONS})
 
+# Auto quality test: the grace after a map start, a hitch and a pause (development tool).
+add_executable(tmvs_aqtest tools/aqtest.cpp src/autoquality.cpp)
+target_link_libraries(tmvs_aqtest PRIVATE tmvs_core)
+target_compile_options(tmvs_aqtest PRIVATE ${TMVS_OPTIONS})
+
 # Share code test: every preset round-trips, garbage is refused, the clipboard (development tool).
 add_executable(tmvs_sharetest tools/sharetest.cpp)
 target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)

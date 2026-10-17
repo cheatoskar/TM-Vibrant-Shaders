@@ -1,6 +1,7 @@
 // Tests the hotkey table (src/keys.cpp): every key name parses back to its key, the ini round trip,
 // conflicts swap, plain letters are refused. Exit code 0 = all passed.
 #include "keys.h"
+#include "log.h"
 #include <cstdio>
 #include <string>
 #include <windows.h>
@@ -17,6 +18,7 @@ static int g_failed = 0;
     } while (0)
 
 int main() {
+    tmshaders::log::setFileName(L"tmvs_keystest.log"); // never the game's log
     // Every nameable key with every modifier combination: name -> parse gives the same binding.
     int count = 0;
     for (int i = 0; unsigned vk = nameableKey(i); i++) {
