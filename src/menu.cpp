@@ -134,11 +134,12 @@ ImVec4 sectionColour(const char* name) {
         ImVec4 colour;
     };
     static const Entry kColours[] = {
-        {"Lighting", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},       {"Look", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},
-        {"Sky", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},            {"Sky & Atmosphere", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},
-        {"Bloom & Lens", ImVec4(0.64f, 0.50f, 0.88f, 1.0f)},   {"Colour", ImVec4(0.88f, 0.48f, 0.58f, 1.0f)},
-        {"Weather", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},        {"Weather & Surfaces", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},
-        {"Cinematic", ImVec4(0.58f, 0.62f, 0.70f, 1.0f)},      {"Image", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},
+        {"Lighting", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},       {"Light and shadows", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},
+        {"Sky", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},            {"Haze and light shafts", ImVec4(0.52f, 0.68f, 0.84f, 1.0f)},
+        {"Bloom and lens", ImVec4(0.64f, 0.50f, 0.88f, 1.0f)}, {"Colour", ImVec4(0.88f, 0.48f, 0.58f, 1.0f)},
+        {"Weather", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},        {"Weather and surfaces", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},
+        {"Cinematic", ImVec4(0.58f, 0.62f, 0.70f, 1.0f)},      {"Image quality", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},
+        {"Game integration", ImVec4(0.70f, 0.62f, 0.50f, 1.0f)}, {"Look", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},
         {"Performance", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},    {"Neon trail", ImVec4(0.26f, 0.74f, 0.90f, 1.0f)},
         {"Author's Shader", ImVec4(0.88f, 0.76f, 0.36f, 1.0f)}, {"Cost per effect", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},
         {"Updates", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},         {"Help", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},
@@ -396,6 +397,37 @@ const char* tooltipFor(const char* key) {
         {"TrailTyres", "Two lines from the rear tyres instead of one."},
         {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},
         {"TrailKeepRuns", "How many earlier runs' trails stay after a restart, dimmer the older they are. 0 clears the trail on every restart."},
+        // The plainer ones too, so every setting says something when the pointer rests on it.
+        {"SkyMode", "Game sky keeps the game's own sky, the others replace it with the mod's. Picking one also sets what suits it (planet, the black hole's light, night darkening)."},
+        {"SkyRotation", "Turns stars, black hole, planet and aurora around you."},
+        {"StarAmount", "Number and brightness of the stars, and how often shooting stars cross."},
+        {"AuroraSpeed", "How fast the aurora's curtains move."},
+        {"BlackHoleAzimuth", "Compass direction of the black hole in the sky."},
+        {"BlackHoleElevation", "Height of the black hole in the sky."},
+        {"PlanetType", "Which planet the sky shows. None turns it off."},
+        {"PlanetAzimuth", "Compass direction of the planet in the sky."},
+        {"PlanetElevation", "Height of the planet in the sky."},
+        {"VolumetricClouds", "3D clouds over any sky, lit by the sun. 0 is off."},
+        {"GodRays", "Rays of light around the visible sun."},
+        {"Bloom", "Soft glow around the bright parts of the image."},
+        {"BloomRadius", "Wider or tighter glow."},
+        {"LensFlare", "Ghost reflections of the sun, as in a camera lens."},
+        {"ChromaticAberration", "Colour fringes towards the edges of the screen."},
+        {"Vignette", "Darker corners."},
+        {"FilmGrain", "Fine film noise."},
+        {"Exposure", "Overall brightness, in camera stops (EV)."},
+        {"Contrast", "The difference between dark and bright parts."},
+        {"Saturation", "Strength of all colours. 0 takes them out."},
+        {"Wetness", "A darker, glossy, reflective track, as after rain."},
+        {"SnowCover", "Snow on everything that faces up. Cars keep their paint."},
+        {"Lightning", "How often lightning strikes: a bolt, a flash over the track, thunder."},
+        {"ReflectionBlur", "Blurs the dry track's reflection into a soft sheen."},
+        {"TrailColor", "The colour of the neon trail."},
+        {"TrailWidth", "Width of the trail, in metres."},
+        {"MotionBlur", "Blur from camera movement. 1 is one full frame of movement."},
+        {"DepthOfField", "Blurs what is in front of and behind the point in focus."},
+        {"FXAA", "Smooths edges within one frame. Fast, a little soft."},
+        {"Quality", "Samples for AO, shadows, clouds, volumetric light and bounce light. Low is clearly faster."},
         // Sharing presets as text (Shaders page).
         {"ShareCopy", "Puts the current look on the clipboard as one line of text (TMVS1:...) to paste into a chat. Only the look's settings are in it, not your installation's (auto quality, sound volume, neon trail, ...). The same code works in TrackMania Nations/United and TrackMania 2."},
         {"SharePaste", "Reads a share code from the clipboard and makes it your look: unsaved, on top of the built-in preset it is closest to, so Save as preset keeps it. Nothing saved is replaced. Settings this version doesn't know are ignored and counted; values out of range are moved into range."},
@@ -1216,6 +1248,13 @@ PanelDef lutPanel(Config& config) {
 bool drawCustomize(Config& config, Settings& s) {
     pageTitle("Customize", "The settings most players want. Every setting is in Studio.");
     std::vector<PanelDef> panels;
+    // In the order of Studio's groups, so the two pages read alike.
+    panels.push_back(settingsPanel("Light and shadows", s,
+                                   {{"ShadowStrength", "Shadows"},
+                                    {"LongShadows", "Long shadows"},
+                                    {"AOStrength", "Ambient occlusion"},
+                                    {"NeonLight", "Neon light spill"},
+                                    {"GodRays", "Light shafts"}}));
     panels.push_back(settingsPanel("Sky", s,
                                    {{"SkyMode", "Sky"},
                                     {"SkyRotation", "Turn the sky"},
@@ -1230,25 +1269,20 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"BlackHoleAzimuth", "Black hole direction"},
                                     {"BlackHoleElevation", "Black hole height"},
                                     {"VolumetricClouds", "Clouds"}}));
-    panels.push_back(settingsPanel("Light and shadows", s,
-                                   {{"ShadowStrength", "Shadows"},
-                                    {"LongShadows", "Long shadows"},
-                                    {"AOStrength", "Ambient occlusion"},
-                                    {"GodRays", "Light shafts"},
-                                    {"NeonLight", "Neon light spill"},
-                                    {"Exposure", "Brightness"},
-                                    {"Contrast", "Contrast"},
-                                    {"Saturation", "Colour"}}));
     panels.push_back(settingsPanel("Bloom and lens", s,
                                    {{"Bloom", "Glow"},
                                     {"BloomRadius", "Glow radius"},
-                                    {"HighlightBoost", "Light sources"},
+                                    {"HighlightBoost", "Light intensity"},
                                     {"BorderGlow", "Neon borders"},
                                     {"Floodlights", "Floodlights"},
                                     {"LensFlare", "Lens flare"},
                                     {"ChromaticAberration", "Colour fringes"},
                                     {"Vignette", "Vignette"},
                                     {"FilmGrain", "Film grain"}}));
+    panels.push_back(settingsPanel("Colour", s,
+                                   {{"Exposure", "Brightness"},
+                                    {"Contrast", "Contrast"},
+                                    {"Saturation", "Saturation"}}));
     panels.push_back(settingsPanel("Weather", s,
                                    {{"Rain", "Rain"},
                                     {"Snow", "Snow"},
@@ -1265,7 +1299,7 @@ bool drawCustomize(Config& config, Settings& s) {
     panels.push_back(settingsPanel("Neon trail", s,
                                    {{"NeonTrail", "Neon trail"},
                                     {"TrailColor", "Colour"},
-                                    {"TrailWidth", "Width"},
+                                    {"TrailWidth", "Width (m)"},
                                     {"TrailTyres", "Tyre lines"},
                                     {"TrailDuration", "Trail fade (s)"},
                                     {"TrailKeepRuns", "Earlier runs"}}));
@@ -1367,8 +1401,11 @@ bool drawStudio(Config& config, Settings& s) {
     if (ImGui::GetContentRegionAvail().x < 220.0f * g_scale) ImGui::NewLine();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##search", "Search settings", query, sizeof(query));
-    ImGui::TextDisabled("Sun: %s (%.2f %.2f %.2f)", g_host->sunKnown ? "from game" : "unknown", g_host->sunDirection[0], g_host->sunDirection[1],
-                        g_host->sunDirection[2]);
+    // For working on the shaders, not for players: only while a debug view is on, and only
+    // where the game reports the sun (TrackMania 2 doesn't pass it to the menu).
+    if (s.debugView != 0 && g_host->sunKnown) {
+        ImGui::TextDisabled("Sun: from game (%.2f %.2f %.2f)", g_host->sunDirection[0], g_host->sunDirection[1], g_host->sunDirection[2]);
+    }
     ImGui::Spacing();
 
     // One panel per category. Searching shows the matches of every category; a match that
@@ -1602,29 +1639,13 @@ bool drawSettings(Config& config, Settings& s) {
                           l |= drawKey(s, "VideoExportBest");
                           return l;
                       }});
-    panels.push_back({"Game", 8.0f, [&s] {
-                          bool l = drawKey(s, "CinematicOnlyInReplays");
-                          l |= drawKey(s, "WeatherSound");
-                          l |= drawKey(s, "TAA");
-                          l |= drawKey(s, "TAAJitter");
-                          l |= drawKey(s, "DisableGameMSAA");
-                          l |= drawKey(s, "ReadableGameDepth");
-                          l |= drawKey(s, "GameMaterials");
-                          l |= drawKey(s, "DisableGameFX");
-                          l |= drawKey(s, "GameNight");
-                          l |= drawKey(s, "EngineMoon");
-                          l |= drawKey(s, "GameSkyClouds");
-                          l |= drawKey(s, "GameHdr");
-                          l |= drawKey(s, "CleanHighlights");
-                          l |= drawKey(s, "EngineLights");
-                          l |= drawKey(s, "CasterShadows");
-                          l |= drawKey(s, "CasterAlphaTest");
-                          l |= drawKey(s, "CleanWater");
-                          l |= drawKey(s, "GameGBuffer");
-                          l |= drawKey(s, "GameLight");
-                          l |= drawKey(s, "ShadeMenuBars");
-                          return l;
-                      }});
+    panels.push_back(settingsPanel("Effects", s, {{"CinematicOnlyInReplays", nullptr}, {"WeatherSound", nullptr}, {"TAA", nullptr}, {"TAAJitter", nullptr}}));
+    // How the mod works with the game itself, as in Studio's group of the same name (same order).
+    Entries game;
+    for (const Field& f : fields()) {
+        if (!strcmp(f.category, "Game integration")) game.push_back({f.key, nullptr});
+    }
+    panels.push_back(settingsPanel("Game integration", s, game));
     panels.push_back({"Photo mode", g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f, [&config] {
                           const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
@@ -1694,6 +1715,8 @@ bool drawSettings(Config& config, Settings& s) {
                           ImGui::TextDisabled("All changes are saved automatically.");
                           return false;
                       }});
+    // A settings panel with nothing this game can do is left out.
+    panels.erase(std::remove_if(panels.begin(), panels.end(), [](const PanelDef& p) { return p.rows <= 0.0f; }), panels.end());
     return panelColumns(panels, 380.0f);
 }
 
