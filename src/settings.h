@@ -34,7 +34,7 @@ struct Settings {
     bool cleanHighlights = true;   // the game's clipped white maps to one smooth result (no frost on floodlit surfaces); off = as up to 1.4.0-preview
     bool casterShadows = true;     // long shadows from a light-space map of the game's own static meshes (casters.cpp)
     bool casterAlphaTest = true;   // CasterShadows also keeps alpha-tested meshes (fences, grids) and draws them with the game's alpha test: lattice shadows; off = they cast none
-    bool shadeMenuBars = true;     // replay menu: the rows under its bars show the shaded image (mirrored) instead of leftovers of earlier frames
+    bool shadeMenuBars = true;     // replay menu: the rows under its bars are black instead of leftovers of earlier frames
     bool cleanWater = true;        // the game's water mirrors only what it can see, unblurred (no blotches of the ramps over it); off = as before
     bool waterFarReflections = true; // with CleanWater: the water's reflection is traced to the screen's edge (stands, masts and gates across a pool), not 40-120 m; off = as up to 1.4.0-preview
     bool gameGBuffer = false;      // the game's material shaders also write their normal (gbufpatch.cpp): AO, shadows, reflections and light on the real normal (needs GameHdr; patched from the start)
