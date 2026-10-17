@@ -55,11 +55,15 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 **Performance and video**
 - **Render scale with AMD FSR 1** (off by default): the game and the effects at a fraction of the screen's resolution, scaled up before the HUD; at 0.67 the effects cost about half.
 - **MP4 video export:** the replay editor's *Shoot video* writes H.264 or HEVC with AAC sound, encoded by the graphics card, with the effects at full quality on the video's own clock.
-- Auto quality measures every effect on your GPU and turns off just enough of them, never the light shafts or the neon light.
+- Auto quality measures every effect on your GPU and turns off just enough of them, never the long shadows, the light shafts or the neon light.
 
 **Neon Trail & Audio**
 - The neon trail tracks the car's true position directly from the engine: no flicker, no gaps, along banked roads and loops; earlier runs can stay, dimmer.
 - Realistic storm audio: recorded winter storm wind for snowstorms.
+
+**Known issues**
+- Real night: the end-of-race replay still shows the map's own sunlight (the race and photo mode are at night).
+- Night presets: some blue printed signs (the blue "d" of the Trackmania United banner) glow like neon strips; the game draws them with the same material as the strips.
 
 **Install (TrackMania Nations Forever / United Forever):**
 1. Download **`TM-Vibrant-Shaders.zip`** and extract it.
