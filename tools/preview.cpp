@@ -201,6 +201,7 @@ struct LoadedCapture {
     IDirect3DTexture9* hdr = nullptr; // capture_NNN.hdr16 next to it (GameHdr)
     IDirect3DTexture9* added = nullptr; // capture_NNN.add16: the light the game's additive draws added
     IDirect3DTexture9* materials = nullptr; // the class mask from capture_NNN.mat next to it
+    bool neonMaterials = false;             // ... with the neon class: the strips known by their material
     IDirect3DTexture9* normals = nullptr; // capture_NNN.nrm16: the game's normals (GameGBuffer)
     IDirect3DTexture9* light = nullptr;   // capture_NNN.lit16: the light its shaders lit each surface with (GameLight)
 };
@@ -615,6 +616,7 @@ int main(int argc, char** argv) {
             if (FILE* f = fopen(matPath.c_str(), "rb")) {
                 uint32_t header[4] = {};
                 uint8_t classes[256] = {};
+                bool texturesRead = false;
                 bool ok = fread(header, sizeof(header), 1, f) == 1 && header[0] == 0x314D4D54u && header[1] == c->cap.width &&
                           header[2] == c->cap.height && header[3] <= 255;
                 for (uint32_t i = 0; ok && i < header[3]; i++) {
@@ -624,17 +626,24 @@ int main(int argc, char** argv) {
                     ok = fread(kind, sizeof(kind), 1, f) == 1 && fread(&draws, sizeof(draws), 1, f) == 1 && fread(&length, sizeof(length), 1, f) == 1 &&
                          fseek(f, length, SEEK_CUR) == 0;
                     classes[i + 1] = kind[0];
+                    texturesRead = texturesRead || (kind[1] & 4) != 0;
                 }
                 std::vector<uint8_t> ids(static_cast<size_t>(c->cap.width) * c->cap.height);
                 if (ok && fread(ids.data(), 1, ids.size(), f) == ids.size()) {
+                    // The materials' textures were read (flag 4, or a material of the neon class):
+                    // the strips are known by their material, as in game.
+                    c->neonMaterials = texturesRead;
+                    for (uint32_t i = 1; i <= header[3]; i++) c->neonMaterials = c->neonMaterials || classes[i] == Pipeline::kNeonClass;
                     std::vector<uint32_t> texels(ids.size());
                     for (size_t i = 0; i < ids.size(); i++) {
                         const int k = classes[ids[i]];
-                        const uint32_t r = k == 1 ? 255u : 0u, g = k == 2 ? 255u : (k == 3 ? 128u : (k == 4 ? 64u : 0u)), b = k == 5 ? 255u : 0u;
+                        const uint32_t notNeon = c->neonMaterials && k != Pipeline::kNeonClass ? Pipeline::kNotNeonG : 0u;
+                        const uint32_t r = k == 1 ? 255u : 0u, g = k == 2 ? 255u : (k == 3 ? 128u : (k == 4 ? 64u : notNeon)), b = k == 5 ? 255u : 0u;
                         texels[i] = (r << 16) | (g << 8) | b;
                     }
                     c->materials = upload(device, c->cap.width, c->cap.height, D3DFMT_A8R8G8B8, texels);
-                    printf("%s: with the game's materials (%s, %u)\n", path.c_str(), matPath.c_str(), header[3]);
+                    printf("%s: with the game's materials (%s, %u%s)\n", path.c_str(), matPath.c_str(), header[3],
+                           c->neonMaterials ? ", neon strips by their material" : "");
                 }
                 fclose(f);
             }
@@ -680,6 +689,7 @@ int main(int argc, char** argv) {
         in.gbuffer = loaded->normals;
         in.gameLight = loaded->light;
         in.materialMask = loaded->materials;
+        in.neonMaterials = loaded->neonMaterials;
         in.materials = loaded->materials != nullptr;
         in.depth = loaded->depth;
         in.width = cap.width;

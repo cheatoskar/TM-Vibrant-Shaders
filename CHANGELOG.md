@@ -34,6 +34,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - *Picked preset applies to all maps of this type* is off: a preset you pick holds on every map until you choose presets per map type again on the *Maps* page.
 
 **Fixed**
+- Neon border glow (*Game light sources*, *Neon strip glow*): which pixels glow is now decided by the game's material (the road borders' and curbs' textures), not by their colour. Blue floors outside the stadium, lane paint and the blue letters of the start banner no longer glow from far away or at some angles, and the dark bars and spots on wide blue curbs are gone; the strips glow as before. Where the mod can't read the materials, each pixel's colour decides as before.
 - *Neon strip glow*: wide blue paint no longer glows like a neon strip (*Game light sources*, *Effect quality* high): the blue floor outside the stadium and blue roofs (B02 at night) lit up whole. What counts is how much of the ground 8 m around is the same blue: wide neon curbs glow evenly, blue floors don't, not even along their edges.
 - Night maps (*Border glow*, Quality 2): the blue glow under far neon strips no longer pulses while the camera barely moves. The game draws a strip 1-2 pixels high with whole rows coming and going from frame to frame; its glow is now averaged over a few frames (only while the view moves slowly, with no trail behind the car).
 - *TAA jitter*: the image no longer trembles with the camera standing still (edges, thin masts, light rows, stars, rain and snow); edges stay smooth.

@@ -9,9 +9,9 @@
         (>= 0.9) becomes a lamp / the car's body. Not the game's materials: a plumbing test.
 
 capture_NNN.mat: "TMM1", width, height, count (uint32 each), then per id 1..count: class
-(uint8, engine::Material: 0 other, 1 light, 2 car, 3 glass, 4 grass, 5 water), flags (uint8:
-1 depth writes, 2 one-one blending), draws (uint32), name length (uint16) and UTF-8 name (the
-material's shader file); then one id byte per pixel, rows top-down (0: nothing drawn with depth).
+(uint8, engine::Material: 0 other, 1 light, 2 car, 3 glass, 4 grass, 5 water, 6 neon), flags (uint8:
+1 depth writes, 2 one-one blending, 4 its textures were read), draws (uint32), name length (uint16) and
+UTF-8 name (the material's shader file, then " | " and its textures' files when they were read); then one id byte per pixel, rows top-down (0: nothing drawn with depth).
 The brightness columns read capture_NNN.tmcap (the game's 8-bit image) and capture_NNN.hdr16
 (GameHdr: its float image) next to it when they exist.
 """
@@ -21,7 +21,7 @@ import sys
 
 import numpy as np
 
-CLASSES = ["other", "LIGHT", "car", "glass", "grass", "water"]
+CLASSES = ["other", "LIGHT", "car", "glass", "grass", "water", "NEON"]
 
 
 def read_mat(path):
@@ -74,7 +74,7 @@ def census(path, map_out=None):
         n = counts[i]
         if n == 0 and i == 0:
             continue
-        flag = ("z" if flags & 1 else "-") + ("+" if flags & 2 else "-")
+        flag = ("z" if flags & 1 else "-") + ("+" if flags & 2 else "-") + ("t" if flags & 4 else "-")
         line = f"{i:>3} {CLASSES[cls] if cls < len(CLASSES) else cls:6} {flag:5} {draws:>5} {n:>8} {n * 100.0 / (w * h):6.2f}"
         sel = ids == i
         if gpeak is not None:

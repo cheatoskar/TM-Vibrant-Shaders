@@ -7,6 +7,9 @@
 #include <cmath>
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
+#include <string>
+#include <vector>
 #include <cwchar>
 #include <cstdio>
 #include <intrin.h>
@@ -46,6 +49,7 @@ struct GameBuild {
     // CMotionManagerWeathers::UpdateAsync, the moon's branch: its calls of GmMat3::SetDOV (the
     // moon's direction) and GxLight::SetBaseRGB (its colour), and those two functions.
     uintptr_t moonDirectionCall, setDov, moonColorCall, setBaseRgb;
+    uintptr_t shaderApplyVTable;   // ??_7CPlugShaderApply@@6B@ (the materials whose textures are read)
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -59,14 +63,14 @@ constexpr GameBuild kBuilds[] = {
       0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0},
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
-     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0},
+     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
       0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0},
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
-     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0},
+     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c},
 };
 const GameBuild* g_build = nullptr;
 
@@ -869,6 +873,114 @@ Material classify(const wchar_t* path) {
     return Material::Other;
 }
 
+// The textures a material draws with. Every block material is its own copy of a shared shader
+// file (CPlugMaterial::DuplicateShaderFromMaterialModel: "TDiff_Spec_Nrm ... .Shader.Gbx?113")
+// with the material's own bitmaps put in: CPlugShaderApply's texture list (AddTextureApply: +0x94
+// the count, +0x98 the CPlugBitmapApply*), each holding its CPlugBitmap at +0x1c
+// (CPlugBitmapSampler::SetBitmap). The same offsets in both builds; only a CPlugShaderApply (its
+// vtable, from the build's table) is read. Returns the number of bitmaps, -1 for another class.
+constexpr size_t kShaderTextureCount = 0x94;
+constexpr size_t kShaderTextures = 0x98;
+constexpr size_t kSamplerBitmap = 0x1c;
+int shaderBitmaps(const void* shader, const void** out, int max) {
+    if (!g_build || !g_build->shaderApplyVTable) return -1;
+    __try {
+        const BYTE* s = static_cast<const BYTE*>(shader);
+        if (*reinterpret_cast<const uintptr_t*>(s) != rebase(g_build->shaderApplyVTable)) return -1;
+        const uint32_t count = *reinterpret_cast<const uint32_t*>(s + kShaderTextureCount);
+        const BYTE* const* list = *reinterpret_cast<const BYTE* const* const*>(s + kShaderTextures);
+        if (count > 64 || (count && !list)) return 0;
+        int n = 0;
+        for (uint32_t i = 0; i < count && n < max; i++) {
+            const void* bitmap = list[i] ? *reinterpret_cast<const void* const*>(list[i] + kSamplerBitmap) : nullptr;
+            if (bitmap) out[n++] = bitmap;
+        }
+        return n;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// The neon strips: plain block material to the game (TDiff_Spec_Nrm, lit like the road, nothing
+// added on top: the same class and shader file as the lane paint and the start banner's letters),
+// their blue is painted into the textures of two Stadium materials: the road borders' walls
+// (StadiumRoadBorderD, the one texture with its own night and sunset versions in Moods\) and the
+// curbs (StadiumRoadCircuitBorderD). The material decides, not the colour: a blue floor or a blue
+// letter is no strip however bright it is. Within the material its colour still tells the blue
+// strip from the grey and orange of the same texture.
+bool neonTexture(const wchar_t* path) {
+    const wchar_t* file = wcsrchr(path, L'\\');
+    const wchar_t* slash = wcsrchr(path, L'/');
+    if (slash > file) file = slash;
+    file = file ? file + 1 : path;
+    return !_wcsnicmp(file, L"StadiumRoadBorder", 17) || !_wcsnicmp(file, L"StadiumRoadCircuitBorder", 24);
+}
+
+volatile bool g_textureNames = false; // a material's texture had a file name (neon by material works)
+
+uintptr_t vtableOf(const void* nod) {
+    __try {
+        return *static_cast<const uintptr_t*>(nod);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// Whether a material draws with a neon strip texture. Logs each neon texture once per map
+// ("engine: neon material ..."), and once when the textures can't be read.
+bool neonMaterial(const void* shader) {
+    const void* bitmaps[16] = {};
+    const int n = shaderBitmaps(shader, bitmaps, 16);
+    static bool s_loggedClass = false;
+    if (n < 0 && !s_loggedClass && g_build && g_build->shaderApplyVTable) {
+        s_loggedClass = true;
+        TMVS_LOG("engine: material %p is no CPlugShaderApply (vtable %08x), its textures are not read", shader, static_cast<unsigned>(vtableOf(shader)));
+    }
+    static std::vector<std::wstring> s_logged;
+    static LONG s_loggedLoads = -1;
+    if (s_loggedLoads != g_mapLoads) {
+        s_logged.clear();
+        s_loggedLoads = g_mapLoads;
+    }
+    bool neon = false;
+    for (int i = 0; i < n; i++) {
+        wchar_t path[512] = {};
+        if (!nodFilePath(bitmaps[i], path, 512)) continue;
+        if (!g_textureNames) {
+            g_textureNames = true;
+            TMVS_LOG("engine: materials' textures readable (%ls), neon strips by their material", path);
+        }
+        if (!neonTexture(path)) continue;
+        neon = true;
+        if (s_logged.size() < 32 && std::find(s_logged.begin(), s_logged.end(), path) == s_logged.end()) {
+            s_logged.push_back(path);
+            TMVS_LOG("engine: neon material %p: %ls", shader, path);
+        }
+    }
+    return neon;
+}
+
+// The file names of a material's textures, "; " between them (F12's capture_NNN.mat).
+bool textureFiles(const void* shader, wchar_t* out, size_t size) {
+    const void* bitmaps[16] = {};
+    const int n = shaderBitmaps(shader, bitmaps, 16);
+    size_t used = 0;
+    out[0] = L'\0';
+    for (int i = 0; i < n; i++) {
+        wchar_t path[512] = {};
+        if (!nodFilePath(bitmaps[i], path, 512)) continue;
+        const size_t length = wcslen(path);
+        if (used + length + 3 >= size) break;
+        if (used) {
+            wcscpy_s(out + used, size - used, L"; ");
+            used += 2;
+        }
+        wcscpy_s(out + used, size - used, path);
+        used += length;
+    }
+    return used > 0;
+}
+
 Material materialOf(const void* shader) {
     static std::unordered_map<const void*, Material> known;
     static LONG knownLoads = -1;
@@ -881,7 +993,8 @@ Material materialOf(const void* shader) {
     if (it != known.end()) return it->second;
     wchar_t path[512] = {};
     const bool named = nodFilePath(shader, path, 512);
-    const Material m = named ? classify(path) : Material::Other;
+    Material m = named ? classify(path) : Material::Other;
+    if (m == Material::Other && neonMaterial(shader)) m = Material::Neon;
     if (known.size() < 8192) known.emplace(shader, m);
     return m;
 }
@@ -1840,6 +1953,14 @@ Material materialClass(const void* shader) {
 
 bool materialFile(const void* shader, wchar_t* out, size_t size) {
     return shader && nodFilePath(shader, out, size);
+}
+
+bool materialTextures(const void* shader, wchar_t* out, size_t size) {
+    return shader && size > 0 && textureFiles(shader, out, size);
+}
+
+bool neonMaterialsKnown() {
+    return g_drawShader && g_drawPass && g_textureNames;
 }
 
 void fullViewDistance(bool full) {

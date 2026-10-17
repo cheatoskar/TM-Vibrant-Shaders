@@ -1684,8 +1684,9 @@ void readHalf(IDirect3DDevice9* device, const gfx::Target& target, CaptureJob::H
 }
 
 // The material ids: "TMM1", width, height, count, then per id (1..count) class (engine::Material),
-// flags (1 depth writes, 2 one-one blending), draws, the length and UTF-8 bytes of its shader
-// file; then one id byte per pixel, rows top-down (0: none).
+// flags (1 depth writes, 2 one-one blending, 4 its textures were read: neon by material), draws, the length and UTF-8 bytes of its shader
+// file (and " | " its textures' files, "; " between them, when they can be read); then one id
+// byte per pixel, rows top-down (0: none).
 void readMaterialCapture(IDirect3DDevice9* device, CaptureJob& job) {
     if (!g_pipeline.readMaterialIds(device, job.ids) || job.ids.size() != static_cast<size_t>(g_frameWidth) * g_frameHeight) {
         TMVS_LOG("capture: material ids not read");
@@ -1700,12 +1701,17 @@ void readMaterialCapture(IDirect3DDevice9* device, CaptureJob& job) {
     const uint32_t header[4] = {0x314D4D54u, g_frameWidth, g_frameHeight, static_cast<uint32_t>(g_idMaterials.size())}; // "TMM1"
     append(header, sizeof(header));
     for (const IdMaterial& m : g_idMaterials) {
-        wchar_t file[512] = {};
-        char utf8[1024] = {};
+        wchar_t file[2048] = {};
+        char utf8[4096] = {};
         if (!engine::materialFile(m.shader, file, 512)) swprintf(file, 512, m.shader ? L"(unnamed %p)" : L"(none)", m.shader);
+        // Which material is which (the neon strips' textures, the paint's): the shader file is
+        // shared by most of them.
+        const size_t named = wcslen(file);
+        const bool textures = named + 3 < 2048 && engine::materialTextures(m.shader, file + named + 3, 2048 - named - 3);
+        if (textures) wmemcpy(file + named, L" | ", 3);
         const int bytes = WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), nullptr, nullptr);
         const uint8_t kind[2] = {static_cast<uint8_t>(engine::materialClass(m.shader)),
-                                 static_cast<uint8_t>((m.depthWrite ? 1 : 0) | (m.additive ? 2 : 0))};
+                                 static_cast<uint8_t>((m.depthWrite ? 1 : 0) | (m.additive ? 2 : 0) | (textures ? 4 : 0))};
         const uint32_t draws = static_cast<uint32_t>(m.draws);
         const uint16_t length = static_cast<uint16_t>(bytes > 0 ? bytes - 1 : 0);
         append(kind, sizeof(kind));
@@ -2249,6 +2255,8 @@ void processScene(IDirect3DDevice9* device) {
     }
     if (g_idFrame && !idFrame) inputs.materials = false; // ids in the stencil, but no capture of them
     g_idFrame = false;
+    // The neon strips by their material (its textures) instead of by their colour.
+    inputs.neonMaterials = inputs.materials && engine::neonMaterialsKnown();
     // RenderScale: a capture is taken at the full size (the next camera is drawn so).
     const bool capture = g_captureRequested && (idFrame || !inputs.materials || part) && !scaledPath;
     if (capture) g_captureRequested = false;

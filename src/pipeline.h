@@ -108,6 +108,11 @@ public:
         // The previewer: the mask itself (from capture_NNN.mat; r light, g car 1 / glass .5 /
         // grass .25, b water), instead of the stencil. Needs `materials`.
         IDirect3DTexture9* materialMask = nullptr;
+        // The neon strips are known by their material (class kNeonClass, from its textures): with
+        // `materials`, the mask's g is 0 on them and kNotNeonG on everything else that was 0 (no
+        // car, glass or grass), and their glow takes those pixels only. False: found by their
+        // colour, pixel by pixel. The previewer: a capture_NNN.mat with that class.
+        bool neonMaterials = false;
         // CasterShadows: draws the game's static meshes into depth maps seen from this light
         // (towards it, world space; camera: world position), inside the pipeline's state save;
         // false while no map is complete. Null: no such maps (the previewer replays no draw calls).
@@ -125,6 +130,12 @@ public:
     static constexpr int kMaterialView = 8;
     static constexpr int kMaterialClasses = 5;
     static constexpr unsigned long kAddedLightBit = 0x08;
+    // The neon strips' class (engine::Material::Neon) and, with Inputs::neonMaterials, the mask's
+    // g everywhere else that had none (28/255 = 0.11): the strip test's "no car, glass or grass"
+    // (g < 0.1) is then "a neon material" at no cost in the lighting pass (at its slot limit),
+    // and every other use of g reads it as before (grass .25 +- .1, car .75, debug view .125).
+    static constexpr int kNeonClass = 6;
+    static constexpr unsigned kNotNeonG = 28;
 
     // The sky replaces the game's sun (night skies, the black hole): its baked light comes out
     // on day maps and its halo is hidden.
