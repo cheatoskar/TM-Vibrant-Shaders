@@ -195,6 +195,8 @@ private:
     ID3D11PixelShader* m_gi = nullptr;
     ID3D11PixelShader* m_giTemporal = nullptr;
     ID3D11PixelShader* m_spillDown = nullptr;
+    ID3D11PixelShader* m_spillSource = nullptr;
+    ID3D11PixelShader* m_spillDownSource = nullptr;
     ID3D11PixelShader* m_spillBlur = nullptr;
     ID3D11PixelShader* m_spillTemporal = nullptr;
     ID3D11PixelShader* m_lighting = nullptr;
@@ -216,6 +218,7 @@ private:
     Target m_giHistory[2]; // quarter: accumulated (rgb, view z)
     int m_giIndex = 0;
     Target m_spill[2];     // quarter: neon light (rgb, view z)
+    Target m_spillSource_; // full: the neon light's sources pixel by pixel (Quality 2), made when first used
     Target m_spillHistory[2]; // quarter: the spill over frames (rgb, view z), what the lighting uses
     int m_spillIndex = 0;
     bool m_spillValid = false;
