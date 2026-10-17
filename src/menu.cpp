@@ -2119,5 +2119,38 @@ bool consumeReloadRequest() {
     return requested;
 }
 
+void drawSplitBar(const std::string& mine, std::string& other, float position, bool mineLeft, const std::string& note, float bottom) {
+    Config& config = Config::get();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    const float x = position * size.x, y = size.y - bottom * g_scale, pad = 8.0f * g_scale;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
+    const char* kGame = "The game's image";
+    // Your side.
+    ImGui::SetNextWindowPos(ImVec2(mineLeft ? x - pad : x + pad, y), ImGuiCond_Always, ImVec2(mineLeft ? 1.0f : 0.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##splitMine", nullptr, flags | ImGuiWindowFlags_NoInputs);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(mine.c_str());
+    ImGui::End();
+    // The other side.
+    const std::vector<std::string> names = config.presetNames();
+    float widest = ImGui::CalcTextSize(kGame).x;
+    for (const std::string& name : names) widest = std::max(widest, ImGui::CalcTextSize(name.c_str()).x);
+    ImGui::SetNextWindowPos(ImVec2(mineLeft ? x + pad : x - pad, y), ImGuiCond_Always, ImVec2(mineLeft ? 0.0f : 1.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##splitOther", nullptr, flags);
+    if (!note.empty()) ImGui::TextDisabled("%s", note.c_str());
+    ImGui::SetNextItemWidth(widest + ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 2.0f);
+    if (ImGui::BeginCombo("##splitOtherList", other.empty() ? kGame : other.c_str(), ImGuiComboFlags_HeightLarge)) {
+        if (ImGui::Selectable(kGame, other.empty())) other.clear();
+        for (const std::string& name : names) {
+            if (ImGui::Selectable(name.c_str(), other == name)) other = name;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::End();
+}
+
 } // namespace menu
 } // namespace tmshaders

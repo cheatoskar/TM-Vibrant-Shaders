@@ -55,8 +55,8 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 
 These are the defaults; the menu's *Settings* page (*Hotkeys*) rebinds them, and they are stored in the `[Keys]` section of settings.ini (see docs/settings.md).
 
-**Compare split with a preset:** menu, *Settings* page, *Photo mode* panel, *Other side*: the game's
-image (as before) or any preset. With a preset, a second renderer (`hooks.cpp`, `g_rendererB`) runs
+**Compare split with a preset:** menu, *Settings* page, *Photo mode* panel, *Other side*, or the list at
+the line near the bottom of the screen (the menu's `drawSplitBar`, as in TMNF): the game's image (as before) or any preset. With a preset, a second renderer (`hooks.cpp`, `g_rendererB`) runs
 that preset's effects and HDR stage on the same engine inputs with its own history, and each look
 draws only its side of the line (a scissor on the final passes). Photo mode only; it costs about
 one more run of the effects while shown and is released when the split, photo mode or the preset
