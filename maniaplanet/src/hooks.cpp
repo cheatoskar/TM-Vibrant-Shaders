@@ -1241,8 +1241,23 @@ void prepareLook() {
         if (g_rendererBReady || g_rendererBFailed) releaseSideB();
         g_sideBPreset = name;
     }
-    tmshaders::Settings b = config.settings;
-    if (!config.presetSettings(name, b)) return; // a preset deleted meanwhile: the game's image
+    // Your own preset is a file read field by field (about 100 GetPrivateProfileString calls, several
+    // ms): read once, again when another preset is picked, its file is written or your settings
+    // change (the machine settings are yours), not every frame (TMNF's renderSideB).
+    static std::string s_name;
+    static unsigned long long s_written = 0;
+    static tmshaders::Settings s_mine, s_look;
+    static bool s_known = false;
+    const unsigned long long written = config.presetWritten(name);
+    if (s_name != name || s_written != written || memcmp(&s_mine, &config.settings, sizeof(tmshaders::Settings)) != 0) {
+        s_name = name;
+        s_written = written;
+        memcpy(&s_mine, &config.settings, sizeof(tmshaders::Settings));
+        s_look = config.settings;
+        s_known = config.presetSettings(name, s_look);
+    }
+    if (!s_known) return; // a preset deleted meanwhile: the game's image
+    tmshaders::Settings b = s_look;
     b.enabled = true; // with the shaders off (F5): the preset next to the game's image
     b.debugView = g_lookSettings.debugView;
     photo::adjust(b);
