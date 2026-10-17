@@ -16,7 +16,8 @@ knows (its normals, material colours, sun shadow maps, motion vectors and HDR im
   lightning, drops on the lens, the weather sound.
 - **Cinema:** depth of field, motion blur (the engine's motion vectors), TAA, photo mode with the
   compare split.
-- **Neon trail** behind the car (the car's position from the engine's own constants).
+- **Neon trail** behind the car (the car's position from the engine's own constants); *Earlier runs kept*
+  (`TrailKeepRuns`) keeps the last runs after a restart (the car back at the run's start), dimmer.
 - **Look:** the HDR stage in place of the engine's tone map (curves, bloom), grading, LUT looks.
 - **Auto quality** (the TMNF mod's, on the effects' GPU times) and the Performance page.
 
@@ -55,8 +56,8 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 
 These are the defaults; the menu's *Settings* page (*Hotkeys*) rebinds them, and they are stored in the `[Keys]` section of settings.ini (see docs/settings.md).
 
-**Compare split with a preset:** menu, *Settings* page, *Photo mode* panel, *Other side*: the game's
-image (as before) or any preset. With a preset, a second renderer (`hooks.cpp`, `g_rendererB`) runs
+**Compare split with a preset:** menu, *Settings* page, *Photo mode* panel, *Other side*, or the list at
+the line near the bottom of the screen (the menu's `drawSplitBar`, as in TMNF): the game's image (as before) or any preset. With a preset, a second renderer (`hooks.cpp`, `g_rendererB`) runs
 that preset's effects and HDR stage on the same engine inputs with its own history, and each look
 draws only its side of the line (a scissor on the final passes). Photo mode only; it costs about
 one more run of the effects while shown and is released when the split, photo mode or the preset
@@ -269,6 +270,7 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 build-mp/Release/mp_preview.exe <capture folder> out.bmp [--preset Punchy] [--view 6] [--set Exposure=0.5]
 build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr [--set ToneCurve=1] [--set Bloom=0.3] [--tonecb file]
 build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 40 --car x,y,z [--carfrom x,y,z]   # the neon trail of a car driving there
+build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 120 --runs 2 --car x,y,z --carfrom x,y,z --set TrailKeepRuns=3   # restarts: earlier runs 2 m apart, dimmer
 build-mp/Release/mp_preview.exe --trailtest   # the trail's recording: how evenly its end and its start behind the car move
 build-mp/Release/mp_preview.exe --cartest     # which car the trail follows with a ghost around (chase, cockpit, respawn)
 ```
@@ -307,7 +309,8 @@ It checks that:
 - the G-buffer and motion are found by name;
 - with `--decomp`: after a map change (new engine targets, the face-normal pass first) the light mask is the new one;
 - with `--selfillum`: with EngineLightDraws the engine's image stays the same and the light buffer holds the
-  material's own light, not its lit surface;
+  material's own light, not its lit surface, also for a draw with a strict depth test that writes its depth
+  (the redraws let its own depth through), and the engine's depth-stencil state is bound again afterwards;
 - with `--shadow`: soft shadows off, the engine's sun shadow pass draws; on, the mod's shader draws a
   penumbra at a shadow's edge and the same light and shadow elsewhere, says so in the log, and the
   engine's shader and slots are bound again after the draw; off again, the engine's light mask to the bit;

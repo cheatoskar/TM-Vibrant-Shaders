@@ -44,6 +44,9 @@ bool g_ready = false;
 std::atomic<bool> g_open{false};
 std::atomic<bool> g_wantMouse{false};
 std::atomic<bool> g_wantKeyboard{false};
+// The compare split's bar at the bottom (the other side switchable) is on screen: it gets the
+// mouse with the menu closed too (presses only while ImGui wants them, i.e. over the bar).
+std::atomic<bool> g_splitBar{false};
 ULONGLONG g_toastUntil = 0;
 std::string g_toast;
 
@@ -207,7 +210,8 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (tmshaders::keys::capturing() && tmshaders::keys::feed(msg, w, l)) return 0;
     // Photo mode: focus click, aperture wheel and Esc, unless the menu has the mouse or keyboard
     // (the game may read the mouse directly too: it still sees them there).
-    if (!(g_open && ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard))) && photo::handleMessage(hwnd, msg, w, l))
+    if (!(g_open && ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard))) &&
+        !(g_splitBar && isMouse(msg) && g_wantMouse) && photo::handleMessage(hwnd, msg, w, l))
         return 0;
     if (g_open && (isMouse(msg) || isKeyboard(msg) || msg == WM_SETFOCUS || msg == WM_KILLFOCUS)) {
         {
@@ -217,6 +221,14 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         // Keep clicks and typing in the menu away from the game (its window messages; the game may
         // also read the mouse directly).
         if ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard && !isHotkey(w))) return 0;
+    } else if (g_splitBar && isMouse(msg)) {
+        // The split's bar with the menu closed: the moves always (hover; the game keeps them too),
+        // presses and the wheel only over the bar (or while ImGui holds a press of its own).
+        {
+            std::lock_guard<std::mutex> lock(g_queueLock);
+            if (g_queue.size() < 512) g_queue.push_back({msg, w, l});
+        }
+        if (msg != WM_MOUSEMOVE && g_wantMouse) return 0;
     }
     return CallWindowProcW(g_originalProc, hwnd, msg, w, l);
 }
@@ -404,6 +416,9 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     const bool showToast = GetTickCount64() < g_toastUntil;
     const char* photoLine = photo::status();
     if (!config.showOverlay) config.previewPreset.clear();
+    // With photo mode's line on screen only, as TMNF's (drawn at Present: never in the photos).
+    g_splitBar = photo::splitShown() && *photoLine;
+    if (!g_splitBar && !config.showOverlay) g_wantMouse = false;
     if (!config.showOverlay && !showToast && !*photoLine && !photo::splitShown()) return;
 
     std::vector<Message> messages;
@@ -417,7 +432,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     ImGui_ImplWin32_NewFrame();
     ImGuiIO& io = ImGui::GetIO();
     // ImGui's pointer over the menu (the game hides the OS cursor), the game's elsewhere.
-    io.MouseDrawCursor = config.showOverlay && io.WantCaptureMouse;
+    io.MouseDrawCursor = (config.showOverlay || g_splitBar) && io.WantCaptureMouse;
     ImGui::NewFrame();
     if (config.showOverlay) {
         // The effects' GPU times for the Performance page (as TMNF's pipeline reports them).
@@ -508,25 +523,12 @@ void frame(ID3D11RenderTargetView* backBuffer) {
         ImGui::TextUnformatted(photoLine);
         ImGui::End();
     }
-    if (photo::splitShown()) {
-        // Which side is which, next to the line near the bottom (drawn at Present: not in photos).
-        const float sc = tmshaders::menu::scale();
-        ImDrawList* draw = ImGui::GetForegroundDrawList();
-        const float x = photo::splitPosition() * io.DisplaySize.x, y = io.DisplaySize.y - 48.0f * sc, pad = 10.0f * sc;
-        // With a preset on the other side: its name and your preset's (as in photos).
-        const bool named = !photo::splitPreset().empty();
-        const std::string leftName = named ? photo::splitName(false) : std::string(photo::splitSwapped() ? "TMVS" : "Game");
-        const std::string rightName = named ? photo::splitName(true) : std::string(photo::splitSwapped() ? "Game" : "TMVS");
-        const char* left = leftName.c_str();
-        const char* right = rightName.c_str();
-        const auto label = [&](float at, const char* text) {
-            const ImVec2 s = ImGui::CalcTextSize(text);
-            draw->AddRectFilled(ImVec2(at - 4.0f * sc, y - 2.0f * sc), ImVec2(at + s.x + 4.0f * sc, y + s.y + 2.0f * sc),
-                                IM_COL32(0, 0, 0, 140), 3.0f * sc);
-            draw->AddText(ImVec2(at, y), IM_COL32(235, 235, 235, 255), text);
-        };
-        label(x - pad - ImGui::CalcTextSize(left).x, left);
-        label(x + pad, right);
+    if (g_splitBar) {
+        // The compare split: which side is which at the line near the bottom, the other side a
+        // list to switch it without the menu (the menu's, shared with TMNF).
+        const bool mineLeft = photo::splitSwapped();
+        tmshaders::menu::drawSplitBar(photo::splitName(!mineLeft), photo::splitPreset(), photo::splitPosition(), mineLeft, std::string(),
+                                      48.0f);
     }
     if (showToast) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 40), ImGuiCond_Always, ImVec2(0.5f, 0));

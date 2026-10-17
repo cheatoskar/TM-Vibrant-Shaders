@@ -14,7 +14,12 @@ namespace {
 //   CTrackMania (0x24001000) <- CGameManiaPlanet <- CGameCtnApp (0x030D3000): its base
 //     constructor keeps `this` in a global (kAppGlobal).
 //   CGameCtnApp::RootMap (0x030D3005) at 0x378, ::Editor (0x030D300A) at 0x7C8.
-//   The editor (CGameCtnEditorCommon 0x0310E000)::Challenge at 0x410.
+//   The editor (CGameCtnEditorCommon 0x0310E000)::Challenge at 0x410. ::Editor (declared as a
+//     CGameCtnEditor) also holds the other editors (MediaTracker 0x030B1000, of the same size,
+//     items, meshes, action maker ...): only the map editor's classes count. The engine makes
+//     CGameCtnEditorSimple, ::Puzzle or ::Free there (registrations 0x1400ED7BF/85F/80F,
+//     Simple <- Puzzle <- Free <- Common; no other class derives from Common), and its own code
+//     that sets ::Editor asks IsKindOf(CGameCtnEditorCommon) the same way.
 //   CGameCtnChallenge (0x03043000)::Comments (0x03043003) at 0xE0, a wide string {wchar_t*, u32
 //     length}, set through the engine's own assign (kWStringAssign: copies into its own buffer).
 // Every object's class is checked through its vtable's GetMwClassId (slot 3:
@@ -23,6 +28,8 @@ constexpr uintptr_t kAppGlobal = 0x1C8B410;
 constexpr uintptr_t kWStringAssign = 0x142E50;
 constexpr size_t kRootMap = 0x378, kEditor = 0x7C8, kEditorMap = 0x410, kComments = 0xE0;
 constexpr uint32_t kChallengeId = 0x03043000;
+// The map editor: CGameCtnEditorFree, ::Puzzle, ::Simple and their base CGameCtnEditorCommon.
+constexpr uint32_t kMapEditorIds[] = {0x0310F000, 0x03110000, 0x03115000, 0x0310E000};
 constexpr uint32_t kAppIds[] = {0x24001000, 0x03013000, 0x030D3000}; // CTrackMania, CGameManiaPlanet, CGameCtnApp
 // The assign's first bytes (mov [rsp+10h], rbx; mov [rsp+18h], rbp; push rdi; sub rsp, 30h;
 // movaps xmm0, [rdx]): another build has something else there and nothing is written.
@@ -99,7 +106,14 @@ uintptr_t currentMap(bool* inEditor) {
     if (inEditor) *inEditor = false;
     if (!a) return 0;
     const uintptr_t editor = readPointer(a + kEditor);
+    bool mapEditor = false;
     if (editor) {
+        const uint32_t id = classOf(editor);
+        for (uint32_t ok : kMapEditorIds) mapEditor = mapEditor || id == ok;
+    }
+    // Another editor there (the MediaTracker, items ...): its 0x410 is something else; the map
+    // being played, if any, is the one shown.
+    if (mapEditor) {
         const uintptr_t map = readPointer(editor + kEditorMap);
         if (classOf(map) == kChallengeId) {
             if (inEditor) *inEditor = true;

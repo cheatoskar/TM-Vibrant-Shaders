@@ -22,6 +22,8 @@ struct TrailConstants {
     float trail[4];  // points, next index (unwrapped), now (s), fade after (s)
     float trail2[4]; // sideways offset (m), half width (m), ring size, 0
     float colour[4]; // rgb * strength
+    float runs[4];   // TrailKeepRuns: the first stamp of this run and of the 3 before it (-1e30 = none)
+    float runs2[4];  // the first stamp 4 runs back, the last run's brightness, less per run further back, 0
 };
 
 } // namespace
@@ -74,7 +76,7 @@ void TrailStage::release() {
 }
 
 bool TrailStage::supports(const char* key) {
-    static const char* const kKeys[] = {"NeonTrail", "TrailColor", "TrailWidth", "TrailTyres", "TrailDuration"};
+    static const char* const kKeys[] = {"NeonTrail", "TrailColor", "TrailWidth", "TrailTyres", "TrailDuration", "TrailKeepRuns"};
     for (const char* k : kKeys)
         if (!strcmp(k, key)) return true;
     return false;
@@ -86,9 +88,42 @@ void TrailStage::clear() {
     m_keptValid = false;
     m_startValid = false;
     m_break = true;
+    m_written = 0;
+    m_runs = 0;
+    for (int k = 0; k <= kRunsMax; k++) {
+        m_runStart[k] = 0.0f;
+        m_runFirst[k] = 0;
+    }
     if (m_points.size() < kPoints * 8) m_points.assign(kPoints * 8, 0.0f);
     std::fill(m_points.begin(), m_points.end(), 0.0f);
     m_dirty = -2;
+}
+
+void TrailStage::newRun(int keepRuns) {
+    if (keepRuns <= 0 || m_written == 0) {
+        clear(); // the trail starts over
+        return;
+    }
+    // The points stay; this run begins with a new line and its own time stamps. A run without a
+    // point (two quick restarts) takes no slot: it would push the real previous run out.
+    if (m_written != m_runFirst[0]) {
+        for (int k = kRunsMax; k > 0; k--) {
+            m_runStart[k] = m_runStart[k - 1];
+            m_runFirst[k] = m_runFirst[k - 1];
+        }
+        m_runs = std::min(m_runs + 1, kRunsMax);
+    }
+    // After the last point's stamp (m_time + 1) with a margin: the shader counts a point as older
+    // when its stamp + 1e-3 <= this. The clock moves on by 5 ms so that this run's first point,
+    // whatever the frame rate, is newer by more than the margin.
+    m_runStart[0] = m_time + 1.0f + 2e-3f;
+    m_runFirst[0] = m_written;
+    m_time += 5e-3f;
+    m_break = true;
+    m_keptValid = false;
+    m_startValid = false;
+    m_liveFrames = 0;
+    TMVS_LOG("trail: the run starts again: %d earlier run(s) kept", m_runs);
 }
 
 // Records the car: every frame into the next slot (the live end, so it stays on the car), kept
@@ -138,6 +173,7 @@ bool TrailStage::record(float dt, const float* car, const float* up) {
         m_break = false;
         m_head = (m_head + 1) % kPoints;
         if (m_count < kPoints) m_count++;
+        m_written++;
         return false; // just kept: it's the newest point now
     }
     // The live end follows the car from 1 cm on. (It waited for 30 cm, like a kept point: above
@@ -157,7 +193,7 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         // trail is a machine setting, the same on both sides.
         const TrailStage& a = *m_from;
         if (!a.m_ready || !a.m_pointsSrv || a.m_drawnPoints < 2 || s.neonTrail <= 0.0f) return;
-        drawPoints(ctx, fx, s, a.m_pointsSrv, a.m_drawnPoints, a.m_drawnNext, a.m_time);
+        drawPoints(ctx, fx, s, a, a.m_drawnPoints, a.m_drawnNext);
         return;
     }
     m_drawnPoints = 0;
@@ -179,12 +215,16 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         clear();
     }
     // The run starts again: the car jumps back to where the trail began (a respawn at a checkpoint
-    // only breaks the line).
+    // only breaks the line). The earlier runs stay as TrailKeepRuns says, else it starts over.
+    const int keepRuns = std::clamp(s.trailKeepRuns, 0, kRunsMax);
     if (carSeen && m_keptValid && m_startValid) {
         const float dx = position[0] - m_kept[0], dy = position[1] - m_kept[1], dz = position[2] - m_kept[2];
         const float sx = position[0] - m_start[0], sy = position[1] - m_start[1], sz = position[2] - m_start[2];
-        if (dx * dx + dy * dy + dz * dz > 25.0f * 25.0f && sx * sx + sy * sy + sz * sz < 12.0f * 12.0f) clear();
+        if (dx * dx + dy * dy + dz * dz > 25.0f * 25.0f && sx * sx + sy * sy + sz * sz < 12.0f * 12.0f) newRun(keepRuns);
     }
+    // Fewer runs wanted (the setting lowered): the older ones go.
+    if (m_runs > keepRuns) m_runs = keepRuns;
+    m_count = std::min(m_count, m_written - m_runFirst[m_runs]);
     // Another car taken up (the camera went to another, or the one followed was a ghost): a new
     // line, none from the old car's place to the new one's.
     if (carSeen && car->track != m_track) {
@@ -217,15 +257,23 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         }
     }
     m_dirty = -1;
-    drawPoints(ctx, fx, s, m_pointsSrv, points, next, m_time);
+    drawPoints(ctx, fx, s, *this, points, next);
 }
 
-void TrailStage::drawPoints(ID3D11DeviceContext* ctx, Effects& fx, const tmshaders::Settings& s, ID3D11ShaderResourceView* pointsSrv,
-                            UINT points, UINT next, float time) {
+void TrailStage::drawPoints(ID3D11DeviceContext* ctx, Effects& fx, const tmshaders::Settings& s, const TrailStage& from, UINT points,
+                            UINT next) {
+    ID3D11ShaderResourceView* pointsSrv = from.m_pointsSrv;
     TrailConstants c = {};
     c.trail[0] = static_cast<float>(points);
     c.trail[1] = static_cast<float>(next + kPoints);
-    c.trail[2] = time + 1.0f;
+    c.trail[2] = from.m_time + 1.0f;
+    // Earlier runs: where each began (a point stamped before it belongs to an older run; -1e30 =
+    // none kept) and their brightness, 0.6 for the last run down to 0.6 / n for the n-th.
+    float runs[8] = {-1e30f, -1e30f, -1e30f, -1e30f, -1e30f, 0.6f, 0.0f, 0.0f};
+    for (int k = 0; k < from.m_runs && k < kRunsMax; k++) runs[k] = from.m_runStart[k];
+    if (from.m_runs > 0) runs[6] = 0.6f / static_cast<float>(from.m_runs);
+    memcpy(c.runs, runs, sizeof(c.runs));
+    memcpy(c.runs2, runs + 4, sizeof(c.runs2));
     c.trail[3] = s.trailDuration;
     c.trail2[1] = s.trailWidth * 0.5f;
     c.trail2[2] = static_cast<float>(kPoints);

@@ -75,6 +75,12 @@ void draw(const Host& host);
 const char* tooltip(const char* key);
 // Set when the user asks for a shader reload from the menu; cleared by the call.
 bool consumeReloadRequest();
+// Photo mode's compare split, at its line near the bottom of the screen: `mine` (your look's
+// name) on its side, the other side (`other`: "" = the game's image, else a preset) as a list to
+// switch it without the menu. `note`: a line above the list (empty: none); `bottom`: the bar's
+// distance from the bottom of the screen (pixels at scale 1). Between NewFrame and Render.
+void drawSplitBar(const std::string& mine, std::string& other, float position, bool mineLeft, const std::string& note,
+                  float bottom = 24.0f);
 
 } // namespace menu
 } // namespace tmshaders

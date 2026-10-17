@@ -2,7 +2,8 @@
 // Neon trail behind the car (the TMNF mod's): the car's position from the engine (hooks.cpp reads
 // it from the car's ObjectV at its G-buffer draw), kept 60 times a second (and every metre) while
 // it moves, in a ring buffer, drawn as a glowing ribbon into the HDR image. It stays until the run
-// starts again (the car back at its start) or the map changes. Shaders: shaders/trail.hlsl.
+// starts again (the car back at its start; TrailKeepRuns keeps earlier runs, dimmer) or the map
+// changes. Shaders: shaders/trail.hlsl.
 #include <d3d11.h>
 #include <vector>
 
@@ -45,9 +46,12 @@ public:
 
 private:
     static constexpr UINT kPoints = 16384; // 4.5 min at 60 points a second, ~3 min at full speed
+    static constexpr int kRunsMax = 5;      // TrailKeepRuns' most
     void clear();
-    void drawPoints(ID3D11DeviceContext* ctx, Effects& fx, const tmshaders::Settings& s, ID3D11ShaderResourceView* pointsSrv, UINT points,
-                    UINT next, float time);
+    // A restart: a new run, the earlier ones kept as `keepRuns` says (0: clear).
+    void newRun(int keepRuns);
+    // `from`'s points, stamps and runs (this stage's own, or the one it shares).
+    void drawPoints(ID3D11DeviceContext* ctx, Effects& fx, const tmshaders::Settings& s, const TrailStage& from, UINT points, UINT next);
     static constexpr float kMinStep = 0.3f; // m: closer points are no line (the car shaking in place)
     static constexpr float kLift = 0.1f;    // m over the car's origin (on the road), see draw()
     ID3D11VertexShader* m_vs = nullptr;
@@ -68,6 +72,12 @@ private:
     float m_start[3] = {};   // where the run began (the first point after a clear)
     bool m_startValid = false;
     int m_mapSerial = -1;
+    // Runs (TrailKeepRuns): per run (0 this one, k the k-th before it) its first time stamp and the
+    // points kept before it began; runs older than the kept ones are cut off the drawn points.
+    UINT m_written = 0; // points kept since the clear
+    int m_runs = 0;     // earlier runs kept
+    float m_runStart[kRunsMax + 1] = {};
+    UINT m_runFirst[kRunsMax + 1] = {};
     unsigned m_track = 0; // the car's (EngineCar::track)
     bool m_ready = false;
     const TrailStage* m_from = nullptr;     // shareFrom

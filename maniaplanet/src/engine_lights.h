@@ -15,7 +15,8 @@ namespace lights {
 //     lights in CarDetails_DefRead; TMapAdvert: the screens; TMapIllum),
 //   - additive draws (Tech3_Block_TAdd: the halos and flares, blended one + one).
 // Each of those draws is drawn a second time into a float target of the same size as the HDR image
-// (same shader, same geometry, same depth test), so the target holds what they added:
+// (same shader, same geometry, the same depth test but one that lets the draw's own depth through
+// and writes no depth or stencil), so the target holds what they added:
 //   - a self-illuminated draw twice: once as it is, then subtracted again with its light texture
 //     black: what is left is its own light, in its own blending (opaque, alpha, additive);
 //   - an additive draw once, added;
@@ -47,6 +48,8 @@ struct Saved {
     ID3D11BlendState* blend = nullptr;
     FLOAT factor[4] = {};
     UINT sampleMask = 0xffffffff;
+    ID3D11DepthStencilState* depth = nullptr; // the engine's, put back after the redraws
+    UINT stencilRef = 0;
     ID3D11ShaderResourceView* light = nullptr; // the material's light texture, while it is black
     UINT lightSlot = 0;
     bool lightSwapped = false;

@@ -27,6 +27,13 @@ struct State {
     };
     Blend blends[24] = {};
     int blendCount = 0;
+    // The redraws' depth-stencil states, by the engine's state they come from (its description).
+    struct Depth {
+        D3D11_DEPTH_STENCIL_DESC desc;
+        ID3D11DepthStencilState* state;
+    };
+    Depth depths[16] = {};
+    int depthCount = 0;
 };
 State g;
 
@@ -106,6 +113,53 @@ ID3D11BlendState* blendState(ID3D11Device* device, bool enable, BOOL a2c, D3D11_
     ID3D11BlendState* state = nullptr;
     if (FAILED(device->CreateBlendState(&d, &state))) return nullptr;
     g.blends[g.blendCount++] = {key, state};
+    return state;
+}
+
+// The engine's depth-stencil state for its draw's redraws. The engine's draw has just written its
+// depth (and its stencil): a strict test (less, greater) would fail the very same draw at the very
+// same depth, and its stencil operations would apply two or three times. So the redraws test with
+// equal depths let through and write neither depth nor stencil. ManiaPlanet's light draws test
+// greater-or-equal or equal (capture 034, reversed depth): those stay as they are but for the
+// writes. Null: the engine's state can't be had, the redraws keep it.
+ID3D11DepthStencilState* redrawDepth(ID3D11Device* device, ID3D11DepthStencilState* engine) {
+    D3D11_DEPTH_STENCIL_DESC d = {};
+    if (engine) {
+        engine->GetDesc(&d);
+    } else {
+        // D3D11's default state: depth on, written, less; no stencil.
+        d.DepthEnable = TRUE;
+        d.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+        d.DepthFunc = D3D11_COMPARISON_LESS;
+        d.StencilReadMask = D3D11_DEFAULT_STENCIL_READ_MASK;
+        d.StencilWriteMask = D3D11_DEFAULT_STENCIL_WRITE_MASK;
+        const D3D11_DEPTH_STENCILOP_DESC keep = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP,
+                                                 D3D11_COMPARISON_ALWAYS};
+        d.FrontFace = d.BackFace = keep;
+    }
+    // Field by field: the description has padding after the stencil masks.
+    auto sameOp = [](const D3D11_DEPTH_STENCILOP_DESC& a, const D3D11_DEPTH_STENCILOP_DESC& b) {
+        return a.StencilFailOp == b.StencilFailOp && a.StencilDepthFailOp == b.StencilDepthFailOp &&
+               a.StencilPassOp == b.StencilPassOp && a.StencilFunc == b.StencilFunc;
+    };
+    for (int i = 0; i < g.depthCount; i++) {
+        const D3D11_DEPTH_STENCIL_DESC& c = g.depths[i].desc;
+        if (c.DepthEnable == d.DepthEnable && c.DepthWriteMask == d.DepthWriteMask && c.DepthFunc == d.DepthFunc &&
+            c.StencilEnable == d.StencilEnable && c.StencilReadMask == d.StencilReadMask && c.StencilWriteMask == d.StencilWriteMask &&
+            sameOp(c.FrontFace, d.FrontFace) && sameOp(c.BackFace, d.BackFace))
+            return g.depths[i].state;
+    }
+    if (g.depthCount == 16) return nullptr;
+    D3D11_DEPTH_STENCIL_DESC r = d;
+    if (r.DepthFunc == D3D11_COMPARISON_LESS) r.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    if (r.DepthFunc == D3D11_COMPARISON_GREATER) r.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
+    r.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    r.StencilWriteMask = 0;
+    ID3D11DepthStencilState* state = nullptr;
+    if (FAILED(device->CreateDepthStencilState(&r, &state))) return nullptr;
+    g.depths[g.depthCount++] = {d, state};
+    TMVS_LOG("lights: redraws of depth test %d (write %d, stencil %d) test %d, write nothing", d.DepthFunc, d.DepthWriteMask,
+             d.StencilEnable, r.DepthFunc);
     return state;
 }
 
@@ -196,6 +250,7 @@ void save(ID3D11DeviceContext* ctx, Saved& s) {
     for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
         if (s.rtvs[i]) s.rtvCount = i + 1;
     ctx->OMGetBlendState(&s.blend, s.factor, &s.sampleMask);
+    ctx->OMGetDepthStencilState(&s.depth, &s.stencilRef);
 }
 
 bool setup(ID3D11DeviceContext* ctx, const Draw& d, int pass, Saved& s) {
@@ -204,6 +259,7 @@ bool setup(ID3D11DeviceContext* ctx, const Draw& d, int pass, Saved& s) {
     ctx->GetDevice(&device);
     if (!device) return false;
     ID3D11BlendState* state = nullptr;
+    ID3D11DepthStencilState* depth = redrawDepth(device, s.depth);
     bool more = true;
     switch (d.kind) {
     case Kind::Light:
@@ -252,6 +308,7 @@ bool setup(ID3D11DeviceContext* ctx, const Draw& d, int pass, Saved& s) {
         return false;
     }
     ctx->OMSetBlendState(state, s.factor, s.sampleMask);
+    if (depth) ctx->OMSetDepthStencilState(depth, s.stencilRef);
     return true;
 }
 
@@ -263,9 +320,11 @@ void restore(ID3D11DeviceContext* ctx, Saved& s) {
     }
     ctx->OMSetRenderTargets(s.rtvCount, s.rtvs, s.dsv);
     ctx->OMSetBlendState(s.blend, s.factor, s.sampleMask);
+    ctx->OMSetDepthStencilState(s.depth, s.stencilRef);
     for (auto*& v : s.rtvs) safeRelease(v);
     safeRelease(s.dsv);
     safeRelease(s.blend);
+    safeRelease(s.depth);
 }
 
 ID3D11Resource* frameTexture(ID3D11Resource* hdr) {
