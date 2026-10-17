@@ -3019,22 +3019,24 @@ float4 PS_NeonGlow(float2 uv : TEXCOORD0) : COLOR0 {
             float3 cs = toLinear(gp + gn[k] - min(gn[k].r, min(gn[k].g, gn[k].b)));
             glow = max(glow, min(cs, 1.0) * neonStrip(cs, dist, mat) * saturate(exP / max(exP + exN[k], 1e-3)) * alone);
         }
-        // A strip is narrow, a painted floor is wide: how much of a ring 3 m around (as facing the
-        // eye) is the same blue. The blue floor outside the stadium (B02 at night, capture_116) is
-        // bright enough for the colour test and two of its pixels together always were: the whole
-        // floor glowed like a strip. A strip or a neon curb band (1-2.5 m wide, A01, capture_120)
-        // covers at most about half of the ring, the floor all of it but near its edges. A share
-        // of the ring, not a hard test of four points: on the curbs those fell on the paler blue
-        // next door or on a white block and punched dark holes into the glow. Off the screen: its
-        // edge.
+        // A strip is narrow, a painted floor is wide: how much of a ring 8 m around (as facing the
+        // eye) is the same blue. The blue floor outside the stadium (B02 at night, capture_116) and
+        // along A01's stadium wall (capture_121) is bright enough for the colour test and two of
+        // its pixels together always were: the whole floor glowed like a strip. A strip or a neon
+        // curb band (1-2.5 m wide, A01, capture_120) covers a tenth of the ring or less, the floor
+        // all of it and half at its edges: a ring of 3 m left the floor's edges glowing as frayed,
+        // blotchy bands (121). A share of the ring, not a hard test of four points: on the curbs
+        // those fell on the paler blue next door or on a white block and punched holes into the
+        // glow. Off the screen: its edge. The game's image with its added light (half the reads: the
+        // lamps' halos are white and add no blue excess).
         [branch] if (max(glow.r, max(glow.g, glow.b)) > 0.0) {
-            float2 reach = 3.0 / max(length(viewPosition(uv + float2(u_Screen.z, 0), z) - viewPosition(uv, z)), 1e-5) * u_Screen.zw;
+            float2 reach = 8.0 / max(length(viewPosition(uv + float2(u_Screen.z, 0), z) - viewPosition(uv, z)), 1e-5) * u_Screen.zw;
             float cover = 0.0;
             [unroll] for (int side = 0; side < 6; side++) {
                 float a = (side + 0.5) * 1.047198;
-                cover += smoothstep(0.5, 0.8, neonExcess(neonSurface(saturate(uv + float2(cos(a), sin(a)) * reach))) / exP);
+                cover += smoothstep(0.5, 0.8, neonExcess(tex2Dlod(s0, float4(saturate(uv + float2(cos(a), sin(a)) * reach), 0, 0)).rgb) / exP);
             }
-            glow *= 1.0 - smoothstep(0.45, 0.8, cover / 6.0);
+            glow *= 1.0 - smoothstep(0.3, 0.5, cover / 6.0);
         }
     }
     return float4(z < SKY_Z ? sqrt(glow) : 0.0, 0);
