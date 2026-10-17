@@ -224,7 +224,10 @@ public:
     bool stretchScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, const RECT& from, IDirect3DSurface9* target, const RECT& to);
     // `source` point sampled at w x h into `out` (format): what the game would have drawn at that
     // size (the previewer's RenderScale). depth: `source` holds raw depth in .r (out R32F).
-    bool downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth);
+    // offset (source uv): which of the source pixels under each output pixel is taken (the
+    // previewer's --jitter: a jittered raster).
+    bool downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth,
+                   float offsetU = 0.0f, float offsetV = 0.0f);
     // RenderScale on: a change of size between the scaled and the full image (photo mode, an F12
     // capture, a fallback frame) keeps what belongs to the world rather than the screen: the height
     // map, the neon trail, rain, the exposure, focus and sky colour. Off: a new size starts

@@ -3338,11 +3338,12 @@ bool Pipeline::stretchScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, 
     return true;
 }
 
-bool Pipeline::downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth) {
+bool Pipeline::downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth,
+                         float offsetU, float offsetV) {
     if (!m_ready || !source || !out.create(device, w, h, depth ? D3DFMT_R32F : format)) return false;
     const BOOL softwareVP = setPassStates(device);
     bind(device, 0, source, false);
-    passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
+    passConstants(device, offsetU, offsetV, 1.0f, 1.0f);
     const float mode[4] = {1.0f, 1.0f, 0.0f, 0.0f}; // c33 xy 1: as it is, alpha too (PS_Resolve)
     device->SetPixelShaderConstantF(33, mode, 1);
     runPass(device, depth ? kCopyDepth : kResolve, out);

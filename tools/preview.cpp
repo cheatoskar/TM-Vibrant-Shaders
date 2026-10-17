@@ -30,6 +30,9 @@
 //     --video                 the video export's quality (photo mode's depth of field, moving)
 //     --repeat <n>            n more sub-pixel samples of the last frame (the export's
 //                             supersampling: history read, not advanced); the last is written
+//     --jitter                with RenderScale 1/n (0.5): TAA jitter as in game (TAAJitter), each
+//                             frame takes another of the n x n capture pixels under a scene pixel
+//                             (a raster shifted by sub-pixels, with its aliasing), Halton (2, 3)
 //     --bars <rows>           the replay menu's band: the image goes between <rows> above and
 //                             below (magenta), which Pipeline::fillBars fills as in game
 //     --nohdr                 ignore capture_NNN.hdr16 next to the capture (the game's float
@@ -371,6 +374,8 @@ int main(int argc, char** argv) {
     bool photoMode = false;              // the photo mode's look (3x reach, full-res blur)
     bool videoMode = false;              // --video: the video export's quality (the same paths, moving)
     int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
+    bool jitterRaster = false;           // --jitter: TAA jitter emulated by RenderScale's point sampling
+    int jitterIndex = 0;                 // its Halton index, on across batch jobs (keep=1) as in game
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     bool useMaterials = true;            // capture_NNN.mat next to the capture (--nomat: no material masks)
     bool spillHistory = true;            // --nospillhistory: the neon spill of each frame on its own (A/B)
@@ -424,6 +429,8 @@ int main(int argc, char** argv) {
             videoMode = true;
         } else if (!strcmp(argv[i], "--repeat") && i + 1 < argc) {
             repeats = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--jitter")) {
+            jitterRaster = true;
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &focus[0], &focus[1]);
         } else if (!strcmp(argv[i], "--compare") && i + 1 < argc) {
@@ -717,18 +724,25 @@ int main(int argc, char** argv) {
         // detail averaged in), shaded at that size and brought up to the capture's with FSR 1 as
         // in game. Not with --photo or --video: the game keeps those at full resolution.
         gfx::Target scaledInputs[7];
+        IDirect3DTexture9* fullInputs[7] = {}; // --jitter: sampled again every frame
+        const D3DFORMAT formats[7] = {D3DFMT_A8R8G8B8, D3DFMT_R32F, D3DFMT_A16B16G16R16F, D3DFMT_A16B16G16R16F, D3DFMT_A16B16G16R16F,
+                                      D3DFMT_A16B16G16R16F, D3DFMT_A8R8G8B8};
+        int jitterGrid = 0; // --jitter: n, the scene is 1/n of the capture
+        UINT sw = cap.width, sh = cap.height;
         const float renderScale = job.settings.renderScale;
         if (renderScale < 0.99f && !photoMode && !videoMode) {
-            const UINT sw = static_cast<UINT>(cap.width * renderScale + 0.5f), sh = static_cast<UINT>(cap.height * renderScale + 0.5f);
+            sw = static_cast<UINT>(cap.width * renderScale + 0.5f);
+            sh = static_cast<UINT>(cap.height * renderScale + 0.5f);
             IDirect3DTexture9** const sources[7] = {&in.color, &in.depth, &in.hdr, &in.added, &in.gbuffer, &in.gameLight, &in.materialMask};
-            const D3DFORMAT formats[7] = {D3DFMT_A8R8G8B8, D3DFMT_R32F, D3DFMT_A16B16G16R16F, D3DFMT_A16B16G16R16F, D3DFMT_A16B16G16R16F,
-                                          D3DFMT_A16B16G16R16F, D3DFMT_A8R8G8B8};
             device->BeginScene();
             for (int k = 0; k < 7; k++) {
+                fullInputs[k] = *sources[k];
                 if (!*sources[k]) continue;
                 if (!pipeline.downscale(device, *sources[k], scaledInputs[k], sw, sh, formats[k], k == 1)) return 1;
                 *sources[k] = scaledInputs[k].texture;
             }
+            if (jitterRaster) jitterGrid = static_cast<int>(lroundf(1.0f / renderScale));
+            if (jitterGrid < 2) jitterGrid = 0;
             device->EndScene();
             in.width = sw;
             in.height = sh;
@@ -818,6 +832,34 @@ int main(int argc, char** argv) {
                 // Per frame as far as the frame's time step (time=: 0.02 s, else 0.1 s).
                 const float step = job.trail * (job.time >= 0.0f ? 0.02f : 0.1f);
                 for (int j = 0; j < 3; j++) driven.carPosition[j] = carEnd[j] + carDir[j] * back * step;
+            }
+            if (jitterGrid > 0) {
+                // TAA jitter as plugin.cpp updateJitter: Halton (2, 3) over 8 frames, here picking
+                // one of the n x n capture pixels under each scene pixel: the raster moves by
+                // sub-pixels and aliases like the game's would.
+                auto halton = [](int index, int base) {
+                    float f = 1.0f, r = 0.0f;
+                    for (int i = index; i > 0; i /= base) {
+                        f /= static_cast<float>(base);
+                        r += f * static_cast<float>(i % base);
+                    }
+                    return r;
+                };
+                jitterIndex = jitterIndex % 8 + 1;
+                const int n = jitterGrid;
+                const int ox = (std::min)(static_cast<int>(halton(jitterIndex, 2) * n), n - 1);
+                const int oy = (std::min)(static_cast<int>(halton(jitterIndex, 3) * n), n - 1);
+                for (int k = 0; k < 7; k++) {
+                    if (!fullInputs[k]) continue;
+                    pipeline.downscale(device, fullInputs[k], scaledInputs[k], sw, sh, formats[k], k == 1, (ox + 0.5f - n * 0.5f) / cap.width,
+                                       (oy + 0.5f - n * 0.5f) / cap.height);
+                }
+                // A sample further right shows the image moved left. The projection carries it
+                // as the game's does (P20, P21 in ndc).
+                driven.jitter[0] = -(ox - (n - 1) * 0.5f) / n / static_cast<float>(sw);
+                driven.jitter[1] = -(oy - (n - 1) * 0.5f) / n / static_cast<float>(sh);
+                driven.projection[8] += 2.0f * driven.jitter[0];
+                driven.projection[9] -= 2.0f * driven.jitter[1];
             }
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
             LARGE_INTEGER renderStart;
