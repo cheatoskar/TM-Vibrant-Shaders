@@ -4,6 +4,7 @@
 // (tmvs_sharetest, mp_sharetest): the presets differ per game, the codes must not. Exit code 0 = all passed.
 #include "config.h"
 #include "log.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -16,7 +17,7 @@ using namespace tmshaders;
 
 static int g_failed = 0;
 // Of the defaults of every look setting (key and bytes). Changed on purpose? Bump the share code version first.
-static const uint64_t kDefaultsFingerprint = 0xc47f0762ad86155bull;
+static const uint64_t kDefaultsFingerprint = 0xd8b11cf8bd5ea985ull; // in key order (was 0xc47f0762ad86155b in table order)
 #define CHECK(...) \
     do { \
         if (!(__VA_ARGS__)) { \
@@ -153,8 +154,14 @@ int main(int argc, char** argv) {
     // The Settings defaults are the base of every code: if one changes, old codes change meaning.
     // Bump the share code version and keep reading the old one against the old default (config.cpp).
     {
+        // In key order: the table's order is only the menu's (codes name their keys), so sorting the
+        // menu must not trip this.
+        std::vector<const Field*> sorted;
+        for (const Field& f : fields()) sorted.push_back(&f);
+        std::sort(sorted.begin(), sorted.end(), [](const Field* a, const Field* b) { return strcmp(a->key, b->key) < 0; });
         uint64_t hash = 1469598103934665603ull;
-        for (const Field& f : fields()) {
+        for (const Field* field : sorted) {
+            const Field& f = *field;
             if (isMachine(f) || isAddedSinceV1(f)) continue;
             const char* p = reinterpret_cast<const char*>(&defaults) + f.offset;
             for (const char* k = f.key; *k; k++) hash = (hash ^ static_cast<unsigned char>(*k)) * 1099511628211ull;
