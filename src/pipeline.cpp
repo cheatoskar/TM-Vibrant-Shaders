@@ -27,7 +27,7 @@ const char* const kEntryPoints[] = {
     "PS_LightingGameLight", "PS_FsrEasu", "PS_FsrRcas", "PS_SpillTemporal",
     "PS_SpillSource", "PS_SpillSourceEngine", "PS_SpillDownSource",
     "PS_SmaaEdges", "PS_SmaaWeights", "PS_SmaaBlend",
-    "PS_SpillSourceNeon", "PS_NeonGlow", "PS_NeonAdd",
+    "PS_SpillSourceNeon", "PS_NeonGlow", "PS_NeonAdd", "PS_NeonTemporal",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -333,6 +333,8 @@ void Pipeline::destroyTargets(bool keepWorld) {
     for (auto& t : m_spill) t.destroy();
     m_spillSource.destroy();
     m_neon.destroy();
+    for (auto& t : m_neonHistory) t.destroy();
+    m_neonValid = false;
     for (auto& t : m_spillHistory) t.destroy();
     m_dof.destroy();
     m_dofFull.destroy();
@@ -2762,6 +2764,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
 
     // 3b. Reflections and neon light spill.
+    IDirect3DTexture9* neonSource = m_neon.texture;
     if (neonPass) {
         bind(device, 0, in.hdr, false);
         bind(device, 1, m_nd.texture, false);
@@ -2769,6 +2772,24 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         if (in.added) bind(device, 14, in.added, false);
         runPass(device, kNeonGlow, m_neon);
         device->SetTexture(14, nullptr);
+        // Over frames (PS_NeonTemporal): rows of a far strip that come and go between frames.
+        if (m_neonHistoryOn && (m_neonHistory[1].valid() || (m_neonHistory[0].create(device, m_width, m_height, D3DFMT_A16B16G16R16F) &&
+                                                             m_neonHistory[1].create(device, m_width, m_height, D3DFMT_A16B16G16R16F)))) {
+            const int previous = m_neonIndex;
+            m_neonIndex ^= 1;
+            bind(device, 0, m_neon.texture, false);
+            bind(device, 1, m_neonHistory[previous].texture, true);
+            bind(device, 2, m_nd.texture, false);
+            passConstants(device, (m_neonValid && m_temporalValid) ? 1.0f : 0.0f, 0.0f);
+            runPass(device, kNeonTemporal, m_neonHistory[m_neonIndex]);
+            device->SetTexture(2, nullptr);
+            neonSource = m_neonHistory[m_neonIndex].texture;
+            m_neonValid = true;
+        } else {
+            m_neonValid = false;
+        }
+    } else {
+        m_neonValid = false;
     }
     const bool reflect = s.wetness > 0.0f || s.reflections > 0.0f || s.waterSurfaces > 0.0f;
     if (reflect) {
@@ -2802,7 +2823,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
                               (m_spillSource.valid() || m_spillSource.create(device, m_width, m_height, D3DFMT_A16B16G16R16F));
         if (perPixel) {
             if (neonPass) {
-                bind(device, 2, m_neon.texture, false);
+                bind(device, 2, neonSource, false);
                 passConstants(device, neonGlow, 0.0f);
             }
             runPass(device, neonPass ? kSpillSourceNeon : (engineLights ? kSpillSourceEngine : kSpillSource), m_spillSource);
@@ -2861,7 +2882,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
     if (neonPass) {
-        bind(device, 0, m_neon.texture, false);
+        bind(device, 0, neonSource, false);
         bind(device, 1, m_nd.texture, false);
         passConstants(device, neonGlow, 0.0f);
         device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);

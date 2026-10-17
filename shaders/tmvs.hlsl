@@ -3350,6 +3350,42 @@ float4 PS_NeonAdd(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(glow * (1.0 - 0.6 * fog), 0);
 }
 
+// The strips' glow over frames: s0 = this frame's PS_NeonGlow (point), s1 = the history (rgb its
+// glow, a its depth; bilinear), s2 = full normal/depth, u_Pass0.x = history valid. Without the
+// game's MSAA a strip 1-2 px high far away is drawn all or nothing per row: as the camera creeps,
+// rows of it come and go from one frame to the next, and their glow (BorderGlow, squared in
+// PS_NeonAdd, then the bloom and the spill over it) pulsed on the wall below (the owner, A01 at
+// night). Averaged over about four frames where the history is the same surface (fewer while the
+// view moves, none from 8 px a frame). It may only reach as far as this frame's glow next door:
+// a row that went this frame still has its neighbour, a strip that went or moved with the car
+// leaves no trail.
+float4 PS_NeonTemporal(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 current = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float z = tex2Dlod(s2, float4(uv, 0, 0)).w;
+    if (u_Pass0.x < 0.5 || z >= SKY_Z) return float4(current, z);
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(current, z);
+    float4 history = tex2Dlod(s1, float4(prevUV, 0, 0));
+    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
+    float speed = length((uv - prevUV) * u_Screen.xy);
+    // Moving fast, this frame alone: the rows pop while the view is (nearly) still, and a strip
+    // 1-2 px high read back from a blurred history kept less and less of its glow.
+    float weight = max(lerp(0.28, 1.0, smoothstep(0.04, 0.12, error)), lerp(0.28, 1.0, saturate((speed - 1.0) / 7.0)));
+    // The rows next to it and two away (a strip two rows high can go at once).
+    float3 lo = current, hi = current;
+    [unroll] for (int k = 0; k < 6; k++) {
+        float2 o = k < 4 ? neonStep(k) : neonStep(k - 4) * 2.0;
+        float3 n = tex2Dlod(s0, float4(uv + o * u_Screen.zw, 0, 0)).rgb;
+        lo = min(lo, n);
+        hi = max(hi, n);
+    }
+    float3 margin = (hi - lo) * 0.25 + current * 0.33 + 0.004;
+    history.rgb = clamp(history.rgb, max(lo - margin, 0.0), hi + margin);
+    // Blended as light (the glow is stored as its root).
+    return float4(sqrt(lerp(history.rgb * history.rgb, current * current, weight)), z);
+}
+
 // s0 = the game's float image (bilinear), s14 = its added light (bilinear), s1 = full normal/depth.
 // out.rgb = the lamps' light as the lighting pass adds it (x the highlight boost, less what the
 // haze takes on the way), out.a = what the haze took (luminance): it scatters around the lamp.
