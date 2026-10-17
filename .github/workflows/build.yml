@@ -137,7 +137,9 @@ jobs:
 
       # Releases from before the server get their TMVS-modloader.zip made from their own
       # TMVibrantShaders.dll (the ModLoader zip holds nothing else). Only missing ones; once.
+      # Off unless the repository variable MODLOADER_BACKFILL is 1: it changes published releases.
       - name: Backfill older releases
+        if: ${{ vars.MODLOADER_BACKFILL == '1' }}
         run: |
           for tag in $(python3 tools/modloader_server.py missing); do
             rm -rf backfill && mkdir backfill
