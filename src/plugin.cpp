@@ -2470,8 +2470,10 @@ void updateJitter() {
     // Hi-res tiles: no jitter (each tile must line up with its neighbours to the pixel). The
     // export's supersampling: no TAA, and the game shifts its samples itself.
     const bool supersampled = g_exporting && (g_export.samplesPerFrame > 1 || g_export.subFrames);
+    // The compare split: its other side (the game's image, or a preset shaded a second time) has
+    // no TAA of this frame to take the jitter out again and trembled (owner, 2026-10-17).
     const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0 &&
-                    !photo::tiling() && !supersampled;
+                    !photo::tiling() && !supersampled && !photo::splitShown();
     if (!on) {
         engine::setProjectionJitter(0.0f, 0.0f);
         g_jitterUV[0] = g_jitterUV[1] = 0.0f;

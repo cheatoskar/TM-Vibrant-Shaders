@@ -136,7 +136,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Quality", "Effect quality", "Image quality", Int, quality, 0.0f, 2.0f),
         TMVS_FIELD("AutoQuality", "Auto quality", "Image quality", Bool, autoQuality, 0.0f, 1.0f),
         TMVS_FIELD("TargetFPS", "Target FPS", "Image quality", Float, targetFps, 30.0f, 240.0f),
-        TMVS_FIELD("RenderScale", "Render scale", "Image quality", Float, renderScale, 0.5f, 1.0f),
+        TMVS_FIELD("RenderScale", "Render scale (FSR)", "Image quality", Float, renderScale, 0.5f, 1.0f),
         TMVS_FIELD("FsrSharpness", "FSR sharpening", "Image quality", Float, fsrSharpness, 0.0f, 1.0f),
 
         TMVS_FIELD("GameNight", "Real night", "Game integration", Bool, gameNight, 0.0f, 1.0f),

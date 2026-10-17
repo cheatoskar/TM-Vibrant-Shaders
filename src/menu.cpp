@@ -1470,7 +1470,9 @@ bool drawStudio(Config& config, Settings& s) {
                                       l |= drawField(g, s);
                                       ImGui::EndDisabled();
                                       if (!relevant && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                                          ImGui::SetTooltip("No effect with the current settings");
+                                          ImGui::SetTooltip("%s", !strcmp(g.key, "FsrSharpness")
+                                                                      ? "FSR runs only with Render scale (FSR) below 1.00: set that first"
+                                                                      : "No effect with the current settings");
                                       }
                                   }
                                   return l;
