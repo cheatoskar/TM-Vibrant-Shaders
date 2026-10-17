@@ -4,6 +4,8 @@
 
 namespace tmshaders {
 
+class IniFile;
+
 // The mod's hotkeys: what each does, its default key and the key the player chose (the [Keys]
 // section of settings.ini, written as readable names: "F8", "Shift+F6", "Ctrl+Alt+K"). Shared by
 // both games; every hotkey check goes through here, nothing else names a key.
@@ -101,6 +103,8 @@ bool feed(UINT msg, WPARAM wparam, LPARAM lparam);
 // settings.ini
 void load(const wchar_t* ini);
 void save(const wchar_t* ini);
+// Into settings.ini being saved (Config::save writes it once).
+void save(IniFile& ini);
 
 } // namespace keys
 } // namespace tmshaders

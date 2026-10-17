@@ -1,4 +1,5 @@
 #include "config.h"
+#include "inifile.h"
 #include "keys.h"
 #include "log.h"
 #include <windows.h>
@@ -292,7 +293,7 @@ void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, 
     }
 }
 
-void writeFields(const Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem) {
+void writeFields(const Settings& settings, IniFile& ini, const wchar_t* section, bool includeSystem) {
     const char* base = reinterpret_cast<const char*>(&settings);
     for (const Field& f : fields()) {
         if (!includeSystem && isSystemField(f)) continue;
@@ -308,7 +309,7 @@ void writeFields(const Settings& settings, const wchar_t* ini, const wchar_t* se
         } else {
             swprintf(value, 128, L"%.4f", *reinterpret_cast<const float*>(base + f.offset));
         }
-        WritePrivateProfileStringW(section, key, value, ini);
+        ini.set(section, key, value);
     }
 }
 
@@ -1002,9 +1003,11 @@ bool Config::saveUserPreset(const std::string& requested, const std::string& des
     const std::wstring file = presetFile(name);
     // Saving over your preset keeps its line unless you wrote a new one.
     const std::string keep = description.empty() && isUserPreset(name) ? presetDescription(name) : description;
-    DeleteFileW(file.c_str());
-    writeFields(settings, file.c_str(), L"Preset", false);
-    if (!keep.empty()) WritePrivateProfileStringW(L"Info", L"Description", widen(keep).c_str(), file.c_str());
+    // A new file, written in one go (it replaces the old one).
+    IniFile ini;
+    writeFields(settings, ini, L"Preset", false);
+    if (!keep.empty()) ini.set(L"Info", L"Description", widen(keep).c_str());
+    if (!ini.save(file)) TMVS_LOG("config: preset file can't be written (error %lu)", ini.error());
     scanUserPresets();
     TMVS_LOG("config: saved preset \"%s\"", name.c_str());
     // A new preset gets its picture; saving changes keeps the one it has.
@@ -1199,16 +1202,19 @@ void Config::markDirty() {
 void Config::tick() {
     if (keys::takeChanged()) markDirty(); // a hotkey was rebound
     if (m_dirty && GetTickCount() - m_dirtySince > 1500) {
-        // On the render thread: about 160 WritePrivateProfileString calls, each opening and
-        // rewriting the file (130 ms on the owner's machine outside the game). The game stands
-        // still meanwhile: the log says when it was long.
-        const DWORD started = GetTickCount();
+        // On the render thread, so the game stands still meanwhile. One read and one write of the
+        // file (IniFile): a few ms. Until 1.4.0 it was about 160 WritePrivateProfileString calls,
+        // each opening and rewriting the file: 125 ms, 1.3 s on a fresh file after a map load.
+        LARGE_INTEGER started, ended, frequency;
+        QueryPerformanceCounter(&started);
         save();
-        const DWORD took = GetTickCount() - started;
+        QueryPerformanceCounter(&ended);
+        QueryPerformanceFrequency(&frequency);
+        const double took = 1000.0 * static_cast<double>(ended.QuadPart - started.QuadPart) / static_cast<double>(frequency.QuadPart);
         static int s_lines = 0;
-        if (took >= 50 && s_lines < 50) {
+        if (!m_dirty && s_lines < 50) {
             s_lines++;
-            TMVS_LOG("config: settings.ini written in %lu ms (the game waited)", took);
+            TMVS_LOG("config: settings.ini written in %.1f ms%s", took, took >= 50.0 ? " (the game waited)" : "");
         }
     }
 }
@@ -1737,45 +1743,58 @@ void Config::load() {
 
 void Config::save() {
     if (m_path.empty()) m_path = log::dataDir() + L"\\settings.ini";
-    const wchar_t* ini = m_path.c_str();
+    // Read once, change in memory, write once: keys and sections the mod doesn't know, comments and
+    // the file's order stay as they are.
+    IniFile ini;
+    ini.load(m_path);
     // A map's look is never saved as yours.
     const Settings own = ownSettings();
-    WritePrivateProfileStringW(L"General", L"Preset", widen(m_mapLook ? m_ownPreset : preset).c_str(), ini);
-    WritePrivateProfileStringW(L"General", L"BasePreset", widen(m_mapLook ? m_ownBasePreset : m_basePreset).c_str(), ini);
-    WritePrivateProfileStringW(L"General", L"Enabled", settings.enabled ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"UseMapLooks", useMapLooks ? L"1" : L"0", ini);
+    ini.set(L"General", L"Preset", widen(m_mapLook ? m_ownPreset : preset).c_str());
+    ini.set(L"General", L"BasePreset", widen(m_mapLook ? m_ownBasePreset : m_basePreset).c_str());
+    ini.set(L"General", L"Enabled", settings.enabled ? L"1" : L"0");
+    ini.set(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0");
+    ini.set(L"General", L"UseMapLooks", useMapLooks ? L"1" : L"0");
     wchar_t page[16];
     swprintf(page, 16, L"%d", menuPage);
-    WritePrivateProfileStringW(L"General", L"MenuPage", page, ini);
-    WritePrivateProfileStringW(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"MenuFull", menuFull ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0", ini);
+    ini.set(L"General", L"MenuPage", page);
+    ini.set(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0");
+    ini.set(L"General", L"MenuFull", menuFull ? L"1" : L"0");
+    ini.set(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0");
+    ini.set(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0");
+    ini.set(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0");
     wchar_t photo[32];
     swprintf(photo, 32, L"%d", photoTiles);
-    WritePrivateProfileStringW(L"General", L"PhotoTiles", photo, ini);
+    ini.set(L"General", L"PhotoTiles", photo);
     swprintf(photo, 32, L"%.2f", photoDof);
-    WritePrivateProfileStringW(L"General", L"PhotoDof", photo, ini);
-    WritePrivateProfileStringW(L"General", L"SplitPhotoLabels", splitPhotoLabels ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"Lut", widen(lutFile).c_str(), ini);
+    ini.set(L"General", L"PhotoDof", photo);
+    ini.set(L"General", L"SplitPhotoLabels", splitPhotoLabels ? L"1" : L"0");
+    ini.set(L"General", L"Lut", widen(lutFile).c_str());
     swprintf(photo, 32, L"%.2f", lutAmount);
-    WritePrivateProfileStringW(L"General", L"LutAmount", photo, ini);
-    WritePrivateProfileStringW(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"ManualPick", manualPick ? L"1" : L"0", ini);
+    ini.set(L"General", L"LutAmount", photo);
+    ini.set(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0");
+    ini.set(L"General", L"ManualPick", manualPick ? L"1" : L"0");
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);
-    WritePrivateProfileStringW(L"General", L"MenuSections", sections, ini);
+    ini.set(L"General", L"MenuSections", sections);
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
-        WritePrivateProfileStringW(L"General", kMoodKeys[i], moodPreset[i].empty() ? L"Keep" : widen(moodPreset[i]).c_str(), ini);
+        ini.set(L"General", kMoodKeys[i], moodPreset[i].empty() ? L"Keep" : widen(moodPreset[i]).c_str());
     }
     wchar_t value[16];
     swprintf(value, 16, L"%d", static_cast<int>(mood));
-    WritePrivateProfileStringW(L"General", L"LastMood", value, ini);
+    ini.set(L"General", L"LastMood", value);
     writeFields(own, ini, L"Settings", true);
     keys::save(ini);
-    m_dirty = false;
+    if (ini.save(m_path)) {
+        m_dirty = false;
+        return;
+    }
+    // Locked (an editor, a virus scanner): stays dirty and tick() tries again in 1.5 s.
+    m_dirtySince = GetTickCount();
+    static bool s_said = false;
+    if (!s_said) {
+        s_said = true;
+        TMVS_LOG("config: settings.ini can't be written (error %lu), trying again", ini.error());
+    }
 }
 
 } // namespace tmshaders

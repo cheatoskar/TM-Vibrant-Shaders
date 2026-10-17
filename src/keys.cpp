@@ -1,4 +1,5 @@
 #include "keys.h"
+#include "inifile.h"
 #include "log.h"
 #include <cwchar>
 #include <cctype>
@@ -484,6 +485,13 @@ void load(const wchar_t* ini) {
 }
 
 void save(const wchar_t* ini) {
+    IniFile file;
+    if (!file.load(ini)) return;
+    save(file);
+    file.save(ini);
+}
+
+void save(IniFile& ini) {
     ensure();
     for (int i = 0; i < kCount; i++) {
         if (!kInfo[i].available) continue;
@@ -491,11 +499,11 @@ void save(const wchar_t* ini) {
         for (int c = 0; kInfo[i].name[c] && c < 31; c++) key[c] = static_cast<wchar_t>(kInfo[i].name[c]);
         const std::string text = name(g_binding[i]);
         for (size_t c = 0; c < text.size() && c < 63; c++) value[c] = static_cast<wchar_t>(text[c]);
-        WritePrivateProfileStringW(L"Keys", key, value, ini);
+        ini.set(L"Keys", key, value);
     }
     wchar_t version[16] = {};
     swprintf(version, 16, L"%d", kKeysVersion);
-    WritePrivateProfileStringW(L"Keys", L"KeysVersion", version, ini);
+    ini.set(L"Keys", L"KeysVersion", version);
 }
 
 } // namespace keys
