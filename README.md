@@ -14,7 +14,7 @@
 
 ![Realistic: the start line in the late sun, with haze and soft shadows](docs/images/realistic-start.jpg)
 
-A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
+A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
 
@@ -34,11 +34,12 @@ A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light s
    |---|---|
    | **Install for the TrackMania ModLoader** | You use the [ModLoader (TMLoader)](https://tomashu.dev/software/tmloader/). Afterwards tick *TM Vibrant Shaders* in your ModLoader profile. |
    | **Install into TrackMania Nations Forever** / **United Forever** | No ModLoader. The setup lists every TrackMania it finds, each with its own button, and puts a `d3d9.dll` next to `TmForever.exe`. |
-   | **Install into another game folder** | Your game isn't in the list. Pick the folder that contains `TmForever.exe`. |
+   | **Install into TrackMania 2 (ManiaPlanet)** | The setup puts a 64-bit `d3d11.dll` next to `ManiaPlanet.exe`. Details: [maniaplanet/README.md](maniaplanet/README.md). |
+   | **Install into another game folder** | Your game isn't in the list. Pick the folder that contains `TmForever.exe` or `ManiaPlanet.exe`. |
 
 4. Start the game. Press **`F8`** for the menu.
 
-Run the setup again to update or uninstall; your settings stay. Windows SmartScreen may warn because the setup isn't code-signed: *More info → Run anyway*, or install by hand. Manual install, updating and the recommended game settings: **[docs/install.md](docs/install.md)**. Deutsche Anleitung: **[docs/INSTALL_DE.md](docs/INSTALL_DE.md)**.
+By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `ManiaPlanet.exe` (start ManiaPlanet 64-bit). Run the setup again to update or uninstall; your settings stay. Windows SmartScreen may warn because the setup isn't code-signed: *More info → Run anyway*, or install by hand. Manual install, updating and the recommended game settings: **[docs/install.md](docs/install.md)**. Deutsche Anleitung: **[docs/INSTALL_DE.md](docs/INSTALL_DE.md)**.
 
 ---
 
@@ -150,7 +151,8 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 |---|---|
 | TrackMania Nations Forever | Yes |
 | TrackMania United Forever | Yes (the mod detects the game build and the map's environment) |
-| TrackMania Nations ESWC, TrackMania 2 / 2020 | No |
+| TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) |
+| TrackMania Nations ESWC, Trackmania (2020) | No |
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
 | Other `d3d9.dll` mods (ReShade and similar) | Not as `d3d9.dll` in the same game folder. Together with the ModLoader install: untested |
 | Windows | 10 and 11 |
@@ -159,8 +161,8 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 
 - **Snow on the ground** (*Snow on the ground*, off in every preset) doesn't follow the game's textures and surfaces well (it can lie across markings, kerbs and edges). For snowy roads a snow texture pack looks better.
 - **Headlights on very bright blocks** (United Forever Island at night): the game itself draws the light pool pure white, so there is no texture left under it.
-- **Floodlit stadiums at night** keep part of the game's burned-out white (*Floodlit surfaces at night* sets how much).
-- **Shaders off with the game's FX post-processing** was reported once (TMNF, shadows *High*). *Turn off the game's FX post-processing* (on by default) should prevent it; if not, switch FX off in the launcher.
+- **Floodlit stadiums at night** keep part of the game's burned-out white (*Floodlit surfaces* sets how much).
+- **Shaders off with the game's FX post-processing** was reported once (TMNF, shadows *High*). *Turn off game FX* (on by default) should prevent it; if not, switch FX off in the launcher.
 - **Bloom costs ~3 ms on integrated GPUs**; *Performance* preset or auto quality help.
 - If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
@@ -191,7 +193,7 @@ This mod was developed with the help of [Claude Code](https://claude.com/claude-
 
 - [Dear ImGui](https://github.com/ocornut/imgui) (MIT) for the menu, [minimp3](https://github.com/lieff/minimp3) (CC0) for the sound. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Rain and thunder recordings from [freesound.org](https://freesound.org) (CC0) by Rubaoliva, loganzsound, seth-m, Fission9, TRP, Kinoton, Martineerok, kingsrow and bastipictures. See [sounds/CREDITS.md](sounds/CREDITS.md).
-- Anti-aliasing and sharpening follow FXAA 3.11 (Timothy Lottes) and AMD FidelityFX CAS. The look is inspired by the Minecraft shader packs Sildur's Vibrant, BSL and IterationT; no code from them is used.
+- Anti-aliasing and sharpening follow FXAA 3.11 (Timothy Lottes) and AMD FidelityFX CAS; the render scale's upscaling is AMD FidelityFX FSR 1. The look is inspired by the Minecraft shader packs Sildur's Vibrant, BSL and IterationT; no code from them is used.
 - TrackMania is a trademark of Ubisoft / Nadeo. This is a fan project and has nothing to do with them.
 
 ## License
