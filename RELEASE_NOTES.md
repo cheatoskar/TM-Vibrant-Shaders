@@ -61,9 +61,6 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 - The neon trail tracks the car's true position directly from the engine: no flicker, no gaps, along banked roads and loops; earlier runs can stay, dimmer.
 - Realistic storm audio: recorded winter storm wind for snowstorms.
 
-**Known issues**
-- Night presets: some blue printed signs (the blue "d" of the Trackmania United banner) glow like neon strips; the game draws them with the same material as the strips.
-
 **Install (TrackMania Nations Forever / United Forever):**
 1. Download **`TM-Vibrant-Shaders.zip`** and extract it.
 2. Run **`TM-Vibrant-Shaders-Setup.exe`** to install into TrackMania ModLoader or game folders.
