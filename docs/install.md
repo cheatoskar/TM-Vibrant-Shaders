@@ -20,6 +20,27 @@ There are two ways to load the mod. Use one of them, not both.
 | Start the game | Through the ModLoader | As usual, launcher or desktop shortcut |
 | Good for | People who already use the ModLoader | Everyone else |
 
+## With the ModLoader's update server
+
+For ModLoader users the simplest way: the ModLoader downloads the mod itself and installs every new version with its auto update.
+
+1. Close the ModLoader.
+2. Open `%LOCALAPPDATA%\TMLoader\config.yaml` with Notepad (paste the path into the Explorer address bar).
+3. Add the server under `servers:`, indented like the other lines, and save:
+
+   ```yaml
+   servers:
+     - 'https://modloader.tomashu.dev/modloader/TmForever/v1/'
+     # ... the servers that are already there ...
+     - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'
+   ```
+
+4. Start the ModLoader. *TM Vibrant Shaders* appears with its versions; tick it in your profile and start the game.
+
+**Pre-releases:** `https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/` lists the stable versions and the pre-releases. Add one of the two URLs, not both.
+
+A copy installed earlier with the setup lives in the same place (`products\TM Vibrant Shaders\<version>`); the ModLoader keeps it and adds newer versions next to it. Old versions can be removed in the ModLoader. The in-game *About* page says whether the ModLoader updates the mod by itself.
+
 ## With the setup
 
 1. Download **`TM-Vibrant-Shaders.zip`** from the [latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest).
@@ -68,7 +89,9 @@ The same zip carries a `d3d11.dll` for ManiaPlanet's Direct3D 11 renderer (64-bi
 
 ## Updating
 
-Run the setup of the new version and pick the same button as before. It replaces the old version. Your settings and presets in `Documents\TrackMania\TMVS\` stay.
+With the ModLoader's update server: nothing to do, the ModLoader installs new versions itself (*Auto Update* in its settings).
+
+Otherwise run the setup of the new version and pick the same button as before. It replaces the old version. Your settings and presets in `Documents\TrackMania\TMVS\` stay.
 
 ## Uninstalling
 

@@ -3,6 +3,7 @@
 #include "tm_shaders_version.h"
 #include <windows.h>
 #include <winhttp.h>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <thread>
@@ -112,9 +113,12 @@ void run() {
     } else {
         info.state = State::Failed;
     }
-    TMVS_LOG("update: %s (latest release %s, this is %s)",
+    const Install how = install();
+    TMVS_LOG("update: %s (latest release %s, this is %s%s)",
              info.state == State::Available ? "a new version is out" : (info.state == State::UpToDate ? "up to date" : "check failed"),
-             info.version.empty() ? "unknown" : info.version.c_str(), TM_SHADERS_VERSION_A);
+             info.version.empty() ? "unknown" : info.version.c_str(), TM_SHADERS_VERSION_A,
+             how == Install::ModLoaderServer ? ", ModLoader with the update server"
+                                             : (how == Install::ModLoader ? ", ModLoader without the update server" : ""));
     std::lock_guard<std::mutex> lock(g_mutex);
     g_info = info;
 }
@@ -132,6 +136,55 @@ void check() {
 Info latest() {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_info;
+}
+
+namespace {
+std::wstring lowerAscii(std::wstring s) {
+    for (wchar_t& c : s)
+        if (c >= L'A' && c <= L'Z') c = static_cast<wchar_t>(c + 32);
+    return s;
+}
+
+bool fileContains(const std::wstring& path, const std::string& needle) {
+    FILE* f = _wfopen(path.c_str(), L"rb");
+    if (!f) return false;
+    std::string text(1 << 16, '\0');
+    text.resize(fread(&text[0], 1, text.size(), f));
+    fclose(f);
+    for (char& c : text)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    return text.find(needle) != std::string::npos;
+}
+
+Install detectInstall() {
+    HMODULE self = nullptr;
+    wchar_t buffer[1024] = {};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&detectInstall), &self) ||
+        !GetModuleFileNameW(self, buffer, static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0]))))
+        return Install::Other;
+    // <TMLoader>\database\TmForever\products\TM Vibrant Shaders\<version>\TMVibrantShaders.dll
+    std::wstring path = buffer;
+    if (lowerAscii(path).find(L"\\products\\tm vibrant shaders\\") == std::wstring::npos) return Install::Other;
+    // config.yaml: in %LOCALAPPDATA%\TMLoader, or next to the database (portable ModLoader).
+    std::string needle = kModLoaderServer;
+    for (char& c : needle)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    needle = needle.substr(needle.find("://") + 3); // with or without https://, trailing slash optional
+    if (!needle.empty() && needle.back() == '/') needle.pop_back();
+    std::wstring root = path;
+    for (int up = 0; up < 6 && root.find_last_of(L"\\/") != std::wstring::npos; up++) root.resize(root.find_last_of(L"\\/"));
+    if (fileContains(root + L"\\config.yaml", needle)) return Install::ModLoaderServer;
+    wchar_t local[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+    if (n > 0 && n < MAX_PATH && fileContains(std::wstring(local) + L"\\TMLoader\\config.yaml", needle)) return Install::ModLoaderServer;
+    return Install::ModLoader;
+}
+} // namespace
+
+Install install() {
+    static const Install cached = detectInstall();
+    return cached;
 }
 
 bool newer(const std::string& version, const std::string& than) {

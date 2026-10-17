@@ -72,6 +72,14 @@ jobs:
       - name: Package
         run: cmake --build build --config Release --target release_zip
 
+      # dist/TMVS-modloader.zip: what the ModLoader downloads from the update server (the DLL
+      # alone; the ModLoader unpacks it into products/TM Vibrant Shaders/<version>/).
+      - name: ModLoader zip
+        shell: bash
+        run: |
+          python tools/modloader_server.py zip --dll dist/TMVibrantShaders.dll --out dist/TMVS-modloader.zip
+          cmake -DDIR=dist -P packaging/sha256sums.cmake
+
       # Release notes: RELEASE_NOTES.md, then a SHA-256 table (where people actually look).
       - name: Release notes
         shell: pwsh
@@ -84,7 +92,8 @@ jobs:
             $h, $f = $line -split "  ", 2
             $body += "| ``$f`` | ``$h`` |"
           }
-          $body += @("", "Check a download in PowerShell: ``Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256``", "</details>")
+          $body += @("", "Check a download in PowerShell: ``Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256``", "")
+          $body += @("``TMVS-modloader.zip`` is what the ModLoader's update server hands out (the DLL alone). To install by hand, take ``TM-Vibrant-Shaders.zip``.", "</details>")
           $body | Set-Content -Encoding utf8 dist/release-notes.md
           Get-Content dist/SHA256SUMS.txt
 
@@ -102,7 +111,59 @@ jobs:
           files: |
             dist/TM-Vibrant-Shaders.zip
             dist/TMVibrantShaders.dll
+            dist/TMVS-modloader.zip
             dist/SHA256SUMS.txt
           body_path: dist/release-notes.md
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  # The ModLoader update server: modloader/index.json (stable releases) and
+  # modloader/beta/index.json (with pre-releases) on GitHub Pages, served from the gh-pages
+  # branch. Rebuilt after every tag's release from all releases that carry TMVS-modloader.zip,
+  # so the index lists every version. Run the workflow by hand to rebuild it without a release.
+  # One-time setup: Settings -> Pages -> Deploy from a branch -> gh-pages, / (root).
+  modloader-server:
+    needs: windows
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: modloader-server
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Releases from before the server get their TMVS-modloader.zip made from their own
+      # TMVibrantShaders.dll (the ModLoader zip holds nothing else). Only missing ones; once.
+      - name: Backfill older releases
+        run: |
+          for tag in $(python3 tools/modloader_server.py missing); do
+            rm -rf backfill && mkdir backfill
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" -p TMVibrantShaders.dll -D backfill
+            python3 tools/modloader_server.py zip --dll backfill/TMVibrantShaders.dll --out backfill/TMVS-modloader.zip
+            gh release upload "$tag" -R "$GITHUB_REPOSITORY" backfill/TMVS-modloader.zip
+          done
+
+      # Hashes come from downloading each zip through its release link, as the ModLoader will.
+      - name: Index
+        run: |
+          python3 tools/modloader_server.py index --out-dir site/modloader
+          python3 tools/modloader_server.py check site/modloader/index.json site/modloader/beta/index.json
+          touch site/.nojekyll
+          for dir in site/modloader site/modloader/beta; do
+            printf '<!doctype html><meta charset="utf-8"><title>TM Vibrant Shaders ModLoader server</title><p>TrackMania ModLoader update server for <a href="https://github.com/%s">TM Vibrant Shaders</a>. Add <code>https://%s.github.io/%s/%s/</code> under <code>servers:</code> in <code>%%LOCALAPPDATA%%\\TMLoader\\config.yaml</code>. Versions: <a href="index.json">index.json</a>.</p>\n' \
+              "$GITHUB_REPOSITORY" "${GITHUB_REPOSITORY_OWNER,,}" "${GITHUB_REPOSITORY#*/}" "${dir#site/}" > "$dir/index.html"
+          done
+
+      # The site is generated whole each time: one fresh commit, force-pushed.
+      - name: Publish to gh-pages
+        run: |
+          cd site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "ModLoader server from ${GITHUB_REF_NAME} (${GITHUB_SHA::7})"
+          git push -f -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

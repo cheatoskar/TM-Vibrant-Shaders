@@ -26,6 +26,23 @@ A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (Trac
 
 ## Install
 
+### With the ModLoader: installs and updates itself
+
+If you start TrackMania Nations/United Forever through the [ModLoader (TMLoader)](https://tomashu.dev/software/tmloader/), let it install the mod and every update:
+
+1. Close the ModLoader. Open `%LOCALAPPDATA%\TMLoader\config.yaml` with Notepad (paste the path into the Explorer address bar).
+2. Add this line under `servers:` (two spaces in front, like the lines there) and save:
+
+   ```yaml
+     - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'
+   ```
+
+3. Start the ModLoader, tick *TM Vibrant Shaders* in your profile and start the game.
+
+New versions then come through the ModLoader's auto update; nothing to download. For pre-releases use `https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/` instead (one of the two, not both). TrackMania 2 has no ModLoader: use the setup.
+
+### With the setup
+
 1. Download **`TM-Vibrant-Shaders.zip`** from the [latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest) and extract the whole zip.
 2. Close TrackMania and run **`TM-Vibrant-Shaders-Setup.exe`**.
 3. Choose where to install:

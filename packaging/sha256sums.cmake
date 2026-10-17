@@ -1,5 +1,9 @@
 # Writes SHA256SUMS.txt for the release files in DIR (sha256sum format).
 set(files TM-Vibrant-Shaders.zip TMVibrantShaders.dll)
+# The ModLoader zip, once CI has made it (tools/modloader_server.py zip).
+if(EXISTS "${DIR}/TMVS-modloader.zip")
+  list(APPEND files TMVS-modloader.zip)
+endif()
 set(out "")
 foreach(file ${files})
   file(SHA256 "${DIR}/${file}" hash)

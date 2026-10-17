@@ -10,6 +10,22 @@ Echtzeit-Licht, Wetter und Himmel für TrackMania Nations Forever, United Foreve
 - Eine Grafikkarte mit Shader Model 3.0 (praktisch jede seit 2008)
 - Optional: der [TrackMania ModLoader (TMLoader)](https://tomashu.dev/software/tmloader/). Es geht auch ohne.
 
+## Mit dem ModLoader: installiert und aktualisiert sich selbst
+
+Wer TrackMania Nations/United Forever über den ModLoader startet, lässt ihn den Mod und jedes Update holen:
+
+1. ModLoader schließen.
+2. `%LOCALAPPDATA%\TMLoader\config.yaml` mit dem Editor öffnen (Pfad in die Adresszeile des Explorers einfügen).
+3. Unter `servers:` diese Zeile ergänzen (eingerückt wie die anderen) und speichern:
+
+   ```yaml
+     - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'
+   ```
+
+4. ModLoader starten, *TM Vibrant Shaders* im Profil anhaken, Spiel starten.
+
+Neue Versionen kommen dann über das Auto-Update des ModLoaders, ohne Download. Vorabversionen: stattdessen `https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/` eintragen (nur eine der beiden Adressen). Für TrackMania 2 gibt es keinen ModLoader: dort das Setup nehmen.
+
 ## Installation mit dem Setup
 
 1. **`TM-Vibrant-Shaders.zip`** von der [Release-Seite](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest) herunterladen und **komplett entpacken**.
@@ -45,7 +61,7 @@ Dieselbe ZIP enthält eine `d3d11.dll` für ManiaPlanets Direct3D-11-Renderer (n
 
 ## Aktualisieren und deinstallieren
 
-- **Aktualisieren:** Das Setup der neuen Version starten und denselben Button wie beim ersten Mal wählen. Einstellungen und eigene Presets bleiben.
+- **Aktualisieren:** Mit dem Update-Server im ModLoader nichts zu tun. Sonst das Setup der neuen Version starten und denselben Button wie beim ersten Mal wählen. Einstellungen und eigene Presets bleiben.
 - **Deinstallieren:** Setup starten und *Uninstall* wählen. Einstellungen liegen weiter in `Dokumente\TrackMania\TMVS\`; den Ordner löschen, um sie auch zu entfernen.
 
 ## Im Spiel
