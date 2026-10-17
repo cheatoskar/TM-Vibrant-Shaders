@@ -1379,7 +1379,9 @@ bool onPresent(IDXGISwapChain* sc) {
     // Gameplay = the scene effects ran (the engine's tone map replaced with a camera found): the
     // menus have no such frame. ManiaPlanet has no better "in a race" signal that needs no game
     // memory; the editors and replays count too, their frame rate is the GPU's as well.
-    if (g_rendererReady)
+    // Not in photo mode (as in TMNF): its frames are drawn at full quality, auto quality's cuts
+    // aren't applied to them, and decisions on them cut effects for the race after it.
+    if (g_rendererReady && !photo::active())
         g_autoQuality.onFrame(nowSeconds(), g_stats.effectsRan, g_renderer.effects().profiler(), tmshaders::Config::get().settings);
     if (g_rendererReady && g_stats.effectsRan) logPerf(g_renderer.effects().profiler());
 

@@ -34,6 +34,8 @@ private:
     void measure(const Pipeline& pipeline);
     void reduce(int knob, double now);
     void restore(int knob, double now);
+    // No decisions until now + seconds (a longer grace already running stays).
+    void startGrace(double now, double seconds, const char* reason);
 
     bool m_reduced[kKnobs] = {};
     int m_order[kKnobs] = {};      // knobs in the order they were turned off (a stack)
@@ -64,6 +66,10 @@ private:
     // Loading a map, the first frames and stalls (alt-tab) have low frame rates that say
     // nothing about the GPU: no decisions until this time.
     double m_quietUntil = -1.0;
+    double m_graceStart = -1.0;
+    const char* m_graceReason = "";
+    int m_graceFrames = 0;      // the frames in the grace: logged when they would have been too slow
+    double m_graceTime = 0.0;
     bool m_wasGameplay = false;
     // Decision windows in a row with time to spare, and the least spare among them: a knob comes
     // back only when it fits that.
