@@ -64,7 +64,8 @@ set(TMVS_ENTRIES
   PS_CopyDepth PS_WaterLevel PS_Resolve PS_LightingEngine PS_SpillDownEngine PS_LightGridInit PS_LightGridSweep PS_PrepareGBuffer
   PS_LampSource PS_LampDown PS_LampUp PS_LightingGameLight PS_FsrEasu PS_FsrRcas PS_SpillTemporal
   PS_SpillSource PS_SpillSourceEngine PS_SpillDownSource
-  PS_SmaaEdges PS_SmaaWeights PS_SmaaBlend)
+  PS_SmaaEdges PS_SmaaWeights PS_SmaaBlend
+  PS_SpillSourceNeon PS_NeonGlow PS_NeonAdd)
 
 file(GLOB TMVS_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
 list(SORT TMVS_SDK_BINS ORDER DESCENDING)

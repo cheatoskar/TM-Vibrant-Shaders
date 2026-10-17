@@ -2941,7 +2941,8 @@ float4 PS_SpillSource(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // EngineLights, as PS_SpillDownEngine. s0 = the game's float image, s14 = its added light, s1, s13
-float4 PS_SpillSourceEngine(float2 uv : TEXCOORD0) : COLOR0 {
+// neonPass: the neon strips' light from PS_NeonGlow (s2), x BorderGlow (u_Pass0.x).
+float4 spillSourceEngine(float2 uv, uniform bool neonPass) {
     float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
     float3 cGame = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
     float3 c = toLinear(cGame);
@@ -2954,11 +2955,72 @@ float4 PS_SpillSourceEngine(float2 uv : TEXCOORD0) : COLOR0 {
     float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
     float peak = max(c.r, max(c.g, c.b));
     float lamp = mat.r * saturate(peak * u_Clean.z + u_Clean.w);
-    float neon = neonStrip(c, length(viewPosition(uv, z)), mat) * u_Engine.w;
-    float3 light = max(min(added * u_Water2.w, 1.0), min(c, 1.0) * max(lamp, neon)) * (z < SKY_Z ? 1.0 : 0.0);
+    float neon = neonPass ? 0.0 : neonStrip(c, length(viewPosition(uv, z)), mat) * u_Engine.w;
+    float3 light = max(min(added * u_Water2.w, 1.0), min(c, 1.0) * max(lamp, neon));
+    float3 strips = tex2Dlod(s2, float4(uv, 0, 0)).rgb;
+    if (neonPass) light = max(light, strips * strips * u_Pass0.x);
+    light *= z < SKY_Z ? 1.0 : 0.0;
     float lp = max(light.r, max(light.g, light.b));
     light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-3)));
     return float4(light, 0);
+}
+float4 PS_SpillSourceEngine(float2 uv : TEXCOORD0) : COLOR0 { return spillSourceEngine(uv, false); }
+float4 PS_SpillSourceNeon(float2 uv : TEXCOORD0) : COLOR0 { return spillSourceEngine(uv, true); }
+
+// Quality 2 (EngineLights, BorderGlow): the neon strips' glow by how much of a strip each pixel
+// covers. Far away a strip is 1-2 px high and the game blends it over two rows wherever it doesn't
+// sit on one (texture filtering, MSAA): neonStrip() on each pixel took the half-blue, half-frame
+// pixels for no strip, and the strips' glow (the bloom and the spill on the wall between them)
+// pulsed as the camera crept towards them (the owner, A01 at night). Here a pixel that is part of
+// a strip with a neighbour counts by its share of the strip's blue: the two halves add up to the
+// whole strip wherever it falls. A pixel neonStrip() takes on its own keeps its old glow.
+//   The game's float image less its added light, in its own (display) values: blends are linear
+//   there. s0, s14 point sampled.
+float3 neonSurface(float2 uv) {
+    float3 g = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    if (u_Engine.x > 0.5) g = max(g - tex2Dlod(s14, float4(uv, 0, 0)).rgb, 0.0);
+    return g;
+}
+// The four neighbours: below, above, right, left.
+float2 neonStep(int k) { return k == 0 ? float2(0, 1) : (k == 1 ? float2(0, -1) : (k == 2 ? float2(1, 0) : float2(-1, 0))); }
+// How much bluer than its red and green: a neutral frame or wall blended in adds nothing.
+float neonExcess(float3 g) { return max(g.b - max(g.r, g.g), 0.0); }
+
+// s0 = the game's float image, s14 = its added light (both point), s1 = full normal/depth,
+// s13 = materials. out.rgb = the square root of the strips' light in the pixel (linear, as the
+// lighting pass's neon glow before its x 0.75, BorderGlow and the highlight boost): 8 bits a
+// channel, half the bandwidth, and the root keeps the faint far ones apart.
+float4 PS_NeonGlow(float2 uv : TEXCOORD0) : COLOR0 {
+    // Most of the screen has no blue at all: done after one read (no glow without a share of it).
+    [branch] if (neonExcess(tex2Dlod(s0, float4(uv, 0, 0)).rgb) <= 0.01) return 0;
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
+    float dist = length(viewPosition(uv, z));
+    float3 gp = neonSurface(uv);
+    float3 cp = toLinear(gp);
+    float3 glow = min(cp, 1.0) * neonStrip(cp, dist, mat);
+    float exP = neonExcess(gp);
+    [branch] if (exP > 0.01 && z < SKY_Z) {
+        float3 gn[4];
+        float exN[4];
+        [unroll] for (int k = 0; k < 4; k++) {
+            gn[k] = neonSurface(uv + neonStep(k) * u_Screen.zw);
+            exN[k] = neonExcess(gn[k]);
+        }
+        [unroll] for (int k = 0; k < 4; k++) {
+            // A strip on its own next door (the edge of a wide one): this pixel's share of its blue.
+            float3 cn = toLinear(gn[k]);
+            glow = max(glow, min(cn, 1.0) * neonStrip(cn, dist, mat) * saturate(exP / max(exN[k], 1e-3)));
+            // A thin one split over the two: their blue together, less the neighbour's grey (the
+            // frame's share of it). Only with no blue on either side of the pair: inside a wide
+            // blue area (the lanes' paint, a flag) two pixels are just twice its colour.
+            float outside = max(exN[k % 2 == 0 ? k + 1 : k - 1], neonExcess(neonSurface(uv + neonStep(k) * 2.0 * u_Screen.zw)));
+            float alone = saturate(2.0 - 3.0 * outside / max(exP + exN[k], 1e-3));
+            float3 cs = toLinear(gp + gn[k] - min(gn[k].r, min(gn[k].g, gn[k].b)));
+            glow = max(glow, min(cs, 1.0) * neonStrip(cs, dist, mat) * saturate(exP / max(exP + exN[k], 1e-3)) * alone);
+        }
+    }
+    return float4(z < SKY_Z ? sqrt(glow) : 0.0, 0);
 }
 
 // The sources found above to quarter res: s0 = them (bilinear), s1 = full normal/depth. Half
@@ -3273,6 +3335,19 @@ float hazeAmount(float3 rd, float dist) {
     float base = density * exp(-u_UpView.w * falloff);
     float f = abs(rd.y) > 1e-4 ? base * (1.0 - exp(-dist * rd.y * falloff)) / (rd.y * falloff) : base * dist;
     return saturate(1.0 - exp(-max(f, 0.0)));
+}
+
+// The strips' glow onto the lit image (blend one, one), as the lighting pass adds it (which then
+// leaves it out: c46.w 0). s0 = PS_NeonGlow, s1 = full normal/depth, u_Pass0.x = BorderGlow.
+float4 PS_NeonAdd(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 glow = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    glow *= glow * (0.75 * u_Pass0.x * u_Rays.w);
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float pk = max(glow.r, max(glow.g, glow.b));
+    glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (pk - min(glow.r, min(glow.g, glow.b))) / max(pk, 1e-3)));
+    float3 v = viewPosition(uv, 1.0);
+    float fog = z < SKY_Z ? hazeAmount(viewToWorldDir(normalize(v)), length(v) * z) : 1.0;
+    return float4(glow * (1.0 - 0.6 * fog), 0);
 }
 
 // s0 = the game's float image (bilinear), s14 = its added light (bilinear), s1 = full normal/depth.
