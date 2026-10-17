@@ -197,9 +197,10 @@ Mood moodOfDayTime(float t) {
     // CMotionManagerWeathers::JumpToTimeRemapped maps the four quarters onto its day
     // animation: up to 0.25 the night, then sunrise, 0.5 - 0.75 the day, then sunset. The
     // first part of the day still has a low, warm sun (Rally at 0.515), and 0.75 itself is
-    // where the sunset starts (Stadium's sunset maps).
+    // where the sunset starts (Stadium's sunset maps). Stadium's day maps sit at 0.53 under a
+    // high, white sun (B13, the owner's screens of 2026-10-17): day, as the light colour said.
     if (t <= 0.25f) return Mood::Night;
-    if (t < 0.55f || t >= 0.72f) return Mood::Dusk;
+    if (t < 0.525f || t >= 0.72f) return Mood::Dusk;
     return Mood::Day;
 }
 

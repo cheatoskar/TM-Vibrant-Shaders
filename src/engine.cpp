@@ -361,6 +361,13 @@ float g_mapDayTime = -1.0f;                   // the loaded map's own time of da
 bool g_nightForced = false;                   // the game lights it at midnight instead
 void* g_weather = nullptr;                    // this map's weather (the last to jump in time)
 float g_weatherTime = -1.0f;                  // the time of day the game asked it for last
+// The game loads a map (CGameCtnApp::InitChallengeDataWithLoadScreen: LoadDecorationAndCollection
+// -> LoadScene3d, the weather's jumps) before SetChallenge makes it the current one
+// (StartChallengeMinimal, Ghidra). The map whose decoration load set the state above, so that
+// its own SetChallenge keeps it: clearing it there left every map without its time of day and
+// its forced midnight (no live relight, no keepNight, the mood from the light's colour).
+const void* g_loadingChallenge = nullptr;     // inside its LoadDecorationAndCollection
+const void* g_sceneChallenge = nullptr;       // the map the state above belongs to
 // Real night kept (keepNight): the weather's own clock (a CMotionTimerLoop at +0x1c: +0x14 mode,
 // +0x18 / +0x1c its two times in ms, +0x20 the length of a day in ms, +0x28 speed) as the forced
 // midnight left it, and the weather's vtable then (the object is checked before it is used again).
@@ -871,13 +878,17 @@ void reportNightJumps() {
 
 void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     g_app = self;
-    // Another map (or none: back to the menu): the objects of the last one go with it.
-    reportNightJumps();
+    // Another map (or none: back to the menu): the objects of the last one go with it. Not the
+    // weather, time of day and forced midnight of the map just loaded (its load came first).
     g_freeCam = nullptr;
-    g_weather = nullptr;
     g_racePlayer = nullptr;
-    g_nightForced = false;
-    g_mapDayTime = -1.0f;
+    if (!challenge || challenge != g_sceneChallenge) {
+        reportNightJumps();
+        g_weather = nullptr;
+        g_nightForced = false;
+        g_mapDayTime = -1.0f;
+        g_sceneChallenge = nullptr;
+    }
     g_setChallenge(self, edx, challenge);
     if (!challenge) InterlockedIncrement(&g_mapCloses);
 }
@@ -907,7 +918,9 @@ bool writeComments(void* challenge, const wchar_t* text, uint32_t length) {
 
 // SGameCtnIdentifier of the decoration at +0xc4: id, collection (the environment), author.
 void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMods) {
+    g_loadingChallenge = self;
     g_loadDecoration(self, edx, forcedMods);
+    g_loadingChallenge = nullptr;
     readMapComments(self);
     const void* collection = static_cast<const BYTE*>(self) + 0xc8;
     if (!readable(collection, sizeof(uint32_t))) return;
@@ -1049,6 +1062,8 @@ void __fastcall loadSceneDetour(void* self, void* edx) {
     const BYTE* decoration = static_cast<const BYTE*>(self);
     void* mood = readable(decoration + kDecorationMood, sizeof(void*)) ? *reinterpret_cast<void* const*>(decoration + kDecorationMood) : nullptr;
     float* time = mood && readable(static_cast<BYTE*>(mood) + kMoodDayTime, sizeof(float)) ? reinterpret_cast<float*>(static_cast<BYTE*>(mood) + kMoodDayTime) : nullptr;
+    // A map's load (null: the editor changing the decoration, a menu scene).
+    g_sceneChallenge = g_loadingChallenge;
     if (!time || !(*time >= 0.0f && *time <= 1.0f)) {
         // Nothing of the last map carries over (its forced midnight, its time of day).
         g_weather = nullptr;
