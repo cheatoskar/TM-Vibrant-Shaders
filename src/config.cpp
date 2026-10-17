@@ -1706,7 +1706,7 @@ void Config::load() {
     settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
     settings.cleanWater = GetPrivateProfileIntW(L"Settings", L"CleanWater", 1, ini) != 0;
     settings.waterFarReflections = GetPrivateProfileIntW(L"Settings", L"WaterFarReflections", 1, ini) != 0;
-    settings.gameGBuffer = GetPrivateProfileIntW(L"Settings", L"GameGBuffer", 1, ini) != 0;
+    settings.gameGBuffer = GetPrivateProfileIntW(L"Settings", L"GameGBuffer", 0, ini) != 0;
     settings.gameLight = GetPrivateProfileIntW(L"Settings", L"GameLight", 0, ini) != 0;
     settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;
     settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 1, ini) != 0;

@@ -65,7 +65,7 @@ What single settings cost there (Golden Hour):
 
 | Setting | GPU | Note |
 |---|---|---|
-| GameGBuffer (*Game normals*, on by default) | +0.9 ms | reflections on the real normals; plus a second render target for every game draw (in game only) |
+| GameGBuffer (*Game normals*, off by default) | +0.9 ms | reflections on the real normals; plus a second render target for every game draw (in game only) |
 | EngineLights | +0.25 ms | the neon spill from the game's light sources |
 | LongShadowQuality 1 (gap-free long shadows) | +0.1–0.2 ms | |
 | GameHdr | +0.1 ms in the passes | plus the game drawing into a float target (in game only) |
@@ -142,4 +142,4 @@ When there's room again it steps back up. It never changes your settings or pres
 - In the game's own options: antialiasing off (the mod does it anyway), FX post-processing off.
 - Keep the **target FPS** of auto quality at a rate your PC reaches with the shaders (e.g. 75 on a GTX 1080 Ti
   at 1440p). A target it never reaches (240) keeps it switching effects off and on every few seconds.
-- *Game normals* (GameGBuffer) costs ~1 ms and more in the game itself: on a slow graphics card, switch it off first (restart the game after).
+- *Game normals* (GameGBuffer) costs ~1 ms and more in the game itself: leave it off unless you want its look.

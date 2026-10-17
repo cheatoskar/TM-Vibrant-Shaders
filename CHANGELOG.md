@@ -24,7 +24,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - **Update check:** the menu says when a new release is out (nothing is downloaded; it can be switched off).
 - The snowstorm's wind is a real recording.
 - New settings *Haze distance*, *Highlight roll-off*, *Floodlit surfaces* and *Game sunset clouds*.
-- *Game normals* (on): the game's own shaders hand the mod their normals (about 1 ms; off on a slow graphics card). *Night on game light* (their light) is not in the menu: `GameLight=1` in `settings.ini`.
+- Experimental, off: *Game normals* (the game's own shaders hand the mod their normals). *Night on game light* (their light) is not in the menu: `GameLight=1` in `settings.ini`.
 - `tmvs.log` writes a performance line every 2000 frames ([performance](docs/performance.md)).
 - **SMAA** edge smoothing (*Image quality*, *SMAA instead of FXAA*, on in every preset but *Performance*): smoother long edges and sharper textures than FXAA for about 0.2 ms more at 1440p. Older `settings.ini` and preset files keep FXAA.
 
