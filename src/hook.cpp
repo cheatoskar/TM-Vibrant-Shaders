@@ -563,6 +563,17 @@ const Detour kDetours[] = {
     {kSetPixelShaderConstantF, reinterpret_cast<void*>(&setPixelShaderConstantFDetour)},
 };
 
+// Puts the game's pointer back into a slot, but only while our detour is still in it: another mod
+// that hooked the same slot after us (its pointer in the vtable, calling ours) keeps its hook.
+void restoreSlot(void** vtable, const Detour& d) {
+    if (!g_original[d.slot]) return;
+    if (vtable[d.slot] == d.function) {
+        writePointer(&vtable[d.slot], g_original[d.slot]);
+    } else {
+        TMVS_LOG("hook: vtable slot %d holds another mod's hook (%p): left in place", d.slot, vtable[d.slot]);
+    }
+}
+
 bool patchDevice(IDirect3DDevice9* device) {
     void** vtable = *reinterpret_cast<void***>(device);
     if (g_vtable == vtable) return true;
@@ -570,7 +581,7 @@ bool patchDevice(IDirect3DDevice9* device) {
         // Vertex-processing modes get different driver vtables: the probe device's table is
         // not the game's. Move the hooks to the device the game actually renders with.
         TMVS_LOG("hook: moving hooks from probe vtable %p to game vtable %p", g_vtable, vtable);
-        for (const Detour& d : kDetours) writePointer(&g_vtable[d.slot], g_original[d.slot]);
+        for (const Detour& d : kDetours) restoreSlot(g_vtable, d);
     }
     g_vtable = vtable;
     for (const Detour& d : kDetours) {
@@ -731,9 +742,7 @@ bool install(const DeviceCallbacks& callbacks) {
 
 void remove() {
     if (!g_vtable) return;
-    for (const Detour& d : kDetours) {
-        if (g_original[d.slot]) writePointer(&g_vtable[d.slot], g_original[d.slot]);
-    }
+    for (const Detour& d : kDetours) restoreSlot(g_vtable, d);
     g_vtable = nullptr;
 }
 
