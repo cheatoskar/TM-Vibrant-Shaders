@@ -3314,6 +3314,25 @@ bool Pipeline::copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth,
     return true;
 }
 
+bool Pipeline::copyColorArea(IDirect3DDevice9* device, IDirect3DTexture9* source, const RECT& area, gfx::Target& out) {
+    if (!m_ready || !source) return false;
+    D3DSURFACE_DESC desc{};
+    source->GetLevelDesc(0, &desc);
+    const UINT w = static_cast<UINT>(area.right - area.left), h = static_cast<UINT>(area.bottom - area.top);
+    if (!out.create(device, w, h, desc.Format)) return false;
+    const BOOL softwareVP = setPassStates(device);
+    bind(device, 0, source, false);
+    // The same mapping as copyDepthArea: the copied image lines up with the copied depth.
+    passConstants(device, static_cast<float>(area.left) / desc.Width, static_cast<float>(area.top) / desc.Height,
+                  static_cast<float>(w) / desc.Width, static_cast<float>(h) / desc.Height);
+    const float mode[4] = {1.0f, 1.0f, 0.0f, 0.0f}; // c33 xy 1: as it is, alpha too (PS_Resolve)
+    device->SetPixelShaderConstantF(33, mode, 1);
+    runPass(device, kResolve, out);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
 bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area) {
     return copyScene(device, scene, target, area, false);
 }

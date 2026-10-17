@@ -201,6 +201,9 @@ public:
     // Copies part of the scene depth (area in pixels) into `out` (R32F, the area's size): the
     // pipeline then runs on a camera that draws into part of the screen (MediaTracker editor).
     bool copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth, const RECT& area, gfx::Target& out);
+    // The same for a colour target (GameHdr's float scene, its added light): `area` of `source`
+    // into `out` (the source's format, the area's size), as it is, alpha too.
+    bool copyColorArea(IDirect3DDevice9* device, IDirect3DTexture9* source, const RECT& area, gfx::Target& out);
     // The game's image from its float target (GameHdr) into `target` (the game's own render
     // target, same size), cut to 0..1 as that 8-bit target would have it. Only inside `area`
     // (the camera's viewport): the rest of the game's target keeps what it had.
