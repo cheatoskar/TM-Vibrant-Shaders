@@ -49,6 +49,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - Photo mode: depth of field blurs the lamps of night maps too.
 - Author's Shader: leaving the map brings your own look back at once.
 - Text fields in the menu take typing.
+- F12 frame capture: the game no longer freezes for half a second (on a busy disk for seconds) while the files are written; they are written in the background.
 
 **TrackMania 2 (ManiaPlanet 4)**
 - The mod as a 64-bit `d3d11.dll` for ManiaPlanet's Direct3D 11 renderer, with the same `F8` menu, presets and settings ([maniaplanet/README.md](maniaplanet/README.md)). Tested in the game on Stadium. `F5` switches the effects (`F7` is ManiaPlanet's friends list).

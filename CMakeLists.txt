@@ -115,6 +115,7 @@ add_library(tmvs_core STATIC
   src/gfx.cpp
   src/noise.cpp
   src/framecap.cpp
+  src/capwriter.cpp
   src/config.cpp
   src/keys.cpp
   src/gbx.cpp
@@ -222,6 +223,12 @@ target_compile_options(tmvs_gbuftest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_castertest tools/castertest.cpp src/casters.cpp)
 target_link_libraries(tmvs_castertest PRIVATE tmvs_core)
 target_compile_options(tmvs_castertest PRIVATE ${TMVS_OPTIONS})
+
+# Capture writer test: the F12 capture's writer thread, its order, files complete or not at all, and the
+# formats byte for byte as before (--device: the screenshot from a real D3D9 surface) (development tool).
+add_executable(tmvs_capwritertest tools/capwritertest.cpp src/capture.cpp)
+target_link_libraries(tmvs_capwritertest PRIVATE tmvs_core)
+target_compile_options(tmvs_capwritertest PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an

@@ -65,4 +65,14 @@ bool FrameCapture::load(const std::wstring& path) {
     return ok;
 }
 
+bool writeHalfFile(const std::wstring& path, uint32_t width, uint32_t height, const std::vector<uint16_t>& half) {
+    FILE* f = _wfopen(path.c_str(), L"wb");
+    if (!f) return false;
+    const uint32_t header[3] = {0x31484D54u, width, height}; // "TMH1"
+    fwrite(header, sizeof(header), 1, f);
+    fwrite(half.data(), sizeof(uint16_t), half.size(), f);
+    fclose(f);
+    return true;
+}
+
 } // namespace tmshaders
