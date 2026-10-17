@@ -1,4 +1,5 @@
 #include "hook.h"
+#include "inlinehook.h"
 #include "gameshaders.h"
 #include "proxy.h"
 #include "tracer.h"
@@ -28,6 +29,7 @@ enum Slot : int {
     kCreateDepthStencilSurface = 29,
     kStretchRect = 34,
     kSetRenderTarget = 37,
+    kGetRenderTarget = 38,
     kSetDepthStencilSurface = 39,
     kBeginScene = 41,
     kEndScene = 42,
@@ -52,15 +54,48 @@ enum Slot : int {
     kSlotCount = 119
 };
 
-void** g_vtable = nullptr;
-void* g_original[kSlotCount] = {};
+// How the device methods are hooked. Inline (a jump at each method's first bytes, inlinehook.h):
+// the device's method table can be rewritten under us (with CenterSpeed loaded, all of the game's
+// device table held d3d9's own functions again after the first frame: no Present, no keys, no
+// effects), the code of the methods stays. A method whose first bytes can't be moved falls back to
+// its vtable slot, and that slot is written again when the table is found rewritten (diagFrame).
+//
+// Per slot, every method address hooked (one, unless devices with different method tables came
+// along), with the trampoline that calls on into it.
+struct SlotHooks {
+    static constexpr int kMax = 4;
+    inlinehook::Hook hooks[kMax];
+    int count = 0;
+};
+SlotHooks g_slots[kSlotCount];
+bool g_inline = false;               // at least one method hooked inline
+void** g_vtable = nullptr;           // the game device's table (vtable fallback slots are written there)
+bool g_vtableSlot[kSlotCount] = {};  // this slot is hooked through g_vtable
+void* g_tableOriginal[kSlotCount] = {}; // what such a slot held before us
+void* g_original[kSlotCount] = {};   // what the game's device calls on into (trampoline or the table's old pointer)
 DeviceCallbacks g_callbacks;
 int g_internal = 0;
 IDirect3DDevice9* g_device = nullptr; // the game's device, for the memory report
-// The device the game created (null until then). Other devices that share the driver's
-// vtable (another mod's helper device) pass through Reset and Present untouched.
+// The device the game created (null until then). Other devices (another mod's helper device,
+// CenterSpeed's dummy, Twinkie's) run into the same hooked code: they pass through untouched.
 IDirect3DDevice9* g_gameDevice = nullptr;
 bool foreignDevice(IDirect3DDevice9* device) { return g_gameDevice && device != g_gameDevice; }
+
+// A call of the game's own (not the plugin's, not another device's): the callbacks see it.
+bool gameCall(IDirect3DDevice9* device) { return g_internal == 0 && !foreignDevice(device); }
+
+// What this device's call continues into: the trampoline of the method its table points to (when
+// one slot has more than one), else the game device's.
+void* originalFor(IDirect3DDevice9* device, Slot slot) {
+    const SlotHooks& s = g_slots[slot];
+    if (s.count > 1) {
+        void** table = *reinterpret_cast<void***>(device);
+        for (int i = 0; i < s.count; i++) {
+            if (s.hooks[i].function == table[slot]) return s.hooks[i].trampoline;
+        }
+    }
+    return g_original[slot];
+}
 
 // --- Hook diagnostics ("hook diag:" in the log) -------------------------------
 // teout's hang with CenterSpeed (kiero + MinHook inline hooks): after the first frame no Present,
@@ -148,7 +183,7 @@ struct DrawStats {
 bool g_countDraws = true;
 
 void countDraw(IDirect3DDevice9* device, UINT primitives) {
-    if (!g_countDraws || g_internal != 0) return;
+    if (!g_countDraws || !gameCall(device)) return;
     g_drawStats.draws++;
     g_drawStats.primitives += primitives;
     if (device->GetSoftwareVertexProcessing()) g_drawStats.software++;
@@ -164,8 +199,8 @@ void drawStatsFrame() {
 }
 
 template <typename Fn>
-Fn original(Slot slot) {
-    return reinterpret_cast<Fn>(g_original[slot]);
+Fn original(IDirect3DDevice9* device, Slot slot) {
+    return reinterpret_cast<Fn>(originalFor(device, slot));
 }
 
 bool writePointer(void** slot, void* value) {
@@ -176,8 +211,8 @@ bool writePointer(void** slot, void* value) {
     return true;
 }
 
-bool tracingGame() {
-    return g_internal == 0 && tracer::tracing();
+bool tracingGame(IDirect3DDevice9* device) {
+    return gameCall(device) && tracer::tracing();
 }
 
 template <typename Shader>
@@ -283,10 +318,10 @@ void logCreateFailure(IDirect3DDevice9* device, const char* what, HRESULT hr) {
 // --- Detours ---------------------------------------------------------------
 
 HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
-    if (foreignDevice(device)) return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*)>(kReset)(device, params);
+    if (foreignDevice(device)) return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*)>(device, kReset)(device, params);
     if (g_callbacks.preReset) g_callbacks.preReset();
     if (params && g_callbacks.adjustPresentParams) g_callbacks.adjustPresentParams(params);
-    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*)>(kReset)(device, params);
+    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*)>(device, kReset)(device, params);
     TMVS_LOG("Reset -> 0x%08lx (%ux%u fmt=%s ms=%d autoDepth=%d %s windowed=%d)", hr, params->BackBufferWidth,
              params->BackBufferHeight, tracer::formatName(params->BackBufferFormat), params->MultiSampleType,
              params->EnableAutoDepthStencil, tracer::formatName(params->AutoDepthStencilFormat), params->Windowed);
@@ -302,7 +337,7 @@ HRESULT APIENTRY resetDetour(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* pa
 
 HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const RECT* dst, HWND window, const RGNDATA* dirty) {
     if (foreignDevice(device)) {
-        return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(kPresent)(
+        return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(device, kPresent)(
             device, src, dst, window, dirty);
     }
     InterlockedIncrement(&g_diagPresents);
@@ -312,23 +347,23 @@ HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const 
         g_callbacks.present(device);
         g_internal--;
     }
-    if (tracingGame()) tracer::event("Present");
+    if (tracingGame(device)) tracer::event("Present");
     tracer::onPresent(device);
     drawStatsFrame();
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(kPresent)(
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(device, kPresent)(
         device, src, dst, window, dirty);
 }
 
 HRESULT APIENTRY createTextureDetour(IDirect3DDevice9* device, UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT format,
                                      D3DPOOL pool, IDirect3DTexture9** out, HANDLE* shared) {
     HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9**,
-                                             HANDLE*)>(kCreateTexture)(device, w, h, levels, usage, format, pool, out, shared);
+                                             HANDLE*)>(device, kCreateTexture)(device, w, h, levels, usage, format, pool, out, shared);
     if (FAILED(hr)) {
         char what[96];
         snprintf(what, sizeof(what), "CreateTexture %ux%u %s pool=%d", w, h, tracer::formatName(format), pool);
         logCreateFailure(device, what, hr);
     }
-    if (g_internal == 0 && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
+    if (gameCall(device) && (usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL))) {
         TMVS_LOG("CreateTexture %ux%u levels=%u usage=0x%lx fmt=%s -> %p", w, h, levels, usage, tracer::formatName(format),
                  SUCCEEDED(hr) && out ? static_cast<void*>(*out) : nullptr);
     }
@@ -338,7 +373,7 @@ HRESULT APIENTRY createTextureDetour(IDirect3DDevice9* device, UINT w, UINT h, U
 HRESULT APIENTRY createVolumeTextureDetour(IDirect3DDevice9* device, UINT w, UINT h, UINT d, UINT levels, DWORD usage,
                                            D3DFORMAT format, D3DPOOL pool, IDirect3DVolumeTexture9** out, HANDLE* shared) {
     HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL,
-                                             IDirect3DVolumeTexture9**, HANDLE*)>(kCreateVolumeTexture)(device, w, h, d, levels, usage,
+                                             IDirect3DVolumeTexture9**, HANDLE*)>(device, kCreateVolumeTexture)(device, w, h, d, levels, usage,
                                                                                                       format, pool, out, shared);
     if (FAILED(hr)) {
         char what[96];
@@ -351,7 +386,7 @@ HRESULT APIENTRY createVolumeTextureDetour(IDirect3DDevice9* device, UINT w, UIN
 HRESULT APIENTRY createCubeTextureDetour(IDirect3DDevice9* device, UINT edge, UINT levels, DWORD usage, D3DFORMAT format,
                                          D3DPOOL pool, IDirect3DCubeTexture9** out, HANDLE* shared) {
     HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DCubeTexture9**,
-                                             HANDLE*)>(kCreateCubeTexture)(device, edge, levels, usage, format, pool, out, shared);
+                                             HANDLE*)>(device, kCreateCubeTexture)(device, edge, levels, usage, format, pool, out, shared);
     if (FAILED(hr)) {
         char what[96];
         snprintf(what, sizeof(what), "CreateCubeTexture %u %s pool=%d", edge, tracer::formatName(format), pool);
@@ -362,8 +397,7 @@ HRESULT APIENTRY createCubeTextureDetour(IDirect3DDevice9* device, UINT edge, UI
 
 HRESULT APIENTRY createVertexBufferDetour(IDirect3DDevice9* device, UINT length, DWORD usage, DWORD fvf, D3DPOOL pool,
                                           IDirect3DVertexBuffer9** out, HANDLE* shared) {
-    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, DWORD, DWORD, D3DPOOL, IDirect3DVertexBuffer9**, HANDLE*)>(
-        kCreateVertexBuffer)(device, length, usage, fvf, pool, out, shared);
+    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, DWORD, DWORD, D3DPOOL, IDirect3DVertexBuffer9**, HANDLE*)>(device, kCreateVertexBuffer)(device, length, usage, fvf, pool, out, shared);
     if (FAILED(hr)) {
         char what[96];
         snprintf(what, sizeof(what), "CreateVertexBuffer %u bytes pool=%d", length, pool);
@@ -374,8 +408,7 @@ HRESULT APIENTRY createVertexBufferDetour(IDirect3DDevice9* device, UINT length,
 
 HRESULT APIENTRY createIndexBufferDetour(IDirect3DDevice9* device, UINT length, DWORD usage, D3DFORMAT format, D3DPOOL pool,
                                          IDirect3DIndexBuffer9** out, HANDLE* shared) {
-    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DIndexBuffer9**, HANDLE*)>(
-        kCreateIndexBuffer)(device, length, usage, format, pool, out, shared);
+    HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DIndexBuffer9**, HANDLE*)>(device, kCreateIndexBuffer)(device, length, usage, format, pool, out, shared);
     if (FAILED(hr)) {
         char what[96];
         snprintf(what, sizeof(what), "CreateIndexBuffer %u bytes pool=%d", length, pool);
@@ -387,9 +420,9 @@ HRESULT APIENTRY createIndexBufferDetour(IDirect3DDevice9* device, UINT length, 
 HRESULT APIENTRY createRenderTargetDetour(IDirect3DDevice9* device, UINT w, UINT h, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
                                           DWORD quality, BOOL lockable, IDirect3DSurface9** out, HANDLE* shared) {
     HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, UINT, D3DFORMAT, D3DMULTISAMPLE_TYPE, DWORD, BOOL,
-                                             IDirect3DSurface9**, HANDLE*)>(kCreateRenderTarget)(device, w, h, format, ms, quality,
+                                             IDirect3DSurface9**, HANDLE*)>(device, kCreateRenderTarget)(device, w, h, format, ms, quality,
                                                                                                  lockable, out, shared);
-    if (g_internal == 0) {
+    if (gameCall(device)) {
         TMVS_LOG("CreateRenderTarget %ux%u fmt=%s ms=%d -> %p", w, h, tracer::formatName(format), ms,
                  SUCCEEDED(hr) && out ? static_cast<void*>(*out) : nullptr);
     }
@@ -398,15 +431,15 @@ HRESULT APIENTRY createRenderTargetDetour(IDirect3DDevice9* device, UINT w, UINT
 
 HRESULT APIENTRY createDepthStencilDetour(IDirect3DDevice9* device, UINT w, UINT h, D3DFORMAT format, D3DMULTISAMPLE_TYPE ms,
                                           DWORD quality, BOOL discard, IDirect3DSurface9** out, HANDLE* shared) {
-    if (g_internal == 0 && g_callbacks.createDepthStencil) {
+    if (gameCall(device) && g_callbacks.createDepthStencil) {
         HRESULT replaced = E_NOTIMPL;
         if (g_callbacks.createDepthStencil(device, w, h, format, ms, out, &replaced)) return replaced;
     }
     HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, UINT, D3DFORMAT, D3DMULTISAMPLE_TYPE, DWORD, BOOL,
-                                             IDirect3DSurface9**, HANDLE*)>(kCreateDepthStencilSurface)(device, w, h, format, ms,
+                                             IDirect3DSurface9**, HANDLE*)>(device, kCreateDepthStencilSurface)(device, w, h, format, ms,
                                                                                                          quality, discard, out,
                                                                                                          shared);
-    if (g_internal == 0) {
+    if (gameCall(device)) {
         TMVS_LOG("CreateDepthStencilSurface %ux%u fmt=%s ms=%d -> %p", w, h, tracer::formatName(format), ms,
                  SUCCEEDED(hr) && out ? static_cast<void*>(*out) : nullptr);
     }
@@ -415,154 +448,154 @@ HRESULT APIENTRY createDepthStencilDetour(IDirect3DDevice9* device, UINT w, UINT
 
 HRESULT APIENTRY stretchRectDetour(IDirect3DDevice9* device, IDirect3DSurface9* src, const RECT* srcRect, IDirect3DSurface9* dst,
                                    const RECT* dstRect, D3DTEXTUREFILTERTYPE filter) {
-    if (tracingGame()) tracer::event("StretchRect %s -> %s", tracer::describe(src), tracer::describe(dst));
-    if (g_internal == 0 && g_callbacks.stretchRects) g_callbacks.stretchRects(src, &srcRect, dst, &dstRect);
+    if (tracingGame(device)) tracer::event("StretchRect %s -> %s", tracer::describe(src), tracer::describe(dst));
+    if (gameCall(device) && g_callbacks.stretchRects) g_callbacks.stretchRects(src, &srcRect, dst, &dstRect);
     return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*,
-                                       D3DTEXTUREFILTERTYPE)>(kStretchRect)(device, src, srcRect, dst, dstRect, filter);
+                                       D3DTEXTUREFILTERTYPE)>(device, kStretchRect)(device, src, srcRect, dst, dstRect, filter);
 }
 
 HRESULT APIENTRY setRenderTargetDetour(IDirect3DDevice9* device, DWORD index, IDirect3DSurface9* surface) {
-    if (tracingGame()) tracer::event("SetRenderTarget %lu %s", index, tracer::describe(surface));
-    if (g_internal == 0 && g_callbacks.setRenderTarget) surface = g_callbacks.setRenderTarget(index, surface);
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*)>(kSetRenderTarget)(device, index, surface);
+    if (tracingGame(device)) tracer::event("SetRenderTarget %lu %s", index, tracer::describe(surface));
+    if (gameCall(device) && g_callbacks.setRenderTarget) surface = g_callbacks.setRenderTarget(index, surface);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*)>(device, kSetRenderTarget)(device, index, surface);
 }
 
 HRESULT APIENTRY setDepthStencilDetour(IDirect3DDevice9* device, IDirect3DSurface9* surface) {
-    if (tracingGame()) tracer::event("SetDepthStencilSurface %s", tracer::describe(surface));
-    if (g_internal == 0 && g_callbacks.setDepthStencil) surface = g_callbacks.setDepthStencil(surface);
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DSurface9*)>(kSetDepthStencilSurface)(device, surface);
+    if (tracingGame(device)) tracer::event("SetDepthStencilSurface %s", tracer::describe(surface));
+    if (gameCall(device) && g_callbacks.setDepthStencil) surface = g_callbacks.setDepthStencil(surface);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DSurface9*)>(device, kSetDepthStencilSurface)(device, surface);
 }
 
 HRESULT APIENTRY beginSceneDetour(IDirect3DDevice9* device) {
-    if (tracingGame()) tracer::event("BeginScene");
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*)>(kBeginScene)(device);
+    if (tracingGame(device)) tracer::event("BeginScene");
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*)>(device, kBeginScene)(device);
 }
 
 HRESULT APIENTRY endSceneDetour(IDirect3DDevice9* device) {
-    if (tracingGame()) tracer::event("EndScene");
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*)>(kEndScene)(device);
+    if (tracingGame(device)) tracer::event("EndScene");
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*)>(device, kEndScene)(device);
 }
 
 HRESULT APIENTRY clearDetour(IDirect3DDevice9* device, DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color, float z,
                              DWORD stencil) {
-    if (tracingGame()) tracer::event("Clear rects=%lu flags=%lx color=%08lx z=%.3f s=%lu", count, flags, color, z, stencil);
-    if (g_internal == 0 && g_callbacks.clear) g_callbacks.clear(device, count, rects, flags, color);
-    if (g_internal == 0 && g_callbacks.clearRects) rects = g_callbacks.clearRects(device, count, rects, flags, z, stencil);
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD)>(kClear)(
+    if (tracingGame(device)) tracer::event("Clear rects=%lu flags=%lx color=%08lx z=%.3f s=%lu", count, flags, color, z, stencil);
+    if (gameCall(device) && g_callbacks.clear) g_callbacks.clear(device, count, rects, flags, color);
+    if (gameCall(device) && g_callbacks.clearRects) rects = g_callbacks.clearRects(device, count, rects, flags, z, stencil);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, const D3DRECT*, DWORD, D3DCOLOR, float, DWORD)>(device, kClear)(
         device, count, rects, flags, color, z, stencil);
 }
 
 HRESULT APIENTRY setTransformDetour(IDirect3DDevice9* device, D3DTRANSFORMSTATETYPE type, const D3DMATRIX* m) {
-    if (tracingGame() && m) {
+    if (tracingGame(device) && m) {
         tracer::event("SetTransform %d [%.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f]",
                       static_cast<int>(type), m->_11, m->_12, m->_13, m->_14, m->_21, m->_22, m->_23, m->_24, m->_31, m->_32,
                       m->_33, m->_34, m->_41, m->_42, m->_43, m->_44);
     }
-    if (g_internal == 0 && m && g_callbacks.setTransform) g_callbacks.setTransform(type, m);
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DTRANSFORMSTATETYPE, const D3DMATRIX*)>(kSetTransform)(device, type, m);
+    if (gameCall(device) && m && g_callbacks.setTransform) g_callbacks.setTransform(type, m);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DTRANSFORMSTATETYPE, const D3DMATRIX*)>(device, kSetTransform)(device, type, m);
 }
 
 HRESULT APIENTRY setLightDetour(IDirect3DDevice9* device, DWORD index, const D3DLIGHT9* light) {
-    if (tracingGame() && light) {
+    if (tracingGame(device) && light) {
         tracer::event("SetLight %lu type=%d dir=(%.4f %.4f %.4f) pos=(%.1f %.1f %.1f) diffuse=(%.3f %.3f %.3f) ambient=(%.3f %.3f %.3f)",
                       index, static_cast<int>(light->Type), light->Direction.x, light->Direction.y, light->Direction.z,
                       light->Position.x, light->Position.y, light->Position.z, light->Diffuse.r, light->Diffuse.g, light->Diffuse.b,
                       light->Ambient.r, light->Ambient.g, light->Ambient.b);
     }
-    if (g_internal == 0 && light && g_callbacks.setLight) g_callbacks.setLight(index, light);
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, const D3DLIGHT9*)>(kSetLight)(device, index, light);
+    if (gameCall(device) && light && g_callbacks.setLight) g_callbacks.setLight(index, light);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, const D3DLIGHT9*)>(device, kSetLight)(device, index, light);
 }
 
 HRESULT APIENTRY lightEnableDetour(IDirect3DDevice9* device, DWORD index, BOOL enable) {
-    if (tracingGame()) tracer::event("LightEnable %lu %d", index, enable);
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, BOOL)>(kLightEnable)(device, index, enable);
+    if (tracingGame(device)) tracer::event("LightEnable %lu %d", index, enable);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, BOOL)>(device, kLightEnable)(device, index, enable);
 }
 
 HRESULT APIENTRY setViewportDetour(IDirect3DDevice9* device, const D3DVIEWPORT9* vp) {
-    if (tracingGame() && vp) {
+    if (tracingGame(device) && vp) {
         tracer::event("SetViewport %lu,%lu %lux%lu z=%.2f..%.2f", vp->X, vp->Y, vp->Width, vp->Height, vp->MinZ, vp->MaxZ);
     }
-    if (g_internal == 0 && vp && g_callbacks.setViewport) vp = g_callbacks.setViewport(device, vp);
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const D3DVIEWPORT9*)>(kSetViewport)(device, vp);
+    if (gameCall(device) && vp && g_callbacks.setViewport) vp = g_callbacks.setViewport(device, vp);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const D3DVIEWPORT9*)>(device, kSetViewport)(device, vp);
 }
 
 HRESULT APIENTRY getViewportDetour(IDirect3DDevice9* device, D3DVIEWPORT9* vp) {
-    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DVIEWPORT9*)>(kGetViewport)(device, vp);
-    if (SUCCEEDED(hr) && g_internal == 0 && vp && g_callbacks.getViewport) g_callbacks.getViewport(device, vp);
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DVIEWPORT9*)>(device, kGetViewport)(device, vp);
+    if (SUCCEEDED(hr) && gameCall(device) && vp && g_callbacks.getViewport) g_callbacks.getViewport(device, vp);
     return hr;
 }
 
 HRESULT APIENTRY setScissorRectDetour(IDirect3DDevice9* device, const RECT* rect) {
-    if (g_internal == 0 && rect && g_callbacks.setScissorRect) rect = g_callbacks.setScissorRect(device, rect);
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*)>(kSetScissorRect)(device, rect);
+    if (gameCall(device) && rect && g_callbacks.setScissorRect) rect = g_callbacks.setScissorRect(device, rect);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*)>(device, kSetScissorRect)(device, rect);
 }
 
 HRESULT APIENTRY getScissorRectDetour(IDirect3DDevice9* device, RECT* rect) {
-    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, RECT*)>(kGetScissorRect)(device, rect);
-    if (SUCCEEDED(hr) && g_internal == 0 && rect && g_callbacks.getScissorRect) g_callbacks.getScissorRect(device, rect);
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, RECT*)>(device, kGetScissorRect)(device, rect);
+    if (SUCCEEDED(hr) && gameCall(device) && rect && g_callbacks.getScissorRect) g_callbacks.getScissorRect(device, rect);
     return hr;
 }
 
 HRESULT APIENTRY setTextureDetour(IDirect3DDevice9* device, DWORD stage, IDirect3DBaseTexture9* texture) {
-    if (tracingGame() && texture) {
+    if (tracingGame(device) && texture) {
         D3DSURFACE_DESC desc{};
         bool interesting = texture->GetType() != D3DRTYPE_TEXTURE ||
                            (SUCCEEDED(static_cast<IDirect3DTexture9*>(texture)->GetLevelDesc(0, &desc)) &&
                             (desc.Usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL)));
         if (interesting) tracer::event("  SetTexture %lu %s", stage, tracer::describe(texture));
     }
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*)>(kSetTexture)(device, stage, texture);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*)>(device, kSetTexture)(device, stage, texture);
 }
 
 HRESULT APIENTRY drawPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT start, UINT count) {
-    if (tracingGame()) traceDrawState(device, "DP", count);
+    if (tracingGame(device)) traceDrawState(device, "DP", count);
     countDraw(device, count);
-    if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
-    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT)>(kDrawPrimitive)(device, type, start, count);
-    if (g_internal == 0 && g_callbacks.drawDone) g_callbacks.drawDone(device);
+    if (gameCall(device) && g_callbacks.draw) g_callbacks.draw(device);
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT)>(device, kDrawPrimitive)(device, type, start, count);
+    if (gameCall(device) && g_callbacks.drawDone) g_callbacks.drawDone(device);
     return hr;
 }
 
 HRESULT APIENTRY drawIndexedPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices,
                                             UINT start, UINT count) {
-    if (tracingGame()) traceDrawState(device, "DIP", count);
+    if (tracingGame(device)) traceDrawState(device, "DIP", count);
     countDraw(device, count);
-    if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
-    if (g_internal == 0 && g_callbacks.drawIndexed) g_callbacks.drawIndexed(device, type, base, minIndex, vertices, start, count);
-    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT)>(kDrawIndexedPrimitive)(
+    if (gameCall(device) && g_callbacks.draw) g_callbacks.draw(device);
+    if (gameCall(device) && g_callbacks.drawIndexed) g_callbacks.drawIndexed(device, type, base, minIndex, vertices, start, count);
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT)>(device, kDrawIndexedPrimitive)(
         device, type, base, minIndex, vertices, start, count);
-    if (g_internal == 0 && g_callbacks.drawDone) g_callbacks.drawDone(device);
+    if (gameCall(device) && g_callbacks.drawDone) g_callbacks.drawDone(device);
     return hr;
 }
 
 HRESULT APIENTRY drawPrimitiveUPDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT count, const void* data, UINT stride) {
-    if (tracingGame()) traceDrawState(device, "DPUP", count);
+    if (tracingGame(device)) traceDrawState(device, "DPUP", count);
     countDraw(device, count);
-    if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
-    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT)>(kDrawPrimitiveUP)(
+    if (gameCall(device) && g_callbacks.draw) g_callbacks.draw(device);
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT)>(device, kDrawPrimitiveUP)(
         device, type, count, data, stride);
-    if (g_internal == 0 && g_callbacks.drawDone) g_callbacks.drawDone(device);
+    if (gameCall(device) && g_callbacks.drawDone) g_callbacks.drawDone(device);
     return hr;
 }
 
 HRESULT APIENTRY drawIndexedPrimitiveUPDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, UINT minIndex, UINT vertices,
                                               UINT count, const void* indices, D3DFORMAT indexFormat, const void* data, UINT stride) {
-    if (tracingGame()) traceDrawState(device, "DIPUP", count);
+    if (tracingGame(device)) traceDrawState(device, "DIPUP", count);
     countDraw(device, count);
-    if (g_internal == 0 && g_callbacks.draw) g_callbacks.draw(device);
+    if (gameCall(device) && g_callbacks.draw) g_callbacks.draw(device);
     const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void*, D3DFORMAT,
-                                                   const void*, UINT)>(kDrawIndexedPrimitiveUP)(device, type, minIndex, vertices, count,
+                                                   const void*, UINT)>(device, kDrawIndexedPrimitiveUP)(device, type, minIndex, vertices, count,
                                                                                                 indices, indexFormat, data, stride);
-    if (g_internal == 0 && g_callbacks.drawDone) g_callbacks.drawDone(device);
+    if (gameCall(device) && g_callbacks.drawDone) g_callbacks.drawDone(device);
     return hr;
 }
 
 HRESULT APIENTRY setVertexShaderDetour(IDirect3DDevice9* device, IDirect3DVertexShader9* shader) {
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DVertexShader9*)>(kSetVertexShader)(device, shader);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DVertexShader9*)>(device, kSetVertexShader)(device, shader);
 }
 
 HRESULT APIENTRY setVertexShaderConstantFDetour(IDirect3DDevice9* device, UINT start, const float* data, UINT count) {
-    if (tracingGame() && data) {
+    if (tracingGame(device) && data) {
         char line[900];
         int n = snprintf(line, sizeof(line), "  VSConst c%u x%u:", start, count);
         for (UINT i = 0; i < count * 4 && i < 16 * 4 && n < 860; i++) {
@@ -570,23 +603,25 @@ HRESULT APIENTRY setVertexShaderConstantFDetour(IDirect3DDevice9* device, UINT s
         }
         tracer::event("%s", line);
     }
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, const float*, UINT)>(kSetVertexShaderConstantF)(device, start, data,
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, const float*, UINT)>(device, kSetVertexShaderConstantF)(device, start, data,
                                                                                                             count);
 }
 
 HRESULT APIENTRY createPixelShaderDetour(IDirect3DDevice9* device, const DWORD* code, IDirect3DPixelShader9** shader) {
-    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const DWORD*, IDirect3DPixelShader9**)>(kCreatePixelShader)(device, code,
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const DWORD*, IDirect3DPixelShader9**)>(device, kCreatePixelShader)(device, code,
                                                                                                                  shader);
-    if (SUCCEEDED(hr) && shader && *shader && g_callbacks.createPixelShader) g_callbacks.createPixelShader(*shader, code);
+    if (SUCCEEDED(hr) && shader && *shader && !foreignDevice(device) && g_callbacks.createPixelShader) {
+        g_callbacks.createPixelShader(*shader, code);
+    }
     return hr;
 }
 
 HRESULT APIENTRY setPixelShaderDetour(IDirect3DDevice9* device, IDirect3DPixelShader9* shader) {
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DPixelShader9*)>(kSetPixelShader)(device, shader);
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, IDirect3DPixelShader9*)>(device, kSetPixelShader)(device, shader);
 }
 
 HRESULT APIENTRY setPixelShaderConstantFDetour(IDirect3DDevice9* device, UINT start, const float* data, UINT count) {
-    if (tracingGame() && data) {
+    if (tracingGame(device) && data) {
         char line[600];
         int n = snprintf(line, sizeof(line), "  PSConst c%u x%u:", start, count);
         for (UINT i = 0; i < count * 4 && i < 8 * 4 && n < 560; i++) {
@@ -594,7 +629,7 @@ HRESULT APIENTRY setPixelShaderConstantFDetour(IDirect3DDevice9* device, UINT st
         }
         tracer::event("%s", line);
     }
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, const float*, UINT)>(kSetPixelShaderConstantF)(device, start, data,
+    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, UINT, const float*, UINT)>(device, kSetPixelShaderConstantF)(device, start, data,
                                                                                                            count);
 }
 
@@ -638,45 +673,101 @@ const Detour kDetours[] = {
     {kSetPixelShaderConstantF, reinterpret_cast<void*>(&setPixelShaderConstantFDetour)},
 };
 
-// Puts the game's pointer back into a slot, but only while our detour is still in it: another mod
-// that hooked the same slot after us (its pointer in the vtable, calling ours) keeps its hook.
+const Detour* detourOf(Slot slot) {
+    for (const Detour& d : kDetours) {
+        if (d.slot == slot) return &d;
+    }
+    return nullptr;
+}
+
+// Puts the game's pointer back into a fallback slot, but only while our detour is still in it:
+// another mod that hooked the same slot after us (its pointer in the vtable, calling ours) keeps
+// its hook.
 void restoreSlot(void** vtable, const Detour& d) {
-    if (!g_original[d.slot]) return;
+    if (!g_vtableSlot[d.slot] || !g_tableOriginal[d.slot]) return;
     if (vtable[d.slot] == d.function) {
-        writePointer(&vtable[d.slot], g_original[d.slot]);
+        writePointer(&vtable[d.slot], g_tableOriginal[d.slot]);
     } else {
         TMVS_LOG("hook: vtable slot %d holds another mod's hook (%p): left in place", d.slot, vtable[d.slot]);
     }
 }
 
-bool patchDevice(IDirect3DDevice9* device) {
+// Hooks the methods the game's device calls. Inline on the code its table points to; a method
+// that can't be hooked inline goes through the table's slot instead (logged). A method already
+// hooked (the same code for a later device) is left as it is.
+void hookDevice(IDirect3DDevice9* device) {
     void** vtable = *reinterpret_cast<void***>(device);
-    if (g_vtable == vtable) return true;
-    if (g_vtable) {
-        // Vertex-processing modes get different driver vtables: the probe device's table is
-        // not the game's. Move the hooks to the device the game actually renders with.
-        // The probe device is released by now, and with it (on drivers that give each device its
-        // own table on the heap) the old table: writing our saved pointers back there wrote into
-        // freed memory, maybe another mod's by then (CenterSpeed allocates in the same moment).
-        // The old table is left alone.
-        TMVS_LOG("hook: moving hooks from probe vtable %p to game vtable %p (the old one left alone)", g_vtable, vtable);
+    // Where the table lives (d3d9.dll's image, or the heap: one per device) and what the game's
+    // Reset and Present were before us: another mod's inline hook shows as a jump.
+    char table[160], reset[220], present[220];
+    describeAddress(vtable, table, sizeof(table));
+    describeCode(vtable[kReset], reset, sizeof(reset));
+    describeCode(vtable[kPresent], present, sizeof(present));
+    TMVS_LOG("hook diag: vtable %s; Reset was %s; Present was %s", table, reset, present);
+    int atEntry = 0, chained = 0, slots = 0, known = 0;
+    for (const Detour& d : kDetours) {
+        void* function = vtable[d.slot];
+        SlotHooks& s = g_slots[d.slot];
+        bool done = false;
+        for (int i = 0; i < s.count && !done; i++) {
+            if (s.hooks[i].function == function) {
+                g_original[d.slot] = s.hooks[i].trampoline; // this device's calls go on into this one
+                g_vtableSlot[d.slot] = false;
+                done = true;
+                known++;
+            }
+        }
+        if (done) continue;
+        if (function == d.function) {
+            known++; // our own detour in the table already (the fallback, same table)
+            continue;
+        }
+        const char* why = "";
+        // Code another slot shares (a common stub): a second jump would send one method's call
+        // into the other's detour.
+        // Through the vtable then, calling on past that jump (into its trampoline).
+        bool shared = false;
+        void* past = function;
+        for (const Detour& other : kDetours) {
+            const SlotHooks& o = g_slots[other.slot];
+            for (int i = 0; i < o.count; i++) {
+                if (o.hooks[i].function != function) continue;
+                shared = true;
+                past = o.hooks[i].trampoline;
+            }
+        }
+        if (shared) why = "its code is another hooked method's";
+        inlinehook::Hook hook;
+        if (!shared && s.count < SlotHooks::kMax && inlinehook::install(function, d.function, hook, &why)) {
+            s.hooks[s.count++] = hook;
+            g_original[d.slot] = hook.trampoline;
+            g_vtableSlot[d.slot] = false;
+            g_inline = true;
+            if (hook.chained) {
+                chained++;
+                char where[160];
+                describeAddress(hook.previous, where, sizeof(where));
+                TMVS_LOG("hook: slot %d starts with another mod's jump (to %s): chained, ours runs first, then theirs", d.slot, where);
+            } else {
+                atEntry++;
+            }
+            continue;
+        }
+        if (!shared && s.count >= SlotHooks::kMax) why = "too many method addresses for this slot";
+        // Fallback: the table's slot (it may be rewritten under us: diagFrame writes it again).
+        g_original[d.slot] = past;
+        g_tableOriginal[d.slot] = function;
+        g_vtableSlot[d.slot] = true;
+        writePointer(&vtable[d.slot], d.function);
+        slots++;
+        char where[220];
+        describeCode(function, where, sizeof(where));
+        TMVS_LOG("hook: slot %d can't be hooked inline (%s; %s): hooked in the vtable instead", d.slot, why, where);
     }
     g_vtable = vtable;
-    for (const Detour& d : kDetours) {
-        g_original[d.slot] = vtable[d.slot];
-        writePointer(&vtable[d.slot], d.function);
-    }
-    TMVS_LOG("hook: device vtable %p patched", vtable);
-    {
-        // Where the table lives (d3d9.dll's image, or the heap: one per device) and what the game's
-        // Reset and Present were before us: another mod's inline hook shows as a jump.
-        char table[160], reset[220], present[220];
-        describeAddress(vtable, table, sizeof(table));
-        describeCode(g_original[kReset], reset, sizeof(reset));
-        describeCode(g_original[kPresent], present, sizeof(present));
-        TMVS_LOG("hook diag: vtable %s; Reset was %s; Present was %s", table, reset, present);
-    }
-    return true;
+    TMVS_LOG("hook: device %p methods hooked: %d inline at their entry, %d chained onto another mod's jump, %d through the vtable, "
+             "%d already hooked",
+             static_cast<void*>(device), atEntry, chained, slots, known);
 }
 
 // --- Device creation interception -------------------------------------------
@@ -709,7 +800,7 @@ HRESULT APIENTRY createDeviceDetour(IDirect3D9* self, UINT adapter, D3DDEVTYPE t
     }
     if (SUCCEEDED(hr) && out && *out) {
         g_gameDevice = *out;
-        patchDevice(*out);
+        hookDevice(*out);
         if (g_callbacks.deviceCreated) {
             g_internal++;
             g_callbacks.deviceCreated(*out);
@@ -767,24 +858,6 @@ bool patchImport(const char* dll, const char* function, void* replacement, void*
     return false;
 }
 
-IDirect3DDevice9* makeProbeDevice(IDirect3D9* d3d, HWND window) {
-    HWND targets[] = {window, GetDesktopWindow()};
-    for (HWND target : targets) {
-        D3DPRESENT_PARAMETERS params{};
-        params.Windowed = TRUE;
-        params.SwapEffect = D3DSWAPEFFECT_DISCARD;
-        params.hDeviceWindow = target;
-        params.BackBufferWidth = 16;
-        params.BackBufferHeight = 16;
-        IDirect3DDevice9* device = nullptr;
-        DWORD flags = D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES | D3DCREATE_FPU_PRESERVE;
-        if (SUCCEEDED(d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, target, flags, &params, &device)) && device) {
-            return device;
-        }
-    }
-    return nullptr;
-}
-
 } // namespace
 
 bool patchGameImport(const char* dll, const char* function, void* replacement, void** originalOut) {
@@ -793,43 +866,36 @@ bool patchGameImport(const char* dll, const char* function, void* replacement, v
 
 bool install(const DeviceCallbacks& callbacks) {
     g_callbacks = callbacks;
-    if (g_vtable) return true;
+    if (g_realCreateDevice) return true;
 
     bool imported = patchImport("d3d9.dll", "Direct3DCreate9", reinterpret_cast<void*>(&create9Detour),
                                 reinterpret_cast<void**>(&g_realCreate9));
     TMVS_LOG("hook: Direct3DCreate9 import %s", imported ? "patched" : "not found");
 
-    // The game may already own a device (late injection) or create it later. Device
-    // vtables are shared per driver, so patching a probe device covers both cases.
-    WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = DefWindowProcW;
-    wc.hInstance = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"TMVSProbeWindow";
-    RegisterClassExW(&wc);
-    HWND window = CreateWindowW(wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 16, 16, nullptr, nullptr, wc.hInstance, nullptr);
-    if (!window) return false;
-
+    // The game's device is hooked when the game creates it (createDeviceDetour). The factory's
+    // table is shared by every IDirect3D9, so patching our own covers the game's too. There is no
+    // probe device any more: hooking a probe's methods at boot raced other mods hooking the same
+    // code from their own threads in that moment (CenterSpeed), and a probe with software vertex
+    // processing has other methods than the game's device.
     // The system d3d9 by full path: in standalone mode this DLL is "d3d9.dll" itself.
     if (IDirect3D9* d3d = proxy::createDirect3D9(D3D_SDK_VERSION)) {
-        if (IDirect3DDevice9* device = makeProbeDevice(d3d, window)) {
-            g_internal++;
-            patchDevice(device);
-            g_internal--;
-            device->Release();
-        }
         patchFactory(d3d);
         d3d->Release();
     }
-
-    DestroyWindow(window);
-    UnregisterClassW(wc.lpszClassName, wc.hInstance);
-    return g_vtable != nullptr;
+    return g_realCreateDevice != nullptr;
 }
 
 void remove() {
-    if (!g_vtable) return;
-    for (const Detour& d : kDetours) restoreSlot(g_vtable, d);
+    for (const Detour& d : kDetours) {
+        SlotHooks& s = g_slots[d.slot];
+        for (int i = 0; i < s.count; i++) {
+            if (!inlinehook::remove(s.hooks[i]) && s.hooks[i].site) {
+                TMVS_LOG("hook: slot %d: another mod's hook sits on ours: left in place", d.slot);
+            }
+        }
+        s.count = 0;
+        if (g_vtable) restoreSlot(g_vtable, d);
+    }
     g_vtable = nullptr;
 }
 
@@ -839,32 +905,72 @@ void logMemory(const char* when) {
     TMVS_LOG("memory %s: %s", when, memory);
 }
 
+namespace {
+
+bool hookedCode(Slot slot, void* function) {
+    const SlotHooks& s = g_slots[slot];
+    for (int i = 0; i < s.count; i++) {
+        if (s.hooks[i].function == function) return true;
+    }
+    return false;
+}
+
+} // namespace
+
 void diagFrame() {
-    if (!g_gameDevice || !g_vtable) return;
-    // 1. Does the game's device still use our table, with our Reset and Present in it?
+    if (!g_gameDevice || (!g_inline && !g_vtable)) return;
+    // 1. Does the game's device table still lead into our hooks? An inline-hooked slot: the table
+    // points to the code we hooked (or to another mod's vtable hook, which calls on into it: only
+    // logged, hooking that too would run ours twice). A vtable slot: our detour; back to the
+    // game's own pointer means the table was rewritten (seen with CenterSpeed): written again.
     void* table = nullptr;
-    void* present = nullptr;
-    void* reset = nullptr;
     const bool readable = readPointer(g_gameDevice, &table);
-    const bool sameTable = readable && table == static_cast<void*>(g_vtable);
-    const bool ourPresent = readPointer(&g_vtable[kPresent], &present) && present == reinterpret_cast<void*>(&presentDetour);
-    const bool ourReset = readPointer(&g_vtable[kReset], &reset) && reset == reinterpret_cast<void*>(&resetDetour);
-    const int state = (readable ? 0 : 1) | (sameTable ? 0 : 2) | (ourPresent ? 0 : 4) | (ourReset ? 0 : 8);
+    int elsewhere = 0, rewritten = 0, first = -1;
+    void* firstAt = nullptr;
+    if (readable) {
+        void** t = static_cast<void**>(table);
+        for (const Detour& d : kDetours) {
+            void* now = nullptr;
+            if (!readPointer(&t[d.slot], &now) || now == d.function) continue;
+            if (g_vtableSlot[d.slot]) {
+                if (now == g_tableOriginal[d.slot] && t == g_vtable && writePointer(&t[d.slot], d.function)) {
+                    rewritten++;
+                    continue;
+                }
+            } else if (hookedCode(d.slot, now)) {
+                continue;
+            }
+            elsewhere++;
+            if (first < 0) {
+                first = d.slot;
+                firstAt = now;
+            }
+        }
+    }
+    // Reset and Present inline: our jump still at their entry, or another mod's on top of it.
+    bool resetIntact = true, presentIntact = true;
+    for (int i = 0; i < g_slots[kReset].count; i++) resetIntact = resetIntact && inlinehook::intact(g_slots[kReset].hooks[i]);
+    for (int i = 0; i < g_slots[kPresent].count; i++) presentIntact = presentIntact && inlinehook::intact(g_slots[kPresent].hooks[i]);
+    const int state = (readable ? 0 : 1) | (elsewhere ? 2 : 0) | (resetIntact ? 0 : 4) | (presentIntact ? 0 : 8);
     static int s_state = 0;
+    if (rewritten && diagLineAllowed()) {
+        TMVS_LOG("hook diag: the game's device table had the game's own pointers back in %d of our vtable slots: hooked again", rewritten);
+    }
     if (state != s_state && diagLineAllowed()) {
         s_state = state;
         if (state == 0) {
-            TMVS_LOG("hook diag: the game's device uses our vtable %p with our Reset and Present again", g_vtable);
+            TMVS_LOG("hook diag: the game's device leads into our hooks again");
         } else {
-            char where[160] = "-", presentAt[220] = "-", resetAt[220] = "-";
-            if (readable && !sameTable) describeAddress(table, where, sizeof(where));
-            if (!ourPresent) describeCode(present, presentAt, sizeof(presentAt));
-            if (!ourReset) describeCode(reset, resetAt, sizeof(resetAt));
-            TMVS_LOG("hook diag: device %p %s (table now %s); slot Present %s; slot Reset %s", static_cast<void*>(g_gameDevice),
-                     !readable ? "not readable" : sameTable ? "still on our vtable" : "on another vtable", where,
-                     ourPresent ? "ours" : presentAt, ourReset ? "ours" : resetAt);
+            char where[220] = "-", resetAt[220] = "-", presentAt[220] = "-";
+            if (elsewhere) describeCode(firstAt, where, sizeof(where));
+            if (!resetIntact) describeCode(g_slots[kReset].hooks[0].site, resetAt, sizeof(resetAt));
+            if (!presentIntact) describeCode(g_slots[kPresent].hooks[0].site, presentAt, sizeof(presentAt));
+            TMVS_LOG("hook diag: device %p %s; %d slots point elsewhere (first slot %d: %s); Reset entry %s; Present entry %s",
+                     static_cast<void*>(g_gameDevice), readable ? "readable" : "not readable", elsewhere, first, where,
+                     resetIntact ? "ours" : resetAt, presentIntact ? "ours" : presentAt);
         }
     }
+
     // 2. Engine frames without a Present through our detour: the game draws, but its Presents go
     // around us (or never come).
     static LONG s_lastPresents = -1;
