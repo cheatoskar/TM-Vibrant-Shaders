@@ -35,7 +35,7 @@ void load() {
     const float soft = static_cast<float>(_wtof(text));
     o.softShadows = soft > 0.0f && soft <= 10.0f ? soft : 0.0f;
     o.engineLightDraws = GetPrivateProfileIntW(L"ManiaPlanet", L"EngineLightDraws", 1, ini.c_str()) != 0;
-    GetPrivateProfileStringW(L"ManiaPlanet", L"BlackHoleMoon", L"0", text, 32, ini.c_str());
+    GetPrivateProfileStringW(L"ManiaPlanet", L"BlackHoleMoon", L"1", text, 32, ini.c_str());
     const float moon = static_cast<float>(_wtof(text));
     o.blackHoleMoon = moon > 0.0f && moon <= 4.0f ? moon : 0.0f;
     GetPrivateProfileStringW(L"ManiaPlanet", L"VideoFps", L"30", text, 32, ini.c_str());

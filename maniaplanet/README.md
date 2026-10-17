@@ -85,7 +85,7 @@ page, panel "ManiaPlanet":
   time into a float buffer of their own (a self-illuminated one twice: the second time with its
   light texture black, subtracted, so only its own light stays); later draws over them take their
   share away again. The debug view "Light sources" shows what counts as light.
-- **Black hole light** (`BlackHoleMoon`, 0.25 – 2, 0 = not chosen, the default): TrackMania 2's
+- **Black hole light** (`BlackHoleMoon`, 0.25 – 2, default 1; 0 = not chosen): TrackMania 2's
   *Game moonlight* → *Black hole* (Settings page, *Game integration*; this slider, its brightness,
   shows only while it is chosen). ManiaPlanet's moon can't be moved without writing into the game,
   so *Game moonlight* has its own three choices here: *Game's* keeps the moon, *Off* takes its light
