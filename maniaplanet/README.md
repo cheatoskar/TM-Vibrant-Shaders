@@ -36,7 +36,7 @@ depth of field and motion blur run in photo mode only), water surfaces, grass de
        the setup will offer to backup and restore it.
 3. Start ManiaPlanet **64-bit**. A message at the top says the mod is running.
 
-Uninstall: `Uninstall.cmd` (`install.ps1 -Uninstall`), or delete `d3d11.dll` from the game folder.
+Uninstall: run `TM-Vibrant-Shaders-Setup.exe` again and choose *Uninstall*, or delete `d3d11.dll` from the game folder.
 
 **If the game doesn't start:** delete `d3d11.dll` from the game folder. The mod is 64-bit only. If
 the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
@@ -51,8 +51,9 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 | F6 | Photo mode: no interface, full quality, depth of field on a clicked point |
 | Shift+F6 / Ctrl+Shift+wheel | Photo mode: compare split (the game's own image or a preset on one side) / move its line |
 
-These are the defaults; the menu's *Settings* page (*Hotkeys*) rebinds them, and they are stored in the `[Keys]` section of settings.ini (see docs/settings.md).
 | Middle click / Ctrl+middle click / Ctrl+wheel | Photo mode: focus here / no focus / aperture |
+
+These are the defaults; the menu's *Settings* page (*Hotkeys*) rebinds them, and they are stored in the `[Keys]` section of settings.ini (see docs/settings.md).
 
 **Compare split with a preset:** menu, *Settings* page, *Photo mode* panel, *Other side*: the game's
 image (as before) or any preset. With a preset, a second renderer (`hooks.cpp`, `g_rendererB`) runs
@@ -62,7 +63,7 @@ one more run of the effects while shown and is released when the split, photo mo
 goes. Photos (F12) get both names at the line (`SplitPhotoLabels`). Offline:
 `mp_preview <capture> out.bmp --hdr --compare Horizon [--split 0.4] [--swap] [--labels "Horizon|Vibrant"]`.
 
-Otherwise the same keys as the TMNF mod. The night skies need *Real night under night skies*
+Otherwise the same keys as the TMNF mod. The night skies need *Real night*
 (Settings page) for their dark nights: ManiaPlanet's time of day can't be changed, so the mod
 brings the engine's sky light down to moonlight itself.
 
