@@ -2,6 +2,7 @@
 #include "keys.h"
 #include "log.h"
 #include <windows.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -1225,6 +1226,7 @@ void applyPreset(Settings& s, Preset preset) {
     const int keepVideoCodec = s.videoCodec;
     const float keepVideoBitrate = s.videoBitrate;
     const bool keepJitter = s.taaJitter;
+    const float keepScale = s.renderScale, keepFsrSharpness = s.fsrSharpness;
     const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
     const bool keepTrailTyres = s.trailTyres;
     const int keepTrailRuns = s.trailKeepRuns;
@@ -1263,6 +1265,8 @@ void applyPreset(Settings& s, Preset preset) {
     s.videoCodec = keepVideoCodec;
     s.videoBitrate = keepVideoBitrate;
     s.taaJitter = keepJitter;
+    s.renderScale = keepScale;
+    s.fsrSharpness = keepFsrSharpness;
     switch (preset) {
         case Preset::Vibrant:
             // The Settings defaults are the base of every preset; Vibrant's own tuning on top.
@@ -1690,6 +1694,12 @@ void Config::load() {
     if (settings.videoCodec < 0 || settings.videoCodec > 2) settings.videoCodec = 1;
     if (GetPrivateProfileStringW(L"Settings", L"VideoBitrate", L"", target, 32, ini)) settings.videoBitrate = static_cast<float>(_wtof(target));
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
+    if (GetPrivateProfileStringW(L"Settings", L"RenderScale", L"", target, 32, ini)) {
+        settings.renderScale = std::clamp(static_cast<float>(_wtof(target)), 0.5f, 1.0f);
+    }
+    if (GetPrivateProfileStringW(L"Settings", L"FsrSharpness", L"", target, 32, ini)) {
+        settings.fsrSharpness = std::clamp(static_cast<float>(_wtof(target)), 0.0f, 1.0f);
+    }
     keys::load(ini);
     readFields(settings, ini, L"Settings", true, true);
     if (preset == kCustomPreset) {
@@ -1699,6 +1709,8 @@ void Config::load() {
         applyPreset(settings, Preset::Vibrant);
         m_baseline = settings;
         if (!namedSettings(m_basePreset, m_baseline)) m_basePreset = "Vibrant";
+        // A setting the file lacks (new since it was saved) comes from that preset, not from Vibrant.
+        settings = m_baseline;
         readFields(settings, ini, L"Settings", false);
     } else if (!applyNamed(preset)) {
         preset = "Vibrant";
