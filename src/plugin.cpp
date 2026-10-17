@@ -2081,9 +2081,21 @@ void processScene(IDirect3DDevice9* device) {
     // A clip of the map (in-game trigger) while the player drives: the trail goes on recording.
     inputs.clipInRace = !g_exporting && engine::clipInRace() && inputs.carKnown;
     {
+        // Once the engine has given the car in this session, the game is one whose car the
+        // engine gives: a frame without it (a map loading, the start's countdown, a pause) records
+        // nothing, the depth search never comes back. With a 5 s window it did after every map
+        // load (the load takes longer), recorded guesses on the car in the first seconds of the
+        // map (the start camera looks at it) and joined them to the engine's first point; kept
+        // as an earlier run (TrailKeepRuns) they floated as short lines through the car at the
+        // start (the owner's B13). The first time the engine gives the car, what the depth search
+        // recorded before goes (those were guesses, the trail starts over).
         static DWORD s_carSeen = 0;
-        if (inputs.carKnown) s_carSeen = GetTickCount();
-        inputs.carFromEngine = s_carSeen && GetTickCount() - s_carSeen < 5000;
+        if (inputs.carKnown && !s_carSeen) {
+            g_pipeline.resetTrail();
+            g_pipelineB.resetTrail();
+        }
+        if (inputs.carKnown) s_carSeen = GetTickCount() | 1;
+        inputs.carFromEngine = s_carSeen != 0;
     }
     {
         // DofAutofocus Car: the engine's car; in the photo mode also the last position it gave

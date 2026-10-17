@@ -34,6 +34,7 @@
 //                             below (magenta), which Pipeline::fillBars fills as in game
 //     --nohdr                 ignore capture_NNN.hdr16 next to the capture (the game's float
 //                             image, GameHdr): render from the 8-bit image only
+//     --nospillhistory        the neon spill of each frame on its own, not over frames (A/B)
 //     --nomat                 ignore capture_NNN.mat next to the capture (which material drew
 //                             each pixel): no material masks, as before F12 wrote them
 //     --nogbuf                ignore capture_NNN.nrm16 and .lit16 next to the capture (the game's
@@ -41,6 +42,8 @@
 //                             --set GameGBuffer=1 / GameLight=1)
 //     --batch <jobs.txt>      many images in one run (shaders compile once); each line:
 //                             out.bmp [cap=file.tmcap] [preset=Golden_Hour] [move=x,y,z] [Key=Value ...]
+//                             [keep=1 frames=n]: n frames on from the last job's history (a
+//                             sequence: one capture a frame, e.g. a camera pan; time= per job)
 //   An output ending in .jpg is a preset picture for the menu (384x216, the middle 16:9).
 #include "audio.h"
 #include "config.h"
@@ -182,6 +185,8 @@ struct Job {
     float trail = 0.0f; // > 0: the neon trail of a car driving at this speed (m/s) to where the car is in the capture
     float bank = 0.0f;  // trail test: the car rolled by this many degrees (its up tilted to the right: a banked curve)
     bool clip = false;  // trail test: a clip of the map plays while the car drives (driving off, clipInRace on)
+    bool keep = false;  // keep=1: go on from the last job's history (a sequence of captures, one per job)
+    int frames = 0;     // frames=n: render n frames (0 = as many as usual)
 };
 
 struct LoadedCapture {
@@ -221,6 +226,8 @@ bool readBatch(const char* path, const Job& defaults, std::vector<Job>& jobs) {
             else if (!_strnicmp(w.c_str(), "trail=", 6)) job.trail = static_cast<float>(atof(w.c_str() + 6));
             else if (!_strnicmp(w.c_str(), "bank=", 5)) job.bank = static_cast<float>(atof(w.c_str() + 5));
             else if (!_stricmp(w.c_str(), "clip=1")) job.clip = true;
+            else if (!_stricmp(w.c_str(), "keep=1")) job.keep = true;
+            else if (!_strnicmp(w.c_str(), "frames=", 7)) job.frames = atoi(w.c_str() + 7);
             else setByKey(job.settings, w.c_str());
         }
         jobs.push_back(job);
@@ -366,6 +373,7 @@ int main(int argc, char** argv) {
     int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
     bool useMaterials = true;            // capture_NNN.mat next to the capture (--nomat: no material masks)
+    bool spillHistory = true;            // --nospillhistory: the neon spill of each frame on its own (A/B)
     bool useNormals = true;              // capture_NNN.nrm16 next to the capture (--nogbuf: none)
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
     float refocus[2] = {-2.0f, -2.0f};   // --refocus: the point clicked before (first half of the frames)
@@ -406,6 +414,8 @@ int main(int argc, char** argv) {
             useHdr = false;
         } else if (!strcmp(argv[i], "--nomat")) {
             useMaterials = false;
+        } else if (!strcmp(argv[i], "--nospillhistory")) {
+            spillHistory = false;
         } else if (!strcmp(argv[i], "--nogbuf")) {
             useNormals = false;
         } else if (!strcmp(argv[i], "--photo")) {
@@ -623,6 +633,7 @@ int main(int argc, char** argv) {
     };
 
     pipeline.setProfiling(bench);
+    pipeline.setSpillHistory(spillHistory);
     int failures = 0;
     for (const Job& job : jobs) {
         LoadedCapture* loaded = loadCapture(job.capture);
@@ -765,9 +776,11 @@ int main(int argc, char** argv) {
         // Several frames so auto exposure and TAA settle like they would in game.
         LARGE_INTEGER t0{}, t1{}, freq{};
         QueryPerformanceFrequency(&freq);
-        pipeline.resetHistory();
-        if (compare) pipelineB.resetHistory();
-        const int frames = bench ? 200 : (trail ? 150 : 40);
+        if (!job.keep) {
+            pipeline.resetHistory();
+            if (compare) pipelineB.resetHistory();
+        }
+        const int frames = job.frames > 0 ? job.frames : (bench ? 200 : (trail ? 150 : 40));
         device->BeginScene();
         for (int frame = 0; frame < frames; frame++) {
             const bool previousFrame = moving && frame == frames - 2;

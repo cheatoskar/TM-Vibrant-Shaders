@@ -22,7 +22,7 @@ const char* const kEntryPoints[] = {
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
     "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
     "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer", "PS_LampSource", "PS_LampDown", "PS_LampUp",
-    "PS_LightingGameLight", "PS_FsrEasu", "PS_FsrRcas",
+    "PS_LightingGameLight", "PS_FsrEasu", "PS_FsrRcas", "PS_SpillTemporal",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -274,6 +274,8 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_reflect.create(device, hw, hh, D3DFMT_A16B16G16R16F);
     ok &= m_spill[0].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
     ok &= m_spill[1].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
+    for (auto& t : m_spillHistory) ok &= t.create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
+    m_spillValid = false;
     ok &= m_focus[0].create(device, 1, 1, D3DFMT_R32F);
     ok &= m_focus[1].create(device, 1, 1, D3DFMT_R32F);
     ok &= m_dof.create(device, hw, hh, D3DFMT_A16B16G16R16F);
@@ -316,6 +318,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     m_clouds.destroy();
     m_reflect.destroy();
     for (auto& t : m_spill) t.destroy();
+    for (auto& t : m_spillHistory) t.destroy();
     m_dof.destroy();
     m_dofFull.destroy();
     m_dofFull2.destroy();
@@ -2206,7 +2209,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     bind(device, 0, m_nd.texture, false);
     bind(device, 1, in.color, true);
     bind(device, 2, m_skyAverage[m_skyIndex].texture, false);
-    bind(device, 3, s.neonLight > 0.0f ? m_spill[0].texture : nullptr, true);
+    bind(device, 3, s.neonLight > 0.0f ? m_spillHistory[m_spillIndex].texture : nullptr, true);
     bind(device, 4, m_adapted[m_adaptIndex].texture, false);
     device->SetVertexDeclaration(m_rainDecl);
     device->SetStreamSource(0, m_rainVB, 0, 24);
@@ -2727,6 +2730,17 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 0, m_spill[1].texture, true);
         passConstants(device, 0.0f, 1.0f / m_spill[0].height);
         runPass(device, kSpillBlur, m_spill[0]);
+        // Over frames: found anew in every frame, the light flickered on the walls next to a
+        // strip as the camera moved.
+        const int previous = m_spillIndex;
+        m_spillIndex ^= 1;
+        bind(device, 0, m_spill[0].texture, false);
+        bind(device, 1, m_spillHistory[previous].texture, true);
+        passConstants(device, (m_spillValid && m_temporalValid && m_spillHistoryOn) ? 1.0f : 0.0f, 0.0f);
+        runPass(device, kSpillTemporal, m_spillHistory[m_spillIndex]);
+        m_spillValid = true;
+    } else {
+        m_spillValid = false;
     }
 
     // 4. Lighting composite.
@@ -2738,7 +2752,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 5, m_sky.texture, false);
     bind(device, 6, m_clouds.texture, true);
     bind(device, 8, m_reflect.texture, true);
-    bind(device, 9, m_spill[0].texture, true);
+    bind(device, 9, m_spillHistory[m_spillIndex].texture, true);
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
     bind(device, 13, materials ? m_materialTexture : nullptr, false);

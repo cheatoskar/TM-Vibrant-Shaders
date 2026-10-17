@@ -43,7 +43,7 @@ constexpr Knob kKnobTable[AutoQuality::kKnobs] = {
     {"depth of field, motion blur", {"Focus", "DofBlur", "Cinematic"}, 1.0f},
     {"light shafts", {"RayMask", "RayBlur"}, 1.0f},
     {"lens flare, sharpening", {"Sharpen"}, 1.0f},
-    {"neon light", {"SpillDown", "SpillDownEngine", "SpillBlur"}, 1.0f},
+    {"neon light", {"SpillDown", "SpillDownEngine", "SpillBlur", "SpillTemporal"}, 1.0f},
 };
 
 void applyKnob(int knob, Settings& s) {
