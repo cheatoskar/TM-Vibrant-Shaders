@@ -2419,6 +2419,21 @@ float neonStrip(float3 c, float dist, float4 mat) {
     return smoothstep(0.7, 0.9, sat) * smoothstep(0.25, 0.45, blue) * smoothstep(low, low + 0.4, peak) * (mat.g < 0.1 ? 1.0 : 0.0);
 }
 
+// The same without the saturation test, for PS_NeonGlow inside a wide band of a strip's blue (the
+// curbs). The game's own sheen on the curb (its soft specular, strongest at the flat angle a few
+// metres in front of the car) mixes white into the blue: saturation 0.6-0.8 instead of 0.9, right
+// on the test's ramp, and the worn spots in the curb's texture fell below it and the clean paint
+// above. The curb in front of the car glowed in patches and the rest of it was the darker night
+// surface (the owner, A01 at night, capture_127). Still blue first (the blue test) and bright.
+float neonBand(float3 c, float dist, float4 mat) {
+    float peak = max(c.r, max(c.g, c.b));
+    float3 cl = min(c, 1.0);
+    float pl = min(peak, 1.0);
+    float blue = (cl.b - max(cl.r, cl.g)) / max(pl, 1e-3);
+    float low = lerp(0.6, 0.35, saturate((dist - 20.0) / 150.0));
+    return smoothstep(0.25, 0.45, blue) * smoothstep(low, low + 0.4, peak) * (mat.g < 0.1 ? 1.0 : 0.0);
+}
+
 // GameLight: how much of a surface's light is the game's lamps, from the light the game's own
 // shader lit it with (s15: its debug view's diffuse light, baked lightmap and prelight plus
 // ambient; the car's sun and ambient), not from the image. In the image a white wall in the
@@ -3036,6 +3051,12 @@ float4 PS_NeonGlow(float2 uv : TEXCOORD0) : COLOR0 {
             float3 cs = toLinear(gp + gn[k] - min(gn[k].r, min(gn[k].g, gn[k].b)));
             glow = max(glow, min(cs, 1.0) * neonStrip(cs, dist, mat) * saturate(exP / max(exP + exN[k], 1e-3)) * alone * own[k]);
         }
+        // Inside a wide band (all four neighbours of a neon material and about as blue): the curb's
+        // own blue, whatever white the game's sheen mixed in (neonBand), and only its blue glows
+        // (the white taken off: the sheen is no light of the strip's). A thin strip's rows next
+        // to the frame have the frame above or below: as before.
+        float inside = smoothstep(0.3, 0.6, min(min(exN[0], exN[1]), min(exN[2], exN[3])) / exP);
+        [branch] if (inside > 0.0) glow = max(glow, min(cp - min(cp.r, min(cp.g, cp.b)), 1.0) * neonBand(cp, dist, mat) * inside);
     }
     return float4(z < SKY_Z ? sqrt(glow) : 0.0, 0);
 }
