@@ -1731,7 +1731,10 @@ void markdown(const std::string& text) {
         for (const char* mark : {"**", "`"}) {
             for (size_t at; (at = line.find(mark)) != std::string::npos;) line.erase(at, strlen(mark));
         }
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.rfind("![", 0) == 0) continue; // pictures: only on the release page
+        // HTML (<details>), tables (the file hashes) and rules: only on the release page too.
+        if (line.rfind("<", 0) == 0 || line.rfind("|", 0) == 0 || line.rfind("---", 0) == 0) continue;
         // Links: [text](url) -> text.
         for (size_t open; (open = line.find('[')) != std::string::npos;) {
             const size_t close = line.find("](", open);
@@ -1742,7 +1745,8 @@ void markdown(const std::string& text) {
         if (line.empty()) {
             ImGui::Spacing();
         } else if (line[0] == '#') {
-            ImGui::TextColored(kAccent, "%s", line.substr(line.find_first_not_of("# ")).c_str());
+            const size_t title = line.find_first_not_of("# ");
+            if (title != std::string::npos) ImGui::TextColored(kAccent, "%s", line.c_str() + title);
         } else if (line.rfind("- ", 0) == 0 || line.rfind("* ", 0) == 0) {
             ImGui::Bullet();
             ImGui::TextWrapped("%s", line.c_str() + 2);
@@ -1813,7 +1817,7 @@ void drawAbout(Config& config) {
                           return false;
                       }});
     panels.push_back({"Credits", 6.0f, [] {
-                          ImGui::TextWrapped("Built with Dear ImGui, minimp3 and stb. Sharpening: AMD FidelityFX CAS. Anti-aliasing: FXAA 3.11.");
+                          ImGui::TextWrapped("Built with Dear ImGui, minimp3 and stb. Sharpening: AMD FidelityFX CAS. Upscaling: AMD FidelityFX FSR 1. Anti-aliasing: FXAA 3.11.");
                           ImGui::TextWrapped("Rain and thunder: CC0 recordings from freesound.org by Rubaoliva, loganzsound, seth-m, Fission9, TRP, "
                                              "Kinoton, Martineerok, kingsrow and bastipictures. The snow storm wind is made by the mod itself.");
                           ImGui::TextDisabled("Licences: see THIRD_PARTY_NOTICES.txt in the download.");
