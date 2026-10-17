@@ -2198,10 +2198,12 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         vc[j][2] = V[2 * 4 + j];
         vc[j][3] = V[12 + j];
     }
+    // The drops go onto the image after TAA, which took the jitter out: without it here too
+    // (with it every drop and flake shook by up to half a pixel).
     vc[3][0] = P[0];
     vc[3][1] = P[5];
-    vc[3][2] = P[8];
-    vc[3][3] = P[9];
+    vc[3][2] = P[8] - 2.0f * in.jitter[0];
+    vc[3][3] = P[9] + 2.0f * in.jitter[1];
     vc[4][0] = P[10];
     vc[4][1] = P[14];
     vc[4][2] = 2.0f / in.width;
@@ -3359,11 +3361,12 @@ bool Pipeline::stretchScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, 
     return true;
 }
 
-bool Pipeline::downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth) {
+bool Pipeline::downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth,
+                         float offsetU, float offsetV) {
     if (!m_ready || !source || !out.create(device, w, h, depth ? D3DFMT_R32F : format)) return false;
     const BOOL softwareVP = setPassStates(device);
     bind(device, 0, source, false);
-    passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
+    passConstants(device, offsetU, offsetV, 1.0f, 1.0f);
     const float mode[4] = {1.0f, 1.0f, 0.0f, 0.0f}; // c33 xy 1: as it is, alpha too (PS_Resolve)
     device->SetPixelShaderConstantF(33, mode, 1);
     runPass(device, depth ? kCopyDepth : kResolve, out);

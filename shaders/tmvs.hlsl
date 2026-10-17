@@ -3925,8 +3925,8 @@ float4 PS_Resolve(float2 uv : TEXCOORD0) : COLOR0 {
 
 // ---------------------------------------------------------------------------------
 // Temporal anti-aliasing / stabilisation (full res, after FXAA, before sharpening).
-// The game's projection can't be jittered, so this mainly calms flicker (thin lines,
-// AO/shadow noise, specular sparkle); camera motion adds sub-pixel samples on its own.
+// Without TAAJitter it mainly calms flicker (thin lines, AO/shadow noise, specular sparkle);
+// camera motion adds sub-pixel samples on its own. With it the projection is jittered.
 //   s0 = current (sRGB), s1 = history (rgb, a = view z), s2 = full normal/depth
 //   out.rgb = resolved colour, out.a = view z (for the next frame's depth check)
 // ---------------------------------------------------------------------------------
@@ -3999,7 +3999,27 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     // Disocclusion and moving objects (the car, opponents): the history must have seen
     // this surface at the depth the reprojection expects.
     float historyZ = tex2Dlod(s1, float4(prevUV, 0, 0)).a;
-    if (z < SKY_Z) {
+    if (any(u_Pass0 != 0.0)) {
+        // Jitter: the raster moves by up to a pixel from frame to frame, and at every depth
+        // edge a pixel's depth flips between the near and the far surface. Checked against the
+        // centre alone the history was thrown away there each time: edges, thin masts and stars
+        // showed the raw jittered frame and shook. The history passes when its depth lies
+        // between the nearest and farthest of the 3x3 around (as far apart as the jitter moves).
+        weight = lerp(0.1, 0.04, still);
+        float zNear = z, zFar = z;
+        [unroll] for (int j = 0; j < 9; j++) {
+            float zj = tex2Dlod(s2, float4(cuv + float2(j % 3 - 1, j / 3 - 1) * u_Screen.zw, 0, 0)).w;
+            zNear = min(zNear, zj);
+            zFar = max(zFar, zj);
+        }
+        float k = prevZ / min(z, 20000.0); // the camera's move along its axis
+        float lo = zNear * k, hi = zFar >= SKY_Z ? 1e30 : zFar * k;
+        float error = max(max(lo - historyZ, historyZ - hi), 0.0);
+        float refZ = clamp(historyZ, lo, hi);
+        float near = 1.0 - smoothstep(12.0, 25.0, refZ);
+        float reset = max(smoothstep(0.02, 0.08, error / max(refZ, 0.1)), near * smoothstep(0.06, 0.2, error));
+        weight = lerp(weight, 1.0, reset);
+    } else if (z < SKY_Z) {
         float error = abs(historyZ - prevZ);
         // Close to the camera the car moves with it: the road just behind it lies only a
         // few dm deeper than the car did a frame ago, too little in relative terms - the car
