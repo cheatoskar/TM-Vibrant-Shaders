@@ -128,6 +128,12 @@ bool g_casterSunSet = false;
 // panels): its depth and the shaded image, the size of that part.
 gfx::Target g_partDepth;
 gfx::Target g_partOut;
+// GameHdr's float scene and its added light cut to that part, so the part is shaded from the
+// game's float image like a full-screen camera (EngineLights). Without them the replay after a
+// race (its 3D view is such a part, between the menu's bars) fell back to the 8-bit guesses:
+// under Real night A01's replay came out lit golden while the race was at night (capture_125).
+gfx::Target g_partHdr;
+gfx::Target g_partAdded;
 // The game's colour clears of this frame that reached the top and the bottom row of their
 // target (only compared, never used): rows it cleared itself are no leftovers (see fillBars).
 struct ClearedRows {
@@ -1803,9 +1809,14 @@ void writeCapture(IDirect3DDevice9* device, const Pipeline::Inputs& inputs, bool
             TMVS_LOG("capture: readback failed");
             return;
         }
-        if (g_hdrValid && g_hdrScene.width == inputs.width && g_hdrScene.height == inputs.height)
+        // A part of the screen (the replay after a race): its cut-out float images.
+        if (inputs.hdr && inputs.hdr == g_partHdr.texture)
+            readHalf(device, g_partHdr, job->hdr, "hdr: readback failed");
+        else if (g_hdrValid && g_hdrScene.width == inputs.width && g_hdrScene.height == inputs.height)
             readHalf(device, g_hdrScene, job->hdr, "hdr: readback failed");
-        if (g_hdrAddedValid && g_hdrAdded.width == inputs.width && g_hdrAdded.height == inputs.height)
+        if (inputs.added && inputs.added == g_partAdded.texture)
+            readHalf(device, g_partAdded, job->added, "hdr: added light not read");
+        else if (g_hdrAddedValid && g_hdrAdded.width == inputs.width && g_hdrAdded.height == inputs.height)
             readHalf(device, g_hdrAdded, job->added, "hdr: added light not read");
         if (g_gbufValid && g_gbuf.width == inputs.width && g_gbuf.height == inputs.height)
             readHalf(device, g_gbuf, job->normals, "gbuffer: normals not read");
@@ -2105,6 +2116,31 @@ void processScene(IDirect3DDevice9* device) {
         if (g_hdrAddedValid) inputs.added = g_hdrAdded.texture;
         if (g_gbufValid && g_gbuf.width == width && g_gbuf.height == height) inputs.gbuffer = g_gbuf.texture;
         if (g_gbufLightValid && g_gbufLight.width == width && g_gbufLight.height == height) inputs.gameLight = g_gbufLight.texture;
+    } else if (g_hdrValid && part && g_hdrScene.width == desc.Width && g_hdrScene.height == desc.Height) {
+        // A part of the screen (the replay after a race, the MediaTracker editor): the float scene
+        // has the whole target's size with the camera's image at its place; that part of it, as
+        // with the depth. (Not the game's normals and light: experimental, off by default.)
+        const bool hdrCut = g_pipeline.copyColorArea(device, g_hdrScene.texture, area, g_partHdr);
+        const bool addedCut = hdrCut && g_hdrAddedValid && g_pipeline.copyColorArea(device, g_hdrAdded.texture, area, g_partAdded);
+        if (hdrCut) inputs.hdr = g_partHdr.texture;
+        if (addedCut) inputs.added = g_partAdded.texture;
+        // Each change (a limited number of lines): the owner's log tells which way the replay went.
+        static int s_partHdrLines = 0;
+        static bool s_partHdrWas = false;
+        if (hdrCut != s_partHdrWas && s_partHdrLines < 10) {
+            s_partHdrLines++;
+            if (hdrCut) TMVS_LOG("scene: the part of the screen is shaded from the game's float image (%ux%u, its added light %s)", width, height,
+                                 addedCut ? "too" : "not");
+            else TMVS_LOG("scene: the part of the screen: the float image could not be cut out, shading the 8-bit image");
+        }
+        s_partHdrWas = hdrCut;
+    } else if (part) {
+        static bool s_logged = false;
+        if (!s_logged && settings.gameHdr) {
+            s_logged = true;
+            TMVS_LOG("scene: the part of the screen is shaded from the 8-bit image (float image valid %d, %ux%u for a %ux%u target)",
+                     g_hdrValid ? 1 : 0, g_hdrScene.width, g_hdrScene.height, desc.Width, desc.Height);
+        }
     }
     inputs.depth = sceneDepth;
     inputs.width = width;
@@ -2749,6 +2785,8 @@ void onPreReset() {
     g_sceneCopy.destroy();
     g_partDepth.destroy();
     g_partOut.destroy();
+    g_partHdr.destroy();
+    g_partAdded.destroy();
     if (g_hdrGame) g_hdrGame->Release();
     g_hdrGame = nullptr;
     g_hdrLastGame = nullptr;
