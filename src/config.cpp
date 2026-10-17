@@ -1723,7 +1723,7 @@ void Config::load() {
     settings.videoCodec = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoCodec", 1, ini));
     if (settings.videoCodec < 0 || settings.videoCodec > 2) settings.videoCodec = 1;
     if (GetPrivateProfileStringW(L"Settings", L"VideoBitrate", L"", target, 32, ini)) settings.videoBitrate = static_cast<float>(_wtof(target));
-    settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
+    settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 1, ini) != 0;
     if (GetPrivateProfileStringW(L"Settings", L"RenderScale", L"", target, 32, ini)) {
         settings.renderScale = std::clamp(static_cast<float>(_wtof(target)), 0.5f, 1.0f);
     }

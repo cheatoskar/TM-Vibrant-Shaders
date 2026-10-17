@@ -256,7 +256,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Setting | Key | Range | What it does |
 |---|---|---|---|
 | Temporal AA | `TAA` | on / off (on) | Smooths edges and flicker over several frames, and the steps of long shadows under a low light. Off in the *Performance* preset. A little softness on fast movement. |
-| TAA jitter | `TAAJitter` | on / off (off) | Samples a different spot inside each pixel every frame, so TAA supersamples the edges. Off: fine grates can shimmer with it. |
+| TAA jitter | `TAAJitter` | on / off (on) | Samples a different spot inside each pixel every frame, so TAA supersamples the edges. Off: fine grates can shimmer with it. |
 | Edge smoothing | `FXAA` | on / off | Smooths edges within one frame, with SMAA or FXAA (below). Off: neither. |
 | SMAA instead of FXAA | `SMAA` | on / off (on) | SMAA 1x finds the edges and blends along them: smoother long edges (railings, roofs, the car) and sharper textures than FXAA, about 0.2 ms more at 2560x1440. Off: FXAA, as before 1.4.0, and in the *Performance* preset. A `settings.ini` or preset file from before (with `FXAA`, without `SMAA`) keeps FXAA. Runs before the render scale's upscaling, on the scene's image. |
 | Sharpening | `Sharpen` | 0 – 1 | Contrast-adaptive sharpening (CAS): brings back detail after anti-aliasing. |
