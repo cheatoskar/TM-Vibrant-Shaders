@@ -58,14 +58,14 @@ GPU time of the mod's passes (previewer, 200 frames, same captures and settings,
 | Build | Golden Hour (day) | Horizon (night) |
 |---|---|---|
 | 1.4.0 checkpoint of Oct 16 (4a99b42) | 5.96 ms | 6.22 ms |
-| Now, *Normals from the game's shaders* (GameGBuffer) off | 6.29 ms | 6.37 ms |
+| Now, *Game normals* (GameGBuffer) off | 6.29 ms | 6.37 ms |
 | Now, GameGBuffer on | 7.21 ms | 6.71 ms |
 
 What single settings cost there (Golden Hour):
 
 | Setting | GPU | Note |
 |---|---|---|
-| GameGBuffer (*Normals from the game's shaders*, off by default) | +0.9 ms | reflections on the real normals; plus a second render target for every game draw (in game only) |
+| GameGBuffer (*Game normals*, off by default) | +0.9 ms | reflections on the real normals; plus a second render target for every game draw (in game only) |
 | EngineLights | +0.25 ms | the neon spill from the game's light sources |
 | LongShadowQuality 1 (gap-free long shadows) | +0.1–0.2 ms | |
 | GameHdr | +0.1 ms in the passes | plus the game drawing into a float target (in game only) |
@@ -142,4 +142,4 @@ When there's room again it steps back up. It never changes your settings or pres
 - In the game's own options: antialiasing off (the mod does it anyway), FX post-processing off.
 - Keep the **target FPS** of auto quality at a rate your PC reaches with the shaders (e.g. 75 on a GTX 1080 Ti
   at 1440p). A target it never reaches (240) keeps it switching effects off and on every few seconds.
-- *Normals from the game's shaders* (GameGBuffer) costs ~1 ms and more in the game itself: leave it off unless you want its look.
+- *Game normals* (GameGBuffer) costs ~1 ms and more in the game itself: leave it off unless you want its look.

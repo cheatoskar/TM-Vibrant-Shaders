@@ -349,7 +349,7 @@ const char* tooltipFor(const char* key) {
         {"LampGlare", "Part of the lamps' light leaves the bright core and spreads wide and soft around them: the bulbs stay apart, the light reaches farther. 0 = off. Needs Game light sources."},
         {"LampHaze", "The light the haze takes from the lamps glows in the air around them; stronger with more haze and for far lamps. 1 = all of it, 0 = off. Needs Game light sources."},
         {"LampSkyHalos", "At night the lamps' halos also shine over the sky instead of ending at the edge of the lamp's frame. Needs Game light sources."},
-        {"Floodlights", "Brightness and glow of stadium floodlights, start lights and other lamps, and the light they throw around them. The neon borders and Light sources stay as they are. 1 = as before. Needs Game light sources."},
+        {"Floodlights", "Brightness and glow of stadium floodlights, start lights and other lamps, and the light they throw around them. The neon borders and the light intensity stay as they are. 1 = as before. Needs Game light sources."},
         {"ToneKnee", "Where bright colours start to roll off instead of clipping."},
         {"NightSurfaces", "How bright floodlit surfaces get at night. 1 keeps the game's white."},
         {"Rain", "0 is dry, 2 is a downpour."},
@@ -381,7 +381,7 @@ const char* tooltipFor(const char* key) {
         {"EngineMoon", "Under the black hole: the game's moonlight (baked light and shadows, glints, the car) comes from the black hole, stays as the game has it, or is left out. (next map)"},
         {"GameSkyClouds", "Keeps the game's sunset clouds, and the sea mirroring them, under night skies."},
         {"GameHdr", "The game draws into a float image, so bright light keeps its texture. The capture key saves it too."},
-        {"CleanHighlights", "Floodlit white at night stays even. Off is the 1.4.0-preview look."},
+        {"CleanHighlights", "Floodlit white at night stays even. Off: the look of earlier versions, with frost-like patches on floodlit white."},
         {"EngineLights", "Lamps and glows glow as the game draws them instead of being guessed from the image. Needs Game HDR."},
         {"CasterShadows", "Long shadows from the game's own meshes, cast from the sun or black hole. Needs Long shadows."},
         {"CasterAlphaTest", "Fences, grids and lattice towers cast their pattern into the long mesh shadows, holes included. Off: they cast none."},
@@ -1323,9 +1323,9 @@ bool drawStudio(Config& config, Settings& s) {
     if (confirm("Reset preset?", ("Reset all settings to " + config.basePreset() + "?").c_str(), "Reset")) {
         // Back to the preset your changes started from (a map's look: its own look again).
         if (config.basePreset() == kMapLookPreset) {
-            const Settings base = config.baseline();
+            const Settings look = config.baseline();
             const bool enabled = s.enabled;
-            s = base;
+            s = look;
             s.enabled = enabled;
             config.preset = kMapLookPreset;
             config.markDirty();
@@ -1709,9 +1709,9 @@ void markdown(const std::string& text) {
         // Links: [text](url) -> text.
         for (size_t open; (open = line.find('[')) != std::string::npos;) {
             const size_t close = line.find("](", open);
-            const size_t end = close == std::string::npos ? std::string::npos : line.find(')', close);
-            if (end == std::string::npos) break;
-            line = line.substr(0, open) + line.substr(open + 1, close - open - 1) + line.substr(end + 1);
+            const size_t shut = close == std::string::npos ? std::string::npos : line.find(')', close);
+            if (shut == std::string::npos) break;
+            line = line.substr(0, open) + line.substr(open + 1, close - open - 1) + line.substr(shut + 1);
         }
         if (line.empty()) {
             ImGui::Spacing();
@@ -1831,6 +1831,18 @@ bool layoutButton(bool full) {
 }
 
 void drawHeader(Config& config, Settings& s) {
+    // The mod's icon left of the name, as tall as the title font. It is made at exactly that many
+    // pixels and drawn on whole pixels, texel for pixel: sharp at every menu size.
+    const int iconSize = static_cast<int>(g_fontTitle->FontSize + 0.5f);
+    const ImTextureID icon = g_host->icon ? g_host->icon(iconSize) : ImTextureID{};
+    if (icon) {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const ImVec2 at(std::floor(p.x), std::floor(p.y));
+        ImGui::Dummy(ImVec2(static_cast<float>(iconSize), static_cast<float>(iconSize)));
+        ImGui::GetWindowDrawList()->AddImageRounded(icon, at, ImVec2(at.x + iconSize, at.y + iconSize), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                                                    IM_COL32_WHITE, iconSize * 0.18f);
+        ImGui::SameLine(0.0f, 8.0f * g_scale);
+    }
     ImGui::PushFont(g_fontTitle);
     ImGui::TextColored(kAccent, "TM VIBRANT SHADERS");
     ImGui::PopFont();

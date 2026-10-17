@@ -184,9 +184,10 @@ target_include_directories(tmvs_preview PRIVATE ${minimp3_SOURCE_DIR})
 set_property(SOURCE sounds/sounds.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/sounds")
 file(GLOB TMVS_SOUND_FILES "${CMAKE_CURRENT_SOURCE_DIR}/sounds/*.mp3")
 set_source_files_properties(sounds/sounds.rc PROPERTIES OBJECT_DEPENDS "${TMVS_SOUND_FILES}")
-# The preset pictures (tools/make-thumbnails.ps1), found next to thumbnails.rc.
-set_property(SOURCE thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails")
-file(GLOB TMVS_THUMBNAIL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails/*.jpg")
+# The preset pictures (tools/make-thumbnails.ps1), found next to thumbnails.rc, and the menu's icon.
+set_property(SOURCE thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails"
+  "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icons")
+file(GLOB TMVS_THUMBNAIL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails/*.jpg" "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icons/icon_a_64.png")
 set_source_files_properties(thumbnails/thumbnails.rc PROPERTIES OBJECT_DEPENDS "${TMVS_THUMBNAIL_FILES}")
 target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
 

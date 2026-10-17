@@ -30,5 +30,11 @@ void drawSplitLabels(unsigned char* pixels, int width, int height, int bytesPerP
 bool decodeJpeg(const void* data, size_t size, std::vector<uint32_t>& pixels, int& width, int& height);
 bool readJpeg(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height);
 
+// The mod's icon (packaging/icons/icon_a_64.png, embedded by thumbnails/thumbnails.rc) for the
+// menu's header: size x size 0xAARRGGBB pixels, area-averaged from the embedded PNG, rows
+// top-down. False when the DLL holds no icon (the offline tools).
+constexpr int kIconResource = 199;
+bool menuIcon(int size, std::vector<uint32_t>& pixels);
+
 } // namespace image
 } // namespace tmshaders

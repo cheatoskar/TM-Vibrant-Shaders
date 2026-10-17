@@ -10,6 +10,10 @@ namespace thumbnails {
 // Managed textures: they survive a device reset.
 IDirect3DTexture9* get(IDirect3DDevice9* device, const std::string& preset);
 
+// The mod's icon for the menu's header, size x size pixels (drawn texel for pixel). Managed, kept
+// until the size or the device changes. nullptr = none.
+IDirect3DTexture9* icon(IDirect3DDevice9* device, int size);
+
 // Saves the middle of the finished frame (before the HUD) as a preset's picture.
 bool savePicture(IDirect3DDevice9* device, IDirect3DSurface9* frame, const std::wstring& path);
 

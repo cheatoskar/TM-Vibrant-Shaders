@@ -1,6 +1,6 @@
 # TM Vibrant Shaders for ManiaPlanet (TrackMania 2)
 
-**Status: preview (1.4.0-preview), tested in the game on Stadium.** The interface (HUD, menus,
+**Status: released with 1.4.0, tested in the game on Stadium.** The interface (HUD, menus,
 chat) is left alone. The TMNF mod's effects, on what ManiaPlanet's deferred HDR renderer
 knows (its normals, material colours, sun shadow maps, motion vectors and HDR image):
 
@@ -76,15 +76,15 @@ Settings and your presets are in `Documents\ManiaPlanet\TMVS` (`settings.ini`, `
 the same format as in TMNF. The *Shaders* page also shares a look as one line of text (*Copy share code* / *Paste share code*, `TMVS1:...`); a code from TrackMania Nations/United loads here and the other way round ([docs/settings.md](../docs/settings.md#share-a-preset-as-text)). ManiaPlanet's own options are in `maniaplanet.ini`, on the Settings
 page, panel "ManiaPlanet":
 - **HDR stage:** on = the look on the engine's HDR image, off = on its finished image.
-- **Light sources from the engine's draws** (`EngineLightDraws`, on by default since the owner's test: grass no longer glows, the road borders still do): the lamps, light
+- **Light sources from the engine's draws** (`EngineLightDraws`, *Game light sources*, on by default: grass no longer glows, the road borders still do): the lamps, light
   strips, screens, halos and the car's lights glow as the engine draws them, nothing is guessed
   from colours (TMNF's EngineLights). The draws of self-illuminated materials (`TMapSelfIllum`,
   `TMapAdvert`, `TMapIllum`) and the additive ones (`Tech3_Block_TAdd`: halos) are drawn a second
   time into a float buffer of their own (a self-illuminated one twice: the second time with its
   light texture black, subtracted, so only its own light stays); later draws over them take their
   share away again. The debug view "Light sources" shows what counts as light.
-- **Black hole moon** (`BlackHoleMoon`, 0 – 2, **off by default**; TMNF's `EngineMoon` *from the
-  black hole*, done in the shaders): on night maps under a sky with the black hole, the game's moon
+- **Black hole moon** (`BlackHoleMoon`, 0 – 2, **off by default**; TMNF's *Game moonlight* from the
+  black hole, done in the shaders): on night maps under a sky with the black hole, the game's moon
   (its blue glint on chrome, glass and the ring sculptures, and its light) is taken out of the
   picture and the black hole lights the scene instead, warm, as bright as the moon was (1) or
   brighter. The engine's lighting pass (`Block_DefReadP1_p`) lights with light x N.L x shadow

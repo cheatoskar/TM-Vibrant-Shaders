@@ -498,6 +498,7 @@ void draw(IDirect3DDevice9* device) {
         host.picture = [device](const std::string& preset) {
             return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::get(device, preset)));
         };
+        host.icon = [device](int size) { return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::icon(device, size))); };
         const AutoQuality* aq = g_status.autoQuality;
         host.autoQualityReduced = [aq]() -> const char* { return aq && aq->reducedCount() ? aq->summary() : nullptr; };
         host.mapComments = [](std::string& comments) { return engine::currentMapComments(comments); };

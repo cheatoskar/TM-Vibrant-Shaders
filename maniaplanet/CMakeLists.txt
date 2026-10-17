@@ -161,8 +161,11 @@ add_library(tmvs_mp SHARED
   ${TMVS_ROOT}/sounds/sounds.rc
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
 )
-# The built-in presets' pictures, embedded like in the TMNF DLL.
-set_property(SOURCE ${TMVS_ROOT}/thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/thumbnails")
+# The built-in presets' pictures and the menu's icon, embedded like in the TMNF DLL.
+set_property(SOURCE ${TMVS_ROOT}/thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/thumbnails"
+  "${TMVS_ROOT}/packaging/icons")
+file(GLOB MP_THUMBNAIL_FILES "${TMVS_ROOT}/thumbnails/*.jpg" "${TMVS_ROOT}/packaging/icons/icon_a_64.png")
+set_source_files_properties(${TMVS_ROOT}/thumbnails/thumbnails.rc PROPERTIES OBJECT_DEPENDS "${MP_THUMBNAIL_FILES}")
 # The weather sounds (src/audio.cpp loads them from the DLL that holds its code), found next to sounds.rc.
 set_property(SOURCE ${TMVS_ROOT}/sounds/sounds.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/sounds")
 file(GLOB MP_SOUND_FILES "${TMVS_ROOT}/sounds/*.mp3")
