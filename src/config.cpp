@@ -1351,9 +1351,9 @@ void applyPreset(Settings& s, Preset preset) {
             s.lensFlare = 0.4f;
             s.reflections = 0.5f;
             s.contrast = 1.1f;
-            s.saturation = 1.1f;
+            s.saturation = 1.0f;   // 1.1 and temperature 0.75 until the owner's test of 2026-10-17
             s.vibrance = 0.3f;
-            s.temperature = 0.75f;
+            s.temperature = 1.0f;
             s.shadowTint = 0.4f;
             s.vignette = 0.3f;
             break;
