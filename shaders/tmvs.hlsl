@@ -57,6 +57,7 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
+float4 u_Neon      : register(c58); // x: 1 = the neon strips are known by their material (s13 g 0 on them, above 0.1 elsewhere; PS_NeonGlow), 0 = by their colour
 float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
 float4 u_Water2    : register(c51); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
                                     // y (EngineLights): the part of the added light taken from the lamp's core, 1 - Floodlights x (1 - LampGlare) (0 = as before, below 0 brighter); z: the part added over the sky (LampSkyHalos: Floodlights x (1 - LampGlare); 0 = dropped, as before); w: Floodlights for the light they spill (1 = as before)
@@ -2404,7 +2405,9 @@ float removeGameSun(float3 c, float3 nWorld, float3 rd, float sat, float night) 
 // stripe in a grey texture: only their colour tells them. Bright, deeply saturated blue (in the
 // game's float image above 1.0 near by); not the paler, darker blue of platform paint or banner
 // letters, not floodlit grass (green), white or a car. Returns 0..1.
-//   c = linear colour (unclamped), mat = the game's material (g: car, glass, grass)
+//   c = linear colour (unclamped), mat = the game's material (g: car, glass, grass; with the neon
+//   strips known by their material, u_Neon.x, also above 0.1 on everything but those materials:
+//   the colour then only picks the strip out of its material's texture)
 float neonStrip(float3 c, float dist, float4 mat) {
     float peak = max(c.r, max(c.g, c.b));
     float3 cl = min(c, 1.0);
@@ -2986,15 +2989,26 @@ float2 neonStep(int k) { return k == 0 ? float2(0, 1) : (k == 1 ? float2(0, -1) 
 // How much bluer than its red and green: a neutral frame or wall blended in adds nothing.
 float neonExcess(float3 g) { return max(g.b - max(g.r, g.g), 0.0); }
 
+// The neon material (u_Neon.x 1, the only way this pass runs): the mask's g is 0 on the strips'
+// materials and above 0.1 on everything else (Pipeline::kNotNeonG), the test neonStrip() makes.
+float neonMaterialAt(float2 uv) { return tex2Dlod(s13, float4(uv, 0, 0)).g < 0.1 ? 1.0 : 0.0; }
+
 // s0 = the game's float image, s14 = its added light (both point), s1 = full normal/depth,
 // s13 = materials. out.rgb = the square root of the strips' light in the pixel (linear, as the
 // lighting pass's neon glow before its x 0.75, BorderGlow and the highlight boost): 8 bits a
 // channel, half the bandwidth, and the root keeps the faint far ones apart.
+// Only pixels of a neon material glow (the road borders' and curbs' textures; the engine tells
+// them, Material::Neon), and only their neighbours of a neon material lend them a share: a blue
+// floor, the lanes' paint or the start banner's letters are another material however blue and
+// bright they are. The colour only says how much of the material's texture is its blue strip and
+// how bright it glows. (Before, an 8 m ring of the same blue around the pixel told a floor from a
+// strip: from far away and at some angles the floors still glowed, capture_116, 121, 124.)
 float4 PS_NeonGlow(float2 uv : TEXCOORD0) : COLOR0 {
     // Most of the screen has no blue at all: done after one read (no glow without a share of it).
     [branch] if (neonExcess(tex2Dlod(s0, float4(uv, 0, 0)).rgb) <= 0.01) return 0;
-    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
     float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
+    [branch] if (mat.g >= 0.1) return 0;
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
     float dist = length(viewPosition(uv, z));
     float3 gp = neonSurface(uv);
     float3 cp = toLinear(gp);
@@ -3002,41 +3016,25 @@ float4 PS_NeonGlow(float2 uv : TEXCOORD0) : COLOR0 {
     float exP = neonExcess(gp);
     [branch] if (exP > 0.01 && z < SKY_Z) {
         float3 gn[4];
-        float exN[4];
+        float exN[4], own[4];
         [unroll] for (int k = 0; k < 4; k++) {
-            gn[k] = neonSurface(uv + neonStep(k) * u_Screen.zw);
-            exN[k] = neonExcess(gn[k]);
+            float2 nuv = uv + neonStep(k) * u_Screen.zw;
+            gn[k] = neonSurface(nuv);
+            own[k] = neonMaterialAt(nuv);
+            exN[k] = neonExcess(gn[k]) * own[k];
         }
         [unroll] for (int k = 0; k < 4; k++) {
+            // Another material next door lends nothing (its blue is no strip's).
             // A strip on its own next door (the edge of a wide one): this pixel's share of its blue.
             float3 cn = toLinear(gn[k]);
-            glow = max(glow, min(cn, 1.0) * neonStrip(cn, dist, mat) * saturate(exP / max(exN[k], 1e-3)));
+            glow = max(glow, min(cn, 1.0) * neonStrip(cn, dist, mat) * saturate(exP / max(exN[k], 1e-3)) * own[k]);
             // A thin one split over the two: their blue together, less the neighbour's grey (the
             // frame's share of it). Only with no blue on either side of the pair: inside a wide
-            // blue area (the lanes' paint, a flag) two pixels are just twice its colour.
+            // blue band (the curbs) two pixels are just twice its colour.
             float outside = max(exN[k % 2 == 0 ? k + 1 : k - 1], neonExcess(neonSurface(uv + neonStep(k) * 2.0 * u_Screen.zw)));
             float alone = saturate(2.0 - 3.0 * outside / max(exP + exN[k], 1e-3));
             float3 cs = toLinear(gp + gn[k] - min(gn[k].r, min(gn[k].g, gn[k].b)));
-            glow = max(glow, min(cs, 1.0) * neonStrip(cs, dist, mat) * saturate(exP / max(exP + exN[k], 1e-3)) * alone);
-        }
-        // A strip is narrow, a painted floor is wide: how much of a ring 8 m around (as facing the
-        // eye) is the same blue. The blue floor outside the stadium (B02 at night, capture_116) and
-        // along A01's stadium wall (capture_121) is bright enough for the colour test and two of
-        // its pixels together always were: the whole floor glowed like a strip. A strip or a neon
-        // curb band (1-2.5 m wide, A01, capture_120) covers a tenth of the ring or less, the floor
-        // all of it and half at its edges: a ring of 3 m left the floor's edges glowing as frayed,
-        // blotchy bands (121). A share of the ring, not a hard test of four points: on the curbs
-        // those fell on the paler blue next door or on a white block and punched holes into the
-        // glow. Off the screen: its edge. The game's image with its added light (half the reads: the
-        // lamps' halos are white and add no blue excess).
-        [branch] if (max(glow.r, max(glow.g, glow.b)) > 0.0) {
-            float2 reach = 8.0 / max(length(viewPosition(uv + float2(u_Screen.z, 0), z) - viewPosition(uv, z)), 1e-5) * u_Screen.zw;
-            float cover = 0.0;
-            [unroll] for (int side = 0; side < 6; side++) {
-                float a = (side + 0.5) * 1.047198;
-                cover += smoothstep(0.5, 0.8, neonExcess(tex2Dlod(s0, float4(saturate(uv + float2(cos(a), sin(a)) * reach), 0, 0)).rgb) / exP);
-            }
-            glow *= 1.0 - smoothstep(0.3, 0.5, cover / 6.0);
+            glow = max(glow, min(cs, 1.0) * neonStrip(cs, dist, mat) * saturate(exP / max(exP + exN[k], 1e-3)) * alone * own[k]);
         }
     }
     return float4(z < SKY_Z ? sqrt(glow) : 0.0, 0);

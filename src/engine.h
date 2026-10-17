@@ -124,13 +124,20 @@ bool relightNight(bool night);
 bool keepNight(bool fix);
 // The game's lens flares since the last call (for the log): other lights, the sun, the sun's hidden.
 void flareCounts(unsigned& other, unsigned& sun, unsigned& hidden);
-// What the material being drawn is (from its shader file), Other between draws.
-enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5 };
+// What the material being drawn is (from its shader file; Neon: from its textures, the neon
+// strips of Stadium's road borders and curbs), Other between draws.
+enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5, Neon = 6 };
 Material currentMaterial();
 // The class and shader file of a material (currentShader; false: no name). For F12's
 // material ids (capture_NNN.mat).
 Material materialClass(const void* shader);
 bool materialFile(const void* shader, wchar_t* out, size_t size);
+// Its textures' files, "; " between them (false: none read).
+bool materialTextures(const void* shader, wchar_t* out, size_t size);
+// The draws' materials are known and their textures can be read: the neon strips are told by
+// their material (Material::Neon), not by their colour. False on an unknown build, without the
+// draw hooks, or while no texture had a file name yet.
+bool neonMaterialsKnown();
 // Development: log each material once with its file (tmvs.log "shader ...").
 void shaderCensus(bool on);
 
