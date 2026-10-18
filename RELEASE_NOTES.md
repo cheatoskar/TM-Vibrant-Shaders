@@ -61,9 +61,12 @@ Real-time lighting, weather and skies for **TrackMania Nations & United Forever*
 - The neon trail tracks the car's true position directly from the engine: no flicker, no gaps, along banked roads and loops; earlier runs can stay, dimmer.
 - Realistic storm audio: recorded winter storm wind for snowstorms.
 
+**Works with other mods**
+- The speedometer mod **CenterSpeed** and this mod run together (with both loaded, this mod's menu moves to `F5`, as CenterSpeed uses `F8`).
+
 **Install (TrackMania Nations Forever / United Forever):**
-1. Download **`TM-Vibrant-Shaders.zip`** and extract it.
-2. Run **`TM-Vibrant-Shaders-Setup.exe`** to install into TrackMania ModLoader or game folders.
-3. In-game: `F8` opens menu, `F7` toggles shaders.
+- **With the ModLoader (updates itself):** close the ModLoader, add `- 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'` under `servers:` in `%LOCALAPPDATA%\TMLoader\config.yaml`, then tick *TM Vibrant Shaders* in your profile. Every new version then comes by itself.
+- **With the setup:** download **`TM-Vibrant-Shaders.zip`**, extract it and run **`TM-Vibrant-Shaders-Setup.exe`** (ModLoader or game folder).
+- In-game: `F8` opens the menu, `F7` toggles the effects. [Full installation guide](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/docs/install.md).
 
 Full details in the [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/CHANGELOG.md).
