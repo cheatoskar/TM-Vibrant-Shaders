@@ -8,7 +8,7 @@ namespace tmvs_mp {
 namespace {
 constexpr double kWindow = 2.0; // seconds of frames per decision
 constexpr double kSettle = 3.0; // after a change, let the new frame rate show
-// Against cutting and restoring in a loop (the TMNF owner, target 61: at 57 FPS six effects off,
+// Against cutting and restoring in a loop (my TMNF test, target 61: at 57 FPS six effects off,
 // one back every 4 - 6 s, all off again 20 s later): a cut stays at least kHold, a knob comes
 // back only after kCalmWindows windows in a row with room for it (the tightest of them counts),
 // and one cut again within kBounce of coming back stays off for kBlocked.

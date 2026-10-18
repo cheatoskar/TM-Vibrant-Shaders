@@ -93,7 +93,7 @@ void publishMouseOwner(bool want) {
 
 // ImGui's DX9 renderer draws with the fixed-function pipeline and sets only part of its state.
 // The rest is whatever the game's last draw left. In the replay viewer that looks like a
-// projected texture transform on stage 0 (the owner's screen 106: the preset pictures smeared
+// projected texture transform on stage 0 (my screen 106: the preset pictures smeared
 // into a fan from their corner, every fill and every letter, which all sample the font texture,
 // gone); the log line below names what was found. The
 // states below are set to their defaults for our draw and given back afterwards: the game may
@@ -199,7 +199,7 @@ const char* g_menuWhy = nullptr;
 // A hotkey's window message (handleHotkeys does the action when polling sees the key). One nobody
 // pressed (scan code 0: dev.ini's key actions, posted) is never seen by polling: it is done from
 // here. For the log: how old the message is and when polling saw the key, so a late message
-// pump shows (the owner's report: in the replay viewer the menu came seconds late).
+// pump shows (my report: in the replay viewer the menu came seconds late).
 void hotkeyMessage(unsigned vk, keys::Action action, LPARAM lparam) {
     const bool posted = ((lparam >> 16) & 0xFF) == 0;
     if (posted) keys::push(action);
@@ -264,7 +264,7 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lparam & (1 << 30))) {
         // The menu, effects and photo keys: done once a frame by polling (handleHotkeys), as Capture,
         // Reload and Trace are; their messages are only kept from the game here. In the replay viewer
-        // the messages came seconds late (the owner's report), polling sees the key at the next frame.
+        // the messages came seconds late (my report), polling sees the key at the next frame.
         // With a text field in the menu focused only F keys count, so typing can't trigger them.
         const bool typing = config.showOverlay && ImGui::GetIO().WantTextInput;
         const keys::Action action = keys::resolve(static_cast<unsigned>(wparam), typing);
@@ -303,7 +303,7 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
         }
         if (msg == WM_MOUSEWHEEL) {
-            // Owner report: the wheel didn't scroll the menu. Once: does it get here at all?
+            // My report: the wheel didn't scroll the menu. Once: does it get here at all?
             static bool logged = false;
             if (!logged) {
                 logged = true;
@@ -416,7 +416,7 @@ void draw(IDirect3DDevice9* device) {
     handleHotkeys(); // also without the overlay (Capture, Reload and Trace)
     if (!g_initialized) return;
     {
-        // The menu opening and closing, for the log (the owner's report: it closed by itself).
+        // The menu opening and closing, for the log (my report: it closed by itself).
         static bool s_shown = false;
         if (Config::get().showOverlay != s_shown) {
             s_shown = Config::get().showOverlay;

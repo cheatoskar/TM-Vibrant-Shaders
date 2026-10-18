@@ -558,7 +558,7 @@ void compareOnDevice(const std::string& name, const std::vector<unsigned char>& 
     if (r) r->Release();
 }
 
-// --bench: GPU time of full-screen layers at the owner's resolution, drawn by the game's shader
+// --bench: GPU time of full-screen layers at my resolution, drawn by the game's shader
 // into the float scene alone, by the normal patch into two targets and by the light patch into
 // three. The difference is what the extra targets cost per layer of the game's opaque draws (a
 // frame's opaque draws cover the screen about 1.5-3 times: the depth test drops the rest).

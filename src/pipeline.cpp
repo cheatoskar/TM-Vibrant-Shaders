@@ -1832,7 +1832,7 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     // The player drives: also while a clip of the map plays (a camera in a loop, texts at the
     // start). Those clips stopped the recording, and when one ended the car was 130 - 340 m from
     // its last point: taken for a missed restart, the trail started over (every such line in the
-    // owner's log came with "cinematic off"; one clip right after each start: the trail came 6 s
+    // my log came with "cinematic off"; one clip right after each start: the trail came 6 s
     // late).
     const bool recording = !m_trailFrom && (in.driving || in.clipInRace);
     // A restart the hooks didn't see (the log had "race reset" on some restarts only, the old run
@@ -2441,7 +2441,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Quality 2: the strips' glow by how much of a strip each pixel covers (PS_NeonGlow), added
     // after the lighting pass (w 0 there) and taken by the spill. Found by each pixel alone, a
     // strip 1-2 px high far away counted or not by where it fell between two rows, and its glow
-    // on the wall pulsed as the camera crept towards it (the owner, A01 at night).
+    // on the wall pulsed as the camera crept towards it (my test, A01 at night).
     // Only with the strips known by their material (the mask's neon class, Inputs::neonMaterials):
     // by colour, the pass let blue floors, lane paint and the start banner's letters glow as well
     // (bright enough near by, and two of their pixels together always were; capture_116, 121, 124,
@@ -2834,7 +2834,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         // res by the four bilinear taps. Found in the taps themselves (the mean of 2x2 pixels), a
         // strip 1-2 px high far away, averaged with the dark wall beside it, counted or not by
         // where it fell, and the blue light on the wall flickered as the camera crept towards it
-        // (the owner, A01 at night). The mean of light already found is the same wherever it falls.
+        // (my test, A01 at night). The mean of light already found is the same wherever it falls.
         // Lower quality (and auto quality's fewer samples): the cheaper way, as before.
         const bool perPixel = s.quality >= 2 &&
                               (m_spillSource.valid() || m_spillSource.create(device, m_width, m_height, D3DFMT_A16B16G16R16F));

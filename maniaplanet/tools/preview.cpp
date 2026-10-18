@@ -301,7 +301,7 @@ struct TrailShape {
 };
 
 // A chase camera rigidly behind the car (6 m back, 3.3 m up, looking 9 degrees down, 2560x1440 at
-// the game's 938 px focal length, as in the owner's captures): where a point is on the screen.
+// the game's 938 px focal length, as in my captures): where a point is on the screen.
 struct ChaseCamera {
     V3 eye, right, up, fwd;
     ChaseCamera(V3 car, V3 heading) {

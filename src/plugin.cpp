@@ -1355,7 +1355,7 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     }
     // The float target starts the camera as the game's own did. The game clears its target before
     // the camera begins (opaque black), so that clear never reached the float one, which kept the
-    // last frames where nothing opaque is drawn: the sky. Some skies (B13-Obstacle, owner
+    // last frames where nothing opaque is drawn: the sky. Some skies (B13-Obstacle, my test
     // 2026-10-17) blend over what is there by its alpha, and the float target doesn't cut the alpha
     // at 1 as the 8-bit one does: the sky added up frame after frame into the hundreds (its alpha
     // counted the frames since the map loaded) and Bloom made white blobs of it. Without a clear of
@@ -1479,7 +1479,7 @@ void endScaledCamera(IDirect3DDevice9* device) {
     } else if (g_rs.partUntil && static_cast<LONG>(GetTickCount() - g_rs.partUntil) >= 0) {
         g_rs.partUntil = 0;
     }
-    // Once per map, a few seconds in: what the game did with the scaled target (the owner's log).
+    // Once per map, a few seconds in: what the game did with the scaled target (my log).
     if (!s_summed && GetTickCount() - s_since > 8000) {
         s_summed = true;
         const RenderScaleState::Counts& c = g_rs.counts;
@@ -1931,7 +1931,7 @@ void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3D
     }
     // Only a clear of the bar rows themselves is the game's own bars. One that also covered the
     // band was the frame's first clear, the band drawn over it after: after an alt-tab the game
-    // clears the whole screen black every frame, which left the bars black and unshaded (owner,
+    // clears the whole screen black every frame, which left the bars black and unshaded (my test,
     // 2026-10-16: "the mirroring isn't there" after minimising).
     const bool clearedTop = g_clearedTop.target == target && g_clearedTop.frame == g_frame && g_clearedTop.bottom <= area.top;
     const bool clearedBottom = g_clearedBottom.target == target && g_clearedBottom.frame == g_frame && g_clearedBottom.top >= area.bottom;
@@ -2141,7 +2141,7 @@ void processScene(IDirect3DDevice9* device) {
         const bool addedCut = hdrCut && g_hdrAddedValid && g_pipeline.copyColorArea(device, g_hdrAdded.texture, area, g_partAdded);
         if (hdrCut) inputs.hdr = g_partHdr.texture;
         if (addedCut) inputs.added = g_partAdded.texture;
-        // Each change (a limited number of lines): the owner's log tells which way the replay went.
+        // Each change (a limited number of lines): my log tells which way the replay went.
         static int s_partHdrLines = 0;
         static bool s_partHdrWas = false;
         if (hdrCut != s_partHdrWas && s_partHdrLines < 10) {
@@ -2202,7 +2202,7 @@ void processScene(IDirect3DDevice9* device) {
         // load (the load takes longer), recorded guesses on the car in the first seconds of the
         // map (the start camera looks at it) and joined them to the engine's first point; kept
         // as an earlier run (TrailKeepRuns) they floated as short lines through the car at the
-        // start (the owner's B13). The first time the engine gives the car, what the depth search
+        // start (my B13). The first time the engine gives the car, what the depth search
         // recorded before goes (those were guesses, the trail starts over).
         static DWORD s_carSeen = 0;
         if (inputs.carKnown && !s_carSeen) {
@@ -2471,7 +2471,7 @@ void updateJitter() {
     // export's supersampling: no TAA, and the game shifts its samples itself.
     const bool supersampled = g_exporting && (g_export.samplesPerFrame > 1 || g_export.subFrames);
     // The compare split: its other side (the game's image, or a preset shaded a second time) has
-    // no TAA of this frame to take the jitter out again and trembled (owner, 2026-10-17).
+    // no TAA of this frame to take the jitter out again and trembled (my test, 2026-10-17).
     const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0 &&
                     !photo::tiling() && !supersampled && !photo::splitShown();
     if (!on) {

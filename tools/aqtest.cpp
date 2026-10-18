@@ -40,7 +40,7 @@ struct Run {
 
 int main() {
     log::setFileName(L"tmvs_aqtest.log"); // never the game's log
-    // The owner's map start (16:58:55 - 16:59:07): menus, the map's first 3D frame, a hitch at
+    // My map start (16:58:55 - 16:59:07): menus, the map's first 3D frame, a hitch at
     // 8 s, 76 FPS until 13 s, then the GPU's real 120 FPS. Before: cut at the 8 s grace's end.
     {
         Run r;
