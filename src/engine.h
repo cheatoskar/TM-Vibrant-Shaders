@@ -125,8 +125,9 @@ bool keepNight(bool fix);
 // The game's lens flares since the last call (for the log): other lights, the sun, the sun's hidden.
 void flareCounts(unsigned& other, unsigned& sun, unsigned& hidden);
 // What the material being drawn is (from its shader file; Neon: from its textures, the neon
-// strips of Stadium's road borders and curbs), Other between draws.
-enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5, Neon = 6 };
+// strips of Stadium's road borders and curbs; Dirt: the terrain's Soil shaders), Other between
+// draws. Seven at most: the class takes the stencil's low three bits.
+enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5, Neon = 6, Dirt = 7 };
 Material currentMaterial();
 // The class and shader file of a material (currentShader; false: no name). For F12's
 // material ids (capture_NNN.mat).

@@ -9,7 +9,7 @@
         (>= 0.9) becomes a lamp / the car's body. Not the game's materials: a plumbing test.
 
 capture_NNN.mat: "TMM1", width, height, count (uint32 each), then per id 1..count: class
-(uint8, engine::Material: 0 other, 1 light, 2 car, 3 glass, 4 grass, 5 water, 6 neon), flags (uint8:
+(uint8, engine::Material: 0 other, 1 light, 2 car, 3 glass, 4 grass, 5 water, 6 neon, 7 dirt), flags (uint8:
 1 depth writes, 2 one-one blending, 4 its textures were read), draws (uint32), name length (uint16) and
 UTF-8 name (the material's shader file, then " | " and its textures' files when they were read); then one id byte per pixel, rows top-down (0: nothing drawn with depth).
 The brightness columns read capture_NNN.tmcap (the game's 8-bit image) and capture_NNN.hdr16
@@ -21,7 +21,7 @@ import sys
 
 import numpy as np
 
-CLASSES = ["other", "LIGHT", "car", "glass", "grass", "water", "NEON"]
+CLASSES = ["other", "LIGHT", "car", "glass", "grass", "water", "NEON", "dirt"]
 
 
 def read_mat(path):

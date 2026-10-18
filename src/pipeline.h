@@ -128,7 +128,7 @@ public:
     // glows). Debug view "Materials" shows them (lamps yellow, cars red, glass cyan, water blue,
     // added light magenta).
     static constexpr int kMaterialView = 8;
-    static constexpr int kMaterialClasses = 5;
+    static constexpr int kMaterialClasses = 7;
     static constexpr unsigned long kAddedLightBit = 0x08;
     // The neon strips' class (engine::Material::Neon) and, with Inputs::neonMaterials, the mask's
     // g everywhere else that had none (28/255 = 0.11): the strip test's "no car, glass or grass"
@@ -136,6 +136,15 @@ public:
     // and every other use of g reads it as before (grass .25 +- .1, car .75, debug view .125).
     static constexpr int kNeonClass = 6;
     static constexpr unsigned kNotNeonG = 28;
+    // Dirt (engine::Material::Dirt): g 77/255 = 0.30, inside the lighting pass's grass test
+    // (.25 +- .1: no mirror and no water) at no cost in its slots and registers; only its puddles
+    // tell them apart (g < .275 grass). The debug view shows it as grass.
+    static constexpr int kDirtClass = 7;
+    static constexpr unsigned kDirtG = 77;
+    // A class's g in the mask (0..255): car 255, glass 128, grass 64, dirt 77, else `other`.
+    static constexpr unsigned classG(int c, unsigned other) {
+        return c == 2 ? 255u : (c == 3 ? 128u : (c == 4 ? 64u : (c == kDirtClass ? kDirtG : other)));
+    }
 
     // The sky replaces the game's sun (night skies, the black hole): its baked light comes out
     // on day maps and its halo is hidden.

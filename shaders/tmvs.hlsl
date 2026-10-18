@@ -86,7 +86,7 @@ sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
 sampler3D s12 : register(s12); // colour look-up table (final pass)
-sampler2D s13 : register(s13); // the game's materials: r lamp, g car 1 / glass .5 / grass .25, b water, a light added on top
+sampler2D s13 : register(s13); // the game's materials: r lamp, g car 1 / glass .5 / dirt .3 / grass .25, b water, a light added on top
 sampler2D s14 : register(s14); // the light the game's additive draws added, float (lighting pass, EngineLights)
 sampler2D s15 : register(s15); // GameLight: the light the game's shaders lit each surface with (rgb) and its distance from the eye (w, 0 = none) (lighting pass)
 
@@ -2625,12 +2625,16 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
     // capture_112, 98 % of the lawn under half) and the dry track's reflection turned the lawn
     // into a lake mirroring the supports. Only the reflections take it: the grass's look
     // (detail, back light, wet sheen) keeps the guess as before.
+    // The game's dirt (g .30, its Soil shaders) counts too: no mirror and no water on it. In
+    // shadow its colour no longer read as dirt (below) and the dry track's reflection made a
+    // dirt platform a mirror of the walls (capture_133). Only puddles tell them apart.
     float grassMat = abs(mat.g - 0.25) < 0.1 ? 1.0 : 0.0;
     if (u_Nature.x + u_Nature.y > 0.0 && grass > 0.0) c = grassDetail(c, world, rd, dist, grass);
 
     // --- Wet surfaces, puddles, water ---
     float wet = u_Weather.x * (1.0 - grass * 0.5) * (1.0 - emissive);
-    float puddle = puddleMask(world, flatness, engine ? max(grass, grassMat) : grass) * (1.0 - emissive);
+    // Puddles form on dirt (g .30), not on grass (.25).
+    float puddle = puddleMask(world, flatness, engine ? max(grass, mat.g < 0.275 ? grassMat : 0.0) : grass) * (1.0 - emissive);
     float water = waterMask(c, nWorld, world, nd.w, emissive);
     // The game's own water material (the TMUF sea, which reports no height): water wherever
     // it is flat, at any distance.

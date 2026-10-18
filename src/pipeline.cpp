@@ -668,11 +668,13 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
     // w: how much farther AO, shadows, bounce light and reflections reach (photo mode).
     // No sea level from the game (TMUF Island): the one measured from its water material.
-    // Stadium water blocks (2): once the water material was seen on the map, water only on
-    // it (3; dirt lies at the blocks' height too).
+    // Stadium water blocks (2): with the material mask, water only on the game's water
+    // material (3; dirt lies at the blocks' height too). Not only once that material was seen on
+    // the map: on a map without water every flat surface at 8 m (a dirt road's ruts,
+    // capture_134) became water.
     const bool measured = in.water[2] >= 0.0f && in.water[2] < 0.5f && m_seaKnown;
     float kind = measured ? 1.0f : in.water[2];
-    if (kind > 1.5f && m_waterMaterialSeen && m_materialsOn) kind = 3.0f;
+    if (kind > 1.5f && m_materialsOn) kind = 3.0f;
     const float water[4] = {measured ? m_seaLevel : in.water[0], measured ? m_seaLevel : in.water[1], kind, in.photo ? 3.0f : 1.0f};
     device->SetPixelShaderConstantF(38, water, 1);
     // The direction the snow drifts (as the flakes in drawRain): walls facing it catch snow.
@@ -1148,8 +1150,8 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     IDirect3DSurface9* ds = nullptr;
     if (FAILED(stencil->GetSurfaceLevel(0, &ds)) || !ds) return false;
     device->SetRenderTarget(0, m_materials.surface);
-    // The neon strips by their material: g kNotNeonG on everything but them, cars, glass and grass.
-    const float notNeon = in.neonMaterials ? static_cast<float>(kNotNeonG) / 255.0f : 0.0f;
+    // The neon strips by their material: g kNotNeonG on everything but them, cars, glass, grass
+    // and dirt.
     device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, in.neonMaterials ? kNotNeonG : 0, 0), 1.0f, 0);
     device->SetDepthStencilSurface(ds);
     device->SetPixelShader(m_solidPS);
@@ -1160,11 +1162,11 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_KEEP);
-    // r light, g car 1 / glass 0.5 / grass 0.25, b water, a light added on top; the neon class
-    // only clears the cleared g.
-    for (int id = 1; id <= (in.neonMaterials ? kNeonClass : kMaterialClasses); id++) {
-        const float color[4] = {id == 1 ? 1.0f : 0.0f, id == 2 ? 1.0f : (id == 3 ? 0.5f : (id == 4 ? 0.25f : (id == kNeonClass ? 0.0f : notNeon))),
-                                id == 5 ? 1.0f : 0.0f, 0.0f};
+    // r light, g car 1 / glass 0.5 / grass 0.25 / dirt 0.3, b water, a light added on top; the
+    // neon class only clears the cleared g (0 without neonMaterials: as the clear).
+    for (int id = 1; id <= kMaterialClasses; id++) {
+        const float g = id == kNeonClass ? 0.0f : static_cast<float>(classG(id, in.neonMaterials ? kNotNeonG : 0u)) / 255.0f;
+        const float color[4] = {id == 1 ? 1.0f : 0.0f, g, id == 5 ? 1.0f : 0.0f, 0.0f};
         device->SetPixelShaderConstantF(32, color, 1);
         device->SetRenderState(D3DRS_STENCILREF, static_cast<DWORD>(id));
         m_quad.draw(device, in.width, in.height);
@@ -1203,7 +1205,7 @@ bool Pipeline::buildMaterialIds(IDirect3DDevice9* device, const Inputs& in) {
         for (int id = 0; id < 256; id++) {
             const int c = in.materialClasses[id];
             const uint32_t notNeon = in.neonMaterials && c != kNeonClass ? kNotNeonG : 0u;
-            const uint32_t r = c == 1 ? 255u : 0u, g = c == 2 ? 255u : (c == 3 ? 128u : (c == 4 ? 64u : notNeon)), b = c == 5 ? 255u : 0u;
+            const uint32_t r = c == 1 ? 255u : 0u, g = classG(c, notNeon), b = c == 5 ? 255u : 0u;
             texels[id] = (r << 16) | (g << 8) | b;
         }
         staging->UnlockRect(0);
