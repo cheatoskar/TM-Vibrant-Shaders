@@ -2181,7 +2181,11 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // While driving too: without TAA the noise stands still, and 16 coarse steps showed as
     // dashed, grainy reflections that only the photo mode didn't have.
     bool photo = u_Water.w > 1.5;
-    float noise = ign(vpos) * (photo ? 0.25 : 0.5);
+    // On the game's water the noise stays put from frame to frame (as with TAA off): TAA takes
+    // much more of the current frame there (see PS_TAA), too much to average a new step
+    // pattern out each frame. The mirror images' edges and the far rim lit and went out from one
+    // frame to the next: the water and its reflections trembled with TAA on.
+    float noise = (onWater ? frac(52.9829189 * frac(dot(vpos, float2(0.06711056, 0.00583715)))) : ign(vpos)) * (photo ? 0.25 : 0.5);
     float tPrev = 0.05;
     // A polished dry track is a mirror: finer steps so the reflection holds together.
     float steps = (u_Nature.w > 1.0 ? 48.0 : 32.0) * (photo ? 2.0 : 1.0);
@@ -4085,7 +4089,10 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
         float level = abs(y - u_Water.x) < abs(y - u_Water.y) ? u_Water.x : u_Water.y;
         float tol = waterTolerance(level); // as waterLevelMatch
         float onWater = saturate(1.0 - (y - level) / tol) * saturate((y - level + 3.0) / 0.3);
-        weight = lerp(weight, max(weight, 0.5), onWater);
+        // Standing still (or nearly) the mirror stands still too: there the jittered raster's
+        // sub-pixel changes on the waves and the mirror images' edges came through at half
+        // strength and trembled (TAAJitter). Less of the current frame then, down to 0.15.
+        weight = lerp(weight, max(weight, lerp(0.5, 0.15, still)), onWater);
     }
     // The neon trail (s3: the HDR image, alpha above 1 where it lies) floats above the road
     // whose depth the reprojection uses: at speed its history came from the wrong place and
