@@ -1744,7 +1744,7 @@ bool waterHeights(float& blockY, float& seaY) {
     float y = 0.0f;
     const bool plane = g_lastWater != 0 && GetTickCount() - g_lastWater < 2000 && levelPlaneHeight(g_waterPlaneEq, y);
     if (plane) seaY = y;
-    // Once per map: the first water plane (the owner's log tells which maps have one).
+    // Once per map: the first water plane (my log tells which maps have one).
     static long s_loggedMap = -1;
     if (plane && s_loggedMap != g_mapLoads) {
         s_loggedMap = g_mapLoads;
@@ -1975,7 +1975,7 @@ bool cinematicActive() {
 
 bool clipInRace() {
     // The map's own clips (in-game triggers) only run the clip player; replays, the end of race
-    // replay and the editor also run the clip viewer's cameras (the owner's log: "sources 3"
+    // replay and the editor also run the clip viewer's cameras (my log: "sources 3"
     // there, "sources 1" for the clips on the track). The race checks its player's trigger zones
     // every frame it runs, also while such a clip plays.
     const DWORD now = GetTickCount();

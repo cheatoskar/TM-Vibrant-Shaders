@@ -1296,7 +1296,7 @@ float3 clearSky(float3 rd) {
     // The glow around the sun follows Sun glow (1 = as it always was; only Golden Hour picks this sky).
     col += u_SunColor.rgb * (henyeyGreenstein(mu, 0.75) * 0.25 + pow(saturate(mu), 8.0) * 0.4) * day * u_Rays.z;
     // The sun as the game draws it: a soft bright core that blooms into a wide glow, no disc
-    // with an edge (owner's vanilla screen, 2026-10-17). pow(mu, n) ~ exp(-n a^2 / 2): the core
+    // with an edge (my vanilla screen, 2026-10-17). pow(mu, n) ~ exp(-n a^2 / 2): the core
     // falls to half at about 1.7 degrees, the glow at about 4.3; bright enough to bloom.
     float sunMu = saturate(mu);
     col += u_SunColor.rgb * (pow(sunMu, 1500.0) * 16.0 + pow(sunMu, 250.0) * 2.5 * u_Rays.z) * day;
@@ -2433,7 +2433,7 @@ float neonStrip(float3 c, float dist, float4 mat) {
 // metres in front of the car) mixes white into the blue: saturation 0.6-0.8 instead of 0.9, right
 // on the test's ramp, and the worn spots in the curb's texture fell below it and the clean paint
 // above. The curb in front of the car glowed in patches and the rest of it was the darker night
-// surface (the owner, A01 at night, capture_127). Still blue first (the blue test) and bright.
+// surface (my test, A01 at night, capture_127). Still blue first (the blue test) and bright.
 float neonBand(float3 c, float dist, float4 mat) {
     float peak = max(c.r, max(c.g, c.b));
     float3 cl = min(c, 1.0);
@@ -2960,7 +2960,7 @@ float4 PS_SpillDownEngine(float2 uv : TEXCOORD0) : COLOR0 {
 // above but on each pixel instead of the mean of 2x2 (PS_SpillDownSource then takes them down).
 // Far away a neon strip is 1-2 px high: averaged with the dark wall beside it first, it counted or
 // not by where it fell in the 4x4 block, and the blue light on the wall flickered as the camera
-// crept towards it (the owner, A01 at night). out.rgb = light (linear)
+// crept towards it (my test, A01 at night). out.rgb = light (linear)
 float4 PS_SpillSource(float2 uv : TEXCOORD0) : COLOR0 {
     float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
     float3 c = toLinear(tex2Dlod(s0, float4(uv, 0, 0)).rgb);
@@ -3004,7 +3004,7 @@ float4 PS_SpillSourceNeon(float2 uv : TEXCOORD0) : COLOR0 { return spillSourceEn
 // covers. Far away a strip is 1-2 px high and the game blends it over two rows wherever it doesn't
 // sit on one (texture filtering, MSAA): neonStrip() on each pixel took the half-blue, half-frame
 // pixels for no strip, and the strips' glow (the bloom and the spill on the wall between them)
-// pulsed as the camera crept towards them (the owner, A01 at night). Here a pixel that is part of
+// pulsed as the camera crept towards them (my test, A01 at night). Here a pixel that is part of
 // a strip with a neighbour counts by its share of the strip's blue: the two halves add up to the
 // whole strip wherever it falls. A pixel neonStrip() takes on its own keeps its old glow.
 //   The game's float image less its added light, in its own (display) values: blends are linear
@@ -3132,7 +3132,7 @@ float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
 // The spill over frames: s0 = this frame's (blurred, view z in a), s1 = the last result,
 // u_Pass0.x = history valid. Each frame finds its sources anew in a quarter-res image: a strip
 // that crosses a texel edge, a highlight on it that changes its colour, the car passing in front
-// of it switched light on the wall on and off from one frame to the next (the owner: "the blue
+// of it switched light on the wall on and off from one frame to the next (my report: "the blue
 // light flickers a bit on the wall" driving along it). Averaged over about four frames, where the
 // history is the same surface; it may only differ from this frame's light by a third, so a light
 // that goes (or moves with a car) leaves no trail. A still image comes out as before.
@@ -3407,7 +3407,7 @@ float4 PS_NeonAdd(float2 uv : TEXCOORD0) : COLOR0 {
 // glow, a its depth; bilinear), s2 = full normal/depth, u_Pass0.x = history valid. Without the
 // game's MSAA a strip 1-2 px high far away is drawn all or nothing per row: as the camera creeps,
 // rows of it come and go from one frame to the next, and their glow (BorderGlow, squared in
-// PS_NeonAdd, then the bloom and the spill over it) pulsed on the wall below (the owner, A01 at
+// PS_NeonAdd, then the bloom and the spill over it) pulsed on the wall below (my test, A01 at
 // night). Averaged over about four frames where the history is the same surface (fewer while the
 // view moves, none from 8 px a frame). It may only reach as far as this frame's glow next door:
 // a row that went this frame still has its neighbour, a strip that went or moved with the car

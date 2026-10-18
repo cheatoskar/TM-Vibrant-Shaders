@@ -8,7 +8,7 @@ namespace tmshaders {
 namespace {
 constexpr double kWindow = 2.0;   // seconds of frames per decision
 constexpr double kSettle = 3.0;   // after a change, let the new frame rate show
-// Against cutting and restoring in a loop (the owner, target 61: at 57 FPS six effects off,
+// Against cutting and restoring in a loop (my test, target 61: at 57 FPS six effects off,
 // one back every 4 - 6 s, all off again 20 s later, the long shadows popping in front of the
 // car): a cut stays at least kHold, a knob comes back only after kCalmWindows windows in a row
 // with room for it (the tightest of them counts), and one cut again within kBounce of coming
@@ -19,7 +19,7 @@ constexpr double kBounce = 60.0;
 constexpr double kBlocked = 300.0;
 // No decisions for a while after a map start or a pause of the frames (loading, device reset,
 // alt-tab, photo mode), and after a hitch: the game compiles shaders and the caster maps record
-// new meshes, the frame rate says nothing about the effects. The owner's log (2026-10-17): hitches
+// new meshes, the frame rate says nothing about the effects. My log (2026-10-17): hitches
 // of 0.3 - 0.75 s up to 16 s after a map's first 3D frame (5 map starts: 7, 8, 11, 12, 16 s);
 // the 8 s grace ended into that and cut nine effects at 76 FPS.
 constexpr double kRestartGrace = 20.0;
@@ -96,7 +96,7 @@ bool matters(int knob, const Settings& s) {
 // cut could reach: 240 FPS on a 144 Hz game) the presets lost what they are picked for.
 // The long shadows stay too: cut, a stand's shadow on the road is only the game's light tint
 // far off and turns dark as the car drives up to it, and photo mode (never cut) shows it dark
-// (the owner, Mini Hunt #27, target 109: cut at a map start's 76 FPS, and as 98 FPS never
+// (my test, Mini Hunt #27, target 109: cut at a map start's 76 FPS, and as 98 FPS never
 // reached the target they stayed off for the rest of the session). Their cost is small
 // (light grid and height map, ~0.3 ms on a GTX 1080 Ti at 1440p).
 bool keepsLook(int knob) {

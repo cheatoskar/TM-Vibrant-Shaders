@@ -20,7 +20,7 @@ the rest (the game's shadow maps, the HUD, waiting for the CPU) ~3.3 ms.
 
 ## Presets
 
-GPU time of the mod's passes per preset, GTX 1080 Ti at 2560×1440 (previewer, two of the owner's race captures, 200 frames,
+GPU time of the mod's passes per preset, GTX 1080 Ti at 2560×1440 (previewer, two of my race captures, 200 frames,
 best of two runs). In the game add about 6 ms for the game itself and the copies around the passes:
 
 | Preset | Passes | FPS in a race (about) |
@@ -110,7 +110,7 @@ the limit (the *rest of the GPU frame* in the perf line near 0); where the CPU i
 GPU time of the mod's passes at 2560×1440 with the scale (GTX 1080 Ti, previewer, 200 frames, median of 3; FSR's own two
 passes included: 0.24 ms to upscale, 0.08 ms to sharpen):
 
-| Render scale | Scene size | Golden Hour (day) | Horizon (night) | The owner's settings (night) |
+| Render scale | Scene size | Golden Hour (day) | Horizon (night) | My settings (night) |
 |---|---|---|---|---|
 | 1 (off) | 2560×1440 | 6.24 ms | 6.68 ms | 3.95 ms |
 | 0.77 | 1971×1109 | 4.04 ms | 4.13 ms | 2.54 ms |

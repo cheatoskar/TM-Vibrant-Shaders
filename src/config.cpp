@@ -204,7 +204,7 @@ Mood moodOfDayTime(float t) {
     // animation: up to 0.25 the night, then sunrise, 0.5 - 0.75 the day, then sunset. The
     // first part of the day still has a low, warm sun (Rally at 0.515), and 0.75 itself is
     // where the sunset starts (Stadium's sunset maps). Stadium's day maps sit at 0.53 under a
-    // high, white sun (B13, the owner's screens of 2026-10-17): day, as the light colour said.
+    // high, white sun (B13, my screens of 2026-10-17): day, as the light colour said.
     if (t <= 0.25f) return Mood::Night;
     if (t < 0.525f || t >= 0.72f) return Mood::Dusk;
     return Mood::Day;
@@ -1364,7 +1364,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.lensFlare = 0.4f;
             s.reflections = 0.5f;
             s.contrast = 1.1f;
-            s.saturation = 1.0f;   // 1.1 and temperature 0.75 until the owner's test of 2026-10-17
+            s.saturation = 1.0f;   // 1.1 and temperature 0.75 until my test of 2026-10-17
             s.vibrance = 0.3f;
             s.temperature = 1.0f;
             s.shadowTint = 0.4f;
@@ -1396,7 +1396,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Neon:
             s.skyMode = 2;
-            s.borderGlow = 3.0f;    // night presets: the borders' neon shines (owner's pick)
+            s.borderGlow = 3.0f;    // night presets: the borders' neon shines (my pick)
             s.starAmount = 3.0f;    // night presets: every star
             s.skyColor[0] = 0.35f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.3f;
@@ -1406,7 +1406,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRays = 2.0f;
             s.exposure = 1.5f;
             s.bloomRadius = 0.65f;
-            s.globalIllumination = 1.0f; // 2 left grain around the car (owner, 2026-10-17)
+            s.globalIllumination = 1.0f; // 2 left grain around the car (my test, 2026-10-17)
             s.skyNight = 0.5f;
             s.skyBrightness = 1.0f;
             s.fogDensity = 0.6f;
@@ -1428,7 +1428,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.planetType = 0;
             s.planetView = 1;
             // Saturn and the black hole, both in view from the start screen.
-            s.planetAzimuth = 20.0f;    // 150 and sky rotation 263 until the owner's test of 2026-10-17
+            s.planetAzimuth = 20.0f;    // 150 and sky rotation 263 until my test of 2026-10-17
             s.planetElevation = 14.0f;
             s.skyRotation = 0.0f;
             s.skyNight = 0.5f;          // a set darkening instead of automatic (-1)

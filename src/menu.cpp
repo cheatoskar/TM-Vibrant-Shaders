@@ -285,7 +285,7 @@ void applySkyDefaults(Settings& s, int sky) {
     }
 }
 
-// Ring world seen from on the rings: the planet and the black hole placed for that view (owner,
+// Ring world seen from on the rings: the planet and the black hole placed for that view (my test,
 // 2026-10-17).
 void applyOnTheRings(Settings& s) {
     s.skyEffectSize = 4.5f;
@@ -1674,7 +1674,7 @@ bool drawSettings(Config& config, Settings& s) {
                           drawHotkeys();
                           return false;
                       }});
-    // Its own panel: in the long Game panel the owner didn't find it. Left out where the game
+    // Its own panel: in the long Game panel I didn't find it. Left out where the game
     // can't export (TrackMania 2 showed its title over nothing).
     panels.push_back(settingsPanel("Video export", s, {{"VideoCodec", nullptr}, {"VideoBitrate", nullptr}, {"VideoExportBest", nullptr}}));
     if (panels.back().rows <= 0.0f) panels.pop_back();
