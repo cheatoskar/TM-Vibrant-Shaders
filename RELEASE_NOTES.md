@@ -1,4 +1,4 @@
-## TM Vibrant Shaders 1.4.0
+## TM Vibrant Shaders 1.4.1
 
 Lighting, weather and skies for **TrackMania Nations & United Forever**, and from this version on also for **TrackMania 2 (ManiaPlanet 4)**. This replaces 1.4.0-preview and the release candidates.
 

@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.4.0 (2026-10-18)
+## 1.4.1 (2026-10-18)
 
-The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and the game's own light. It replaces 1.4.0-preview (2026-10-12); this list covers everything since 1.3.0.
+The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and the game's own light. It follows 1.4.0-preview (2026-10-12) and its release candidates (there is no plain 1.4.0); this list covers everything since 1.3.0.
 
 **New**
 - **TrackMania 2 (ManiaPlanet 4)** support (see the end of this list). One zip and one setup for both games.
