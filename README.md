@@ -160,11 +160,13 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 
 ## Performance
 
-- **Runs on:** any GPU with Shader Model 3.0, from Intel UHD 620 and GTX 750 upwards. Pick *Performance* and *Effect quality: Low* on weak GPUs.
-- **Comfortable at 1080p:** GTX 1060, RX 580, Radeon 780M, Intel Arc 140V.
-- **Everything on at 1440p:** RTX 3060, GTX 1080 Ti and faster.
+The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the game alone runs at ~240 FPS, with the shaders at 70 – 90 FPS.
 
-**Auto quality** is on by default. When your frame rate drops below the target it turns off the effects that cost the most on your GPU, only as many as it has to, and brings them back when there is room. Your settings stay as they are. On a weak GPU, *Render scale (FSR)* at 0.77 or 0.67 is another way to more FPS. The *Performance* section in the menu shows what each effect costs on your GPU, live. Measured numbers and the most expensive settings: **[docs/performance.md](docs/performance.md)**.
+- **Minimum:** GTX 1050, Radeon 780M or Intel Arc 140V at 1080p, with the *Performance* preset and *Render scale (FSR)* 0.67.
+- **60 FPS and more at 1080p:** GTX 1060, RX 580.
+- **1440p:** GTX 1080 Ti, RTX 3060 (70 – 90 FPS); 120 FPS and more from an RTX 4070 Ti on.
+
+**Auto quality** is on by default. When your frame rate drops below the target it turns off the effects that cost the most on your GPU, only as many as it has to, and brings them back when there is room. Your settings stay as they are. On a weak GPU, *Render scale (FSR)* at 0.77 or 0.67 is another way to more FPS. The *Performance* section in the menu shows what each effect costs on your GPU, live. What each preset costs, estimates for other cards and the most expensive settings: **[docs/performance.md](docs/performance.md)**.
 
 ---
 
