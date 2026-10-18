@@ -147,9 +147,11 @@ int main(int argc, char** argv) {
     std::string error;
     ShareStats stats;
 
-    // The defaults: nothing differs, the code is the marker alone.
-    const Settings defaults;
+    // The base: nothing differs, the code is the marker alone.
+    const Settings defaults = shareCodeBase();
     CHECK(shareCodeFor(defaults) == "TMVS1:" + b64("V=1"));
+    // A default changed since then is written out, so older versions read it right.
+    CHECK(shareCodeFor(Settings()) == "TMVS1:" + b64("V=1;Sharpen=0.8"));
 
     // The Settings defaults are the base of every code: if one changes, old codes change meaning.
     // Bump the share code version and keep reading the old one against the old default (config.cpp).

@@ -55,6 +55,9 @@ struct ShareStats {
     int clamped = 0; // values outside the setting's range, moved into it
 };
 std::string shareCodeFor(const Settings& settings);
+// What a TMVS1 code does not mention: the Settings defaults as they were when the format came out
+// (Sharpen was 0.35 then, 0.8 since 1.4), so old codes keep their look and old versions read new ones.
+Settings shareCodeBase();
 // `look` comes in with your machine settings and leaves with the code's look on success; on
 // failure it is untouched and `error` says why in a sentence for the menu.
 bool decodeShareCode(const std::string& text, Settings& look, ShareStats& stats, std::string& error);

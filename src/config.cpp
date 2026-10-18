@@ -568,8 +568,9 @@ bool lookFromComments(const std::string& comments, Settings& look, std::string& 
 // every setting of a preset (the machine settings are not part of one) that differs from the
 // Settings defaults. The defaults, not a preset, are the base: presets are tuned per game and per
 // version, so a code based on one would look different on the other side. A change of a Settings
-// default must therefore bump the version (TMVS2) and keep reading TMVS1 against the old default:
-// tools/keystest.cpp carries a golden code that fails when that happens by accident.
+// default must therefore bump the version (TMVS2) and keep reading TMVS1 against the old default,
+// or keep the old value in shareCodeBase (as Sharpen does): tools/keystest.cpp carries a golden
+// code that fails when that happens by accident.
 namespace {
 
 constexpr size_t kShareMaxBody = 12000;      // characters of base64 we read (a full code is ~3000)
@@ -654,9 +655,9 @@ bool shareValue(const Field& f, const std::string& value, Settings& s, bool& cla
     }
 }
 
-// The Settings defaults for the look's fields: what a share code does not mention.
+// The base for the look's fields: what a share code does not mention.
 void resetLookFields(Settings& s) {
-    const Settings defaults;
+    const Settings defaults = shareCodeBase();
     for (const Field& f : fields()) {
         if (isSystemField(f)) continue;
         const size_t size = f.kind == Field::Bool ? sizeof(bool) : (f.kind == Field::Color ? sizeof(float) * 3 : sizeof(float));
@@ -666,8 +667,14 @@ void resetLookFields(Settings& s) {
 
 } // namespace
 
+Settings shareCodeBase() {
+    Settings s;
+    s.sharpen = 0.35f; // the default until 1.4
+    return s;
+}
+
 std::string shareCodeFor(const Settings& s) {
-    const Settings defaults;
+    const Settings defaults = shareCodeBase();
     std::string text = "V=1";
     for (const Field& f : fields()) {
         if (isSystemField(f) || sameExactly(f, s, defaults) || !finiteFloats(f, s)) continue;
@@ -1491,7 +1498,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.vibrance = 0.2f;
             s.temperature = 0.0f;
             s.shadowTint = 0.0f;
-            s.sharpen = 0.5f;
+            s.sharpen = 0.8f;
             s.neonLight = 0.45f;
             break;
         case Preset::Performance:

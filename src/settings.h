@@ -168,7 +168,7 @@ struct Settings {
     bool fxaa = true;
     bool smaa = true;              // with fxaa: SMAA 1x does the edge smoothing instead of FXAA
     bool taa = true;               // temporal anti-aliasing / stabilisation (smooths the long shadows' steps; jitter stays off)
-    float sharpen = 0.35f;
+    float sharpen = 0.8f;
 };
 
 } // namespace tmshaders
