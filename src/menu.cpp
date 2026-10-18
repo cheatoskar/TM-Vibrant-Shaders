@@ -4,6 +4,7 @@
 // is overlay.cpp for TMNF and maniaplanet/src/overlay.cpp for ManiaPlanet.
 #include "menu.h"
 #include "config.h"
+#include "keys.h"
 #include "log.h"
 #include "lut.h"
 #include "update.h"
@@ -39,7 +40,15 @@ ImTextureID picture(const std::string& preset) {
     return g_host->picture ? g_host->picture(preset) : ImTextureID{};
 }
 
+// Settings that work from settings.ini but are not in the menu (no page, no search): Night on
+// game light is an experiment that needs a game restart and changes little, and players took it
+// for a switch for the night presets. GameLight=1 in settings.ini still turns it on.
+bool hiddenFromMenu(const Field& f) {
+    return !strcmp(f.key, "GameLight");
+}
+
 bool supported(const Field& f) {
+    if (hiddenFromMenu(f)) return false;
     return !g_host || !g_host->supports || g_host->supports(f);
 }
 
@@ -52,26 +61,27 @@ void drawPerformance() {
     }
     struct Group {
         const char* label;
-        const char* passes[3];
+        const char* passes[4];
     };
     static const Group kGroups[] = {
-        {"Depth & normals", {"LinearDepth", "Prepare", "DownsampleND"}},
+        {"Depth & normals", {"LinearDepth", "Prepare*", "DownsampleND"}},
         {"AO & sun shadows", {"OcclusionShadow", "BilateralBlur", nullptr}},
-        {"Long-range shadows / rain map", {"HeightSplat", "HeightMerge", nullptr}},
+        {"Long-range shadows / rain map", {"HeightSplat", "HeightMerge", "LightGrid*", "Casters"}},
         {"Volumetric light", {"ShadowHeight", "Volumetric", nullptr}},
         {"Bounce light (GI)", {"GI", "GITemporal", nullptr}},
         {"Neon trail", {"TrailPoint", "Trail", nullptr}},
         {"Custom sky", {"Sky*", "AuroraHalf", nullptr}},
         {"Volumetric clouds", {"Clouds", nullptr, nullptr}},
         {"Reflections", {"Reflect", nullptr, nullptr}},
-        {"Neon light", {"SpillDown", "SpillBlur", nullptr}},
-        {"Lighting, grass, weather, fog", {"Lighting", nullptr, nullptr}},
+        {"Neon light", {"Spill*", nullptr, nullptr}},
+        {"Lamp glare and haze", {"Lamp*", nullptr, nullptr}},
+        {"Lighting, grass, weather, fog", {"Lighting*", nullptr, nullptr}},
         {"Rain and snow particles", {"RainDrop", "RainSplash", "SnowFlake"}},
         {"Depth of field, motion blur", {"Focus", "DofBlur", "Cinematic"}},
         {"Light shafts", {"RayMask", "RayBlur", nullptr}},
         {"Bloom", {"BloomDown", "BloomUp", nullptr}},
         {"Exposure, colour grading", {"Luminance", "Adapt", "Final"}},
-        {"FXAA", {"FXAA", nullptr, nullptr}},
+        {"Edge smoothing (FXAA, SMAA)", {"FXAA", "Smaa*", nullptr}},
         {"Temporal AA", {"TAA", nullptr, nullptr}},
         {"Sharpening", {"Sharpen", "Copy", nullptr}},
     };
@@ -132,11 +142,12 @@ ImVec4 sectionColour(const char* name) {
         ImVec4 colour;
     };
     static const Entry kColours[] = {
-        {"Lighting", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},       {"Look", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},
-        {"Sky", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},            {"Sky & Atmosphere", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},
-        {"Bloom & Lens", ImVec4(0.64f, 0.50f, 0.88f, 1.0f)},   {"Colour", ImVec4(0.88f, 0.48f, 0.58f, 1.0f)},
-        {"Weather", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},        {"Weather & Surfaces", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},
-        {"Cinematic", ImVec4(0.58f, 0.62f, 0.70f, 1.0f)},      {"Image", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},
+        {"Lighting", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},       {"Light and shadows", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},
+        {"Sky", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},            {"Haze and light shafts", ImVec4(0.52f, 0.68f, 0.84f, 1.0f)},
+        {"Bloom and lens", ImVec4(0.64f, 0.50f, 0.88f, 1.0f)}, {"Colour", ImVec4(0.88f, 0.48f, 0.58f, 1.0f)},
+        {"Weather", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},        {"Weather and surfaces", ImVec4(0.30f, 0.72f, 0.68f, 1.0f)},
+        {"Cinematic", ImVec4(0.58f, 0.62f, 0.70f, 1.0f)},      {"Image quality", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},
+        {"Game integration", ImVec4(0.70f, 0.62f, 0.50f, 1.0f)}, {"Look", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},
         {"Performance", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},    {"Neon trail", ImVec4(0.26f, 0.74f, 0.90f, 1.0f)},
         {"Author's Shader", ImVec4(0.88f, 0.76f, 0.36f, 1.0f)}, {"Cost per effect", ImVec4(0.50f, 0.70f, 0.50f, 1.0f)},
         {"Updates", ImVec4(0.86f, 0.62f, 0.28f, 1.0f)},         {"Help", ImVec4(0.38f, 0.58f, 0.90f, 1.0f)},
@@ -207,7 +218,11 @@ const Field* findField(const char* key) {
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds");
+           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "GameGBuffer") ||
+           !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
+           !strcmp(f.key, "FsrSharpness");
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -228,16 +243,21 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("PlanetAzimuth") || is("PlanetElevation")) return (sky == 3 || sky == 5) && s.planetSize > 0.0f;
     if (is("PlanetView")) return sky == 5 && s.planetSize > 0.0f;
     if (is("CloudCoverage") || is("CloudHeight")) return s.volumetricClouds > 0.0f;
-    if (is("LongShadowRange")) return s.longShadows > 0.0f;
+    if (is("LongShadowRange") || is("LongShadowQuality")) return s.longShadows > 0.0f;
     if (is("ShadowLength")) return s.shadowStrength > 0.0f;
     if (is("GodRayDecay")) return s.godRays > 0.0f;
     if (is("Puddles")) return s.wetness > 0.0f;
     if (is("Spray")) return s.wetness > 0.0f || s.snowCover > 0.0f;
     if (is("LensDrops")) return s.rain > 0.0f || s.snow > 0.0f;
     if (is("ReflectionBlur")) return s.reflections > 0.0f;
+    if (is("WaterFarReflections")) return s.cleanWater && s.waterSurfaces > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
+    if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it
     if (is("TargetFPS")) return s.autoQuality;
+    if (is("FsrSharpness")) return s.renderScale < 0.99f;
+    if (is("Sharpen")) return s.renderScale >= 0.99f; // FSR sharpening takes its place while scaled
     if (is("TAAJitter")) return s.taa;
+    if (is("SMAA")) return s.fxaa;
     if (!strncmp(f.key, "Trail", 5)) return s.neonTrail > 0.0f;
     if (is("WeatherSound")) return s.rain > 0.0f || s.lightning > 0.0f || s.snow > 0.0f;
     if (is("SunAzimuth")) return s.sunElevationOverride >= 0.0f;
@@ -252,7 +272,10 @@ void applySkyDefaults(Settings& s, int sky) {
         s.godRays = 1.35f;
         s.godRayDecay = 0.9f;
         if (s.planetSize <= 0.0f) s.planetSize = 1.0f;
-        if (sky == 5) s.planetView = 1; // next to the rings
+        if (sky == 5) {
+            s.planetView = 1; // next to the rings
+            s.skyNight = 0.5f;
+        }
     } else if (sky == 2) {
         s.skyNight = 0.5f;
         s.skyBrightness = 1.0f;
@@ -260,6 +283,18 @@ void applySkyDefaults(Settings& s, int sky) {
     } else if (sky == 4) {
         s.skyRotation = 150.0f;
     }
+}
+
+// Ring world seen from on the rings: the planet and the black hole placed for that view (owner,
+// 2026-10-17).
+void applyOnTheRings(Settings& s) {
+    s.skyEffectSize = 4.5f;
+    s.planetSize = 1.15f;
+    s.planetAzimuth = 20.0f;
+    s.planetElevation = -4.0f;
+    s.skyRotation = 150.0f;
+    s.blackHoleElevation = 25.0f;
+    s.skyNight = 0.5f;
 }
 
 size_t fieldSize(const Field& f) {
@@ -283,6 +318,170 @@ bool differsFromBase(const Field& f, const Settings& s, const Settings& base) {
 
 bool toggle(const char* id, bool* value); // below, with the other widgets
 
+// What a setting does, shown when the mouse rests on it: the labels stay short, the detail is here.
+// "(restart)" / "(next map)" say when a change takes effect.
+const char* tooltipFor(const char* key) {
+    if (g_host)
+        for (const auto& t : g_host->tips)
+            if (!strcmp(t.first, key)) return t.second;
+    static const struct {
+        const char* key;
+        const char* tip;
+    } kTips[] = {
+        {"AOStrength", "Darkens corners and creases where light would not reach."},
+        {"AORadius", "How far around a point the occlusion looks. Large values darken whole areas, small ones only tight corners."},
+        {"SunLight", "How strongly sunlit surfaces take on the sun colour."},
+        {"AmbientTint", "How strongly surfaces in shade take on the sky colour."},
+        {"SunColor", "The colour of the sunlight."},
+        {"SkyColor", "The colour of shade and ambient light."},
+        {"SkyBrightness", "Brightness of the mod's sky."},
+        {"CloudCoverage", "How much of the sky the clouds cover."},
+        {"CloudHeight", "Height of the cloud layer. Lower clouds look bigger and closer."},
+        {"SkyEnhance", "A richer colour gradient on the game's own sky."},
+        {"SunGlow", "The glow and disc around the sun."},
+        {"FogDensity", "How thick the haze is."},
+        {"FogHeightFalloff", "How fast the haze thins out with height. 0 is the same everywhere."},
+        {"FogSunScatter", "How much the haze glows around the sun."},
+        {"HazeDistance", "Where the haze closes in. 1 is the default, lower brings it nearer."},
+        {"GodRayDecay", "How far the light shafts reach from the sun."},
+        {"AutoExposure", "How much the brightness adapts to the scene, like an eye. 0 keeps it fixed."},
+        {"ToneCurve", "How bright colours roll off to white (TrackMania 2): 0 the game's curve, 1 the mod's, 2 ACES."},
+        {"Vibrance", "Boosts weak colours more than strong ones. Below 0 mutes them."},
+        {"Temperature", "Warmer (orange) or cooler (blue) image."},
+        {"Tint", "Shifts the image towards green or magenta."},
+        {"Lift", "Brightness of the darkest parts."},
+        {"Gamma", "Brightness of the mid-tones."},
+        {"Gain", "Brightness of the highlights."},
+        {"SplitToning", "Cool shadows, warm highlights."},
+        {"Puddles", "Standing water on flat ground. Needs wet roads."},
+        {"GrassDetail", "Grass patches and blades close to the camera."},
+        {"MowingStripes", "Light and dark mowing stripes on grass."},
+        {"Wind", "Slant of the rain, movement of grass and clouds."},
+        {"BokehSize", "The largest blur size of depth of field, at 1080p."},
+        {"ShadowStrength", "Sun shadows drawn by the mod. 0 leaves the game's own."},
+        {"ShadowLength", "How far a shadow is traced from each point. Longer is more accurate but slower."},
+        {"LongShadows", "Shadows from far-away objects, such as hills and buildings."},
+        {"LongShadowRange", "How far the long shadows reach, in metres."},
+        {"LongShadowQuality", "Stepped is fast. Every cell checks the whole map grid, so thin walls leave no gaps."},
+        {"NeonLight", "Neon blocks light the road and walls around them."},
+        {"GlobalIllumination", "Sunlit surfaces light their surroundings."},
+        {"GameSunColor", "How much of the sun's colour comes from the map instead of the preset."},
+        {"SunElevation", "Overrides the sun's height in degrees. -1 uses the game's sun."},
+        {"SunAzimuth", "Overrides the compass direction of the sun."},
+        {"SkyNight", "How dark the sky gets at night. -1 picks it from the map."},
+        {"SkyEffectSize", "0 turns the black hole off. Above 3 the camera is close to it."},
+        {"PlanetSize", "0 turns the planet off."},
+        {"PlanetView", "Where the camera sits relative to the planet's rings."},
+        {"CloudAmount", "Clouds in the clear sky."},
+        {"VolumetricLight", "Haze that shows the sun's shadows as beams."},
+        {"HighlightBoost", "How strongly lamps and bright spots glow."},
+        {"BorderGlow", "Glow of the neon strips along the road. Needs Game light sources."},
+        {"LampGlare", "Part of the lamps' light leaves the bright core and spreads wide and soft around them: the bulbs stay apart, the light reaches farther. 0 = off. Needs Game light sources."},
+        {"LampHaze", "The light the haze takes from the lamps glows in the air around them; stronger with more haze and for far lamps. 1 = all of it, 0 = off. Needs Game light sources."},
+        {"LampSkyHalos", "At night the lamps' halos also shine over the sky instead of ending at the edge of the lamp's frame. Needs Game light sources."},
+        {"Floodlights", "Brightness and glow of stadium floodlights, start lights and other lamps, and the light they throw around them. The neon borders and the light intensity stay as they are. 1 = as before. Needs Game light sources."},
+        {"ToneKnee", "Where bright colours start to roll off instead of clipping."},
+        {"NightSurfaces", "How bright floodlit surfaces get at night. 1 keeps the game's white."},
+        {"Rain", "0 is dry, 2 is a downpour."},
+        {"Snow", "0 is none, 2 is a blizzard."},
+        {"LensDrops", "Drops and flakes run down the camera lens."},
+        {"WeatherShelter", "No rain or snow under roofs and bridges."},
+        {"WeatherSound", "Volume of rain and thunder."},
+        {"WaterSurfaces", "Reflections on pools and the sea."},
+        {"Reflections", "Reflections on the dry track. Above 1 it turns into a mirror."},
+        {"Spray", "Spray behind the car on wet roads and snow."},
+        {"CinematicOnlyInReplays", "Motion blur and depth of field only in replays and video export."},
+        {"VideoExportBest", "Renders each video frame with full quality and the effects on the video's own clock."},
+        {"VideoCodec", "What the replay editor's Shoot video writes. MP4 is encoded by the graphics card and skips the game's codec dialog; the file lands where the .avi would."},
+        {"VideoBitrate", "Mbit/s. 0 picks one: 50 for 4K 30 fps H.264, 30 for HEVC."},
+        {"FocusDistance", "Metres to the sharp point. 0 focuses automatically."},
+        {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, wherever the replay camera puts it; the middle again while the car is off screen. A click in the photo mode still wins."},
+        {"TAA", "Smooths edges by blending frames. Costs a little sharpness."},
+        {"TAAJitter", "Shifts the image by sub-pixels each frame for finer edges."},
+        {"Sharpen", "Contrast-adaptive sharpening (CAS). With Render scale (FSR) below 1.00, FSR sharpening takes its place."},
+        {"AutoQuality", "Below the target FPS it switches off the effects that cost most for least look, and back on when there is room. The light shafts, the neon light and the long shadows always stay. Your settings stay as they are."},
+        {"TargetFPS", "The frame rate auto quality aims for."},
+        {"RenderScale", "Draws the game's 3D image and every effect at this fraction of your screen's resolution and scales it back up with AMD FSR 1 before the HUD, which stays sharp. 1.00 is off. 0.77 costs a little sharpness, 0.67 more, for clearly more FPS when the graphics card is the limit. Photo mode, captures and the video export always use the full resolution. Needs Game HDR."},
+        {"FsrSharpness", "How much FSR sharpens the scaled-up image. 1 is AMD's strongest, 0 none. Takes the place of Sharpening while the render scale is below 1."},
+        {"DisableGameMSAA", "Turns off the game's own MSAA, which the mod's effects do not need. (restart)"},
+        {"ReadableGameDepth", "Lets the effects work in replays and video export. (restart)"},
+        {"GameMaterials", "Reads the game's material ids. Used for the TMUF sea and the debug view."},
+        {"DisableGameFX", "Turns off the game's own bloom and colour filter. (next map)"},
+        {"GameNight", "Under night skies the game lights day maps as at midnight."},
+        {"EngineMoon", "Under the black hole: the game's moonlight (baked light and shadows, glints, the car) comes from the black hole, stays as the game has it, or is left out. (next map)"},
+        {"GameSkyClouds", "Keeps the game's sunset clouds, and the sea mirroring them, under night skies."},
+        {"GameHdr", "The game draws into a float image, so bright light keeps its texture. The capture key saves it too."},
+        {"CleanHighlights", "Floodlit white at night stays even. Off: the look of earlier versions, with frost-like patches on floodlit white."},
+        {"EngineLights", "Lamps and glows glow as the game draws them instead of being guessed from the image. Needs Game HDR."},
+        {"CasterShadows", "Long shadows from the game's own meshes, cast from the sun or black hole. Needs Long shadows."},
+        {"CasterAlphaTest", "Fences, grids and lattice towers cast their pattern into the long mesh shadows, holes included. Off: they cast none."},
+        {"CleanWater", "Pools mirror only what they can see, sharp. Off shows blotches of the ramps over them."},
+        {"WaterFarReflections", "Pools and the sea mirror the stands and masts across them, not only what is near. Off: as before."},
+        {"GameGBuffer", "Surface normals from the game's shaders, so AO, shadows, reflections and light follow bump maps and the car's real shape. Needs Game HDR. (restart the first time)"},
+        {"GameLight", "Under night skies, darkens and cools the light the game lit each surface with instead of the whole image: paint keeps its colour, and what the game's lamps light stays as bright as the game drew it. Needs Game HDR and Game light sources. (restart the first time)"},
+        {"ShadeMenuBars", "The replay mirrored under the replay menu's bars. Off: black bars."},
+        {"NeonTrail", "A glowing trail behind the car. 0 is off."},
+        {"TrailTyres", "Two lines from the rear tyres instead of one."},
+        {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},
+        {"TrailKeepRuns", "How many earlier runs' trails stay after a restart, dimmer the older they are. 0 clears the trail on every restart."},
+        // The plainer ones too, so every setting says something when the pointer rests on it.
+        {"SkyMode", "Game sky keeps the game's own sky, the others replace it with the mod's. Picking one also sets what suits it (planet, the black hole's light, night darkening)."},
+        {"SkyRotation", "Turns stars, black hole, planet and aurora around you."},
+        {"StarAmount", "Number and brightness of the stars, and how often shooting stars cross."},
+        {"AuroraSpeed", "How fast the aurora's curtains move."},
+        {"BlackHoleAzimuth", "Compass direction of the black hole in the sky."},
+        {"BlackHoleElevation", "Height of the black hole in the sky."},
+        {"PlanetType", "Which planet the sky shows. None turns it off."},
+        {"PlanetAzimuth", "Compass direction of the planet in the sky."},
+        {"PlanetElevation", "Height of the planet in the sky."},
+        {"VolumetricClouds", "3D clouds over any sky, lit by the sun. 0 is off."},
+        {"GodRays", "Rays of light around the visible sun."},
+        {"Bloom", "Soft glow around the bright parts of the image."},
+        {"BloomRadius", "Wider or tighter glow."},
+        {"LensFlare", "Ghost reflections of the sun, as in a camera lens."},
+        {"ChromaticAberration", "Colour fringes towards the edges of the screen."},
+        {"Vignette", "Darker corners."},
+        {"FilmGrain", "Fine film noise."},
+        {"Exposure", "Overall brightness, in camera stops (EV)."},
+        {"Contrast", "The difference between dark and bright parts."},
+        {"Saturation", "Strength of all colours. 0 takes them out."},
+        {"Wetness", "A darker, glossy, reflective track, as after rain."},
+        {"SnowCover", "Snow on everything that faces up. Cars keep their paint."},
+        {"Lightning", "How often lightning strikes: a bolt, a flash over the track, thunder."},
+        {"ReflectionBlur", "Blurs the dry track's reflection into a soft sheen."},
+        {"TrailColor", "The colour of the neon trail."},
+        {"TrailWidth", "Width of the trail, in metres."},
+        {"MotionBlur", "Blur from camera movement. 1 is one full frame of movement."},
+        {"DepthOfField", "Blurs what is in front of and behind the point in focus."},
+        {"FXAA", "Smooths edges within one frame: SMAA, or FXAA (a little softer, a little faster)."},
+        {"SMAA", "SMAA finds the edges and blends along them: smoother long edges, sharper textures than FXAA. About 0.2 ms more at 1440p. Off: FXAA."},
+        {"Quality", "Samples for AO, shadows, clouds, volumetric light and bounce light. Low is clearly faster."},
+        // Sharing presets as text (Shaders page).
+        {"ShareCopy", "Puts the current look on the clipboard as one line of text (TMVS1:...) to paste into a chat. Only the look's settings are in it, not your installation's (auto quality, sound volume, neon trail, ...). The same code works in TrackMania Nations/United and TrackMania 2."},
+        {"SharePaste", "Reads a share code from the clipboard and makes it your look: unsaved, on top of the built-in preset it is closest to, so Save as preset keeps it. Nothing saved is replaced. Settings this version doesn't know are ignored and counted; values out of range are moved into range."},
+        // Photo mode (General, not a look setting).
+        {"SplitPhotoLabels", "Photos of the compare split get both sides' names burnt in at the bottom, at the line (the list on the screen is never in them)."},
+        // TrackMania 2 (maniaplanet.ini, the host's own panel).
+        {"BlackHoleMoon", "With Game moonlight Black hole (Game integration), how bright the black hole lights night maps under it:\n"
+                          "the game's moon (its blue glint on chrome and the sculptures, its light) is taken out of the picture and the\n"
+                          "black hole lights the scene instead, warm, with the game's own shine on each material.\n"
+                          "1 = as bright as the moon was. Shadows: the game's moon shadows where the black hole stands near the moon,\n"
+                          "else only short contact shadows. Only the mod's shaders change, nothing in the game."},
+    };
+    for (const auto& t : kTips)
+        if (!strcmp(t.key, key)) return t.tip;
+    return nullptr;
+}
+
+// A tooltip that wraps instead of running off the screen.
+void showTip(const char* text) {
+    ImGui::BeginTooltip();
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26.0f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+}
+
 // One setting as a widget. Returns true when the look changed (-> preset becomes Custom).
 bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
     if (!supported(f)) return false;
@@ -302,13 +501,16 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
         resetButton(false, "");
     }
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth() - ImGui::GetFrameHeight() - 4.0f);
+    bool hovered = false;
     switch (f.kind) {
         case Field::Bool:
             // A switch, like the rest of the menu.
             changed |= toggle("##on", reinterpret_cast<bool*>(base + f.offset));
+            hovered = ImGui::IsItemHovered();
             ImGui::SameLine();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(label);
+            hovered |= ImGui::IsItemHovered();
             break;
         case Field::Int: {
             int* value = reinterpret_cast<int*>(base + f.offset);
@@ -332,10 +534,27 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
                     changed = true;
                 }
             } else if (!strcmp(f.key, "ToneCurve")) {
-                static const char* kCurves[] = {"The game's", "TMVS (colours keep their hue)", "ACES (film)"};
+                static const char* kCurves[] = {"The game's", "TMVS (keeps hue)", "ACES (film)"};
                 changed |= ImGui::Combo(label, value, kCurves, IM_ARRAYSIZE(kCurves));
+            } else if (!strcmp(f.key, "VideoCodec")) {
+                static const char* kCodecs[] = {"Game's AVI", "MP4 (H.264)", "MP4 (HEVC)"};
+                changed |= ImGui::Combo(label, value, kCodecs, IM_ARRAYSIZE(kCodecs));
+            } else if (!strcmp(f.key, "DofAutofocus")) {
+                static const char* kFocusModes[] = {"Middle", "Car"};
+                changed |= ImGui::Combo(label, value, kFocusModes, IM_ARRAYSIZE(kFocusModes));
+            } else if (!strcmp(f.key, "EngineMoon") && g_host && g_host->engineMoon) {
+                // TrackMania 2: what its choices can do there (maniaplanet/src/overlay.cpp).
+                changed |= g_host->engineMoon(s, label);
+            } else if (!strcmp(f.key, "EngineMoon")) {
+                static const char* kMoons[] = {"Game's", "Black hole", "Off"};
+                changed |= ImGui::Combo(label, value, kMoons, IM_ARRAYSIZE(kMoons));
+            } else if (!strcmp(f.key, "LongShadowQuality")) {
+                static const char* kLongQualities[] = {"Stepped", "Every cell"};
+                changed |= ImGui::Combo(label, value, kLongQualities, IM_ARRAYSIZE(kLongQualities));
             } else if (!strcmp(f.key, "PlanetView")) {
-                changed |= ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
+                const bool picked = ImGui::Combo(label, value, kPlanetViews, IM_ARRAYSIZE(kPlanetViews));
+                if (picked && *value == 2 && s.skyMode == 5) applyOnTheRings(s);
+                changed |= picked;
             } else {
                 changed |= ImGui::SliderInt(label, value, static_cast<int>(f.min), static_cast<int>(f.max));
             }
@@ -348,6 +567,10 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             changed |= ImGui::SliderFloat(label, reinterpret_cast<float*>(base + f.offset), f.min, f.max,
                                           !strcmp(f.key, "TargetFPS") ? "%.0f" : "%.2f");
             break;
+    }
+    if (f.kind != Field::Bool) hovered = ImGui::IsItemHovered();
+    if (hovered) {
+        if (const char* tip = tooltipFor(f.key)) showTip(tip);
     }
     ImGui::PopID();
     if (!changed) return false;
@@ -406,6 +629,52 @@ void sameLineIfRoom(const char* nextLabel) {
 }
 
 // A switch with its label in front and a tooltip. Returns true when flipped.
+// A hotkey's current name for texts ("F8", "Shift+F6"), "no key" if the player turned it off.
+std::string keyText(keys::Action a) {
+    const keys::Binding b = keys::get(a);
+    return b.vk ? keys::name(b) : std::string("no key");
+}
+
+// Set while the Hotkeys panel is drawn: a key capture whose panel is gone (other page, menu
+// closed) is cancelled at the end of the frame, else the keyboard would stay captured.
+bool g_keysShown = false;
+
+// The Hotkeys panel: one row per action, Change waits for the next key press (Esc cancels).
+void drawHotkeys() {
+    g_keysShown = true;
+    ImGui::TextDisabled("Press the new key (Esc cancels). Letters need Ctrl or Alt.");
+    if (ImGui::BeginTable("hotkeys", 3, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("a", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+        ImGui::TableSetupColumn("b", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+        ImGui::TableSetupColumn("c", ImGuiTableColumnFlags_WidthFixed, 80.0f * g_scale);
+        for (int i = 0; i < static_cast<int>(keys::Action::Count); i++) {
+            const keys::Action a = static_cast<keys::Action>(i);
+            if (!keys::info(a).available) continue;
+            const bool mine = keys::capturing() && keys::captureTarget() == a;
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(keys::info(a).label);
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            if (mine) ImGui::TextColored(kAccent, "Press a key...");
+            else ImGui::TextUnformatted(keyText(a).c_str());
+            ImGui::TableNextColumn();
+            if (ImGui::Button(mine ? "Cancel" : "Change", ImVec2(-FLT_MIN, 0.0f))) {
+                if (mine) keys::cancelCapture();
+                else keys::beginCapture(a);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (!keys::note().empty()) ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1), "%s", keys::note().c_str());
+    ImGui::BeginDisabled(keys::capturing());
+    if (ImGui::Button("Reset to defaults")) keys::resetDefaults();
+    ImGui::EndDisabled();
+}
+
 bool switchRow(const char* label, bool* value, const char* tooltip) {
     ImGui::PushID(label);
     ImGui::AlignTextToFramePadding();
@@ -643,6 +912,7 @@ bool presetCard(const std::string& name, bool active, float width) {
                 config.moodPreset[m] = name;
                 config.autoMood = true;
                 if (static_cast<int>(config.mood) == m) config.selectPreset(name);
+                config.resumeMoodPresets();
                 config.markDirty();
             }
         }
@@ -832,6 +1102,27 @@ void drawShaders(Config& config) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens Explorer. In fullscreen the game may minimise.");
     ImGui::SameLine();
     ImGui::TextDisabled("Each preset is a .ini file plus a .jpg picture. Copy both to share it.");
+
+    // Sharing as text: one line to paste into a chat (the same code reads in both games).
+    static std::string s_shareStatus;
+    static bool s_shareOk = true;
+    if (ImGui::Button("Copy share code")) {
+        s_shareOk = copyTextToClipboard(config.shareCode());
+        s_shareStatus = s_shareOk ? "Share code copied." : "The clipboard is busy. Try again.";
+    }
+    if (ImGui::IsItemHovered()) showTip(tooltipFor("ShareCopy"));
+    ImGui::SameLine();
+    if (ImGui::Button("Paste share code")) {
+        std::string text;
+        s_shareOk = textFromClipboard(text, s_shareStatus) && config.applyShareCode(text, s_shareStatus);
+    }
+    if (ImGui::IsItemHovered()) showTip(tooltipFor("SharePaste"));
+    if (!s_shareStatus.empty()) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, s_shareOk ? ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled) : ImVec4(1.0f, 0.5f, 0.4f, 1.0f));
+        ImGui::TextUnformatted(s_shareStatus.c_str());
+        ImGui::PopStyleColor();
+    }
 }
 
 // --- Panels: settings side by side ---------------------------------------------------
@@ -944,7 +1235,9 @@ PanelDef settingsPanel(const char* title, Settings& s, const Entries& entries) {
     float rows = 0.0f;
     for (const auto& e : entries) {
         const Field* f = findField(e.first);
-        if (f && isRelevant(*f, s)) rows += 1.0f;
+        // Only what this game can do (ManiaPlanet has no long shadows, FXAA, water ...): the
+        // panel's height had room for rows that were never drawn.
+        if (f && supported(*f) && isRelevant(*f, s)) rows += 1.0f;
     }
     return {title, rows, [&s, entries] {
                 bool l = false;
@@ -955,35 +1248,9 @@ PanelDef settingsPanel(const char* title, Settings& s, const Entries& entries) {
 
 // --- The other pages ---------------------------------------------------------------
 
-// The handful of things a player wants to change.
-bool drawCustomize(Config& config, Settings& s) {
-    pageTitle("Customize", "The main settings of the current preset. All settings are in Studio.");
-    std::vector<PanelDef> panels;
-    panels.push_back(settingsPanel("Sky", s,
-                                   {{"SkyMode", "Sky"},
-                                    {"SkyRotation", "Turn the sky"},
-                                    {"StarAmount", "Stars"},
-                                    {"AuroraSpeed", "Aurora movement"},
-                                    {"PlanetType", "Planet"},
-                                    {"PlanetSize", "Planet size"},
-                                    {"PlanetView", "View"},
-                                    {"PlanetAzimuth", "Planet direction"},
-                                    {"PlanetElevation", "Planet height"},
-                                    {"SkyEffectSize", "Black hole size (0 = off)"},
-                                    {"BlackHoleAzimuth", "Black hole direction"},
-                                    {"BlackHoleElevation", "Black hole height"},
-                                    {"VolumetricClouds", "Clouds"}}));
-    panels.push_back(settingsPanel("Look", s,
-                                   {{"ShadowStrength", "Shadows"},
-                                    {"GodRays", "Light shafts"},
-                                    {"Bloom", "Glow"},
-                                    {"HighlightBoost", "Light sources"},
-                                    {"NeonLight", "Neon light"},
-                                    {"Exposure", "Brightness"},
-                                    {"Saturation", "Colour"},
-                                    {"MotionBlur", "Motion blur"}}));
-    // On top of every preset (not part of one): a colour look from Resolve, Lightroom, ...
-    panels.push_back({"Colour look (LUT)", 3.0f, [&config] {
+// On top of every preset (not part of one): a colour look from Resolve, Lightroom, ...
+PanelDef lutPanel(Config& config) {
+    return {"Colour look (LUT)", 3.0f, [&config] {
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           if (ImGui::BeginCombo("Look", config.lutFile.empty() ? "None" : config.lutFile.c_str())) {
                               if (ImGui::Selectable("None", config.lutFile.empty())) {
@@ -1008,7 +1275,48 @@ bool drawCustomize(Config& config, Settings& s) {
                               ShellExecuteW(nullptr, L"open", lut::folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                           }
                           return false;
-                      }});
+                      }};
+}
+
+// What a player wants to change; every setting is in Studio.
+bool drawCustomize(Config& config, Settings& s) {
+    pageTitle("Customize", "The settings most players want. Every setting is in Studio.");
+    std::vector<PanelDef> panels;
+    // In the order of Studio's groups, so the two pages read alike.
+    panels.push_back(settingsPanel("Light and shadows", s,
+                                   {{"ShadowStrength", "Shadows"},
+                                    {"LongShadows", "Long shadows"},
+                                    {"AOStrength", "Ambient occlusion"},
+                                    {"NeonLight", "Neon light spill"},
+                                    {"GodRays", "Light shafts"}}));
+    panels.push_back(settingsPanel("Sky", s,
+                                   {{"SkyMode", "Sky"},
+                                    {"SkyRotation", "Turn the sky"},
+                                    {"StarAmount", "Stars"},
+                                    {"AuroraSpeed", "Aurora movement"},
+                                    {"PlanetType", "Planet"},
+                                    {"PlanetSize", "Planet size"},
+                                    {"PlanetView", "Planet view"},
+                                    {"PlanetAzimuth", "Planet direction"},
+                                    {"PlanetElevation", "Planet height"},
+                                    {"SkyEffectSize", "Black hole size"},
+                                    {"BlackHoleAzimuth", "Black hole direction"},
+                                    {"BlackHoleElevation", "Black hole height"},
+                                    {"VolumetricClouds", "Clouds"}}));
+    panels.push_back(settingsPanel("Bloom and lens", s,
+                                   {{"Bloom", "Glow"},
+                                    {"BloomRadius", "Glow radius"},
+                                    {"HighlightBoost", "Light intensity"},
+                                    {"BorderGlow", "Neon borders"},
+                                    {"Floodlights", "Floodlights"},
+                                    {"LensFlare", "Lens flare"},
+                                    {"ChromaticAberration", "Colour fringes"},
+                                    {"Vignette", "Vignette"},
+                                    {"FilmGrain", "Film grain"}}));
+    panels.push_back(settingsPanel("Colour", s,
+                                   {{"Exposure", "Brightness"},
+                                    {"Contrast", "Contrast"},
+                                    {"Saturation", "Saturation"}}));
     panels.push_back(settingsPanel("Weather", s,
                                    {{"Rain", "Rain"},
                                     {"Snow", "Snow"},
@@ -1017,11 +1325,32 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"Lightning", "Lightning"},
                                     {"WeatherShelter", "Dry under roofs"},
                                     {"LensDrops", "Drops on the lens"},
-                                    {"Spray", "Spray behind the car"},
-                                    {"WeatherSound", "Weather sound"},
+                                    {"Spray", "Car spray"},
+                                    {"WeatherSound", "Weather volume"},
                                     {"WaterSurfaces", "Water"},
-                                    {"Reflections", "Reflections (dry track)"},
+                                    {"Reflections", "Reflections"},
                                     {"ReflectionBlur", "Reflection blur"}}));
+    panels.push_back(settingsPanel("Neon trail", s,
+                                   {{"NeonTrail", "Neon trail"},
+                                    {"TrailColor", "Colour"},
+                                    {"TrailWidth", "Width (m)"},
+                                    {"TrailTyres", "Tyre lines"},
+                                    {"TrailDuration", "Trail fade (s)"},
+                                    {"TrailKeepRuns", "Earlier runs"}}));
+    panels.push_back(settingsPanel("Cinematic", s,
+                                   {{"MotionBlur", "Motion blur"},
+                                    {"DepthOfField", "Depth of field"},
+                                    {"DofAutofocus", "Focus on"},
+                                    {"CinematicOnlyInReplays", nullptr}}));
+    panels.push_back(settingsPanel("Image quality", s,
+                                   {{"TAA", "Temporal AA"},
+                                    {"FXAA", "Edge smoothing"},
+                                    {"SMAA", "SMAA instead of FXAA"},
+                                    {"Sharpen", "Sharpening"},
+                                    {"Quality", "Effect quality"},
+                                    {"AutoQuality", "Auto quality"}}));
+    // A panel with nothing this game can do (or nothing the current choices use) is left out.
+    panels.erase(std::remove_if(panels.begin(), panels.end(), [](const PanelDef& p) { return p.rows <= 0.0f; }), panels.end());
     for (PanelDef& p : panels) p.foldable = true; // closed at first, the title opens them
     const bool look = panelColumns(panels, 330.0f);
     if (config.preset == kCustomPreset) {
@@ -1066,9 +1395,9 @@ bool drawStudio(Config& config, Settings& s) {
     if (confirm("Reset preset?", ("Reset all settings to " + config.basePreset() + "?").c_str(), "Reset")) {
         // Back to the preset your changes started from (a map's look: its own look again).
         if (config.basePreset() == kMapLookPreset) {
-            const Settings base = config.baseline();
+            const Settings look = config.baseline();
             const bool enabled = s.enabled;
-            s = base;
+            s = look;
             s.enabled = enabled;
             config.preset = kMapLookPreset;
             config.markDirty();
@@ -1077,8 +1406,9 @@ bool drawStudio(Config& config, Settings& s) {
         }
     }
     if (g_host->reloadShaders) {
-        sameLineIfRoom("Reload shaders (F9)");
-        if (ImGui::Button("Reload shaders (F9)")) g_reloadRequested = true;
+        const std::string reload = "Reload shaders (" + keyText(keys::Action::Reload) + ")";
+        sameLineIfRoom(reload.c_str());
+        if (ImGui::Button(reload.c_str())) g_reloadRequested = true;
     }
     ImGui::SameLine();
     if (ImGui::GetContentRegionAvail().x < 260.0f * g_scale) ImGui::NewLine();
@@ -1106,8 +1436,11 @@ bool drawStudio(Config& config, Settings& s) {
     if (ImGui::GetContentRegionAvail().x < 220.0f * g_scale) ImGui::NewLine();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##search", "Search settings", query, sizeof(query));
-    ImGui::TextDisabled("Sun: %s (%.2f %.2f %.2f)", g_host->sunKnown ? "from game" : "unknown", g_host->sunDirection[0], g_host->sunDirection[1],
-                        g_host->sunDirection[2]);
+    // For working on the shaders, not for players: only while a debug view is on, and only
+    // where the game reports the sun (TrackMania 2 doesn't pass it to the menu).
+    if (s.debugView != 0 && g_host->sunKnown) {
+        ImGui::TextDisabled("Sun: from game (%.2f %.2f %.2f)", g_host->sunDirection[0], g_host->sunDirection[1], g_host->sunDirection[2]);
+    }
     ImGui::Spacing();
 
     // One panel per category. Searching shows the matches of every category; a match that
@@ -1116,7 +1449,9 @@ bool drawStudio(Config& config, Settings& s) {
     const bool searching = query[0] != 0;
     for (const Field& f : fields()) {
         const bool match = !searching || containsNoCase(f.label, query) || containsNoCase(f.key, query) || containsNoCase(f.category, query);
-        if (!match || (!searching && !isRelevant(f, s))) continue;
+        // A hidden setting found by the search would open an empty panel (so would one this game
+        // can't do: "FSR" in TrackMania 2).
+        if (!match || !supported(f) || (!searching && !isRelevant(f, s))) continue;
         if (panels.empty() || panels.back().title != f.category) {
             const char* category = f.category;
             // Changed settings in this group (a dot on its title).
@@ -1127,7 +1462,7 @@ bool drawStudio(Config& config, Settings& s) {
             panels.push_back({category, 0.0f, [&s, category, searching] {
                                   bool l = false;
                                   for (const Field& g : fields()) {
-                                      if (strcmp(g.category, category) != 0) continue;
+                                      if (strcmp(g.category, category) != 0 || hiddenFromMenu(g)) continue;
                                       const bool hit = !searching || containsNoCase(g.label, query) || containsNoCase(g.key, query) ||
                                                        containsNoCase(g.category, query);
                                       const bool relevant = isRelevant(g, s);
@@ -1136,7 +1471,11 @@ bool drawStudio(Config& config, Settings& s) {
                                       l |= drawField(g, s);
                                       ImGui::EndDisabled();
                                       if (!relevant && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                                          ImGui::SetTooltip("No effect with the current settings");
+                                          ImGui::SetTooltip("%s", !strcmp(g.key, "FsrSharpness")
+                                                                      ? "FSR runs only with Render scale (FSR) below 1.00: set that first"
+                                                                  : !strcmp(g.key, "Sharpen")
+                                                                      ? "Render scale (FSR) is below 1.00: FSR sharpening sharpens instead"
+                                                                      : "No effect with the current settings");
                                       }
                                   }
                                   return l;
@@ -1154,6 +1493,10 @@ bool drawStudio(Config& config, Settings& s) {
         }
         ImGui::Spacing();
     }
+    if (!searching || containsNoCase("Colour look LUT", query)) {
+        panels.insert(panels.begin(), lutPanel(config));
+        panels.front().foldable = !searching;
+    }
     if (panels.empty()) ImGui::TextDisabled("Nothing found.");
     return panelColumns(panels, 360.0f);
 }
@@ -1164,9 +1507,16 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Preset per map type");
     ImGui::SameLine();
-    if (toggle("mood", &config.autoMood)) config.markDirty();
+    if (toggle("mood", &config.autoMood)) {
+        if (config.autoMood) config.resumeMoodPresets();
+        config.markDirty();
+    }
     ImGui::SameLine();
     ImGui::TextDisabled("this map: %s", moodName(config.mood));
+    if (config.autoMood && config.manualPick) {
+        ImGui::TextWrapped("Your pick (%s) holds on every map until you choose a preset for a map type below.", config.preset.c_str());
+        if (ImGui::Button("Use the presets per map type again")) config.resumeMoodPresets();
+    }
     ImGui::Spacing();
 
     // The three moods as big cards side by side (one under the other when narrow).
@@ -1208,12 +1558,14 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
             if (ImGui::BeginCombo("##preset", mp.empty() ? "Keep current" : mp.c_str())) {
                 if (ImGui::Selectable("Keep current", mp.empty())) {
                     mp.clear();
+                    config.resumeMoodPresets();
                     config.markDirty();
                 }
                 for (const auto& name : names) {
                     if (ImGui::Selectable(name.c_str(), mp == name)) {
                         mp = name;
                         if (static_cast<int>(config.mood) == m) config.selectPreset(name);
+                        config.resumeMoodPresets();
                         config.markDirty();
                     }
                 }
@@ -1262,16 +1614,12 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
 bool drawPerformancePage(Settings& s) {
     pageTitle("Performance", "Frame rate target and the cost of each effect on your GPU.");
     std::vector<PanelDef> panels;
-    panels.push_back({"Performance", 5.0f, [&s] {
-                          bool l = drawKey(s, "AutoQuality", "Adapt quality to my GPU");
-                          ImGui::SameLine();
-                          ImGui::TextDisabled("(?)");
-                          if (ImGui::IsItemHovered()) {
-                              ImGui::SetTooltip("Below the target it turns off just enough effects - the ones that cost the most for the least look\n"
-                                                "first - and brings them back when there is room. Your settings and presets stay as they are.");
-                          }
-                          l |= drawKey(s, "TargetFPS", "Target FPS");
-                          l |= drawKey(s, "Quality", "Effect quality");
+    panels.push_back({"Performance", 6.0f, [&s] {
+                          bool l = drawKey(s, "AutoQuality");
+                          l |= drawKey(s, "TargetFPS");
+                          l |= drawKey(s, "Quality");
+                          l |= drawKey(s, "RenderScale");
+                          l |= drawKey(s, "FsrSharpness");
                           if (s.autoQuality && g_host->autoQualityReduced) {
                               if (const char* reduced = g_host->autoQualityReduced()) {
                                   ImGui::TextWrapped("Turned off by auto quality: %s", reduced);
@@ -1300,10 +1648,13 @@ bool drawSettings(Config& config, Settings& s) {
                           }});
     }
     panels.push_back({"Presets and maps", 4.0f, [&config] {
-                          switchRow("Preset per map type", &config.autoMood,
-                                    "Day, sunset and night maps each use their own preset (see Maps). Off: the same preset everywhere.");
+                          if (switchRow("Preset per map type", &config.autoMood,
+                                        "Day, sunset and night maps each use their own preset (see Maps). Off: the same preset everywhere.\n"
+                                        "A preset you pick holds on every map until you choose one for a map type again.") &&
+                              config.autoMood)
+                              config.resumeMoodPresets();
                           ImGui::BeginDisabled(!config.autoMood);
-                          switchRow("Picked preset applies to all maps of this type", &config.rememberMoodPick,
+                          switchRow("Remember preset picks", &config.rememberMoodPick,
                                     "On: picking a preset on a night map makes it the preset for all night maps (same for day and sunset).\nOff: only the Maps page sets these.");
                           ImGui::EndDisabled();
                           bool mapLooks = config.useMapLooks;
@@ -1318,28 +1669,33 @@ bool drawSettings(Config& config, Settings& s) {
                           switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
                           return false;
                       }});
-    panels.push_back({"Game", 8.0f, [&s] {
-                          bool l = drawKey(s, "CinematicOnlyInReplays", "Motion blur, depth of field only in replays");
-                          l |= drawKey(s, "WeatherSound", "Rain and thunder volume");
-                          l |= drawKey(s, "TAA", "Temporal anti-aliasing");
-                          l |= drawKey(s, "TAAJitter", "TAA sub-pixel jitter");
-                          l |= drawKey(s, "DisableGameMSAA", "Turn off the game's MSAA (restart)");
-                          l |= drawKey(s, "ReadableGameDepth", "Effects in replays and video export (restart)");
-                          l |= drawKey(s, "GameMaterials", "Read the game's materials (TMUF sea, debug view)");
-                          l |= drawKey(s, "DisableGameFX", "Turn off the game's FX: bloom, colour filter (next map)");
-                          l |= drawKey(s, "GameNight", "Real night under night skies: the game lights day maps at midnight");
-                          l |= drawKey(s, "GameSkyClouds", "Keep the game's sunset clouds (and the sea mirroring them) under night skies");
-                          return l;
+    panels.push_back({"Hotkeys", 11.0f, [] {
+                          drawHotkeys();
+                          return false;
                       }});
-    panels.push_back({"Photo mode", g_host->splitOn ? 11.0f : 8.0f, [&config] {
-                          switchRow("With the free camera (cam 7)", &config.photoAuto,
-                                    "Photo mode comes on by itself with the free camera: no HUD, full quality, effects that reach far.\nF6 turns it on or off anywhere.");
-                          switchRow("Hide the HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
+    // Its own panel: in the long Game panel the owner didn't find it. Left out where the game
+    // can't export (TrackMania 2 showed its title over nothing).
+    panels.push_back(settingsPanel("Video export", s, {{"VideoCodec", nullptr}, {"VideoBitrate", nullptr}, {"VideoExportBest", nullptr}}));
+    if (panels.back().rows <= 0.0f) panels.pop_back();
+    panels.push_back(settingsPanel("Effects", s, {{"CinematicOnlyInReplays", nullptr}, {"WeatherSound", nullptr}, {"TAA", nullptr}, {"TAAJitter", nullptr}}));
+    // How the mod works with the game itself, as in Studio's group of the same name (same order).
+    Entries game;
+    for (const Field& f : fields()) {
+        if (!strcmp(f.category, "Game integration")) game.push_back({f.key, nullptr});
+    }
+    panels.push_back(settingsPanel("Game integration", s, game));
+    panels.push_back({"Photo mode", g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f, [&config] {
+                          const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
+                          const std::string splitKey = keyText(keys::Action::PhotoSplit);
+                          switchRow("Auto photo mode", &config.photoAuto,
+                                    ("Photo mode turns on by itself with the free camera (cam 7): no HUD, full quality, far-reaching effects.\n" + photoKey +
+                                     " turns it on or off anywhere.").c_str());
+                          switchRow("Hide HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           char factor[48];
                           snprintf(factor, sizeof(factor), "%d x %d tiles = %.1fx", config.photoTiles, config.photoTiles, config.photoTiles * 0.84f);
                           if (ImGui::SliderInt("Hi-res photo", &config.photoTiles, 2, 4, factor)) config.markDirty();
-                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+F12: a photo this many times the screen size. Pause the replay while the tiles are taken.");
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+%s: a photo this many times the screen size. Pause the replay while the tiles are taken.", capKey.c_str());
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           char aperture[32];
                           snprintf(aperture, sizeof(aperture), "f/%.1f", (g_host->fNumber ? g_host->fNumber(config.photoDof) : 0.0f));
@@ -1348,20 +1704,42 @@ bool drawSettings(Config& config, Settings& s) {
                           if (g_host->splitOn) {
                               bool& split = *g_host->splitOn;
                               if (switchRow("Compare split", &split,
-                                            "One side of a line shows the game's image without the mod's effects, the other the mod's (Shift+F6).\n"
-                                            "In photos too, not in hi-res ones. The game's own changes stay on both sides (its bloom off, real night).")) {
+                                            ("One side of a line shows the game's image without the mod's effects (or another preset's look), the other yours (" + splitKey +
+                                             ").\n" +
+                                             (g_host->splitNote ? std::string(g_host->splitNote)
+                                                                // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
+                                                                : std::string(g_host->splitPreset ? "In photos too, hi-res ones included; the aperture blurs both sides alike."
+                                                                                                  : "In photos too, not in hi-res ones.") +
+                                                                      " The game's own changes stay on both sides (its bloom off, real night).")).c_str())) {
                                   if (split && g_host->photoOn) g_host->photoOn();
                               }
                               ImGui::BeginDisabled(!split);
+                              if (std::string* other = g_host->splitPreset) {
+                                  // The other side: the game's image or a preset (your look stays on the mod's side;
+                                  // to compare two presets, pick one as your look and the other here).
+                                  ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                                  if (ImGui::BeginCombo("Other side", other->empty() ? "The game's image" : other->c_str())) {
+                                      if (ImGui::Selectable("The game's image", other->empty())) other->clear();
+                                      for (const std::string& name : config.presetNames()) {
+                                          if (ImGui::Selectable(name.c_str(), *other == name)) *other = name;
+                                      }
+                                      ImGui::EndCombo();
+                                  }
+                                  if (ImGui::IsItemHovered())
+                                      ImGui::SetTooltip("What the other side of the line shows: the game's own image, or a preset's look next to yours.\n"
+                                                        "A preset costs a second run of the effects every frame (photo mode only).");
+                                  switchRow("Photo labels", &config.splitPhotoLabels, tooltipFor("SplitPhotoLabels"));
+                              }
                               ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                               ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");
                               if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where the line sits, from the left (Ctrl+Shift+wheel in the game).");
-                              ImGui::Checkbox("Game's image on the right", g_host->splitSwapped);
+                              ImGui::Checkbox("Swap sides", g_host->splitSwapped);
+                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the game's image on the right of the line instead of the left.");
                               ImGui::EndDisabled();
                           }
-                          ImGui::TextDisabled("F12 photo  |  Shift+F12 hi-res  |  middle click: focus");
-                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  F6: on/off");
-                          if (g_host->splitOn) ImGui::TextDisabled("Shift+F6: compare split  |  Ctrl+Shift+wheel: move its line");
+                          ImGui::TextDisabled("%s photo  |  Shift+%s hi-res  |  middle click: focus", capKey.c_str(), capKey.c_str());
+                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  %s: on/off", photoKey.c_str());
+                          if (g_host->splitOn) ImGui::TextDisabled("%s: compare split  |  Ctrl+Shift+wheel: move its line", splitKey.c_str());
                           return false;
                       }});
     panels.push_back({"Files", 3.0f, [&config] {
@@ -1375,6 +1753,8 @@ bool drawSettings(Config& config, Settings& s) {
                           ImGui::TextDisabled("All changes are saved automatically.");
                           return false;
                       }});
+    // A settings panel with nothing this game can do is left out.
+    panels.erase(std::remove_if(panels.begin(), panels.end(), [](const PanelDef& p) { return p.rows <= 0.0f; }), panels.end());
     return panelColumns(panels, 380.0f);
 }
 
@@ -1389,18 +1769,22 @@ void markdown(const std::string& text) {
         for (const char* mark : {"**", "`"}) {
             for (size_t at; (at = line.find(mark)) != std::string::npos;) line.erase(at, strlen(mark));
         }
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.rfind("![", 0) == 0) continue; // pictures: only on the release page
+        // HTML (<details>), tables (the file hashes) and rules: only on the release page too.
+        if (line.rfind("<", 0) == 0 || line.rfind("|", 0) == 0 || line.rfind("---", 0) == 0) continue;
         // Links: [text](url) -> text.
         for (size_t open; (open = line.find('[')) != std::string::npos;) {
             const size_t close = line.find("](", open);
-            const size_t end = close == std::string::npos ? std::string::npos : line.find(')', close);
-            if (end == std::string::npos) break;
-            line = line.substr(0, open) + line.substr(open + 1, close - open - 1) + line.substr(end + 1);
+            const size_t shut = close == std::string::npos ? std::string::npos : line.find(')', close);
+            if (shut == std::string::npos) break;
+            line = line.substr(0, open) + line.substr(open + 1, close - open - 1) + line.substr(shut + 1);
         }
         if (line.empty()) {
             ImGui::Spacing();
         } else if (line[0] == '#') {
-            ImGui::TextColored(kAccent, "%s", line.substr(line.find_first_not_of("# ")).c_str());
+            const size_t title = line.find_first_not_of("# ");
+            if (title != std::string::npos) ImGui::TextColored(kAccent, "%s", line.c_str() + title);
         } else if (line.rfind("- ", 0) == 0 || line.rfind("* ", 0) == 0) {
             ImGui::Bullet();
             ImGui::TextWrapped("%s", line.c_str() + 2);
@@ -1419,7 +1803,10 @@ void drawAbout(Config& config) {
     pageTitle("About", "TM Vibrant Shaders " TM_SHADERS_VERSION_A " - updates, help and credits.");
     const update::Info info = update::latest();
     std::vector<PanelDef> panels;
-    panels.push_back({"Updates", info.state == update::State::Available ? 14.0f : 4.0f, [&config, info] {
+    const update::Install install = update::install();
+    const float updatesHeight =
+        info.state != update::State::Available ? 4.0f : (install == update::Install::ModLoader ? 16.0f : 14.0f);
+    panels.push_back({"Updates", updatesHeight, [&config, info, install] {
                           switch (info.state) {
                               case update::State::Checking: ImGui::TextDisabled("Checking for updates..."); break;
                               case update::State::UpToDate: ImGui::Text("You're up to date (%s).", TM_SHADERS_VERSION_A); break;
@@ -1429,9 +1816,22 @@ void drawAbout(Config& config) {
                                   ImGui::PushFont(g_fontTitle);
                                   ImGui::TextColored(kAccent, "Update available: %s", info.version.c_str());
                                   ImGui::PopFont();
-                                  ImGui::TextDisabled("Installed: %s. Download the new version and run its Setup.", TM_SHADERS_VERSION_A);
-                                  if (ImGui::Button("Download")) openLink(info.url);
+                                  if (install == update::Install::ModLoaderServer) {
+                                      // The ModLoader's own auto update fetches it from our server.
+                                      ImGui::TextDisabled("Installed: %s. The ModLoader installs the update by itself.", TM_SHADERS_VERSION_A);
+                                      if (ImGui::Button("Release page")) openLink(info.url);
+                                  } else {
+                                      ImGui::TextDisabled("Installed: %s. Download the new version and run its Setup.", TM_SHADERS_VERSION_A);
+                                      if (ImGui::Button("Download")) openLink(info.url);
+                                  }
                                   if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the release page in your browser. In fullscreen the game may minimise.");
+                                  if (install == update::Install::ModLoader) {
+                                      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                                      ImGui::TextWrapped("Or let the ModLoader update the mod by itself: add our server under servers: in its config.yaml.");
+                                      ImGui::PopStyleColor();
+                                      if (ImGui::Button("Copy server address")) ImGui::SetClipboardText(update::kModLoaderServer);
+                                      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", update::kModLoaderServer);
+                                  }
                                   if (!info.notes.empty()) {
                                       ImGui::Spacing();
                                       ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.25f));
@@ -1463,13 +1863,15 @@ void drawAbout(Config& config) {
                           }
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("Settings, presets, tmvs.log and F12 captures. Attach tmvs.log to bug reports.");
                           ImGui::Spacing();
-                          ImGui::TextDisabled("F8  menu      %s  effects on/off", g_host->toggleKey);
-                          if (g_host->reloadShaders) ImGui::TextDisabled("F9  reload shaders      F12  frame capture");
-                          else ImGui::TextDisabled("F12  frame capture");
+                          ImGui::TextDisabled("%s  menu      %s  effects on/off", keyText(keys::Action::Menu).c_str(), keyText(keys::Action::Effects).c_str());
+                          if (g_host->reloadShaders)
+                              ImGui::TextDisabled("%s  reload shaders      %s  frame capture", keyText(keys::Action::Reload).c_str(),
+                                                  keyText(keys::Action::Capture).c_str());
+                          else ImGui::TextDisabled("%s  frame capture", keyText(keys::Action::Capture).c_str());
                           return false;
                       }});
     panels.push_back({"Credits", 6.0f, [] {
-                          ImGui::TextWrapped("Built with Dear ImGui, minimp3 and stb. Sharpening: AMD FidelityFX CAS. Anti-aliasing: FXAA 3.11.");
+                          ImGui::TextWrapped("Built with Dear ImGui, minimp3 and stb. Sharpening: AMD FidelityFX CAS. Upscaling: AMD FidelityFX FSR 1. Anti-aliasing: FXAA 3.11, SMAA (Jimenez, Echevarria, Masia, Navarro, Gutierrez).");
                           ImGui::TextWrapped("Rain and thunder: CC0 recordings from freesound.org by Rubaoliva, loganzsound, seth-m, Fission9, TRP, "
                                              "Kinoton, Martineerok, kingsrow and bastipictures. The snow storm wind is made by the mod itself.");
                           ImGui::TextDisabled("Licences: see THIRD_PARTY_NOTICES.txt in the download.");
@@ -1513,6 +1915,18 @@ bool layoutButton(bool full) {
 }
 
 void drawHeader(Config& config, Settings& s) {
+    // The mod's icon left of the name, as tall as the title font. It is made at exactly that many
+    // pixels and drawn on whole pixels, texel for pixel: sharp at every menu size.
+    const int iconSize = static_cast<int>(g_fontTitle->FontSize + 0.5f);
+    const ImTextureID icon = g_host->icon ? g_host->icon(iconSize) : ImTextureID{};
+    if (icon) {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const ImVec2 at(std::floor(p.x), std::floor(p.y));
+        ImGui::Dummy(ImVec2(static_cast<float>(iconSize), static_cast<float>(iconSize)));
+        ImGui::GetWindowDrawList()->AddImageRounded(icon, at, ImVec2(at.x + iconSize, at.y + iconSize), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                                                    IM_COL32_WHITE, iconSize * 0.18f);
+        ImGui::SameLine(0.0f, 8.0f * g_scale);
+    }
     ImGui::PushFont(g_fontTitle);
     ImGui::TextColored(kAccent, "TM VIBRANT SHADERS");
     ImGui::PopFont();
@@ -1540,7 +1954,7 @@ void drawHeader(Config& config, Settings& s) {
     const float right = ImGui::GetContentRegionMax().x;
     const float switchW = h * 1.8f, buttonW = h;
     char effectsLabel[32];
-    snprintf(effectsLabel, sizeof(effectsLabel), "Effects (%s)", g_host->toggleKey);
+    snprintf(effectsLabel, sizeof(effectsLabel), "Effects (%s)", keyText(keys::Action::Effects).c_str());
     const float effectsW = ImGui::CalcTextSize(effectsLabel).x;
     ImGui::SameLine(right - buttonW * 2.0f - switchW - effectsW - ImGui::CalcTextSize(fps).x - 48.0f * g_scale);
     ImGui::TextDisabled("%s", fps);
@@ -1562,7 +1976,7 @@ void drawHeader(Config& config, Settings& s) {
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.65f, 0.15f, 0.15f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
     if (ImGui::Button("\xC3\x97", ImVec2(buttonW, h))) config.showOverlay = false; // U+00D7
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close (F8)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close (%s)", keyText(keys::Action::Menu).c_str());
     ImGui::PopStyleColor(4);
 
     if (!g_host->depthAvailable) {
@@ -1602,9 +2016,9 @@ void drawNavigation(Config& config) {
     const float lines = ImGui::GetTextLineHeightWithSpacing() * 4.0f;
     const float space = ImGui::GetContentRegionAvail().y - lines;
     if (space > 0.0f) ImGui::Dummy(ImVec2(0.0f, space));
-    ImGui::TextDisabled("F8  menu");
-    ImGui::TextDisabled("%s  effects on/off", g_host->toggleKey);
-    ImGui::TextDisabled("F12 frame capture");
+    ImGui::TextDisabled("%s  menu", keyText(keys::Action::Menu).c_str());
+    ImGui::TextDisabled("%s  effects on/off", keyText(keys::Action::Effects).c_str());
+    ImGui::TextDisabled("%s  frame capture", keyText(keys::Action::Capture).c_str());
     ImGui::TextDisabled("Changes save automatically");
 }
 
@@ -1675,6 +2089,10 @@ void drawMenu() {
 
 } // namespace
 
+const char* tooltip(const char* key) {
+    return tooltipFor(key);
+}
+
 void setupStyle(HWND window) {
     ImGuiIO& io = ImGui::GetIO();
     ImGui::StyleColorsDark();
@@ -1732,7 +2150,9 @@ float scale() {
 
 void draw(const Host& host) {
     g_host = &host;
+    g_keysShown = false;
     drawMenu();
+    if (keys::capturing() && !g_keysShown) keys::cancelCapture();
     g_host = nullptr;
 }
 
@@ -1740,6 +2160,39 @@ bool consumeReloadRequest() {
     const bool requested = g_reloadRequested;
     g_reloadRequested = false;
     return requested;
+}
+
+void drawSplitBar(const std::string& mine, std::string& other, float position, bool mineLeft, const std::string& note, float bottom) {
+    Config& config = Config::get();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    const float x = position * size.x, y = size.y - bottom * g_scale, pad = 8.0f * g_scale;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
+    const char* kGame = "The game's image";
+    // Your side.
+    ImGui::SetNextWindowPos(ImVec2(mineLeft ? x - pad : x + pad, y), ImGuiCond_Always, ImVec2(mineLeft ? 1.0f : 0.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##splitMine", nullptr, flags | ImGuiWindowFlags_NoInputs);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(mine.c_str());
+    ImGui::End();
+    // The other side.
+    const std::vector<std::string> names = config.presetNames();
+    float widest = ImGui::CalcTextSize(kGame).x;
+    for (const std::string& name : names) widest = std::max(widest, ImGui::CalcTextSize(name.c_str()).x);
+    ImGui::SetNextWindowPos(ImVec2(mineLeft ? x + pad : x - pad, y), ImGuiCond_Always, ImVec2(mineLeft ? 0.0f : 1.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::Begin("##splitOther", nullptr, flags);
+    if (!note.empty()) ImGui::TextDisabled("%s", note.c_str());
+    ImGui::SetNextItemWidth(widest + ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 2.0f);
+    if (ImGui::BeginCombo("##splitOtherList", other.empty() ? kGame : other.c_str(), ImGuiComboFlags_HeightLarge)) {
+        if (ImGui::Selectable(kGame, other.empty())) other.clear();
+        for (const std::string& name : names) {
+            if (ImGui::Selectable(name.c_str(), other == name)) other = name;
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::End();
 }
 
 } // namespace menu

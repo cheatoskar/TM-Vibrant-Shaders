@@ -2,4 +2,5 @@ name: TM Vibrant Shaders
 author: cheatoskar
 type: modification
 homepage: 'https://github.com/cheatoskar/TM-Vibrant-Shaders'
-description: 'Real-time lighting, weather and skies for TrackMania Nations & United Forever: shadows, ambient occlusion, light shafts, glowing neon, rain and thunderstorms, reflections, volumetric clouds, a black hole and a ring world sky, with an in-game F8 menu.'
+description: 'Real-time lighting and weather mod for TrackMania Nations/United Forever and TrackMania 2. Features include dynamic lighting, night mode, long shadows, neon effects, rain, clouds, improved water, MP4 video export, and customizable hotkeys. Open the menu with F8.'
+icon_link: 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/icon.png'

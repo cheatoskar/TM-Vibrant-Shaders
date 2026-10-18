@@ -2,6 +2,7 @@
 #include "config.h"
 #include "hooks.h"
 #include "image.h"
+#include "keys.h"
 #include "log.h"
 #include "settings.h"
 #include <atomic>
@@ -39,10 +40,18 @@ struct SaveJob {
     std::vector<unsigned char> rgb;
     int width;
     int height;
+    // The compare split's names (SplitPhotoLabels, as in TMNF), "" = none.
+    std::string left, right;
+    float splitAt = 0.5f;
 };
+void splitLabels(SaveJob& job); // below, with the split's state
 
 DWORD WINAPI saveThread(LPVOID param) {
     SaveJob* job = static_cast<SaveJob*>(param);
+    // On this thread too: GDI draws the names in a few ms.
+    if (!job->left.empty() || !job->right.empty())
+        tmshaders::image::drawSplitLabels(job->rgb.data(), job->width, job->height, 3, static_cast<size_t>(job->width) * 3,
+                                          job->splitAt, job->left, job->right);
     const bool ok = tmshaders::image::writePng(job->path, job->rgb.data(), job->width, job->height);
     const size_t slash = job->path.find_last_of(L"\\/");
     const std::wstring file = slash == std::wstring::npos ? job->path : job->path.substr(slash + 1);
@@ -56,6 +65,7 @@ DWORD WINAPI saveThread(LPVOID param) {
 
 void save(std::vector<unsigned char>&& rgb, int width, int height) {
     SaveJob* job = new SaveJob{L"", std::move(rgb), width, height};
+    splitLabels(*job);
     wchar_t name[64];
     for (int n = 0;; n++) {
         swprintf(name, 64, L"\\photo_%03d.png", n);
@@ -129,7 +139,30 @@ namespace {
 bool g_splitOn = false;
 float g_splitPosition = 0.5f;
 bool g_splitSwapped = false;
+std::string g_splitPreset; // the other side: "" the game's image, else this preset's look
+
+// The photo has the compare split (the line and the other side are in the frame): which side
+// shows what, as the labels at the line name them on the screen (never in photos).
+void splitLabels(SaveJob& job) {
+    const Config& config = Config::get();
+    if (!splitShown() || !config.splitPhotoLabels) return;
+    job.splitAt = g_splitPosition < 0.01f ? 0.01f : (g_splitPosition > 0.99f ? 0.99f : g_splitPosition);
+    job.left = splitName(false);
+    job.right = splitName(true);
+}
 } // namespace
+
+std::string& splitPreset() {
+    return g_splitPreset;
+}
+
+std::string splitName(bool right) {
+    const Config& config = Config::get();
+    const std::string mine = !config.settings.enabled ? std::string("Shaders off") : (config.preset.empty() ? std::string("Your look") : config.preset);
+    const std::string other = g_splitPreset.empty() ? std::string("Game") : g_splitPreset;
+    // The other side is on the left unless swapped.
+    return right != g_splitSwapped ? mine : other;
+}
 
 bool& splitOn() {
     return g_splitOn;
@@ -146,7 +179,8 @@ bool& splitSwapped() {
 void toggleSplit() {
     g_splitOn = !g_splitOn;
     if (g_splitOn && !g_active) toggle();
-    setStatus(g_splitOn ? "Compare split: the game's image on one side (Ctrl+Shift+wheel moves the line)" : "Compare split off", 3);
+    const std::string other = g_splitPreset.empty() ? std::string("the game's image") : g_splitPreset;
+    setStatus(g_splitOn ? "Compare split: " + other + " on one side (Ctrl+Shift+wheel moves the line)" : std::string("Compare split off"), 3);
 }
 
 bool splitShown() {
@@ -164,7 +198,10 @@ void toggle() {
     g_active = on;
     TMVS_LOG("photo: mode %s", on ? "on" : "off");
     if (on) {
-        setStatus("Photo mode   F12 photo   middle click: focus   Ctrl+middle click: no focus   Ctrl+wheel: aperture   F6/Esc: off", 6);
+        namespace keys = tmshaders::keys;
+        setStatus("Photo mode   " + keys::name(keys::get(keys::Action::Capture)) + " photo   middle click: focus   Ctrl+middle click: no focus   Ctrl+wheel: aperture   " +
+                      keys::name(keys::get(keys::Action::Photo)) + "/Esc: off",
+                  6);
     } else {
         g_requested = false;
         g_focusU = g_focusV = -1.0f;
@@ -245,6 +282,44 @@ void adjust(tmshaders::Settings& s) {
     }
 }
 
+void vanillaLook(tmshaders::Settings& s) {
+    s.aoStrength = 0.0f;
+    s.shadowStrength = 0.0f;
+    s.globalIllumination = 0.0f;
+    s.neonLight = 0.0f;
+    s.sunLight = 0.0f;
+    s.ambientTint = 0.0f;
+    s.fogDensity = 0.0f;
+    s.skyMode = 0;
+    s.skyEnhance = 0.0f;
+    s.volumetricClouds = 0.0f;
+    s.godRays = 0.0f;
+    s.volumetricLight = 0.0f;
+    s.bloom = 0.0f;
+    s.lensFlare = 0.0f;
+    s.wetness = 0.0f;
+    s.rain = 0.0f;
+    s.snow = 0.0f;
+    s.puddles = 0.0f;
+    s.reflections = 0.0f;
+    s.lightning = 0.0f;
+    s.neonTrail = 0.0f;
+    s.exposure = 0.0f;
+    s.contrast = 1.0f;
+    s.saturation = 1.0f;
+    s.vibrance = 0.0f;
+    s.temperature = 0.0f;
+    s.tint = 0.0f;
+    s.shadowTint = 0.0f;
+    s.lift = 0.0f;
+    s.gamma = 1.0f;
+    s.gain = 1.0f;
+    s.vignette = 0.0f;
+    s.filmGrain = 0.0f;
+    s.chromaticAberration = 0.0f;
+    s.toneCurve = 0; // the engine's curve
+}
+
 void focusPoint(float out[2]) {
     out[0] = g_focusU;
     out[1] = g_focusV;
@@ -278,6 +353,7 @@ const char* status() {
         char line[96];
         snprintf(line, sizeof(line), "Photo mode   %s   Focus %s", aperture, g_focusU >= 0.0f ? "point" : "auto");
         text = line;
+        if (g_splitOn && !g_splitPreset.empty()) text += "   Compare with " + g_splitPreset;
         if (!g_status.empty()) text += "\n" + g_status;
     } else {
         text = g_status;

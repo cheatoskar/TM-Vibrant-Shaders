@@ -23,6 +23,21 @@ struct Options {
     bool fallbackAtEnd = true;
     View view = View::Normal;
     float split = 0.5f; // Split: the game's own image left of this
+    // Soft sun shadows: the light's angular diameter in degrees (the sun is 0.53) for the mod's
+    // PCSS shader in place of the engine's sun shadow pass (default 1, the owner's pick); 0 keeps the engine's.
+    float softShadows = 1.0f;
+    // The light sources (lamps, screens, halos, the car's lights) from what the engine draws as
+    // light, not guessed from the image's colours (engine_lights.cpp). On since the owner's test
+    // (2026-10-16, captures 031/032): grass no longer glows, the road borders still do.
+    bool engineLightDraws = true;
+    // Night maps under the black hole: the engine's moon (its diffuse light and its blue glint) is
+    // taken out of the image and the black hole lights the scene instead, at this strength (1 = as
+    // bright as the game's moon, the default as in TMNF (owner, 2026-10-17); 0 = off). Shader side
+    // only (scene.hlsl).
+    float blackHoleMoon = 1.0f;
+    // The frame rate of the replay editor's Shoot video, for the effects' clock while it renders
+    // (VideoExportBest, hooks.cpp). The game doesn't tell it on the D3D11 side: set it to match.
+    float videoFps = 30.0f;
 };
 
 namespace options {
@@ -34,7 +49,7 @@ void save();
 } // namespace options
 
 // Sets a look setting (a settings.ini key: Exposure, Bloom, ToneCurve ...; also Preset, Enabled,
-// Lut, LutAmount) or a ManiaPlanet option (Placement, FallbackAtEnd, View, Split). False for an
+// Lut, LutAmount) or a ManiaPlanet option (Placement, FallbackAtEnd, View, Split, SoftShadows). False for an
 // unknown key. For the offline tools and the test.
 bool setValue(const std::string& key, const std::string& value);
 

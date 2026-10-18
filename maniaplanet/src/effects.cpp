@@ -2,6 +2,7 @@
 #include "config.h"
 #include "hooks.h"
 #include "log.h"
+#include "options.h"
 #include "settings.h"
 #include "weather.h"
 #include "shaders/PS_BilateralBlur.h"
@@ -9,9 +10,13 @@
 #include "shaders/PS_GI.h"
 #include "shaders/PS_GITemporal.h"
 #include "shaders/PS_Lighting.h"
+#include "shaders/PS_LightingMoon.h"
 #include "shaders/PS_OcclusionShadow.h"
 #include "shaders/PS_SpillBlur.h"
 #include "shaders/PS_SpillDown.h"
+#include "shaders/PS_SpillDownSource.h"
+#include "shaders/PS_SpillSource.h"
+#include "shaders/PS_SpillTemporal.h"
 #include "shaders/PS_Volumetric.h"
 #include "shaders/VS_Full.h"
 #include <algorithm>
@@ -34,12 +39,13 @@ float smoothstepf(float a, float b, float x) {
 const char* const kPassNames[kPassCount] = {
     "DownsampleND", "OcclusionShadow", "BilateralBlur", "GI",       "GITemporal", "SkyClear",   "SkyStars", "SkyBlackHole",
     "SkyAurora",    "SkyRing",         "AuroraHalf",    "SkyAverage", "Clouds",   "Reflect",    "SpillDown", "SpillBlur",
-    "Lighting",     "RainDrop",        "RainSplash",    "Spray",    "SnowFlake",  "Trail",      "Focus",    "DofBlur",
+    "SpillTemporal", "Lighting",     "RainDrop",        "RainSplash",    "Spray",    "SnowFlake",  "Trail",      "Focus",    "DofBlur",
     "Cinematic",    "RayMask",         "RayBlur",       "BloomDown", "BloomUp",   "Final",      "TAA",      "Sharpen",
     "Volumetric"};
 
 // The settings ManiaPlanet can do so far (the menu shows only these). The look (hdr.hlsl), then
-// the scene effects (scene.hlsl), then the stages as they come.
+// the scene effects (scene.hlsl), then the stages as they come. Not DisableGameFX: the engine's
+// bloom stays (hooks.cpp skipEngineBloom), so it changed nothing here.
 const char* const kSupported[] = {
     // look and tone map
     "Exposure", "Contrast", "ToneKnee", "ToneCurve", "Saturation", "Vibrance", "Temperature", "Tint", "Lift", "Gamma", "Gain",
@@ -47,8 +53,8 @@ const char* const kSupported[] = {
     // scene
     "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "NeonLight", "GlobalIllumination", "SunLight", "AmbientTint",
     "SunColor", "GameSunColor", "SkyColor", "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter",
-    "HazeDistance", "HighlightBoost", "Quality", "DisableGameFX", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
-    "VolumetricLight", "GameNight"};
+    "HazeDistance", "HighlightBoost", "Quality", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
+    "VolumetricLight", "GameNight", "EngineMoon"};
 
 } // namespace
 
@@ -180,8 +186,12 @@ bool Effects::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_GI, sizeof(g_PS_GI), nullptr, &m_gi));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_GITemporal, sizeof(g_PS_GITemporal), nullptr, &m_giTemporal));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillDown, sizeof(g_PS_SpillDown), nullptr, &m_spillDown));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillSource, sizeof(g_PS_SpillSource), nullptr, &m_spillSource));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillDownSource, sizeof(g_PS_SpillDownSource), nullptr, &m_spillDownSource));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillBlur, sizeof(g_PS_SpillBlur), nullptr, &m_spillBlur));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SpillTemporal, sizeof(g_PS_SpillTemporal), nullptr, &m_spillTemporal));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Lighting, sizeof(g_PS_Lighting), nullptr, &m_lighting));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_LightingMoon, sizeof(g_PS_LightingMoon), nullptr, &m_lightingMoon));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Volumetric, sizeof(g_PS_Volumetric), nullptr, &m_volumetric));
 
     D3D11_BUFFER_DESC cb = {};
@@ -229,6 +239,8 @@ void Effects::releaseTargets() {
     for (auto& t : m_gi_) t.release();
     for (auto& t : m_giHistory) t.release();
     for (auto& t : m_spill) t.release();
+    m_spillSource_.release();
+    for (auto& t : m_spillHistory) t.release();
     for (auto& t : m_volume) t.release();
     for (auto& t : m_hdr) t.release();
     m_result = nullptr;
@@ -253,8 +265,12 @@ void Effects::release() {
     safeRelease(m_gi);
     safeRelease(m_giTemporal);
     safeRelease(m_spillDown);
+    safeRelease(m_spillSource);
+    safeRelease(m_spillDownSource);
     safeRelease(m_spillBlur);
+    safeRelease(m_spillTemporal);
     safeRelease(m_lighting);
+    safeRelease(m_lightingMoon);
     safeRelease(m_volumetric);
     safeRelease(m_frameCb);
     safeRelease(m_passCb);
@@ -274,6 +290,7 @@ bool Effects::wanted(const tmshaders::Settings& s) {
 }
 
 bool Effects::supports(const char* key) {
+    if (!strcmp(key, "VideoExportBest")) return true; // the replay editor's Shoot video (hooks.cpp, VideoWatch)
     for (const char* k : kSupported)
         if (!strcmp(k, key)) return true;
     return SkyStage::supports(key) || WeatherStage::supports(key) || CinemaStage::supports(key) || TrailStage::supports(key);
@@ -290,6 +307,8 @@ bool Effects::ensureTargets(UINT w, UINT h) {
     for (auto& t : m_gi_) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R11G11B10_FLOAT);
     for (auto& t : m_giHistory) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT);
     for (auto& t : m_spill) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    for (auto& t : m_spillHistory) ok &= t.create(m_device, qw, qh, DXGI_FORMAT_R16G16B16A16_FLOAT);
+    m_spillValid = false;
     for (auto& t : m_volume) ok &= t.create(m_device, hw, hh, DXGI_FORMAT_R16G16B16A16_FLOAT);
     for (auto& t : m_hdr) ok &= t.create(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT);
     if (!ok) {
@@ -357,7 +376,7 @@ void Effects::run(ID3D11DeviceContext* ctx, int pass, ID3D11PixelShader* ps, con
 // The TMNF constants (pipeline.cpp, setFrameConstants) from the settings and the engine's camera.
 void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings& s) {
     const Camera& cam = *frame.camera;
-    float(&c)[48][4] = m_c;
+    float(&c)[49][4] = m_c;
     memset(c, 0, sizeof(c));
     constexpr float kPi = 3.14159265f;
 
@@ -432,7 +451,10 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     toView(sw, sv);
     const bool ringWorld = s.skyMode == 5;
     const bool nightSky = s.skyMode >= 2 && !ringWorld;
-    const bool mapNight = tmshaders::classifyMood(cam.sunColour) == tmshaders::Mood::Night;
+    // The map's time of day from the engine when it tells it (its night moon passed for a day sun
+    // by its colour: taken out under the black hole, shadows came out brighter than the ground).
+    const int dayMood = dayTimeMood(cam);
+    const bool mapNight = dayMood >= 0 ? dayMood == 0 : tmshaders::classifyMood(cam.sunColour) == tmshaders::Mood::Night;
     const bool gameNight = mapNight && !blackHole;
     const bool sunKnown = blackHole || (cam.sunDirectionKnown && !nightSky);
     const float daylight = blackHole ? fminf(0.3f + 0.12f * s.skyEffectSize, 1.0f) : smoothstepf(-0.08f, 0.18f, sw[1]) * (gameNight ? 0.35f : 1.0f);
@@ -575,6 +597,7 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[32][3] = has(kTexMotion);
     c[33][0] = cam.sunDirectionKnown ? (mapNight ? -1.0f : 1.0f) : 0.0f;
     c[33][1] = has(kTexSpecular);
+    c[33][3] = s.cleanHighlights ? 1.0f : 0.0f; // the sun's glint goes with the sun under night skies
     c[34][0] = s.taa ? 1.0f : 0.0f;
     c[34][1] = m_temporalValid ? 1.0f : 0.0f;
     c[34][2] = static_cast<float>(m_frame % 64);
@@ -612,18 +635,59 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[41][3] = 1.0f / fmaxf(s.hazeDistance, 0.1f);
     // How much of the engine's sun comes out: every night sky over a day map (not on night maps,
     // whose "sun" is the moon already).
-    c[43][0] = nightSky && !mapNight ? 1.0f : 0.0f;
+    // On night maps the moon stays (EngineMoon 0 and 1: ManiaPlanet's moon can't be moved), EngineMoon 2
+    // takes it out too.
+    c[43][0] = nightSky && (!mapNight || s.engineMoon == 2) ? 1.0f : 0.0f;
     const float glen = sqrtf(gameSun[0] * gameSun[0] + gameSun[1] * gameSun[1] + gameSun[2] * gameSun[2]);
     for (int i = 0; i < 3; i++) c[43][1 + i] = glen > 1e-5f ? cam.sunDirection[i] / glen : 0.0f;
+    // EngineLightDraws: t17 holds the light the engine drew as light (engine_lights.cpp).
+    c[44][0] = options::current().engineLightDraws && has(kTexLights) > 0.5f ? 1.0f : 0.0f;
     c[44][1] = s.gameNight ? 1.0f : 0.0f;
     c[44][2] = nightSky ? 1.0f : 0.0f;
     c[44][3] = s.toneKnee;
+    // The engine's cloud factor at its darkest (it lights with 2 x a factor between its clouds' min
+    // and max): how much of the estimated sun can go under a night sky (scene.hlsl).
+    if (cam.hasSceneP) {
+        float cmin[4];
+        memcpy(cmin, cam.rawP + kScenePCloudsMin, sizeof(cmin));
+        const bool ok = std::isfinite(cmin[0]) && std::isfinite(cmin[1]) && std::isfinite(cmin[2]) && cmin[0] > 0.0f && cmin[1] > 0.0f && cmin[2] > 0.0f;
+        for (int i = 0; i < 3; i++) c[42][i] = ok ? fminf(cmin[i], 1.0f) : 0.0f;
+        c[42][3] = ok ? 1.0f : 0.0f;
+    }
     for (int i = 0; i < 3; i++) c[45][i] = cam.sunColour[i];
     c[45][3] = cam.sunDirectionKnown ? 1.0f : 0.0f;
     for (int i = 0; i < 3; i++) c[46][i] = cam.fog[i];
     c[47][0] = 0.0f; // the passes read the engine's HDR image and expose it themselves
     c[47][1] = frame.photo ? 1.0f : 0.0f;
     c[47][2] = m_tmnfScale;
+
+    // BlackHoleMoon (maniaplanet.ini): on a night map under the black hole, the engine's moon (its
+    // diffuse light and its glint, blue on chrome and the ring sculptures) is taken out of the
+    // image and the black hole lights the scene instead (scene.hlsl), with the engine's own
+    // specular model: its constants (SceneP: SpecMaxExp, SpecScale, the light's w) and the
+    // material's specular from the G-buffer. Only what the proxy sees; nothing in the game changes.
+    const float moonStrength = options::current().blackHoleMoon;
+    if (moonStrength > 0.0f && blackHole && mapNight && cam.hasSceneP && cam.sunDirectionKnown && has(kTexSpecular) > 0.5f &&
+        has(kTexLightMask) > 0.5f && has(kTexNormal) > 0.5f && c[42][3] > 0.5f) {
+        float gen[4], light[4], cmax[4];
+        memcpy(gen, cam.rawP + kScenePLightGenSpec, sizeof(gen));
+        memcpy(light, cam.rawP + kScenePLightDirRgbLinear0, sizeof(light));
+        memcpy(cmax, cam.rawP + kScenePCloudsMax, sizeof(cmax));
+        const float specScale = gen[3] * light[3];
+        if (std::isfinite(gen[2]) && gen[2] >= 0.0f && gen[2] < 4096.0f && std::isfinite(specScale) && specScale >= 0.0f &&
+            std::isfinite(cmax[0]) && std::isfinite(cmax[1]) && std::isfinite(cmax[2])) {
+            // The cloud factor varies with the engine's cloud texture (not seen here): halfway
+            // between its darkest and brightest, as a luma.
+            float mid[3];
+            for (int i = 0; i < 3; i++) mid[i] = 0.5f * (c[42][i] + fminf(fmaxf(cmax[i], c[42][i]), 1.0f));
+            c[48][0] = moonStrength;
+            c[48][1] = gen[2];
+            c[48][2] = specScale;
+            c[48][3] = 0.2126f * mid[0] + 0.7152f * mid[1] + 0.0722f * mid[2];
+            c[43][0] = 0.0f; // the moon is replaced here, not taken out by EngineMoon 2's path as well
+            c[33][3] = 0.0f; // nor its glint guessed by CleanHighlights: it is rebuilt exactly here
+        }
+    }
 }
 
 bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tmshaders::Settings& s) {
@@ -665,6 +729,8 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     memcpy(m_engineViews, engine, sizeof(engine));
     ctx->PSSetShaderResources(8, 8, engine);
     ctx->VSSetShaderResources(8, 8, engine);
+    ID3D11ShaderResourceView* engineLights = m_c[44][0] > 0.5f ? frame.engine[kTexLights] : nullptr;
+    ctx->PSSetShaderResources(17, 1, &engineLights);
 
     const float hx = 1.0f / m_ndHalf_.w, hy = 1.0f / m_ndHalf_.h;
     const float qx = 1.0f / m_gi_[0].w, qy = 1.0f / m_gi_[0].h;
@@ -714,11 +780,32 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     // Neon light.
     ID3D11ShaderResourceView* spill = nullptr;
     if (s.neonLight > 0.0f) {
-        run(ctx, kSpillDown, m_spillDown, m_spill[0], nullptr, 0);
+        // Quality 2: the sources found pixel by pixel first (full res), then taken down to quarter
+        // res. PS_SpillDown reads 4 of the 16 pixels of each block: a far strip 1-2 px high was
+        // seen or not by where it fell, and the light on the wall next to it pulsed as the camera
+        // crept towards it. Lower quality (auto quality's fewer samples too): the cheaper way.
+        // Both passes count as SpillDown (the menu's times, auto quality's neon light).
+        const bool perPixel = s.quality >= 2 && (m_spillSource_.ready() || m_spillSource_.create(m_device, m_w, m_h, DXGI_FORMAT_R16G16B16A16_FLOAT));
+        if (perPixel) {
+            run(ctx, kSpillDown, m_spillSource, m_spillSource_, nullptr, 0);
+            run(ctx, kSpillDown, m_spillDownSource, m_spill[0], &m_spillSource_.srv, 1);
+        } else {
+            run(ctx, kSpillDown, m_spillDown, m_spill[0], nullptr, 0);
+        }
         const float dirH[4] = {qx, 0, 0, 0}, dirV[4] = {0, qy, 0, 0};
         run(ctx, kSpillBlur, m_spillBlur, m_spill[1], &m_spill[0].srv, 1, dirH);
         run(ctx, kSpillBlur, m_spillBlur, m_spill[0], &m_spill[1].srv, 1, dirV);
-        spill = m_spill[0].srv;
+        // Over frames: found anew in every frame, the light flickered on the walls next to a
+        // strip as the car or the camera moved.
+        const int prev = m_spillIndex, next = 1 - m_spillIndex;
+        const float t0[4] = {m_spillValid && m_temporalValid && m_spillHistoryOn ? 1.0f : 0.0f, 0, 0, 0};
+        ID3D11ShaderResourceView* tin[2] = {m_spill[0].srv, m_spillHistory[prev].srv};
+        run(ctx, kSpillTemporal, m_spillTemporal, m_spillHistory[next], tin, 2, t0);
+        m_spillIndex = next;
+        m_spillValid = true;
+        spill = m_spillHistory[next].srv;
+    } else {
+        m_spillValid = false;
     }
 
     // Volumetric light: the view rays through the engine's own shadow maps. Only with the engine's
@@ -763,10 +850,13 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     const float p0[4] = {sky.sky ? 1.0f : 0.0f, sky.average ? 1.0f : 0.0f, sky.clouds ? 1.0f : 0.0f, reflections ? 1.0f : 0.0f};
     m_currentHdr = 0;
     ctx->PSSetShaderResources(16, 1, &volume);
+    ctx->PSSetShaderResources(17, 1, &engineLights);
     const float p1[4] = {volume ? 1.0f : 0.0f, 0, 0, 0};
-    run(ctx, kLighting, m_lighting, m_hdr[0], in, 8, p0, p1);
-    ID3D11ShaderResourceView* noVolume = nullptr;
-    ctx->PSSetShaderResources(16, 1, &noVolume);
+    // BlackHoleMoon acting (c48.x): the variant with the moon's relight (the plain one stays as it was).
+    ID3D11PixelShader* lighting = m_c[48][0] > 0.0f && m_lightingMoon ? m_lightingMoon : m_lighting;
+    run(ctx, kLighting, lighting, m_hdr[0], in, 8, p0, p1);
+    ID3D11ShaderResourceView* noVolume[2] = {};
+    ctx->PSSetShaderResources(16, 2, noVolume);
 
     // On the HDR image: cinema (depth of field, motion blur, TAA), then the weather's particles and
     // lens drops (after TAA as in TMNF: it would smear the streaks), then the sun's light shafts and
@@ -775,7 +865,7 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     bindFrame(ctx);
     ctx->PSSetConstantBuffers(2, 1, &engineTone);
     ctx->PSSetShaderResources(8, 8, engine);
-    m_weather.tick(s, frame.time);
+    if (m_sound) m_weather.tick(s, frame.time);
     m_weather.draw(ctx, *this, frame, s);
     bindFrame(ctx);
     m_trail.draw(ctx, *this, frame, s);

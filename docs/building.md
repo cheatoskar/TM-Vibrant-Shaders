@@ -19,7 +19,7 @@ cmake --build build --config Release                        # plugin, setup, pre
 cmake --build build --config Release --target release_zip   # dist/: zip, DLL, SHA256SUMS.txt
 ```
 
-Set a version with `-DTM_SHADERS_VERSION=1.4.0` when configuring. The CI does this from the tag.
+Set a version with `-DTM_SHADERS_VERSION=1.4.1` when configuring. The CI does this from the tag.
 
 To try a local build in the game: `install-modloader.ps1` copies it into the ModLoader, or copy `build\Release\TMVibrantShaders.dll` next to `TmForever.exe` as `d3d9.dll`. Close the game first.
 
@@ -81,3 +81,4 @@ GPU clocks vary between runs; compare benchmarks by their ratio to the `LinearDe
 - Every visual feature is a setting with a field in `fields()`, and is off or cheap by default. Passes that contribute nothing are skipped, not passed through.
 - New engine hooks need an address for both game builds in `kBuilds` (`src/engine.cpp`).
 - Every push to `main` builds on GitHub Actions; a `v*` tag publishes a release (a tag with a suffix is a pre-release).
+- After a tag's release the job `modloader-server` rebuilds the ModLoader update server on GitHub Pages (branch `gh-pages`): `modloader/index.json` lists every release that is not marked as a pre-release, `modloader/beta/index.json` all of them, each with its `TMVS-modloader.zip` (the DLL alone), SHA-256 and changelog from `CHANGELOG.md`. Older releases get that zip made from their own DLL. One-time setup: *Settings → Pages → Deploy from a branch → `gh-pages`, `/ (root)`*. Check the format locally with `python tools/modloader_server.py selftest` (uses `build/Release/TMVibrantShaders.dll`; `--reference https://fullspeed.mooo.com/modloader/index.json` compares with a working server).

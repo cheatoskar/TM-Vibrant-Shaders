@@ -4,6 +4,8 @@
 #include "config.h"
 #include "noise.h"
 #include "tmvs_bytecode.h"
+#include "smaa/AreaTex.h"
+#include "smaa/SearchTex.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -20,7 +22,12 @@ const char* const kEntryPoints[] = {
     "PS_RainDrop",    "PS_RainSplash", "PS_Spray", "PS_TrailPoint", "PS_Trail", "PS_SnowFlake",
     "PS_Focus",       "PS_DofBlur",  "PS_Cinematic",    "PS_RayMask",     "PS_RayBlur",     "PS_BloomDown",       "PS_BloomUp",
     "PS_Luminance",   "PS_Adapt",    "PS_Final",        "PS_FXAA",        "PS_TAA",         "PS_Sharpen",         "PS_Copy",
-    "PS_CopyDepth",   "PS_WaterLevel",
+    "PS_CopyDepth",   "PS_WaterLevel", "PS_Resolve",    "PS_LightingEngine", "PS_SpillDownEngine",
+    "PS_LightGridInit", "PS_LightGridSweep", "PS_PrepareGBuffer", "PS_LampSource", "PS_LampDown", "PS_LampUp",
+    "PS_LightingGameLight", "PS_FsrEasu", "PS_FsrRcas", "PS_SpillTemporal",
+    "PS_SpillSource", "PS_SpillSourceEngine", "PS_SpillDownSource",
+    "PS_SmaaEdges", "PS_SmaaWeights", "PS_SmaaBlend",
+    "PS_SpillSourceNeon", "PS_NeonGlow", "PS_NeonAdd", "PS_NeonTemporal",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -45,8 +52,15 @@ float smoothstepf(float a, float b, float x) {
 
 bool Pipeline::init(IDirect3DDevice9* device, const std::wstring& shaderDir) {
     m_shaderDir = shaderDir;
+    // After a device reset the shaders are still there (releaseForReset): creating the 58 passes
+    // again took most of the 1.6 s the game stood still after every alt-tab. Another device
+    // (or none yet) gets everything new.
+    const bool kept = m_shaders[0] && m_shaderDevice == device;
+    if (!kept && m_shaderDevice) release();
     if (!m_quad.init(device)) return false;
-    if (!compileAll(device)) return false;
+    if (kept) TMVS_LOG("pipeline: %d passes kept through the device reset", kPassCount);
+    else if (!compileAll(device)) return false;
+    m_shaderDevice = device;
     if (!m_stateBlock) device->CreateStateBlock(D3DSBT_ALL, &m_stateBlock);
     m_ready = true;
     m_historyValid = false;
@@ -54,6 +68,7 @@ bool Pipeline::init(IDirect3DDevice9* device, const std::wstring& shaderDir) {
 }
 
 const char* Pipeline::passName(int pass) {
+    if (pass == kProfileCasters) return "Casters";
     return pass >= 0 && pass < kPassCount ? kEntryPoints[pass] + 3 : "?";
 }
 
@@ -70,7 +85,8 @@ void Pipeline::profileBegin(IDirect3DDevice9* device) {
     }
     if (!frame.frequency || !frame.stamps[ProfileFrame::kMaxStamps - 1]) return;
     frame.count = 0;
-    frame.disjoint->Issue(D3DISSUE_BEGIN);
+    frame.outer = m_outerDisjoint;
+    if (!frame.outer) frame.disjoint->Issue(D3DISSUE_BEGIN);
     m_currentProfile = &frame;
     profileMark(-1);
 }
@@ -85,7 +101,7 @@ void Pipeline::profileMark(int pass) {
 void Pipeline::profileEnd() {
     ProfileFrame* frame = m_currentProfile;
     if (!frame) return;
-    frame->disjoint->Issue(D3DISSUE_END);
+    if (!frame->outer) frame->disjoint->Issue(D3DISSUE_END);
     frame->frequency->Issue(D3DISSUE_END);
     frame->pending = true;
     m_currentProfile = nullptr;
@@ -101,20 +117,28 @@ bool Pipeline::profileResolve(ProfileFrame& frame, bool wait) {
         }
         return hr == S_OK;
     };
-    if (!get(frame.disjoint, &disjoint, sizeof(disjoint)) || !get(frame.frequency, &frequency, sizeof(frequency))) return false;
+    if (frame.outer) disjoint = FALSE; // the caller's bracket tells it, not read here: the checks below
+    else if (!get(frame.disjoint, &disjoint, sizeof(disjoint))) return false;
+    if (!get(frame.frequency, &frequency, sizeof(frequency))) return false;
     UINT64 times[ProfileFrame::kMaxStamps] = {};
     for (int i = 0; i < frame.count; i++) {
         if (!get(frame.stamps[i], &times[i], sizeof(UINT64))) return false;
     }
     frame.pending = false;
+    // Without its own disjoint query: a frame whose stamps run backwards or span more than a
+    // second (the clock changed under them) is left out rather than smoothed in.
+    if (frame.outer && frequency != 0) {
+        for (int i = 1; i < frame.count && !disjoint; i++) disjoint = times[i] < times[i - 1];
+        if (frame.count >= 2 && times[frame.count - 1] - times[0] > frequency) disjoint = TRUE;
+    }
     if (disjoint || frequency == 0 || frame.count < 2) return true;
-    float ms[kPassCount] = {};
+    float ms[kProfileSlots] = {};
     for (int i = 1; i < frame.count; i++) {
         if (frame.pass[i] >= 0) ms[frame.pass[i]] += static_cast<float>(static_cast<double>(times[i] - times[i - 1]) * 1000.0 / frequency);
     }
     const float total = static_cast<float>(static_cast<double>(times[frame.count - 1] - times[0]) * 1000.0 / frequency);
     const float k = m_totalMs > 0.0f ? 0.1f : 1.0f;
-    for (int p = 0; p < kPassCount; p++) m_passMs[p] += (ms[p] - m_passMs[p]) * k;
+    for (int p = 0; p < kProfileSlots; p++) m_passMs[p] += (ms[p] - m_passMs[p]) * k;
     m_totalMs += (total - m_totalMs) * k;
     return true;
 }
@@ -135,12 +159,21 @@ void Pipeline::releaseProfile() {
     m_currentProfile = nullptr;
 }
 
+void Pipeline::releaseForReset() {
+    m_ready = false;
+    releaseProfile();
+    gfx::release(m_stateBlock); // state blocks don't live through a reset
+    destroyTargets();
+}
+
 void Pipeline::release() {
     m_ready = false;
+    m_shaderDevice = nullptr;
     releaseProfile();
     for (auto& shader : m_shaders) gfx::release(shader);
     gfx::release(m_stateBlock);
     gfx::release(m_solidPS);
+    gfx::release(m_paletteLookupPS);
     gfx::release(m_splatVS);
     gfx::release(m_splatDecl);
     gfx::release(m_dropVS);
@@ -168,6 +201,15 @@ bool Pipeline::compileAll(IDirect3DDevice9* device) {
     // fxc produced at build time.
     std::string source;
     const bool fromDisk = !m_shaderDir.empty() && readFile(m_shaderDir + L"\\tmvs.hlsl", source);
+    // tmvs.hlsl includes SMAA.hlsl (fxc finds it next to it at build time); D3DCompile gets no
+    // include handler, so it goes in here.
+    if (fromDisk) {
+        const std::string include = "#include \"SMAA.hlsl\"";
+        const size_t at = source.find(include);
+        std::string smaa;
+        if (at != std::string::npos && readFile(m_shaderDir + L"\\SMAA.hlsl", smaa)) source.replace(at, include.size(), smaa);
+    }
+    const DWORD started = GetTickCount();
 
     IDirect3DPixelShader9* compiled[kPassCount] = {};
     m_lastError.clear();
@@ -198,14 +240,17 @@ bool Pipeline::compileAll(IDirect3DDevice9* device) {
     }
     D3DCAPS9 caps{};
     device->GetDeviceCaps(&caps);
-    TMVS_LOG("pipeline: %d passes ready (%s, driver allows %lu pixel shader instruction slots)", kPassCount,
-             fromDisk ? "compiled from disk" : "precompiled", caps.MaxPixelShader30InstructionSlots);
+    TMVS_LOG("pipeline: %d passes ready (%s, driver allows %lu pixel shader instruction slots) in %lu ms", kPassCount,
+             fromDisk ? "compiled from disk" : "precompiled", caps.MaxPixelShader30InstructionSlots, GetTickCount() - started);
     return true;
 }
 
 bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) {
     if (m_width == width && m_height == height && m_hdr.valid()) return true;
-    destroyTargets();
+    // RenderScale: a resize between the scaled and the full image keeps the world's state (the
+    // 1x1 targets below are kept as they are by create()).
+    const bool keep = m_keepWorld && m_hdr.valid();
+    destroyTargets(keep);
     const UINT hw = (width + 1) / 2, hh = (height + 1) / 2;
     bool ok = true;
     ok &= m_linearDepth.create(device, width, height, D3DFMT_R32F);
@@ -214,9 +259,9 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_occlusion.create(device, hw, hh, D3DFMT_A8R8G8B8);
     ok &= m_occlusionTmp.create(device, hw, hh, D3DFMT_A8R8G8B8);
     for (auto& t : m_skyAverage) ok &= t.create(device, 1, 1, D3DFMT_A16B16G16R16F);
-    m_skyValid = false;
+    if (!keep) m_skyValid = false;
     for (auto& t : m_shelter) ok &= t.create(device, 1, 1, D3DFMT_A16B16G16R16F);
-    m_shelterValid = false;
+    if (!keep) m_shelterValid = false;
     ok &= m_sky.create(device, width, height, D3DFMT_A16B16G16R16F);
     ok &= m_gi[0].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
     ok &= m_gi[1].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
@@ -242,6 +287,8 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_reflect.create(device, hw, hh, D3DFMT_A16B16G16R16F);
     ok &= m_spill[0].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
     ok &= m_spill[1].create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
+    for (auto& t : m_spillHistory) ok &= t.create(device, (width + 3) / 4, (height + 3) / 4, D3DFMT_A16B16G16R16F);
+    m_spillValid = false;
     ok &= m_focus[0].create(device, 1, 1, D3DFMT_R32F);
     ok &= m_focus[1].create(device, 1, 1, D3DFMT_R32F);
     ok &= m_dof.create(device, hw, hh, D3DFMT_A16B16G16R16F);
@@ -251,21 +298,20 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     }
     m_width = width;
     m_height = height;
-    m_historyValid = false;
+    if (!keep) m_historyValid = false; // the exposure (its 1x1 targets kept)
     m_taaValid = false;
-    m_heightValid = false;
-    TMVS_LOG("pipeline: render targets created for %ux%u", width, height);
+    if (!keep) m_heightValid = false;
+    TMVS_LOG("pipeline: render targets created for %ux%u%s", width, height, keep ? " (height map, trail and exposure kept)" : "");
     return true;
 }
 
-void Pipeline::destroyTargets() {
+void Pipeline::destroyTargets(bool keepWorld) {
+    // The screen's size: these follow the image.
     m_linearDepth.destroy();
     m_nd.destroy();
     m_ndHalf.destroy();
     m_occlusion.destroy();
     m_occlusionTmp.destroy();
-    for (auto& t : m_skyAverage) t.destroy();
-    for (auto& t : m_shelter) t.destroy();
     m_sky.destroy();
     for (auto& t : m_gi) t.destroy();
     for (auto& t : m_giHistory) t.destroy();
@@ -273,42 +319,65 @@ void Pipeline::destroyTargets() {
     for (auto& t : m_rays) t.destroy();
     for (auto& t : m_bloomDown) t.destroy();
     for (auto& t : m_bloomUp) t.destroy();
-    m_luminance.destroy();
-    for (auto& t : m_adapted) t.destroy();
+    m_lampSource.destroy();
+    for (auto& t : m_lampDown) t.destroy();
+    for (auto& t : m_lampUp) t.destroy();
+    m_lampFailed = false;
     m_ldr.destroy();
     m_ldr2.destroy();
     m_materials.destroy();
-    for (auto& t : m_waterLevel) t.destroy();
-    gfx::release(m_waterRead);
-    m_waterPending = -1;
+    m_materialIds.destroy();
     m_depthCopy.destroy();
     m_clouds.destroy();
     m_reflect.destroy();
     for (auto& t : m_spill) t.destroy();
-    for (auto& t : m_focus) t.destroy();
+    m_spillSource.destroy();
+    m_neon.destroy();
+    for (auto& t : m_neonHistory) t.destroy();
+    m_neonValid = false;
+    for (auto& t : m_spillHistory) t.destroy();
     m_dof.destroy();
     m_dofFull.destroy();
     m_dofFull2.destroy();
     m_dof2.destroy();
     m_hdr2.destroy();
     for (auto& t : m_taa) t.destroy();
+    m_scaled.destroy();
+    m_fsr.destroy();
+    m_smaaEdges.destroy();
+    m_smaaWeights.destroy();
+    gfx::release(m_splatPoints); // one point per 5 pixels of the depth
+    m_taaValid = false;
+    m_width = m_height = 0;
+    if (keepWorld) return;
+    // The world's (or no size at all): RenderScale's resizes keep these.
+    for (auto& t : m_skyAverage) t.destroy();
+    for (auto& t : m_shelter) t.destroy();
+    m_luminance.destroy();
+    for (auto& t : m_adapted) t.destroy();
+    for (auto& t : m_waterLevel) t.destroy();
+    gfx::release(m_waterRead);
+    gfx::release(m_waterDone);
+    m_waterPending = -1;
+    for (auto& t : m_focus) t.destroy();
     m_heightFrame.destroy();
     for (auto& t : m_heightMap) t.destroy();
     for (auto& t : m_ceilingMap) t.destroy();
     m_shadowHeight.destroy();
+    for (auto& t : m_lightGrid) t.destroy();
     gfx::release(m_heightDepth);
-    gfx::release(m_splatPoints);
     gfx::release(m_cloudNoise);
     gfx::release(m_lut);
+    gfx::release(m_smaaArea);
+    gfx::release(m_smaaSearch);
+    m_smaaFailed = false;
     gfx::release(m_rainVB);
     gfx::release(m_rainIB);
     gfx::release(m_trailVB);
     gfx::release(m_trailIB);
     m_trailPoints.destroy();
     m_trailReset = true;
-    m_taaValid = false;
     m_heightValid = false;
-    m_width = m_height = 0;
 }
 
 void Pipeline::beginStateSave(IDirect3DDevice9*) {
@@ -336,6 +405,25 @@ void Pipeline::passConstants(IDirect3DDevice9* device, float a, float b, float c
     device->SetPixelShaderConstantF(32, v, 1);
 }
 
+// PS_Focus's c33: the car to focus on (DofAutofocus Car), w = 0 for the middle of the screen
+// as before. Always set: c33 holds whatever the pass before left there. A click in the photo
+// mode and a set focus distance win. The log says once per change whether the engine gave the
+// car (whether its position reaches replays is the open question).
+void Pipeline::focusOnCarConstants(IDirect3DDevice9* device, const Inputs& in, const Settings& s) {
+    const bool wanted = s.dofAutofocus == 1 && s.focusDistance <= 0.0f && in.focusPoint[0] < 0.0f;
+    const bool onCar = wanted && in.focusCarKnown;
+    const float car[4] = {in.focusCar[0], in.focusCar[1], in.focusCar[2], onCar ? 1.0f : 0.0f};
+    device->SetPixelShaderConstantF(33, car, 1);
+    const int state = !wanted ? -1 : (onCar ? 1 : 0);
+    // At most 20 lines: in a replay whose car position comes and goes it would change every frame.
+    if (wanted && state != m_focusOnCar && m_focusLogs < 20) {
+        m_focusLogs++;
+        TMVS_LOG("pipeline: depth of field focuses %s%s", onCar ? "on the car (engine position)" : "on the middle (no car position from the engine)",
+                 m_focusLogs == 20 ? " (further changes not logged)" : "");
+    }
+    m_focusOnCar = state;
+}
+
 void Pipeline::runPass(IDirect3DDevice9* device, Pass pass, gfx::Target& target) {
     runPass(device, pass, target.surface, target.width, target.height);
 }
@@ -345,6 +433,15 @@ void Pipeline::runPass(IDirect3DDevice9* device, Pass pass, IDirect3DSurface9* t
     device->SetPixelShader(m_shaders[pass]);
     m_quad.draw(device, width, height);
     profileMark(pass);
+}
+
+void Pipeline::blackHoleDirection(const Settings& s, float toward[3]) {
+    const float az = s.blackHoleAzimuth * 3.14159265f / 180.0f, el = s.blackHoleElevation * 3.14159265f / 180.0f;
+    const float rot = s.skyRotation * 3.14159265f / 180.0f;
+    const float d[3] = {sinf(az) * cosf(el), sinf(el), cosf(az) * cosf(el)};
+    toward[0] = cosf(rot) * d[0] - sinf(rot) * d[2];
+    toward[1] = d[1];
+    toward[2] = sinf(rot) * d[0] + cosf(rot) * d[2];
 }
 
 void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, const Settings& s) {
@@ -378,16 +475,9 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
 
     // The black hole of the space skies (it turns with the sky). Where there is one it is the
     // light of the scene instead of the sun: shafts, shadows, flare and glow come from it.
-    const bool blackHole = (s.skyMode == 3 || s.skyMode == 5) && s.skyEffectSize > 0.0f;
+    const bool blackHole = blackHoleLights(s);
     float hole[3];
-    {
-        const float az = s.blackHoleAzimuth * 3.14159265f / 180.0f, el = s.blackHoleElevation * 3.14159265f / 180.0f;
-        const float rot = s.skyRotation * 3.14159265f / 180.0f;
-        const float d[3] = {sinf(az) * cosf(el), sinf(el), cosf(az) * cosf(el)};
-        hole[0] = cosf(rot) * d[0] - sinf(rot) * d[2];
-        hole[1] = d[1];
-        hole[2] = sinf(rot) * d[0] + cosf(rot) * d[2];
-    }
+    blackHoleDirection(s, hole);
     const float holeConstants[4] = {hole[0], hole[1], hole[2], blackHole ? s.skyEffectSize : 0.0f};
     device->SetPixelShaderConstantF(40, holeConstants, 1);
 
@@ -416,6 +506,7 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[7][1] = sw[1];
     c[7][2] = sw[2];
     c[7][3] = sunKnown ? daylight : 1.0f;
+    for (int j = 0; j < 3; j++) m_sunWorld[j] = sw[j];
     m_sunKnown = sunKnown;
 
     // Sun position on screen.
@@ -554,7 +645,10 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     c[36][0] = s.neonLight;
     // The game's sun, even under a night sky: 1 known, 0 unknown, -1 the map is a night map
     // (its light is the moon: no sun glare to tell from lamps, nothing baked to take out).
-    c[36][1] = mapNight ? -1.0f : (in.sunKnown && len > 1e-5f ? 1.0f : 0.0f);
+    // EngineMoon: the game's light is the night's, moved to the black hole or off, whatever its
+    // colour says (a sunset map lit at midnight keeps a warm, "dusk" moon colour): no sun baked
+    // to take out, nothing white is glare. Only this flag: the exposure and grade stay.
+    c[36][1] = mapNight || in.moonReplaced ? -1.0f : (in.sunKnown && len > 1e-5f ? 1.0f : 0.0f);
     c[36][2] = weather::lightningFlash(in.time, s.lightning);
     // The bolt of the current strike: its direction is picked once, near where the camera
     // looks at that moment (a bolt behind you is a wasted strike), and then stays put.
@@ -574,11 +668,13 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(35, &c[35][0], 2);
     // w: how much farther AO, shadows, bounce light and reflections reach (photo mode).
     // No sea level from the game (TMUF Island): the one measured from its water material.
-    // Stadium water blocks (2): once the water material was seen on the map, water only on
-    // it (3; dirt lies at the blocks' height too).
+    // Stadium water blocks (2): with the material mask, water only on the game's water
+    // material (3; dirt lies at the blocks' height too). Not only once that material was seen on
+    // the map: on a map without water every flat surface at 8 m (a dirt road's ruts,
+    // capture_134) became water.
     const bool measured = in.water[2] >= 0.0f && in.water[2] < 0.5f && m_seaKnown;
     float kind = measured ? 1.0f : in.water[2];
-    if (kind > 1.5f && m_waterMaterialSeen && m_materialsOn) kind = 3.0f;
+    if (kind > 1.5f && m_materialsOn) kind = 3.0f;
     const float water[4] = {measured ? m_seaLevel : in.water[0], measured ? m_seaLevel : in.water[1], kind, in.photo ? 3.0f : 1.0f};
     device->SetPixelShaderConstantF(38, water, 1);
     // The direction the snow drifts (as the flakes in drawRain): walls facing it catch snow.
@@ -731,6 +827,8 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
             return false;
         }
     }
+    // Only the splat points went with a resize (keepWorldOnResize): the maps hold on.
+    const bool mapsKept = m_heightFrame.valid() && m_heightMap[0].valid() && m_heightMap[1].valid() && m_heightDepth;
     bool ok = m_heightFrame.create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
     ok &= m_heightMap[0].create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
     ok &= m_heightMap[1].create(device, m_heightSize, m_heightSize, D3DFMT_R32F);
@@ -762,7 +860,8 @@ bool Pipeline::ensureHeightMap(IDirect3DDevice9* device) {
         TMVS_LOG("pipeline: height map resources failed - long-range shadows disabled");
         m_heightSupported = false;
     }
-    m_heightValid = false;
+    if (!mapsKept || !ok) m_heightValid = false;
+    m_shadowHeightStale = true;
     return ok;
 }
 
@@ -849,8 +948,9 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
         const bool fresh = pass ? !m_ceilingValid : !m_heightValid;
         bind(device, 0, map[previous].texture, false);
         bind(device, 1, m_heightFrame.texture, false);
+        bind(device, 2, m_linearDepth.texture, false); // what the camera sees past (a lower column)
         passConstants(device, shift[0], shift[1], fresh ? 1.0f : 0.0f, pass ? 0.0f : 0.08f);
-        const float texelSize[4] = {1.0f / m_heightSize, 0.0f, 0.0f, 0.0f};
+        const float texelSize[4] = {1.0f / m_heightSize, m_heightOrigin[0], m_heightOrigin[1], m_heightWorld};
         device->SetPixelShaderConstantF(33, texelSize, 1);
         runPass(device, kHeightMerge, map[m_heightIndex]);
     }
@@ -861,6 +961,82 @@ void Pipeline::updateHeightMap(IDirect3DDevice9* device, const Inputs& in, const
     // volumetric passes read the shifted map ~40 m off for one frame (shadows popping up).
     const float map[4] = {m_heightOrigin[0], m_heightOrigin[1], m_heightWorld, s.longShadowRange};
     device->SetPixelShaderConstantF(35, map, 1);
+}
+
+// LongShadowQuality 1: the height map turned so that +x points to the light, then swept towards
+// it (see longShadowGrid in tmvs.hlsl). Only when the map, the light or the range changed (the
+// map: every other frame). Returns false where the GPU lacks the format: the trace stays.
+bool Pipeline::updateLightGrid(IDirect3DDevice9* device, const Settings& s) {
+    if (!m_lightGridSupported) return false;
+    if (!m_lightGrid[0].valid()) {
+        IDirect3D9* d3d = nullptr;
+        device->GetDirect3D(&d3d);
+        D3DDEVICE_CREATION_PARAMETERS cp{};
+        device->GetCreationParameters(&cp);
+        D3DDISPLAYMODE mode{};
+        device->GetDisplayMode(0, &mode);
+        const bool target = d3d && SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format, D3DUSAGE_RENDERTARGET,
+                                                                     D3DRTYPE_TEXTURE, D3DFMT_G32R32F));
+        m_lightGridFilter = d3d && SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, mode.Format, D3DUSAGE_QUERY_FILTER,
+                                                                     D3DRTYPE_TEXTURE, D3DFMT_G32R32F));
+        if (d3d) d3d->Release();
+        bool ok = target && m_lightGrid[0].create(device, m_heightSize, m_heightSize, D3DFMT_G32R32F) &&
+                  m_lightGrid[1].create(device, m_heightSize, m_heightSize, D3DFMT_G32R32F);
+        TMVS_LOG("pipeline: long-shadow light grid %s", ok ? (m_lightGridFilter ? "ready (filtered)" : "ready (point sampled)")
+                                                           : "unavailable (no G32R32F target) - long shadows are traced in steps");
+        if (!ok) {
+            for (auto& t : m_lightGrid) t.destroy();
+            m_lightGridSupported = false;
+            return false;
+        }
+        m_lightGridStale = true;
+    }
+    // The light's horizontal direction is the grid's x. Straight overhead it has none: any will do,
+    // nothing is far from its caster then.
+    const float sx = m_sunWorld[0], sy = m_sunWorld[1], sz = m_sunWorld[2];
+    const float horizontal = sqrtf(sx * sx + sz * sz);
+    const float lx = horizontal > 1e-3f ? sx / horizontal : 1.0f, lz = horizontal > 1e-3f ? sz / horizontal : 0.0f;
+    const float ch = fmaxf(horizontal, 1e-3f);
+    // The trace's margin: it grows by this much per metre along the ray (more under a low light).
+    const float margin = 0.012f + 0.02f * fminf(fmaxf(1.0f - sy * 3.0f, 0.0f), 1.0f);
+    const float texel = m_heightWorld / m_heightSize;
+    // The corner around the height map's middle, in whole cells along and across the light, so the
+    // cells keep their place while the map stays put.
+    const float mx = m_heightOrigin[0] + m_heightWorld * 0.5f, mz = m_heightOrigin[1] + m_heightWorld * 0.5f;
+    const float along = floorf((mx * lx + mz * lz - m_heightWorld * 0.5f) / texel) * texel;
+    const float across = floorf((-mx * lz + mz * lx - m_heightWorld * 0.5f) / texel) * texel;
+    const float grid[2][4] = {{lx, lz, along, across}, {1.0f / m_heightWorld, ch, margin, s.longShadowRange}};
+    const bool moved = memcmp(grid, m_lightGridConstants, sizeof(grid)) != 0;
+    if (!m_lightGridStale && !moved) return true;
+    memcpy(m_lightGridConstants, grid, sizeof(grid));
+    m_lightGridStale = false;
+
+    device->SetPixelShaderConstantF(52, &grid[0][0], 2);
+    bind(device, 0, m_heightMap[m_heightIndex].texture, false);
+    passConstants(device, 0.5f / m_heightSize, 0.0f);
+    runPass(device, kLightGridInit, m_lightGrid[0]);
+    // Sweeps of four: each cell takes the best of the 4 windows after it, so the window grows
+    // x4 a sweep; the last one is cut to the range (its windows overlap: a maximum doesn't mind).
+    // Capped: an absurd range from a hand-edited file would overflow window * 4 and never end.
+    const float wanted = ceilf(s.longShadowRange * ch / texel);
+    const int cells = wanted < 1048576.0f ? static_cast<int>(wanted) : 1048576;
+    int window = 1, index = 0;
+    while (window < cells) {
+        const int next = window * 4 < cells ? window * 4 : cells;
+        float offset[3];
+        for (int j = 0; j < 3; j++) offset[j] = static_cast<float>(std::min((j + 1) * window, next - window)) / m_heightSize;
+        // How far the ray climbs (and its margin grows) per uv unit along the grid.
+        const float drop = (sy + margin) / ch * m_heightWorld;
+        bind(device, 0, m_lightGrid[index].texture, false);
+        passConstants(device, offset[0], offset[1], offset[2], drop);
+        const float metres[4] = {m_heightWorld, 0.0f, 0.0f, 0.0f};
+        device->SetPixelShaderConstantF(33, metres, 1);
+        runPass(device, kLightGridSweep, m_lightGrid[index ^ 1]);
+        index ^= 1;
+        window = next;
+    }
+    m_lightGridIndex = index;
+    return true;
 }
 
 bool Pipeline::ensureCloudNoise(IDirect3DDevice9* device) {
@@ -919,22 +1095,64 @@ bool Pipeline::ensureLut(IDirect3DDevice9* device) {
     return ok;
 }
 
+// SMAA's two look-up textures, uploaded as the reference D3D9 demo does (the area texture's
+// two channels as A8L8, read .ra; the search texture as L8), and its two targets.
+bool Pipeline::ensureSmaa(IDirect3DDevice9* device, UINT width, UINT height) {
+    if (m_smaaFailed) return false;
+    auto upload = [device](UINT w, UINT h, D3DFORMAT format, const unsigned char* bytes, UINT pitch, IDirect3DTexture9** out) {
+        IDirect3DTexture9* staging = nullptr;
+        if (FAILED(device->CreateTexture(w, h, 1, 0, format, D3DPOOL_SYSTEMMEM, &staging, nullptr))) return false;
+        D3DLOCKED_RECT rect{};
+        bool ok = SUCCEEDED(staging->LockRect(0, &rect, nullptr, 0));
+        if (ok) {
+            for (UINT y = 0; y < h; y++) memcpy(static_cast<BYTE*>(rect.pBits) + static_cast<size_t>(y) * rect.Pitch, bytes + static_cast<size_t>(y) * pitch, pitch);
+            staging->UnlockRect(0);
+        }
+        ok = ok && SUCCEEDED(device->CreateTexture(w, h, 1, 0, format, D3DPOOL_DEFAULT, out, nullptr)) && SUCCEEDED(device->UpdateTexture(staging, *out));
+        staging->Release();
+        if (!ok) gfx::release(*out);
+        return ok;
+    };
+    if (!m_smaaArea && !upload(AREATEX_WIDTH, AREATEX_HEIGHT, D3DFMT_A8L8, areaTexBytes, AREATEX_PITCH, &m_smaaArea)) m_smaaFailed = true;
+    if (!m_smaaFailed && !m_smaaSearch && !upload(SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT, D3DFMT_L8, searchTexBytes, SEARCHTEX_PITCH, &m_smaaSearch))
+        m_smaaFailed = true;
+    if (m_smaaFailed) {
+        TMVS_LOG("pipeline: SMAA's textures can't be made, FXAA instead");
+        return false;
+    }
+    return m_smaaEdges.create(device, width, height, D3DFMT_A8R8G8B8) && m_smaaWeights.create(device, width, height, D3DFMT_A8R8G8B8);
+}
+
+// One colour (the material debug view, the class mask), and material id -> its class's colour.
+const char* const kSolidPS = "float4 c : register(c32); float4 main() : COLOR0 { return c; }";
+const char* const kPalettePS = "sampler2D ids : register(s0); sampler2D palette : register(s1);\n"
+                               "float4 main(float2 uv : TEXCOORD0) : COLOR0 {\n"
+                               "    float id = floor(tex2D(ids, uv).r * 255.0 + 0.5);\n"
+                               "    return tex2D(palette, float2((id + 0.5) / 256.0, 0.5));\n"
+                               "}\n";
+
 bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     // The game's depth-stencil is our INTZ texture; its stencil holds the material class of
     // every pixel (written while the game drew, see the plugin). Bound as the depth-stencil
     // again for a stencil test per class (no texture of ours may be bound meanwhile). Not in
     // the previewer: its depth is a plain R32F texture.
+    if (in.materials && in.materialMask) return true; // the previewer: from capture_NNN.mat
+    // RenderScale: the depth is a copy of the scene's corner, the stencil is the game's own.
+    IDirect3DTexture9* const stencil = in.stencil ? in.stencil : in.depth;
     D3DSURFACE_DESC desc{};
-    if (!in.materials || FAILED(in.depth->GetLevelDesc(0, &desc)) || desc.Format != static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z')))
+    if (!in.materials || FAILED(stencil->GetLevelDesc(0, &desc)) || desc.Format != static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z')))
         return false;
+    if (in.materialClasses) return buildMaterialIds(device, in);
     if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
-    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, "float4 c : register(c32); float4 main() : COLOR0 { return c; }", "main", "Solid");
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
     if (!m_solidPS) return false;
     for (int i = 0; i < 16; i++) device->SetTexture(i, nullptr);
     IDirect3DSurface9* ds = nullptr;
-    if (FAILED(in.depth->GetSurfaceLevel(0, &ds)) || !ds) return false;
+    if (FAILED(stencil->GetSurfaceLevel(0, &ds)) || !ds) return false;
     device->SetRenderTarget(0, m_materials.surface);
-    device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    // The neon strips by their material: g kNotNeonG on everything but them, cars, glass, grass
+    // and dirt.
+    device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, in.neonMaterials ? kNotNeonG : 0, 0), 1.0f, 0);
     device->SetDepthStencilSurface(ds);
     device->SetPixelShader(m_solidPS);
     device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
@@ -944,9 +1162,11 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
     device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_KEEP);
-    // r light, g car 1 / glass 0.5 / grass 0.25, b water, a light added on top.
+    // r light, g car 1 / glass 0.5 / grass 0.25 / dirt 0.3, b water, a light added on top; the
+    // neon class only clears the cleared g (0 without neonMaterials: as the clear).
     for (int id = 1; id <= kMaterialClasses; id++) {
-        const float color[4] = {id == 1 ? 1.0f : 0.0f, id == 2 ? 1.0f : (id == 3 ? 0.5f : (id == 4 ? 0.25f : 0.0f)), id == 5 ? 1.0f : 0.0f, 0.0f};
+        const float g = id == kNeonClass ? 0.0f : static_cast<float>(classG(id, in.neonMaterials ? kNotNeonG : 0u)) / 255.0f;
+        const float color[4] = {id == 1 ? 1.0f : 0.0f, g, id == 5 ? 1.0f : 0.0f, 0.0f};
         device->SetPixelShaderConstantF(32, color, 1);
         device->SetRenderState(D3DRS_STENCILREF, static_cast<DWORD>(id));
         m_quad.draw(device, in.width, in.height);
@@ -962,6 +1182,89 @@ bool Pipeline::buildMaterialMask(IDirect3DDevice9* device, const Inputs& in) {
     device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
     device->SetDepthStencilSurface(nullptr);
     ds->Release();
+    return true;
+}
+
+// F12's frame: the stencil holds material ids (1..255). One pass per stencil bit adds that
+// bit to m_materialIds (r = id / 255), then a palette (256 x 1, the class colour of each id)
+// turns the ids into the usual class mask. No added-light bit in this frame.
+bool Pipeline::buildMaterialIds(IDirect3DDevice9* device, const Inputs& in) {
+    if (!m_materials.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
+    if (!m_materialIds.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
+    if (!m_paletteLookupPS)
+        m_paletteLookupPS = gfx::compilePixelShader(device, kPalettePS, "main", "MaterialPalette");
+    if (!m_solidPS || !m_paletteLookupPS) return false;
+    // Filled in system memory and uploaded (no managed pool on D3D9Ex).
+    IDirect3DTexture9* staging = nullptr;
+    IDirect3DTexture9* palette = nullptr;
+    if (FAILED(device->CreateTexture(256, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &staging, nullptr))) return false;
+    D3DLOCKED_RECT locked{};
+    if (SUCCEEDED(staging->LockRect(0, &locked, nullptr, 0))) {
+        uint32_t* texels = static_cast<uint32_t*>(locked.pBits);
+        for (int id = 0; id < 256; id++) {
+            const int c = in.materialClasses[id];
+            const uint32_t notNeon = in.neonMaterials && c != kNeonClass ? kNotNeonG : 0u;
+            const uint32_t r = c == 1 ? 255u : 0u, g = classG(c, notNeon), b = c == 5 ? 255u : 0u;
+            texels[id] = (r << 16) | (g << 8) | b;
+        }
+        staging->UnlockRect(0);
+    }
+    const bool uploaded = SUCCEEDED(device->CreateTexture(256, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &palette, nullptr)) &&
+                          SUCCEEDED(device->UpdateTexture(staging, palette));
+    staging->Release();
+    if (!uploaded) {
+        gfx::release(palette);
+        return false;
+    }
+    for (int i = 0; i < 16; i++) device->SetTexture(i, nullptr);
+    IDirect3DSurface9* ds = nullptr;
+    if (FAILED((in.stencil ? in.stencil : in.depth)->GetSurfaceLevel(0, &ds)) || !ds) {
+        palette->Release();
+        return false;
+    }
+    device->SetRenderTarget(0, m_materialIds.surface);
+    device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    device->SetDepthStencilSurface(ds);
+    device->SetPixelShader(m_solidPS);
+    device->SetRenderState(D3DRS_STENCILENABLE, TRUE);
+    device->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
+    device->SetRenderState(D3DRS_STENCILFUNC, D3DCMP_EQUAL);
+    device->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_KEEP);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    for (int bit = 0; bit < 8; bit++) {
+        const float color[4] = {static_cast<float>(1 << bit) / 255.0f, 0.0f, 0.0f, 0.0f};
+        device->SetPixelShaderConstantF(32, color, 1);
+        device->SetRenderState(D3DRS_STENCILMASK, 1u << bit);
+        device->SetRenderState(D3DRS_STENCILREF, 1u << bit);
+        m_quad.draw(device, in.width, in.height);
+    }
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_STENCILMASK, 0xFF);
+    device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    device->SetDepthStencilSurface(nullptr);
+    ds->Release();
+    device->SetRenderTarget(0, m_materials.surface);
+    device->SetPixelShader(m_paletteLookupPS);
+    bind(device, 0, m_materialIds.texture, false);
+    bind(device, 1, palette, false);
+    m_quad.draw(device, in.width, in.height);
+    device->SetTexture(0, nullptr);
+    device->SetTexture(1, nullptr);
+    palette->Release();
+    return true;
+}
+
+bool Pipeline::readMaterialIds(IDirect3DDevice9* device, std::vector<uint8_t>& out) {
+    std::vector<uint32_t> texels;
+    if (!m_materialIds.surface || !readColor(device, m_materialIds.surface, texels)) return false;
+    out.resize(texels.size());
+    for (size_t i = 0; i < texels.size(); i++) out[i] = static_cast<uint8_t>((texels[i] >> 16) & 0xFF);
     return true;
 }
 
@@ -1248,16 +1551,27 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
 // Neon trail: quad k joins point k and k + 1 of the ring buffer, widened towards the camera.
 float4 c_Trail  : register(c16); // points written, next index, now (s), fade after (s, 0 = never)
 float4 c_Trail2 : register(c17); // sideways offset (m), half width (m), 0, 0
+float4 c_Runs   : register(c20); // TrailKeepRuns: the first stamp of this run and of the 3 before it (-1e30 = none)
+float4 c_Runs2  : register(c21); // x the first stamp 4 runs back; y the last run's brightness, z less per run further back
 sampler2D s_trail : register(s2);
 #ifndef TRAIL_W
 #define TRAIL_W 128.0
 #define TRAIL_POINTS 8192.0
 #endif
 
+// The ring's texture: the points in its upper half, the car's up at each in the lower half.
 float4 trailPoint(float i) {
     i = fmod(i + 2.0 * TRAIL_POINTS, TRAIL_POINTS);
-    float2 uv = float2((fmod(i, TRAIL_W) + 0.5) / TRAIL_W, (floor(i / TRAIL_W) + 0.5) / (TRAIL_POINTS / TRAIL_W));
+    float2 uv = float2((fmod(i, TRAIL_W) + 0.5) / TRAIL_W, (floor(i / TRAIL_W) + 0.5) / (2.0 * TRAIL_POINTS / TRAIL_W));
     return tex2Dlod(s_trail, float4(uv, 0, 0));
+}
+
+// The car's up at point i (unit length; the world's up where none was written).
+float3 trailUp(float i) {
+    i = fmod(i + 2.0 * TRAIL_POINTS, TRAIL_POINTS);
+    float2 uv = float2((fmod(i, TRAIL_W) + 0.5) / TRAIL_W, 0.5 + (floor(i / TRAIL_W) + 0.5) / (2.0 * TRAIL_POINTS / TRAIL_W));
+    float3 u = tex2Dlod(s_trail, float4(uv, 0, 0)).xyz;
+    return dot(u, u) > 0.25 ? normalize(u) : float3(0, 1, 0);
 }
 
 // The car is found anew in every frame, so the raw points wobble (most in jumps, when the
@@ -1325,40 +1639,94 @@ VSOut trailVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float3 d = trailTangent(j, pj, s);
     float len = length(d);
     if (len < 1e-3) return o;
-    float age = c_Trail.z - (corner.y > 0.5 ? b.w : abs(a.w));
+    float stamp = corner.y > 0.5 ? b.w : abs(a.w);
+    float age = c_Trail.z - stamp;
     float fade = c_Trail.w > 0.0 ? saturate(1.0 - age / c_Trail.w) : 1.0;
+    // An earlier run (TrailKeepRuns) is drawn dimmer, the older the dimmer.
+    float run = dot(step(stamp + 1e-3, c_Runs), float4(1, 1, 1, 1)) + step(stamp + 1e-3, c_Runs2.x);
+    if (run > 0.5) fade *= c_Runs2.y - (run - 1.0) * c_Runs2.z;
     if (fade <= 0.0) return o;
     // It comes out behind the car: under and in it the line would flicker through the body
     // and the rear wheels (it runs through their centres, almost at the depth of the tread).
-    // The distance to the car goes to the pixels (data.w): at speed the points lie 15 m apart,
-    // a fade per vertex would stretch over the whole first piece. Only the fresh part: an
-    // older line the car drives back over stays.
-    float3 car = trailPoint(c_Trail.y - 1.0).xyz;
-    float fromCar = lerp(distance(s, car), 100.0, saturate((age - 0.6) / 0.3));
+    // The way back to the car along the line goes to the pixels (data.w), the fade-in lies 1.6 to
+    // 2.6 m behind the car at any speed. Farther back along the line it stays, also where the car
+    // drives over its old line again. (It was the points' age: driving slowly the line next to the
+    // car popped in and out, at speed the points lie metres apart.)
+    float fromCar = 100.0;
+    float newest = c_Trail.y - 1.0;
+    if (newest - j < 24.0) {
+        float path = 0.0;
+        float3 q = trailPoint(newest).xyz;
+        [loop] for (int i = 1; i <= 24; i++) {
+            if (newest - i < j - 0.5) break;
+            float3 r = trailPoint(newest - i).xyz;
+            path += distance(q, r);
+            q = r;
+        }
+        fromCar = path;
+    }
     float3 dir = d / len;
-    float3 right = cross(float3(0, 1, 0), dir);
+    // Across the line in the road's plane: the car's up there (its neighbours' with it, a car
+    // rocking on its springs doesn't tilt the line), not the world's. With the world's up the
+    // line lay level on banked curves and walls: its lower half (on a wall all of the inner tyre's
+    // line) went into the road.
+    float firstJ = c_Trail.y - c_Trail.x, lastJ = c_Trail.y - 1.0;
+    float3 up = trailUp(j) * 2.0;
+    if (j - 1.0 >= firstJ) up += trailUp(j - 1.0);
+    if (j + 1.0 <= lastJ) up += trailUp(j + 1.0);
+    up = normalize(up);
+    // Smoothing (the average of its neighbours) took the line under the road over a crest: the
+    // point may rise along the car's up (in dips), never sink below where the car was.
+    s += up * max(dot(pj.xyz - s, up), 0.0);
+    float3 right = cross(up, dir);
     float rl = length(right);
-    right = rl > 0.1 ? right / rl : float3(1, 0, 0);
-    float3 p = s + right * c_Trail2.x;
+    float3 across = rl > 1e-3 ? right / rl : float3(1, 0, 0);
+    float3 p = s + across * c_Trail2.x;
     float3 v = toView(p);
-    if (v.z < 0.3) return o;
     // Right in front of the lens (a camera on the ground after a crash) it would fill the screen.
+    // Behind the camera the hardware clips the piece (dropping the corner dropped the whole piece:
+    // at speed the one from the car back past the camera).
     fade *= smoothstep(0.5, 2.5, v.z);
     float3 dv = toView(p + dir) - v;
     float3 side = cross(dv, v);
     float sl = length(side);
-    if (sl < 1e-5) return o;
-    // At least a pixel wide (no flicker far away); thinner lines are dimmed instead.
-    float pixel = v.z * c_Proj2.z / c_Proj.x;
-    float halfWidth = max(c_Trail2.y, pixel * 1.2);
-    fade *= c_Trail2.y / halfWidth;
-    o.pos = toClip(v + side / sl * halfWidth * corner.x);
+    side = sl > 1e-6 ? side / sl : float3(1, 0, 0);
+    // Flat across the line, lying on the road: turned to the camera it flapped with every swing of
+    // the chase camera and stood up like a wall where the line passes beside or above the camera
+    // (downhill). Only where the line runs along the car's up (flying straight up) "across" is
+    // unknown: turned to the camera there.
+    float flatness = saturate((rl - 0.15) / 0.35);
+    float3 wide = normalize(lerp(side, normalize(toView(p + across) - v), flatness));
+    float facing = dot(wide, side);
+    // At least a pixel wide as seen (far away, or seen edge-on), widened towards the camera;
+    // thinner lines are dimmed instead.
+    float pixel = abs(v.z) * c_Proj2.z / c_Proj.x;
+    float seen = c_Trail2.y * abs(facing);
+    float more = max(pixel * 1.2 - seen, 0.0);
+    fade *= c_Trail2.y / max(c_Trail2.y, pixel * 1.2);
+    o.pos = toClip(v + (wide * c_Trail2.y + side * (facing < 0.0 ? -more : more)) * corner.x);
     o.data = float4(corner.x, fade, v.z, fromCar);
     return o;
 }
 )";
 
 } // namespace
+
+std::string Pipeline::trailSource() {
+    char defines[96];
+    snprintf(defines, sizeof(defines), "#define TRAIL_W %u.0\n#define TRAIL_POINTS %u.0\n", kTrailWidth, kTrailPoints);
+    return std::string(defines) + kRainVS;
+}
+
+void Pipeline::runtimeShaders(std::vector<gfx::ShaderSource>& out) {
+    gfx::quadShaders(out);
+    // In the order the first frames need them: the height map, the trail, the material mask.
+    out.push_back({kSplatVS, "main", "vs_3_0", "SplatVS"});
+    out.push_back({trailSource(), "trailVS", "vs_3_0", "TrailVS"});
+    out.push_back({kSolidPS, "main", "ps_3_0", "Solid"});
+    out.push_back({kPalettePS, "main", "ps_3_0", "MaterialPalette"});
+    for (const char* entry : {"dropVS", "splashVS", "sprayVS", "snowVS"}) out.push_back({kRainVS, entry, "vs_3_0", "RainVS"});
+}
 
 bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
     if (!m_trailSupported) return false;
@@ -1380,10 +1748,7 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
                                                          D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING,
                                                          D3DRTYPE_TEXTURE, D3DFMT_A16B16G16R16F));
         if (d3d) d3d->Release();
-        char defines[96];
-        snprintf(defines, sizeof(defines), "#define TRAIL_W %u.0\n#define TRAIL_POINTS %u.0\n", kTrailWidth, kTrailPoints);
-        const std::string source = std::string(defines) + kRainVS;
-        m_trailVS = ok ? gfx::compileVertexShader(device, source.c_str(), "trailVS", "TrailVS") : nullptr;
+        m_trailVS = ok ? gfx::compileVertexShader(device, trailSource(), "trailVS", "TrailVS") : nullptr;
         const D3DVERTEXELEMENT9 elements[] = {
             {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
             {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
@@ -1396,7 +1761,8 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
             return false;
         }
     }
-    bool ok = m_trailPoints.create(device, kTrailWidth, kTrailHeight, D3DFMT_A32B32G32R32F) &&
+    // The points in the upper half, the car's up at each point in the lower half.
+    bool ok = m_trailPoints.create(device, kTrailWidth, kTrailHeight * 2, D3DFMT_A32B32G32R32F) &&
               SUCCEEDED(device->CreateVertexBuffer(kTrailPoints * 4 * 24, D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &m_trailVB, nullptr)) &&
               SUCCEEDED(device->CreateIndexBuffer(kTrailPoints * 6 * 2, D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_trailIB, nullptr));
     float* v = nullptr;
@@ -1440,23 +1806,157 @@ bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
     return ok;
 }
 
+void Pipeline::shareTrail(const Pipeline* from) {
+    const Pipeline* was = m_trailFrom;
+    m_trailFrom = from && from != this && from->m_trailPoints.texture ? from : nullptr;
+    if (!m_trailFrom) {
+        if (was) m_trailReset = true; // the copied counts don't belong to its own (empty) points
+        return;
+    }
+    // Its state as of its render this frame; nothing here resets or records over it.
+    m_trailReset = false;
+    m_trailNewRun = false;
+    m_trailHead = from->m_trailHead;
+    m_trailCount = from->m_trailCount;
+    m_trailTime = from->m_trailTime;
+    m_trailWritten = from->m_trailWritten;
+    m_trailRuns = from->m_trailRuns;
+    memcpy(m_trailRunStart, from->m_trailRunStart, sizeof(m_trailRunStart));
+    memcpy(m_trailRunFirst, from->m_trailRunFirst, sizeof(m_trailRunFirst));
+    m_trailPause = from->m_trailPause;
+    m_trailPauseAt = from->m_trailPauseAt;
+    m_trailPauseLogged = true; // its log is the other pipeline's
+}
+
 void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt) {
+    // The player drives: also while a clip of the map plays (a camera in a loop, texts at the
+    // start). Those clips stopped the recording, and when one ended the car was 130 - 340 m from
+    // its last point: taken for a missed restart, the trail started over (every such line in the
+    // owner's log came with "cinematic off"; one clip right after each start: the trail came 6 s
+    // late).
+    const bool recording = !m_trailFrom && (in.driving || in.clipInRace);
+    // A restart the hooks didn't see (the log had "race reset" on some restarts only, the old run
+    // stayed under the new one): the car jumped far between two frames it was seen in, without a
+    // respawn; or, after frames without it, it is back where this run began.
+    if (!m_trailReset && !m_trailNewRun && recording && in.carKnown && m_trailTime - m_trailRespawnAt > 1.0f) {
+        auto apart = [](const float* a, const float* b) {
+            const float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+            return sqrtf(dx * dx + dy * dy + dz * dz);
+        };
+        const float since = m_trailTime - m_trailSeenAt;
+        if (since < 0.5f) {
+            // The car drove for this frame's dt too (m_trailTime grows below): a frame hitch while
+            // driving fast covers more than 60 m (0.25 s at 250 m/s), no restart. 350 m/s is faster
+            // than any car drives.
+            const float elapsed = since + dt;
+            const float jump = apart(in.carPosition, m_trailSeen);
+            if (jump > fmaxf(kTrailTeleport, elapsed * 350.0f)) {
+                m_trailNewRun = true;
+                if (m_trailLogged < 20) {
+                    m_trailLogged++;
+                    TMVS_LOG("pipeline: neon trail: the car jumped %.0f m in %.0f ms without a respawn: a new run", jump, elapsed * 1000.0f);
+                }
+            }
+        } else if (m_trailKeptValid && m_trailRunAtValid && apart(in.carPosition, m_trailKept) > kTrailTeleport &&
+                   apart(in.carPosition, m_trailRunAt) < 12.0f) {
+            m_trailNewRun = true;
+            if (m_trailLogged < 20) {
+                m_trailLogged++;
+                TMVS_LOG("pipeline: neon trail: the car is back where the run began (%.0f m from its last point, unseen for %.1f s): a new run",
+                         apart(in.carPosition, m_trailKept), since);
+            }
+        }
+    }
+    const int keepRuns = s.trailKeepRuns < 0 ? 0 : (s.trailKeepRuns > kTrailRunsMax ? kTrailRunsMax : s.trailKeepRuns);
+    if (m_trailNewRun) {
+        m_trailNewRun = false;
+        if (keepRuns == 0 || m_trailWritten == 0) {
+            m_trailReset = true; // as before: the trail starts over
+        } else if (!m_trailReset) {
+            // The points stay; this run begins with a new line and its own time stamps. A run
+            // without a point (the hook's restart a frame after a teleport-detected one, two quick
+            // restarts) takes no slot: it would push the real previous run out.
+            if (m_trailWritten != m_trailRunFirst[0]) {
+                for (int k = kTrailRunsMax; k > 0; k--) {
+                    m_trailRunStart[k] = m_trailRunStart[k - 1];
+                    m_trailRunFirst[k] = m_trailRunFirst[k - 1];
+                }
+                m_trailRuns = m_trailRuns + 1 < kTrailRunsMax ? m_trailRuns + 1 : kTrailRunsMax;
+            }
+            // Just after the stamp of "now" (= the last frame's point, m_trailTime grows below):
+            // the shader counts a point as older when its stamp + 1e-3 <= this, so that last point
+            // belongs to the old run with a margin (without one it counted as this run's: a metre
+            // at the end of each kept run was drawn at full brightness), and every point of this
+            // run, a frame later, is newer.
+            m_trailRunStart[0] = (m_trailTime + 1.0f) + 2e-3f;
+            m_trailRunFirst[0] = m_trailWritten;
+            m_trailBreak = true;
+            m_trailKeptValid = false;
+            m_trailClock = 0.0f;
+            m_trailRunAtValid = false;
+            m_trailFirstLogged = false;
+            m_trailRunBegan = m_trailTime;
+        }
+    }
     if (m_trailReset) {
         m_trailReset = false;
         m_trailBreak = true;
         m_trailHead = m_trailCount = 0;
         m_trailClock = m_trailTime = 0.0f;
         m_trailKeptValid = false;
+        m_trailRespawnAt = -100.0f;
+        m_trailSeenAt = -100.0f;
+        m_trailRunAtValid = false;
+        m_trailFirstLogged = false;
+        m_trailRunBegan = 0.0f;
+        m_trailWritten = 0;
+        m_trailRuns = 0;
+        for (int k = 0; k <= kTrailRunsMax; k++) {
+            m_trailRunStart[k] = 0.0f;
+            m_trailRunFirst[k] = 0;
+        }
         device->SetRenderTarget(0, m_trailPoints.surface);
         device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 0.0f, 0);
     }
+    // Fewer runs wanted (the setting lowered): the older ones go.
+    if (m_trailRuns > keepRuns) m_trailRuns = keepRuns;
+    {
+        const UINT sinceOldest = m_trailWritten - m_trailRunFirst[m_trailRuns];
+        if (m_trailCount > sinceOldest) m_trailCount = sinceOldest;
+    }
     m_trailTime += dt;
     m_trailClock += dt;
+    if (in.carKnown) {
+        memcpy(m_trailSeen, in.carPosition, sizeof(m_trailSeen));
+        m_trailSeenAt = m_trailTime;
+    }
     // Record the car while you drive (not in replays and intros): every frame into the next
-    // slot (the live end of the trail, so it stays on the car), kept 30 times a second.
+    // slot (the live end of the trail, so it stays on the car), kept 30 times a second. A camera
+    // cut only matters to the car found in the depth buffer: the engine's car is where it is
+    // whatever the camera does.
     bool live = false;
     if (in.carFromEngine && !in.carKnown) m_trailBreak = true; // a gap: the next point starts a new line
-    if (in.driving && dt > 0.0f && m_temporalValid && (in.carKnown || !in.carFromEngine)) {
+    const int pause = !recording ? 1 : (!m_temporalValid && !in.carKnown) ? 2 : (in.carFromEngine && !in.carKnown) ? 3 : 0;
+    if (dt > 0.0f) {
+        // The log tells when the trail records nothing for longer than half a second, and why.
+        static const char* const kWhy[] = {"", "not driving (a replay, an intro or the replay viewer)", "camera cuts (the car found in the depth buffer)",
+                                           "the engine lost the car"};
+        if (pause != m_trailPause) {
+            if (m_trailPause != 0 && m_trailPauseLogged && m_trailPauseLogs < 60) {
+                m_trailPauseLogs++;
+                TMVS_LOG("pipeline: neon trail: %s, over after %.1f s", kWhy[m_trailPause], m_trailTime - m_trailPauseAt);
+            }
+            m_trailPause = pause;
+            m_trailPauseAt = m_trailTime;
+            m_trailPauseLogged = false;
+        }
+        if (pause != 0 && !m_trailPauseLogged && m_trailTime - m_trailPauseAt > 0.5f && m_trailPauseLogs < 60) {
+            m_trailPauseLogged = true;
+            m_trailPauseLogs++;
+            TMVS_LOG("pipeline: neon trail records nothing for 0.5 s: %s", kWhy[pause]);
+        }
+    }
+    if (pause == 0 && dt > 0.0f) {
         live = true;
         bind(device, 0, m_nd.texture, false);
         const float stamp = m_trailTime + 1.0f; // never 0 (= no car)
@@ -1467,12 +1967,25 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
         device->SetPixelShaderConstantF(33, car, 1);
         // One pixel of the ring buffer. (SetRenderTarget resets the scissor rect: set it after.)
         device->SetRenderTarget(0, m_trailPoints.surface);
-        const RECT pixel = {static_cast<LONG>(m_trailHead % kTrailWidth), static_cast<LONG>(m_trailHead / kTrailWidth),
-                            static_cast<LONG>(m_trailHead % kTrailWidth) + 1, static_cast<LONG>(m_trailHead / kTrailWidth) + 1};
+        const LONG px = static_cast<LONG>(m_trailHead % kTrailWidth), py = static_cast<LONG>(m_trailHead / kTrailWidth);
+        const RECT pixel = {px, py, px + 1, py + 1};
         device->SetScissorRect(&pixel);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
         device->SetPixelShader(m_shaders[kTrailPoint]);
-        m_quad.draw(device, kTrailWidth, kTrailHeight);
+        m_quad.draw(device, kTrailWidth, kTrailHeight * 2);
+        // And the car's up at that point, in the lower half (the world's up for the depth
+        // buffer's car).
+        const float up[4] = {in.carKnown ? in.carUp[0] : 0.0f, in.carKnown ? in.carUp[1] : 1.0f, in.carKnown ? in.carUp[2] : 0.0f, 0.0f};
+        if (in.carKnown && up[1] < 0.866f && !m_trailTiltLogged) {
+            m_trailTiltLogged = true;
+            TMVS_LOG("pipeline: neon trail: the car's up tilts %.0f degrees (%.2f %.2f %.2f; a banked curve, a wall or a loop): the line lies along the road",
+                     acosf(up[1] < -1.0f ? -1.0f : (up[1] > 1.0f ? 1.0f : up[1])) * 57.2958f, up[0], up[1], up[2]);
+        }
+        passConstants(device, 0.0f, 0.0f, 1.0f);
+        device->SetPixelShaderConstantF(33, up, 1);
+        const RECT upPixel = {px, py + static_cast<LONG>(kTrailHeight), px + 1, py + static_cast<LONG>(kTrailHeight) + 1};
+        device->SetScissorRect(&upPixel);
+        m_quad.draw(device, kTrailWidth, kTrailHeight * 2);
         profileMark(kTrailPoint);
         device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
         // With the engine's position: kept 60 times a second while the car moves, and every
@@ -1493,9 +2006,21 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
             m_trailClock = moved >= 1.0f ? 0.0f : fmodf(m_trailClock, measured ? 1.0f / 60.0f : 1.0f / 30.0f);
             memcpy(m_trailKept, in.carPosition, sizeof(m_trailKept));
             m_trailKeptValid = in.carKnown;
+            if (in.carKnown && !m_trailRunAtValid) {
+                memcpy(m_trailRunAt, in.carPosition, sizeof(m_trailRunAt));
+                m_trailRunAtValid = true;
+            }
+            // The run's first point that leaves the start (the line shows from it on): when.
+            if (!m_trailFirstLogged && measured && m_trailLogged < 40) {
+                m_trailFirstLogged = true;
+                m_trailLogged++;
+                TMVS_LOG("pipeline: neon trail: the run's line begins %.2f s after the run began (%s)", m_trailTime - m_trailRunBegan,
+                         in.carKnown ? (in.driving ? "the engine's car" : "the engine's car, a clip of the map plays") : "the depth buffer's car");
+            }
             m_trailBreak = false;
             m_trailHead = (m_trailHead + 1) % kTrailPoints;
             if (m_trailCount < kTrailPoints) m_trailCount++;
+            m_trailWritten++;
             live = false; // just kept: it's the newest point now
         }
     }
@@ -1525,6 +2050,12 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     // The vertex shader works with unwrapped indices: next + kTrailPoints keeps them positive.
     const float trail[4] = {static_cast<float>(points), static_cast<float>(next + kTrailPoints), m_trailTime + 1.0f, s.trailDuration};
     device->SetVertexShaderConstantF(16, trail, 1);
+    // Earlier runs: where each began (a point stamped before it belongs to an older run; -1e30 =
+    // none kept) and their brightness, 0.6 for the last run down to 0.6 / n for the n-th.
+    float runs[8] = {-1e30f, -1e30f, -1e30f, -1e30f, -1e30f, 0.6f, 0.0f, 0.0f};
+    for (int k = 0; k < m_trailRuns && k < kTrailRunsMax; k++) runs[k] = m_trailRunStart[k];
+    if (m_trailRuns > 0) runs[6] = 0.6f / static_cast<float>(m_trailRuns);
+    device->SetVertexShaderConstantF(20, runs, 2);
 
     device->SetRenderTarget(0, m_hdr.surface);
     D3DVIEWPORT9 viewport = {0, 0, in.width, in.height, 0.0f, 1.0f};
@@ -1536,7 +2067,7 @@ void Pipeline::drawTrail(IDirect3DDevice9* device, const Inputs& in, const Setti
     // Alpha too: it adds the trail's coverage to the 1 the lighting wrote (TAA's mask).
     device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
     bind(device, 0, m_nd.texture, false);
-    device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailPoints.texture);
+    device->SetTexture(D3DVERTEXTEXTURESAMPLER2, m_trailFrom ? m_trailFrom->m_trailPoints.texture : m_trailPoints.texture);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MINFILTER, D3DTEXF_POINT);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
     device->SetSamplerState(D3DVERTEXTEXTURESAMPLER2, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
@@ -1674,10 +2205,12 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         vc[j][2] = V[2 * 4 + j];
         vc[j][3] = V[12 + j];
     }
+    // The drops go onto the image after TAA, which took the jitter out: without it here too
+    // (with it every drop and flake shook by up to half a pixel).
     vc[3][0] = P[0];
     vc[3][1] = P[5];
-    vc[3][2] = P[8];
-    vc[3][3] = P[9];
+    vc[3][2] = P[8] - 2.0f * in.jitter[0];
+    vc[3][3] = P[9] + 2.0f * in.jitter[1];
     vc[4][0] = P[10];
     vc[4][1] = P[14];
     vc[4][2] = 2.0f / in.width;
@@ -1737,7 +2270,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     bind(device, 0, m_nd.texture, false);
     bind(device, 1, in.color, true);
     bind(device, 2, m_skyAverage[m_skyIndex].texture, false);
-    bind(device, 3, s.neonLight > 0.0f ? m_spill[0].texture : nullptr, true);
+    bind(device, 3, s.neonLight > 0.0f ? m_spillHistory[m_spillIndex].texture : nullptr, true);
     bind(device, 4, m_adapted[m_adaptIndex].texture, false);
     device->SetVertexDeclaration(m_rainDecl);
     device->SetStreamSource(0, m_rainVB, 0, 24);
@@ -1831,6 +2364,21 @@ bool Pipeline::detectCameraCut(const Inputs& in) const {
     return fabsf(in.projection[5] - m_prevProjection[5]) > 0.1f * fabsf(m_prevProjection[5]);
 }
 
+// Before a temporal frame moves the previous camera on: what its repeats need.
+void Pipeline::keepRepeatCamera() {
+    memcpy(m_repeatPrevView, m_prevView, sizeof(m_prevView));
+    memcpy(m_repeatPrevProjection, m_prevProjection, sizeof(m_prevProjection));
+    m_repeatHavePrevious = m_havePrevious;
+    m_repeatTemporalValid = m_temporalValid;
+}
+
+// A repeat sees the camera before its frame as the previous one (twice: back again).
+void Pipeline::swapRepeatCamera() {
+    std::swap(m_prevView, m_repeatPrevView);
+    std::swap(m_prevProjection, m_repeatPrevProjection);
+    std::swap(m_havePrevious, m_repeatHavePrevious);
+}
+
 namespace {
 
 // Full-screen passes with none of the game's leftover state (alpha test, stencil, scissor and
@@ -1858,9 +2406,18 @@ BOOL setPassStates(IDirect3DDevice9* device) {
 
 } // namespace
 
-void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output) {
-    if (!m_ready || !in.color || !in.depth) return;
-    if (!ensureTargets(device, in.width, in.height)) return;
+bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output) {
+    if (!m_ready || !in.color || !in.depth) return false;
+    if (!ensureTargets(device, in.width, in.height)) return false;
+    // RenderScale: every pass at the scene's size into m_scaled, then up to `output` at the end
+    // (upscaleOutput). The look's sharpening is skipped then, FSR's own (RCAS) takes its place:
+    // sharpened before EASU, its halos would be scaled up with the image.
+    const bool upscale = in.outputWidth > 0 && in.outputHeight > 0 && (in.outputWidth != in.width || in.outputHeight != in.height);
+    IDirect3DSurface9* const screen = output;
+    if (upscale) {
+        if (!m_scaled.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
+        output = m_scaled.surface;
+    }
     m_frame++;
 
     const BOOL softwareVP = setPassStates(device);
@@ -1868,16 +2425,67 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // The game's materials (lamps, cars, glass, grass) for the lighting and the final pass.
     const bool materials = buildMaterialMask(device, in);
     m_materialsOn = materials;
+    m_materialTexture = in.materialMask ? in.materialMask : m_materials.texture;
     // z: a night sky replaces the game's, its sunset clouds and their mirror image in the sea go.
     const float gameSkyOut = skyReplacesSun(s) && !s.gameSkyClouds ? 1.0f : 0.0f;
     const float materialConstants[4] = {materials ? 1.0f : 0.0f, 0.0f, gameSkyOut, s.toneKnee};
     device->SetPixelShaderConstantF(44, materialConstants, 1);
+    // x 8: the scale of the car test in the lighting pass (saves an instruction there, it is at the limit).
+    // zw: lamps by their material glow from 0.4 to 0.8 of the game's white, only with GameHdr.
+    const float cleanConstants[4] = {s.cleanHighlights ? 8.0f : 0.0f, in.hdr ? 1.0f : 0.0f, in.hdr ? 2.5f : 0.0f, -1.0f};
+    device->SetPixelShaderConstantF(45, cleanConstants, 1);
+    // c46 (EngineLights): x s14 holds the added light; y its extra strength per HighlightBoost;
+    // z the reflections' boost of bright hits (1: as before; 0: the light sources are known);
+    // w the neon strips' glow (they are plain block material to the game: found by their colour).
+    const bool engineLights = s.engineLights && in.hdr;
+    // Quality 2: the strips' glow by how much of a strip each pixel covers (PS_NeonGlow), added
+    // after the lighting pass (w 0 there) and taken by the spill. Found by each pixel alone, a
+    // strip 1-2 px high far away counted or not by where it fell between two rows, and its glow
+    // on the wall pulsed as the camera crept towards it (the owner, A01 at night).
+    // Only with the strips known by their material (the mask's neon class, Inputs::neonMaterials):
+    // by colour, the pass let blue floors, lane paint and the start banner's letters glow as well
+    // (bright enough near by, and two of their pixels together always were; capture_116, 121, 124,
+    // 122). Without the materials (an unknown build, no draw hooks) each pixel's colour decides
+    // in the lighting pass, as before the pass.
+    const bool neonByMaterial = materials && in.neonMaterials;
+    const float neonConstants[4] = {neonByMaterial ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(58, neonConstants, 1); // c58 x: u_Neon
+    const bool neonPass = engineLights && neonByMaterial && s.borderGlow > 0.0f && s.quality >= 2 &&
+                          (m_neon.valid() || m_neon.create(device, m_width, m_height, D3DFMT_A8R8G8B8));
+    // Its strength: the blended edges of wide strips count now, x 0.8 keeps A01's near strips and
+    // the light around them as bright as before (capture_108).
+    const float neonGlow = s.borderGlow * 0.8f;
+    const float engineConstants[4] = {engineLights && in.added ? 1.0f : 0.0f, 0.5f, engineLights ? 0.0f : 1.0f, neonPass ? 0.0f : s.borderGlow};
+    device->SetPixelShaderConstantF(46, engineConstants, 1);
+    // c51 x (CleanWater): the reflection on the game's water skips what it can't see (the tops
+    // of the ramps over the pools) and takes no dry-track blur. Only where the engine tells the
+    // water's height (or it was measured): the colour guess also takes blue kerbs for water.
+    const bool waterKnown = in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown);
+    // c51 (EngineLights, the lamps: what the game's additive draws added). Floodlights: their own
+    // strength, apart from the neon borders (BorderGlow) and HighlightBoost (1 = as before). y: the
+    // part taken out of their core, 1 - Floodlights x (1 - LampGlare): LampGlare's part is spread
+    // around them in the final pass (0 = as before; below 0 the core gets brighter). z (LampSkyHalos):
+    // the part added over the sky as well, at night only (by day the game's sun glow is an added
+    // light too). w: Floodlights for the light they spill onto their surroundings (NeonLight).
+    const bool lampMask = engineLights && in.added;
+    // Without its targets (allocation failed) no glare is added back: the core keeps its light.
+    const bool lampLight = lampMask && !m_lampFailed && (s.lampGlare > 0.0f || s.lampHaze > 0.0f);
+    const float floodlights = lampMask ? fmaxf(s.floodlights, 0.0f) : 1.0f;
+    const float lampGlareTaken = lampLight ? fminf(fmaxf(s.lampGlare, 0.0f), 1.0f) : 0.0f;
+    const float lampCore = floodlights * (1.0f - lampGlareTaken);
+    const bool lampNight = skyReplacesSun(s) || (in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night);
+    const float lampSky = s.lampSkyHalos && lampMask && lampNight ? lampCore : 0.0f;
+    const float waterConstants[4] = {s.cleanWater && waterKnown ? 1.0f : 0.0f, 1.0f - lampCore, lampSky, floodlights};
+    device->SetPixelShaderConstantF(51, waterConstants, 1);
 
     // Temporal state: history is only valid for the same camera as last frame.
     const bool temporal = in.temporal;
-    // Photo mode: a 3x larger height map (twice the texels), so far views get long shadows.
-    const UINT heightSize = in.photo ? 1024 : 512;
-    const float heightWorld = in.photo ? 960.0f : 320.0f;
+    // 640 m around the camera (0.625 m a texel): at speed the shadows ahead were only known
+    // 120..160 m out, the next blocks' shadows popped up in front of the car. Photo mode: 960 m,
+    // far views get long shadows. (Not the video export: with photo mode's reach and map its
+    // frames looked different from the replay, water reflections noisier, lit walls darker.)
+    const UINT heightSize = 1024;
+    const float heightWorld = in.photo ? 960.0f : 640.0f;
     if (heightSize != m_heightSize || heightWorld != m_heightWorld) {
         m_heightSize = heightSize;
         m_heightWorld = heightWorld;
@@ -1888,6 +2496,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool cut = temporal && detectCameraCut(in);
     m_temporalValid = temporal && !cut;
     if (cut) m_taaValid = false;
+    // A repeat of the last frame: its motion (the camera before it), swapped back at the end.
+    if (in.repeat) {
+        m_temporalValid = m_repeatTemporalValid;
+        swapRepeatCamera();
+    }
 
     profileBegin(device);
     setFrameConstants(device, in, s);
@@ -1897,14 +2510,21 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 0, in.depth, false);
     runPass(device, kLinearDepth, m_linearDepth);
     bind(device, 0, m_linearDepth.texture, false);
-    runPass(device, kPrepare, m_nd);
+    // GameGBuffer: the game's own normals where they belong to the surface seen (a pass of its
+    // own: without them PS_Prepare is as it was).
+    const bool gameNormals = in.gbuffer && s.gameGBuffer;
+    if (gameNormals) bind(device, 1, in.gbuffer, false);
+    runPass(device, gameNormals ? kPrepareGBuffer : kPrepare, m_nd);
     bind(device, 0, m_nd.texture, false);
     passConstants(device, 1.0f / in.width, 1.0f / in.height);
     runPass(device, kDownsampleND, m_ndHalf);
 
     if (!s.enabled && in.photo) {
         // Vanilla photo mode: only depth of field and sharpening on the game's original image (in.color).
-        const float dt = m_historyValid ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
+        // The time step from the last frame of this camera: m_historyValid belongs to the exposure,
+        // which never runs here. With it the focus froze where it was first measured (the shaders
+        // off from the start, or after a resize): clicks and the auto focus didn't move it.
+        const float dt = m_havePrevious ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
         if (temporal) m_lastTime = in.time;
         IDirect3DTexture9* current = in.color;
         const bool dof = s.depthOfField > 0.0f;
@@ -1917,6 +2537,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
                 bind(device, 0, m_nd.texture, false);
                 bind(device, 1, m_focus[m_focusIndex].texture, false);
                 passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+                focusOnCarConstants(device, in, s);
                 runPass(device, kFocus, m_focus[focus]);
                 m_focusIndex = focus;
             }
@@ -1938,20 +2559,23 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             runPass(device, kCinematic, m_hdr2);
             current = m_hdr2.texture;
         }
-        const bool sharpen = s.sharpen > 0.001f;
+        const bool sharpen = s.sharpen > 0.001f && !upscale;
         bind(device, 0, current, false);
         bind(device, 1, nullptr, false);
         passConstants(device, 1.0f / in.width, 1.0f / in.height);
         runPass(device, sharpen ? kSharpen : kCopy, output, in.width, in.height);
+        if (upscale) upscaleOutput(device, in, s, screen);
         profileEnd();
+        if (in.repeat) swapRepeatCamera();
         if (temporal) {
+            keepRepeatCamera();
             memcpy(m_prevView, in.view, sizeof(m_prevView));
             memcpy(m_prevProjection, in.projection, sizeof(m_prevProjection));
             m_havePrevious = true;
         }
         for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
         if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
-        return;
+        return true;
     }
     // 1a. The sea the game reports no height for (TMUF Island), from its water material.
     if (materials && s.waterSurfaces > 0.0f && ((in.water[2] >= 0.0f && in.water[2] < 0.5f) || in.water[2] > 1.5f)) measureSeaLevel(device);
@@ -1961,6 +2585,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Rain splashes land on it too.
     const bool wantLong = s.longShadows > 0.0f && s.shadowStrength > 0.0f && m_sunKnown;
     const bool wantVolume = s.volumetricLight > 0.0f && m_sunKnown;
+    if (wantLong || wantVolume) m_castersWanted = true;
     if (m_heightReset) {
         m_heightReset = false;
         m_heightValid = false;
@@ -1972,9 +2597,39 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
     // Roofs and bridges for the rain and snow, only while it falls.
     const bool ceilings = s.weatherShelter && (s.rain > 0.0f || s.snow > 0.0f);
-    if (heightMap && splat && (!m_heightValid || (m_frame & 1))) updateHeightMap(device, in, s, ceilings);
+    if (heightMap && splat && (!m_heightValid || (m_frame & 1))) {
+        updateHeightMap(device, in, s, ceilings);
+        m_shadowHeightStale = true;
+        m_lightGridStale = true;
+    }
     if (!ceilings) m_ceilingValid = false;
     const bool longShadows = heightMap && wantLong;
+    // 1c. CasterShadows: the game's own static meshes drawn from the light, built up over the
+    // map: around the camera (c47-c50, s3) and over the whole track (c54-c57, s4). For the long
+    // shadows and the volumetric light alike, so the shafts' gaps line up with the shadows.
+    // The constants go up every frame: the game's pixel shaders use these registers too.
+    casters::Maps casterMaps;
+    float camera[3];
+    for (int j = 0; j < 3; j++) camera[j] = -(in.view[12] * in.view[j * 4 + 0] + in.view[13] * in.view[j * 4 + 1] + in.view[14] * in.view[j * 4 + 2]);
+    profileMark(-1);
+    const bool casterShadows = (longShadows || (heightMap && wantVolume)) && in.casterMap && in.casterMap(device, m_sunWorld, camera, casterMaps);
+    profileMark(kProfileCasters); // the maps' draws (new meshes, the near map following the camera)
+    const casters::MapInfo* casterInfo[2] = {&casterMaps.nearMap, &casterMaps.farMap};
+    for (int k = 0; k < 2; k++) {
+        float constants[4][4] = {};
+        const casters::MapInfo& map = *casterInfo[k];
+        if (casterShadows && map.texture) {
+            memcpy(constants, map.rows, sizeof(map.rows));
+            constants[3][0] = 1.0f;
+            constants[3][1] = map.texel[0];
+            constants[3][2] = map.texel[1];
+            constants[3][3] = map.bias;
+        }
+        device->SetPixelShaderConstantF(k == 0 ? 47 : 54, &constants[0][0], 4);
+    }
+    const bool lightGrid = longShadows && s.longShadowQuality > 0 && updateLightGrid(device, s);
+    const float noGrid[2][4] = {};
+    device->SetPixelShaderConstantF(52, lightGrid ? &m_lightGridConstants[0][0] : &noGrid[0][0], 2);
     const float longConstants[4] = {s.taa ? 1.0f : 0.0f, m_temporalValid ? 1.0f : 0.0f, s.taa ? static_cast<float>(m_frame % 64) : 0.0f,
                                     longShadows ? s.longShadows : 0.0f};
     device->SetPixelShaderConstantF(34, longConstants, 1);
@@ -1983,8 +2638,20 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (s.aoStrength > 0.0f || s.shadowStrength > 0.0f || s.debugView == 3 || s.debugView == 4 || s.debugView == 7) {
         bind(device, 0, m_ndHalf.texture, false);
         bind(device, 1, m_nd.texture, false);
-        bind(device, 2, longShadows ? m_heightMap[m_heightIndex].texture : nullptr, m_heightFilter);
+        if (lightGrid) {
+            bind(device, 2, m_lightGrid[m_lightGridIndex].texture, m_lightGridFilter);
+        } else {
+            bind(device, 2, longShadows ? m_heightMap[m_heightIndex].texture : nullptr, m_heightFilter);
+        }
+        if (casterShadows) {
+            bind(device, 3, casterMaps.nearMap.texture, false);
+            bind(device, 4, casterMaps.farMap.texture, false);
+        }
         runPass(device, kOcclusionShadow, m_occlusion);
+        if (casterShadows) {
+            device->SetTexture(3, nullptr); // depth textures bound as textures
+            device->SetTexture(4, nullptr);
+        }
         bind(device, 0, m_occlusion.texture, false);
         bind(device, 1, m_ndHalf.texture, false);
         passConstants(device, 1.0f / hw, 0.0f);
@@ -2000,18 +2667,40 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // 2b. Volumetric light: shadow heights from the height map, then the view rays through
     // the haze at half resolution (the light shaft target is free until later).
     const bool volume = heightMap && wantVolume;
+    // c37 before the march, which reads its range (u_Volume.y): set after it, the march took the
+    // value of whatever set c37 last (the game's own shaders in game, the compare split's other
+    // pipeline, the previous frame).
+    const bool gi = s.globalIllumination > 0.0f;
+    const float lensDrops = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f;
+    const float lensSnow = s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f;
+    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
+    device->SetPixelShaderConstantF(37, volumeConstants, 1);
     if (volume) {
         static const float kVolumeSteps[3] = {8.0f, 12.0f, 16.0f};
         const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
-        bind(device, 0, m_heightMap[m_heightIndex].texture, false);
-        runPass(device, kShadowHeight, m_shadowHeight);
+        // Only when the map or the sun changed (the map: every other frame).
+        const bool sunMoved = fabsf(m_sunWorld[0] - m_shadowHeightSun[0]) + fabsf(m_sunWorld[1] - m_shadowHeightSun[1]) +
+                                  fabsf(m_sunWorld[2] - m_shadowHeightSun[2]) > 1e-4f;
+        if (m_shadowHeightStale || sunMoved) {
+            bind(device, 0, m_heightMap[m_heightIndex].texture, false);
+            runPass(device, kShadowHeight, m_shadowHeight);
+            for (int j = 0; j < 3; j++) m_shadowHeightSun[j] = m_sunWorld[j];
+            m_shadowHeightStale = false;
+        }
         bind(device, 0, m_ndHalf.texture, false);
         bind(device, 1, m_shadowHeight.texture, false); // R32F: no filtering on older GPUs
+        if (casterShadows) {
+            bind(device, 3, casterMaps.nearMap.texture, false);
+            bind(device, 4, casterMaps.farMap.texture, false);
+        }
         passConstants(device, kVolumeSteps[q], 0.0f);
         runPass(device, kVolumetric, m_rays[1]);
+        if (casterShadows) {
+            device->SetTexture(3, nullptr);
+            device->SetTexture(4, nullptr);
+        }
     }
     // 2c. One-bounce global illumination, blurred like the AO.
-    const bool gi = s.globalIllumination > 0.0f;
     if (gi) {
         static const float kGISamples[3] = {4.0f, 6.0f, 8.0f};
         const int q = s.quality < 0 ? 0 : (s.quality > 2 ? 2 : s.quality);
@@ -2039,10 +2728,6 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     } else {
         m_giValid = false;
     }
-    const float lensDrops = s.lensDrops ? fminf(s.rain, 1.0f) : 0.0f;
-    const float lensSnow = s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f;
-    const float volumeConstants[4] = {volume ? s.volumetricLight : 0.0f, 150.0f, gi ? s.globalIllumination : 0.0f, lensDrops};
-    device->SetPixelShaderConstantF(37, volumeConstants, 1);
 
     // 3. Custom sky, the average sky colour (fog), volumetric clouds.
     if (s.skyMode > 0) {
@@ -2096,26 +2781,94 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
 
     // 3b. Reflections and neon light spill.
+    IDirect3DTexture9* neonSource = m_neon.texture;
+    if (neonPass) {
+        bind(device, 0, in.hdr, false);
+        bind(device, 1, m_nd.texture, false);
+        bind(device, 13, materials ? m_materialTexture : nullptr, false);
+        if (in.added) bind(device, 14, in.added, false);
+        runPass(device, kNeonGlow, m_neon);
+        device->SetTexture(14, nullptr);
+        // Over frames (PS_NeonTemporal): rows of a far strip that come and go between frames.
+        if (m_neonHistoryOn && (m_neonHistory[1].valid() || (m_neonHistory[0].create(device, m_width, m_height, D3DFMT_A16B16G16R16F) &&
+                                                             m_neonHistory[1].create(device, m_width, m_height, D3DFMT_A16B16G16R16F)))) {
+            const int previous = m_neonIndex;
+            m_neonIndex ^= 1;
+            bind(device, 0, m_neon.texture, false);
+            bind(device, 1, m_neonHistory[previous].texture, true);
+            bind(device, 2, m_nd.texture, false);
+            passConstants(device, (m_neonValid && m_temporalValid) ? 1.0f : 0.0f, 0.0f);
+            runPass(device, kNeonTemporal, m_neonHistory[m_neonIndex]);
+            device->SetTexture(2, nullptr);
+            neonSource = m_neonHistory[m_neonIndex].texture;
+            m_neonValid = true;
+        } else {
+            m_neonValid = false;
+        }
+    } else {
+        m_neonValid = false;
+    }
     const bool reflect = s.wetness > 0.0f || s.reflections > 0.0f || s.waterSurfaces > 0.0f;
     if (reflect) {
         bind(device, 0, in.color, true);
         bind(device, 1, m_nd.texture, false);
         bind(device, 2, m_ndHalf.texture, false);
-        bind(device, 13, materials ? m_materials.texture : nullptr, false);
+        bind(device, 13, materials ? m_materialTexture : nullptr, false);
+        // x (WaterFarReflections): with Clean water, the water's reflection is traced to the
+        // screen's edge instead of 40-120 m (the stands across a pool showed as plain sky).
+        passConstants(device, s.waterFarReflections ? 1.0f : 0.0f, 0.0f);
         runPass(device, kReflect, m_reflect);
     }
     const bool spill = s.neonLight > 0.0f;
     if (spill) {
         bind(device, 0, in.color, true);
         bind(device, 1, m_nd.texture, false);
-        bind(device, 13, materials ? m_materials.texture : nullptr, false);
-        runPass(device, kSpillDown, m_spill[0]);
+        bind(device, 13, materials ? m_materialTexture : nullptr, false);
+        // EngineLights: the sources are what the game drew as light (its float image less what its
+        // additive draws added, their light, the lamp material, the neon strips), not bright colours.
+        if (engineLights) {
+            bind(device, 0, in.hdr, true);
+            if (in.added) bind(device, 14, in.added, true);
+        }
+        // Quality 2: the sources found pixel by pixel first (full res), then taken down to quarter
+        // res by the four bilinear taps. Found in the taps themselves (the mean of 2x2 pixels), a
+        // strip 1-2 px high far away, averaged with the dark wall beside it, counted or not by
+        // where it fell, and the blue light on the wall flickered as the camera crept towards it
+        // (the owner, A01 at night). The mean of light already found is the same wherever it falls.
+        // Lower quality (and auto quality's fewer samples): the cheaper way, as before.
+        const bool perPixel = s.quality >= 2 &&
+                              (m_spillSource.valid() || m_spillSource.create(device, m_width, m_height, D3DFMT_A16B16G16R16F));
+        if (perPixel) {
+            if (neonPass) {
+                bind(device, 2, neonSource, false);
+                passConstants(device, neonGlow, 0.0f);
+            }
+            runPass(device, neonPass ? kSpillSourceNeon : (engineLights ? kSpillSourceEngine : kSpillSource), m_spillSource);
+            device->SetTexture(14, nullptr);
+            device->SetTexture(2, nullptr);
+            bind(device, 0, m_spillSource.texture, true);
+            runPass(device, kSpillDownSource, m_spill[0]);
+        } else {
+            runPass(device, engineLights ? kSpillDownEngine : kSpillDown, m_spill[0]);
+        }
+        device->SetTexture(14, nullptr);
         bind(device, 0, m_spill[0].texture, true);
         passConstants(device, 1.0f / m_spill[0].width, 0.0f);
         runPass(device, kSpillBlur, m_spill[1]);
         bind(device, 0, m_spill[1].texture, true);
         passConstants(device, 0.0f, 1.0f / m_spill[0].height);
         runPass(device, kSpillBlur, m_spill[0]);
+        // Over frames: found anew in every frame, the light flickered on the walls next to a
+        // strip as the camera moved.
+        const int previous = m_spillIndex;
+        m_spillIndex ^= 1;
+        bind(device, 0, m_spill[0].texture, false);
+        bind(device, 1, m_spillHistory[previous].texture, true);
+        passConstants(device, (m_spillValid && m_temporalValid && m_spillHistoryOn) ? 1.0f : 0.0f, 0.0f);
+        runPass(device, kSpillTemporal, m_spillHistory[m_spillIndex]);
+        m_spillValid = true;
+    } else {
+        m_spillValid = false;
     }
 
     // 4. Lighting composite.
@@ -2127,15 +2880,35 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 5, m_sky.texture, false);
     bind(device, 6, m_clouds.texture, true);
     bind(device, 8, m_reflect.texture, true);
-    bind(device, 9, m_spill[0].texture, true);
+    bind(device, 9, m_spillHistory[m_spillIndex].texture, true);
     bind(device, 10, m_rays[1].texture, true);
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
-    bind(device, 13, materials ? m_materials.texture : nullptr, false);
-    runPass(device, kLighting, m_hdr);
+    bind(device, 13, materials ? m_materialTexture : nullptr, false);
+    if (in.hdr) bind(device, 0, in.hdr, false); // GameHdr: light above 1.0 (the guesses in there clamp it)
+    // EngineLights: light sources from the game, not guessed (s14 = what its additive draws added).
+    if (engineLights && in.added) bind(device, 14, in.added, false);
+    // GameLight: the light the game's shaders lit each surface with (s15): the night sky spares
+    // what the game's lamps light. A pass of its own: without it PS_LightingEngine is as it was.
+    const bool gameLight = engineLights && in.gameLight && s.gameLight;
+    if (gameLight) bind(device, 15, in.gameLight, false);
+    runPass(device, gameLight ? kLightingGameLight : (engineLights ? kLightingEngine : kLighting), m_hdr);
+    if (gameLight) device->SetTexture(15, nullptr);
+    device->SetTexture(14, nullptr);
     device->SetTexture(10, nullptr);
     device->SetTexture(11, nullptr);
     device->SetTexture(8, nullptr);
     device->SetTexture(9, nullptr);
+    if (neonPass) {
+        bind(device, 0, neonSource, false);
+        bind(device, 1, m_nd.texture, false);
+        passConstants(device, neonGlow, 0.0f);
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+        runPass(device, kNeonAdd, m_hdr);
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    }
 
     // 4b. Neon trail behind the car, into the HDR image so it blooms.
     if (s.neonTrail > 0.0f && ensureTrail(device)) drawTrail(device, in, s, temporal ? dt : 0.0f);
@@ -2148,9 +2921,11 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool dof = s.depthOfField > 0.0f;
     if ((motionBlur || dof) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
         // Photo mode: the blur at full resolution (half resolution showed as coarse, blocky
-        // edges once the image stands still and gets looked at).
+        // edges once the image stands still and gets looked at). The video export too: it has
+        // the time, and its frames get looked at one by one.
+        const bool best = in.photo || in.video;
         gfx::Target* dofTarget = &m_dof;
-        if (dof && in.photo && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
+        if (dof && best && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
         if (dof) {
             int focus = m_focusIndex;
             if (temporal && !in.freeze) {
@@ -2158,6 +2933,7 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
                 bind(device, 0, m_nd.texture, false);
                 bind(device, 1, m_focus[m_focusIndex].texture, false);
                 passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+                focusOnCarConstants(device, in, s);
                 runPass(device, kFocus, m_focus[focus]);
                 m_focusIndex = focus;
             }
@@ -2166,15 +2942,15 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             bind(device, 2, m_focus[focus].texture, false);
             dofFocus = m_focus[focus].texture;
             // Photo mode: four times the samples and no per-pixel noise (nothing averages it
-            // out over frames: TAA is off by default, tiles freeze it).
-            passConstants(device, in.photo ? 64.0f : 16.0f, in.photo ? 0.0f : 1.0f, 1.0f);
+            // out over frames: TAA is off by default, tiles freeze it). The video export too.
+            passConstants(device, best ? 64.0f : 16.0f, best ? 0.0f : 1.0f, 1.0f);
             runPass(device, kDofBlur, *dofTarget);
             // A second, smaller pass over the first smooths the grain of the 16 samples and the
             // rings the spiral leaves on bright lights.
             gfx::Target& second = dofTarget == &m_dofFull ? m_dofFull2 : m_dof2;
             if (second.create(device, dofTarget->width, dofTarget->height, D3DFMT_A16B16G16R16F)) {
                 bind(device, 0, dofTarget->texture, true);
-                passConstants(device, in.photo ? 32.0f : 12.0f, in.photo ? 0.0f : 1.0f, 0.3f);
+                passConstants(device, best ? 32.0f : 12.0f, best ? 0.0f : 1.0f, 0.3f);
                 runPass(device, kDofBlur, second);
                 dofTarget = &second;
             }
@@ -2226,6 +3002,72 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 1, m_bloomDown[i].texture, true);
         passConstants(device, 1.0f / lower.width, 1.0f / lower.height, s.bloomRadius);
         runPass(device, kBloomUp, m_bloomUp[i]);
+    }
+
+    // 7b. Lamp glare (LampGlare, LampHaze): only the lamps' light (what the game's additive draws
+    // added) at a quarter of the resolution, then a pyramid from an eighth down to 1/128, summed
+    // back up with weights per level that shape its tail. Normalised: the haze glow carries as much
+    // light as the haze took from the lamps (LampHaze 1), the glare a part of what the lighting
+    // pass took from their core (LampGlare).
+    float lampScale[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    bool lampReady = false;
+    if (lampLight) {
+        UINT lw = (in.width + 3) / 4, lh = (in.height + 3) / 4;
+        lampReady = m_lampSource.create(device, lw, lh, D3DFMT_A16B16G16R16F);
+        for (int i = 0; i < kLampLevels && lampReady; i++) {
+            lw = lw > 3 ? (lw + 1) / 2 : 2;
+            lh = lh > 3 ? (lh + 1) / 2 : 2;
+            lampReady = m_lampDown[i].create(device, lw, lh, D3DFMT_A16B16G16R16F) &&
+                        (i == kLampLevels - 1 || m_lampUp[i].create(device, lw, lh, D3DFMT_A16B16G16R16F));
+        }
+        // Out of video memory: no new try (and log line) every frame, the next map or device
+        // reset tries again. What was created goes back.
+        if (!lampReady) {
+            m_lampFailed = true;
+            m_lampSource.destroy();
+            for (auto& t : m_lampDown) t.destroy();
+            for (auto& t : m_lampUp) t.destroy();
+            TMVS_LOG("pipeline: lamp glare and haze off: their render targets failed (until the next map)");
+        }
+    }
+    if (lampReady) {
+        bind(device, 0, in.hdr, true);
+        bind(device, 1, m_nd.texture, false);
+        bind(device, 14, in.added, true);
+        runPass(device, kLampSource, m_lampSource);
+        device->SetTexture(14, nullptr);
+        const gfx::Target* above = &m_lampSource;
+        for (int i = 0; i < kLampLevels; i++) {
+            bind(device, 0, above->texture, true);
+            passConstants(device, 1.0f / above->width, 1.0f / above->height);
+            runPass(device, kLampDown, m_lampDown[i]);
+            above = &m_lampDown[i];
+        }
+        // Weight of each wider level against the one above it. Above 1 the wide levels carry more:
+        // a long soft tail that reaches the arch and the air around a floodlight (0.7, most of it
+        // close to the lamp, only filled the gaps between the bulbs again: the same flat slab). The
+        // haze's light lies wide, scattered in the air between the camera and the lamp.
+        const float glareStep = 1.2f, hazeStep = 1.0f;
+        float glareNorm = 0.0f, hazeNorm = 0.0f, glareLevel = 1.0f, hazeLevel = 1.0f;
+        for (int i = 0; i < kLampLevels; i++) {
+            glareNorm += glareLevel;
+            hazeNorm += hazeLevel;
+            glareLevel *= glareStep;
+            hazeLevel *= hazeStep;
+        }
+        for (int i = kLampLevels - 2; i >= 0; i--) {
+            const gfx::Target& lower = (i == kLampLevels - 2) ? m_lampDown[kLampLevels - 1] : m_lampUp[i + 1];
+            bind(device, 0, lower.texture, true);
+            bind(device, 1, m_lampDown[i].texture, true);
+            passConstants(device, 1.0f / lower.width, 1.0f / lower.height, glareStep, hazeStep);
+            runPass(device, kLampUp, m_lampUp[i]);
+        }
+        // Of the light taken from the core, 40% comes back as glare. All of it was too much: the
+        // lamps carry as much light as the rest of the night scene (A01's start: 0.05 a pixel), and
+        // spread out it washed the scene grey. The rest was clipped to white in the core anyway.
+        // The source holds the lamps' light at Floodlights 1.
+        lampScale[0] = floodlights * lampGlareTaken * 0.4f / glareNorm;
+        lampScale[1] = floodlights * fmaxf(s.lampHaze, 0.0f) / hazeNorm;
     }
 
     // 8. Exposure (extra cameras reuse the adapted value).
@@ -2287,9 +3129,10 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const float n = static_cast<float>(m_lutSize > 0 ? m_lutSize : 2);
     // Night maps: light sources never end up darker than the game drew them (the grade and
     // the tone curve pulled lamps and the surfaces they light to grey). s8 = the game's image.
-    const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night && s.debugView == 0;
+    // Not with EngineLights: the lamps glow as the game drew them, nothing needs putting back.
+    const bool mapNight = in.sunColorKnown && classifyMood(in.sunColor) == Mood::Night && s.debugView == 0 && !engineLights;
     if (mapNight) bind(device, 8, in.color, false);
-    bind(device, 13, materials ? m_materials.texture : nullptr, false);
+    bind(device, 13, materials ? m_materialTexture : nullptr, false);
     // Where the depth of field blurs, the lamps aren't put back sharp: s9 = its focus distance.
     if (dofFocus) bind(device, 9, dofFocus, false);
     const float finalMaterials[4] = {materials ? 1.0f : 0.0f, dofFocus ? 1.0f : 0.0f, gameSkyOut, s.toneKnee};
@@ -2297,19 +3140,25 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
     passConstants(device, 1.0f / norm, 0.0f, s.nightSurfaces);
-    // Disabled post passes are skipped entirely, not just passed through.
-    const bool fxaa = s.fxaa && post;
+    // c33 (final pass): the lamp glare's and the lamp haze's strength (0: off, s10 not read).
+    device->SetPixelShaderConstantF(33, lampScale, 1);
+    if (lampReady) bind(device, 10, m_lampUp[0].texture, true);
+    // Disabled post passes are skipped entirely, not just passed through. SMAA takes FXAA's
+    // place (FXAA if its textures can't be made).
+    const bool smaa = s.fxaa && s.smaa && post && ensureSmaa(device, in.width, in.height);
+    const bool fxaa = s.fxaa && post && !smaa;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
                      m_taa[1].create(device, in.width, in.height, D3DFMT_A16B16G16R16F);
-    const bool sharpen = s.sharpen > 0.001f && post;
-    // Chain: Final -> [FXAA] -> [TAA] -> [Sharpen | Copy] -> output.
+    const bool sharpen = s.sharpen > 0.001f && post && !upscale;
+    // Chain: Final -> [FXAA | SMAA] -> [TAA] -> [Sharpen | Copy] -> output (RenderScale: -> EASU -> RCAS).
     IDirect3DTexture9* current = nullptr;
-    if (!fxaa && !taa && !sharpen && !drops) {
+    if (!fxaa && !smaa && !taa && !sharpen && !drops) {
         runPass(device, kFinal, output, in.width, in.height);
     } else {
         runPass(device, kFinal, m_ldr);
         current = m_ldr.texture;
     }
+    if (lampReady) device->SetTexture(10, nullptr); // the next frame draws into it
     if (fxaa) {
         bind(device, 0, current, true);
         passConstants(device, 1.0f / in.width, 1.0f / in.height);
@@ -2320,6 +3169,34 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             runPass(device, kFXAA, m_ldr2);
             current = m_ldr2.texture;
         }
+    }
+    if (smaa) {
+        // Edges (no edge: discarded, so the target starts cleared), the blending weights from
+        // them, then the blend. The blend reads the image as sRGB and writes it back as sRGB:
+        // it mixes in linear light, as SMAA's reference does.
+        passConstants(device, 1.0f / in.width, 1.0f / in.height, static_cast<float>(in.width), static_cast<float>(in.height));
+        device->SetRenderTarget(0, m_smaaEdges.surface);
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        bind(device, 0, current, true);
+        runPass(device, kSmaaEdges, m_smaaEdges);
+        bind(device, 0, m_smaaEdges.texture, true);
+        bind(device, 1, m_smaaArea, true);
+        bind(device, 2, m_smaaSearch, false);
+        runPass(device, kSmaaWeights, m_smaaWeights);
+        bind(device, 0, current, true);
+        bind(device, 1, m_smaaWeights.texture, true);
+        bind(device, 2, nullptr, false);
+        device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, TRUE);
+        device->SetRenderState(D3DRS_SRGBWRITEENABLE, TRUE);
+        if (!taa && !sharpen && !drops) {
+            runPass(device, kSmaaBlend, output, in.width, in.height);
+            current = nullptr;
+        } else {
+            runPass(device, kSmaaBlend, m_ldr2);
+            current = m_ldr2.texture;
+        }
+        device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+        device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
     }
     if (taa) {
         const int previous = m_taaIndex;
@@ -2350,9 +3227,12 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // flicker, and keeping them out of its history avoids trails.
     if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && post && ensureRain(device))
         drawRain(device, in, s, dt, heightMap && m_heightValid, output);
+    if (upscale) upscaleOutput(device, in, s, screen);
     profileEnd();
 
+    if (in.repeat) swapRepeatCamera();
     if (temporal) {
+        keepRepeatCamera();
         memcpy(m_prevView, in.view, sizeof(m_prevView));
         memcpy(m_prevProjection, in.projection, sizeof(m_prevProjection));
         m_havePrevious = true;
@@ -2360,13 +3240,20 @@ void Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
     for (int i = 12; i < 16; i++) device->SetTexture(i, nullptr); // the LUT, the materials: nothing of ours stays bound (Reset)
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
 }
 
-// Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back two
-// frames later, when the GPU is long done with it (no stall). A flat sheet of it (within 0.6 m)
-// is the sea.
+// Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back once
+// the GPU has got past it (an event query, asked without waiting). A flat sheet of it (within
+// 0.6 m) is the sea. GetRenderTargetData waits for everything queued before it: read two frames
+// later regardless, it stalled the CPU until the GPU had caught up (92 ms in the previewer, up
+// to the 3 frames the game lets the GPU fall behind in game, 4 times a second).
 void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
-    if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2) {
+    // Not there after 6 frames (the previewer, which queues frames without presenting them): read
+    // anyway, as before.
+    const bool done = m_waterPending < 0 || !m_waterDone || m_waterDone->GetData(nullptr, 0, D3DGETDATA_FLUSH) == S_OK ||
+                      m_frame - m_waterDrawn >= 6;
+    if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2 && done) {
         const gfx::Target& t = m_waterLevel[m_waterPending];
         m_waterPending = -1;
         if (!m_waterRead) device->CreateOffscreenPlainSurface(1, 1, D3DFMT_A32B32G32R32F, D3DPOOL_SYSTEMMEM, &m_waterRead, nullptr);
@@ -2393,8 +3280,10 @@ void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
         const int i = m_waterIndex ^= 1;
         if (m_waterLevel[i].create(device, 1, 1, D3DFMT_A32B32G32R32F)) {
             bind(device, 0, m_nd.texture, false);
-            bind(device, 1, m_materials.texture, false);
+            bind(device, 1, m_materialTexture, false);
             runPass(device, kWaterLevel, m_waterLevel[i]);
+            if (!m_waterDone) device->CreateQuery(D3DQUERYTYPE_EVENT, &m_waterDone);
+            if (m_waterDone) m_waterDone->Issue(D3DISSUE_END);
             m_waterPending = i;
             m_waterDrawn = m_frame;
         }
@@ -2438,6 +3327,218 @@ bool Pipeline::copyDepthArea(IDirect3DDevice9* device, IDirect3DTexture9* depth,
     device->SetTexture(0, nullptr);
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
     return true;
+}
+
+bool Pipeline::copyColorArea(IDirect3DDevice9* device, IDirect3DTexture9* source, const RECT& area, gfx::Target& out) {
+    if (!m_ready || !source) return false;
+    D3DSURFACE_DESC desc{};
+    source->GetLevelDesc(0, &desc);
+    const UINT w = static_cast<UINT>(area.right - area.left), h = static_cast<UINT>(area.bottom - area.top);
+    if (!out.create(device, w, h, desc.Format)) return false;
+    const BOOL softwareVP = setPassStates(device);
+    bind(device, 0, source, false);
+    // The same mapping as copyDepthArea: the copied image lines up with the copied depth.
+    passConstants(device, static_cast<float>(area.left) / desc.Width, static_cast<float>(area.top) / desc.Height,
+                  static_cast<float>(w) / desc.Width, static_cast<float>(h) / desc.Height);
+    const float mode[4] = {1.0f, 1.0f, 0.0f, 0.0f}; // c33 xy 1: as it is, alpha too (PS_Resolve)
+    device->SetPixelShaderConstantF(33, mode, 1);
+    runPass(device, kResolve, out);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area) {
+    return copyScene(device, scene, target, area, false);
+}
+
+// RenderScale: m_scaled (the finished image at the scene's size) up to `output` with FSR 1. RCAS
+// by FsrSharpness, AMD's sharpness as a factor, 2^-stops: 1 is its strongest (0 stops), its
+// default of 0.2 stops is 0.87, ours of 0.8 is 0.32 stops. Debug views get EASU only.
+void Pipeline::upscaleOutput(IDirect3DDevice9* device, const Inputs& in, const Settings& s, IDirect3DSurface9* output) {
+    const UINT ow = in.outputWidth, oh = in.outputHeight;
+    const float amount = s.debugView == 0 ? fminf(s.fsrSharpness, 1.0f) : 0.0f;
+    const bool rcas = amount > 0.001f && m_fsr.create(device, ow, oh, D3DFMT_A8R8G8B8);
+    bind(device, 0, m_scaled.texture, false);
+    passConstants(device, static_cast<float>(in.width), static_cast<float>(in.height), 1.0f / in.width, 1.0f / in.height);
+    runPass(device, kFsrEasu, rcas ? m_fsr.surface : output, ow, oh);
+    if (rcas) {
+        bind(device, 0, m_fsr.texture, false);
+        passConstants(device, 1.0f / ow, 1.0f / oh, amount);
+        runPass(device, kFsrRcas, output, ow, oh);
+    }
+    device->SetTexture(0, nullptr);
+}
+
+bool Pipeline::stretchScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, const RECT& from, IDirect3DSurface9* target, const RECT& to) {
+    if (!m_ready || !scene || !target || to.right <= to.left || to.bottom <= to.top) return false;
+    D3DSURFACE_DESC sceneDesc{}, desc{};
+    scene->GetLevelDesc(0, &sceneDesc);
+    target->GetDesc(&desc);
+    // PS_Resolve reads u_Pass0.xy + uv * u_Pass0.zw, uv over the whole target: `to` maps onto `from`.
+    const float sx = static_cast<float>(from.right - from.left) / sceneDesc.Width * desc.Width / (to.right - to.left);
+    const float sy = static_cast<float>(from.bottom - from.top) / sceneDesc.Height * desc.Height / (to.bottom - to.top);
+    const float ox = static_cast<float>(from.left) / sceneDesc.Width - static_cast<float>(to.left) / desc.Width * sx;
+    const float oy = static_cast<float>(from.top) / sceneDesc.Height - static_cast<float>(to.top) / desc.Height * sy;
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target); // resets the scissor rect: set it after
+    device->SetScissorRect(&to);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    bind(device, 0, scene, true);
+    passConstants(device, ox, oy, sx, sy);
+    const float mode[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // c33.x 0: cut to 0..1
+    device->SetPixelShaderConstantF(33, mode, 1);
+    runPass(device, kResolve, target, desc.Width, desc.Height);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+bool Pipeline::downscale(IDirect3DDevice9* device, IDirect3DTexture9* source, gfx::Target& out, UINT w, UINT h, D3DFORMAT format, bool depth,
+                         float offsetU, float offsetV) {
+    if (!m_ready || !source || !out.create(device, w, h, depth ? D3DFMT_R32F : format)) return false;
+    const BOOL softwareVP = setPassStates(device);
+    bind(device, 0, source, false);
+    passConstants(device, offsetU, offsetV, 1.0f, 1.0f);
+    const float mode[4] = {1.0f, 1.0f, 0.0f, 0.0f}; // c33 xy 1: as it is, alpha too (PS_Resolve)
+    device->SetPixelShaderConstantF(33, mode, 1);
+    runPass(device, depth ? kCopyDepth : kResolve, out);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+bool Pipeline::addScene(IDirect3DDevice9* device, IDirect3DTexture9* added, IDirect3DSurface9* target, const RECT& area) {
+    return copyScene(device, added, target, area, true);
+}
+
+bool Pipeline::capScene(IDirect3DDevice9* device, IDirect3DSurface9* target, const RECT& area) {
+    if (!m_ready || !target) return false;
+    if (!m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
+    if (!m_solidPS) return false;
+    D3DSURFACE_DESC desc{};
+    target->GetDesc(&desc);
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target); // resets the scissor rect: set it after
+    device->SetScissorRect(&area);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    // The smaller of what is there and the ceiling (the blend factors don't count for MIN); the
+    // colour only, the game's alpha stays.
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_MIN);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+    const float ceiling[4] = {kSceneCeiling, kSceneCeiling, kSceneCeiling, kSceneCeiling};
+    device->SetPixelShaderConstantF(32, ceiling, 1);
+    device->SetPixelShader(m_solidPS);
+    m_quad.draw(device, desc.Width, desc.Height);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+bool Pipeline::fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDirect3DSurface9* target, const RECT& area, bool top, bool bottom) {
+    if (!m_ready || !target) return false;
+    // No band: black, as the game's own bars when it clears them.
+    if (!band && !m_solidPS) m_solidPS = gfx::compilePixelShader(device, kSolidPS, "main", "Solid");
+    if (!band && !m_solidPS) return false;
+    D3DSURFACE_DESC desc{};
+    target->GetDesc(&desc);
+    const LONG width = static_cast<LONG>(desc.Width), height = static_cast<LONG>(desc.Height);
+    const LONG bandHeight = area.bottom - area.top;
+    if (area.left != 0 || area.right != width || bandHeight < 1 || area.top < 0 || area.bottom > height) return false;
+    const float h = static_cast<float>(bandHeight), scale = static_cast<float>(height) / h;
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    if (band) {
+        device->SetPixelShader(m_shaders[kResolve]);
+        bind(device, 0, band, false);
+        const float mode[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // c33.x 0: cut to 0..1 (an 8-bit image anyway)
+        device->SetPixelShaderConstantF(33, mode, 1);
+    } else {
+        const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        device->SetPixelShaderConstantF(32, black, 1);
+        device->SetPixelShader(m_solidPS);
+    }
+    // PS_Resolve reads the band at u_Pass0.xy + uv * u_Pass0.zw, uv over the whole target: row y
+    // above the band gets band row (top - 1 - y), row y below it band row (2 h - 1 - (y - top)).
+    // The scissor rect after SetRenderTarget (which resets it); the quad sets only the viewport.
+    bool drew = false;
+    if (top && area.top > 0) {
+        const RECT rows = {0, band && area.top > bandHeight ? area.top - bandHeight : 0, width, area.top};
+        device->SetScissorRect(&rows);
+        if (band) passConstants(device, 0.0f, static_cast<float>(area.top) / h, 1.0f, -scale);
+        m_quad.draw(device, desc.Width, desc.Height);
+        drew = true;
+    }
+    if (bottom && area.bottom < height) {
+        const RECT rows = {0, area.bottom, width, band && height - area.bottom > bandHeight ? area.bottom + bandHeight : height};
+        device->SetScissorRect(&rows);
+        if (band) passConstants(device, 0.0f, (2.0f * h + static_cast<float>(area.top)) / h, 1.0f, -scale);
+        m_quad.draw(device, desc.Width, desc.Height);
+        drew = true;
+    }
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    if (band) device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return drew;
+}
+
+bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add) {
+    if (!m_ready) return false;
+    D3DSURFACE_DESC desc{};
+    target->GetDesc(&desc);
+    const BOOL softwareVP = setPassStates(device);
+    device->SetRenderTarget(0, target); // resets the scissor rect: set it after
+    device->SetScissorRect(&area);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
+    if (add) {
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        device->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+        device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+    }
+    bind(device, 0, source, false);
+    passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
+    const float mode[4] = {add ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f}; // c33.x: 1 = as it is (added), 0 = cut to 0..1
+    device->SetPixelShaderConstantF(33, mode, 1);
+    runPass(device, kResolve, target, desc.Width, desc.Height);
+    if (add) device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+bool Pipeline::readHalfColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint16_t>& out) {
+    D3DSURFACE_DESC desc{};
+    surface->GetDesc(&desc);
+    if (desc.Format != D3DFMT_A16B16G16R16F) return false;
+    IDirect3DSurface9* system = nullptr;
+    if (FAILED(device->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format, D3DPOOL_SYSTEMMEM, &system, nullptr)))
+        return false;
+    bool ok = SUCCEEDED(device->GetRenderTargetData(surface, system));
+    D3DLOCKED_RECT locked{};
+    if (ok && SUCCEEDED(system->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+        out.resize(static_cast<size_t>(desc.Width) * desc.Height * 4);
+        for (UINT y = 0; y < desc.Height; y++) {
+            memcpy(&out[static_cast<size_t>(y) * desc.Width * 4], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(locked.Pitch) * y,
+                   desc.Width * 8);
+        }
+        system->UnlockRect();
+    } else {
+        ok = false;
+    }
+    system->Release();
+    return ok;
 }
 
 bool Pipeline::readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std::vector<float>& out) {

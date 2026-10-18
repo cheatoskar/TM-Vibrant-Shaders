@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.21)
 # Separate project from the TMNF plugin (that one is 32-bit D3D9):
 #   cmake -S maniaplanet -B build-mp -A x64
 #   cmake --build build-mp --config Release
-project(tmvs_maniaplanet VERSION 1.4.0 LANGUAGES CXX RC ASM_MASM)
+project(tmvs_maniaplanet VERSION 1.4.1 LANGUAGES CXX RC ASM_MASM)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "Build the ManiaPlanet proxy for ManiaPlanet.exe (64-bit): configure with -A x64.")
@@ -102,8 +102,10 @@ endforeach()
 add_library(tmvs_mp_core STATIC
   src/hooks.cpp
   src/engine_frame.cpp
+  src/engine_lights.cpp
   src/shaderdb.cpp
   src/renderer.cpp
+  src/softshadow.cpp
   src/effects.cpp
   src/effects_sky.cpp
   src/effects_weather.cpp
@@ -120,6 +122,8 @@ add_library(tmvs_mp_core STATIC
   ${TMVS_ROOT}/src/lut.cpp
   # The TMNF mod's settings, presets and menu, shared.
   ${TMVS_ROOT}/src/config.cpp
+  ${TMVS_ROOT}/src/keys.cpp
+  ${TMVS_ROOT}/src/inifile.cpp
   ${TMVS_ROOT}/src/menu.cpp
   ${TMVS_ROOT}/src/image.cpp
   ${TMVS_ROOT}/src/update.cpp
@@ -154,18 +158,23 @@ add_library(tmvs_mp SHARED
   src/proxy.cpp
   src/forward.asm
   src/d3d11.def
-  ${TMVS_ROOT}/thumbnails/thumbnails.rc
+  thumbnails/thumbnails.rc
   ${TMVS_ROOT}/sounds/sounds.rc
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
 )
-# The built-in presets' pictures, embedded like in the TMNF DLL.
-set_property(SOURCE ${TMVS_ROOT}/thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/thumbnails")
+# The built-in presets' pictures, embedded like in the TMNF DLL: ManiaPlanet's own set, rendered from a
+# TrackMania 2 capture (tools/make-thumbnails.ps1); TMNF's show its Stadium. The menu's icon comes from
+# packaging/icons, shared with TMNF.
+set_property(SOURCE thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails"
+  "${TMVS_ROOT}/packaging/icons")
+file(GLOB MP_THUMBNAIL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails/*.jpg" "${TMVS_ROOT}/packaging/icons/icon_a_64.png")
+set_source_files_properties(thumbnails/thumbnails.rc PROPERTIES OBJECT_DEPENDS "${MP_THUMBNAIL_FILES}")
 # The weather sounds (src/audio.cpp loads them from the DLL that holds its code), found next to sounds.rc.
 set_property(SOURCE ${TMVS_ROOT}/sounds/sounds.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${TMVS_ROOT}/sounds")
 file(GLOB MP_SOUND_FILES "${TMVS_ROOT}/sounds/*.mp3")
 set_source_files_properties(${TMVS_ROOT}/sounds/sounds.rc PROPERTIES OBJECT_DEPENDS "${MP_SOUND_FILES}")
 # ManiaPlanet's own preset values (src/config.cpp).
-set_source_files_properties(${TMVS_ROOT}/src/config.cpp PROPERTIES COMPILE_DEFINITIONS TMVS_MANIAPLANET)
+set_source_files_properties(${TMVS_ROOT}/src/config.cpp ${TMVS_ROOT}/src/keys.cpp PROPERTIES COMPILE_DEFINITIONS TMVS_MANIAPLANET)
 # The game loads it as d3d11.dll from its own folder.
 set_target_properties(tmvs_mp PROPERTIES OUTPUT_NAME d3d11)
 target_compile_options(tmvs_mp PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
@@ -176,6 +185,24 @@ target_link_libraries(tmvs_mp PRIVATE tmvs_mp_core)
 add_executable(mp_preview tools/preview.cpp)
 target_link_libraries(mp_preview PRIVATE tmvs_mp_core d3d11)
 target_compile_options(mp_preview PRIVATE /W4 /EHsc /permissive- /utf-8)
+
+# Offline test of the soft sun shadows against the engine's own shadow shader (tools/shadowtest.cpp).
+#   mp_shadowtest <folder> <out dir> <engine shader.dxbc> [--light 0.5,1,2] [--bench N] [--variants dir]
+add_executable(mp_shadowtest tools/shadowtest.cpp)
+target_link_libraries(mp_shadowtest PRIVATE tmvs_mp_core d3d11 d3dcompiler)
+target_compile_options(mp_shadowtest PRIVATE /W4 /EHsc /permissive- /utf-8)
+
+# Share codes against ManiaPlanet's presets (the same test as tmvs_sharetest, tools/sharetest.cpp).
+add_executable(mp_sharetest ${TMVS_ROOT}/tools/sharetest.cpp)
+target_link_libraries(mp_sharetest PRIVATE tmvs_mp_core d3d11)
+target_compile_options(mp_sharetest PRIVATE /W4 /EHsc /permissive- /utf-8)
+
+# The settings.ini writer against WritePrivateProfileString (the same test as tmvs_initest, tools/initest.cpp).
+add_executable(mp_initest ${TMVS_ROOT}/tools/initest.cpp)
+target_link_libraries(mp_initest PRIVATE tmvs_mp_core d3d11)
+# Also Config::save itself, in the folder TMVS_MP_DATA names.
+target_compile_definitions(mp_initest PRIVATE TMVS_INITEST_CONFIG)
+target_compile_options(mp_initest PRIVATE /W4 /EHsc /permissive- /utf-8)
 
 # Offline test: a small D3D11 program that draws like the game (scene with depth, the engine's own
 # tone-map pixel shader, then an interface draw) through the proxy and checks where the effects land.

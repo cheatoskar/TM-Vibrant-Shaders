@@ -6,9 +6,10 @@
 //
 // Per frame (effects.cpp):
 //   PS_DownsampleND (half, 2 targets) -> PS_OcclusionShadow (half) -> PS_BilateralBlur x2
-//   -> PS_GI (quarter) -> PS_GITemporal -> PS_SpillDown (quarter) -> PS_SpillBlur x2
+//   -> PS_GI (quarter) -> PS_GITemporal -> PS_SpillDown (quarter; Quality 2: PS_SpillSource (full)
+//   -> PS_SpillDownSource) -> PS_SpillBlur x2 -> PS_SpillTemporal
 //   -> [sky, clouds: sky.hlsl] -> PS_Lighting (full, the result) -> [weather, cinema]
-// entries: PS_DownsampleND:ps_5_0 PS_OcclusionShadow:ps_5_0 PS_BilateralBlur:ps_5_0 PS_GI:ps_5_0 PS_GITemporal:ps_5_0 PS_SpillDown:ps_5_0 PS_SpillBlur:ps_5_0 PS_Lighting:ps_5_0
+// entries: PS_DownsampleND:ps_5_0 PS_OcclusionShadow:ps_5_0 PS_BilateralBlur:ps_5_0 PS_GI:ps_5_0 PS_GITemporal:ps_5_0 PS_SpillDown:ps_5_0 PS_SpillSource:ps_5_0 PS_SpillDownSource:ps_5_0 PS_SpillBlur:ps_5_0 PS_SpillTemporal:ps_5_0 PS_Lighting:ps_5_0 PS_LightingMoon:ps_5_0
 #include "common.hlsli"
 #include "sky.hlsli"
 #include "weather.hlsli"
@@ -254,6 +255,16 @@ float4 PS_GITemporal(VSOut i) : SV_Target
     return float4(lerp(history.rgb, avg, weight), z);
 }
 
+// EngineLightDraws (u_Mat.x): what the engine drew as light (engine_lights.cpp: the own light of its
+// self-illuminated materials, what its additive draws added), in the HDR image's units. Nothing
+// is guessed: floodlit grass, white paint and the sky's reflections aren't in it.
+Texture2D t_engineLights : register(t17);
+
+float3 engineLightsAt(float2 uv, float e)
+{
+    return min(max(t_engineLights.SampleLevel(g_point, uv, 0).rgb, 0.0), 50000.0) * e;
+}
+
 // ---------------------------------------------------------------------------------
 // What the engine's light doesn't explain: lamps, neon, screens. Light maps can add ambient too:
 // up to `room` times the engine's ambient counts as lighting. The sun's glint (on chrome, glass,
@@ -291,6 +302,39 @@ float3 emissiveOf(float3 rest, float3 albedo, float e, float3 nWorld, float3 rd)
 // Neon light spill (quarter res): coloured lights light up the surfaces around them.
 //   out.rgb = light, out.a = view z
 // ---------------------------------------------------------------------------------
+// The light one pixel gives its surroundings (z: its view z, not the sky's; e: the exposure).
+float3 spillLightAt(float2 suv, float z, float e)
+{
+    float3 c = engineColour(suv);
+    float3 light;
+    if (u_Mat.x > 0.5)
+    {
+        // EngineLightDraws: the sources are what the engine drew as light, each in its own
+        // colour. White lamps light things too (white paint and glints are no source any
+        // more), a little less than coloured ones, as in TMNF's EngineLights.
+        light = min(engineLightsAt(suv, e), c);
+        float lp = max(light.r, max(light.g, light.b));
+        light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-4)));
+    }
+    else
+    {
+        float3 albedo = u_Engine.y > 0.5 ? engineAlbedo(suv) : c;
+        float3 n = surfaceNormal(suv, z);
+        float3 sunPart, ambPart;
+        float shadow;
+        engineLight(suv, n, albedo, sunPart, ambPart, shadow);
+        float3 rd = viewToWorldDir(normalize(viewPosition(suv, 1.0)));
+        light = emissiveOf(max(c - sunPart - ambPart, 0.0), albedo, e, viewToWorldDir(n), rd);
+        // Coloured light lights its surroundings most; white lamps a little (white is also
+        // the sun's glint on chrome and glass).
+        float peak = max(light.r, max(light.g, light.b));
+        float sat = (peak - min(light.r, min(light.g, light.b))) / max(peak, 1e-4);
+        light *= lerp(0.35, 1.0, smoothstep(0.3, 0.7, sat));
+    }
+    return min(light, 8.0);
+}
+
+// Quality below 2: four pixels of each 4x4 block, one in each corner of its middle.
 float4 PS_SpillDown(VSOut i) : SV_Target
 {
     float3 sum = 0, strongest = 0;
@@ -301,23 +345,64 @@ float4 PS_SpillDown(VSOut i) : SV_Target
         float2 suv = i.uv + (float2(k & 1, k >> 1) * 2.0 - 1.0) * u_Screen.zw;
         float z = engineZ(suv);
         if (z >= SKY_Z) continue;
-        float3 c = engineColour(suv);
-        float3 albedo = u_Engine.y > 0.5 ? engineAlbedo(suv) : c;
-        float3 n = surfaceNormal(suv, z);
-        float3 sunPart, ambPart;
-        float shadow;
-        engineLight(suv, n, albedo, sunPart, ambPart, shadow);
-        float3 rd = viewToWorldDir(normalize(viewPosition(suv, 1.0)));
-        float3 light = emissiveOf(max(c - sunPart - ambPart, 0.0), albedo, e, viewToWorldDir(n), rd);
-        // Coloured light lights its surroundings most; white lamps a little (white is also
-        // the sun's glint on chrome and glass).
-        float peak = max(light.r, max(light.g, light.b));
-        float sat = (peak - min(light.r, min(light.g, light.b))) / max(peak, 1e-4);
-        light *= lerp(0.35, 1.0, smoothstep(0.3, 0.7, sat));
-        light = min(light, 8.0);
+        float3 light = spillLightAt(suv, z, e);
         sum += light;
         strongest = max(strongest, light);
         zmin = min(zmin, z);
+    }
+    return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
+}
+
+// Quality 2 (TMNF's PS_SpillSource): the spill's sources pixel by pixel (full res), taken down by
+// PS_SpillDownSource. PS_SpillDown reads 4 of the 16 pixels of its block: far away a neon strip is
+// 1-2 px high and was seen or not by where it fell in the block, so the blue light on the wall next
+// to it pulsed as the camera crept towards it.
+//   out.rgb = light, out.a = its view z times r+g+b (a bilinear tap of it over r+g+b of the tap's
+//   light: the depth of the light in those 2x2 pixels, without a read of the depth buffer)
+float4 PS_SpillSource(VSOut i) : SV_Target
+{
+    // EngineLightDraws: where the engine drew no light there is none (the same 0, without the
+    // reads below, most of what four times PS_SpillDown's pixels cost).
+    [branch] if (u_Mat.x > 0.5 && !any(t_engineLights.SampleLevel(g_point, i.uv, 0).rgb > 0.0)) return 0;
+    float z = engineZ(i.uv);
+    if (z >= SKY_Z) return 0;
+    float e = u_Misc.x > 0.5 ? 1.0 : engineExposure();
+    float3 light = spillLightAt(i.uv, z, e);
+    // At most 24 * 2000 in a half float (PS_SpillBlur takes no more than 2000 m either).
+    return float4(light, dot(light, 1.0) * min(z, 2000.0));
+}
+
+// The sources found above to quarter res: t0 = them (bilinear: each tap the mean of 2x2 pixels).
+// Half the block's mean (its four taps), half the brightest 2x2 over the block and half of each
+// neighbour's, by a tent (1 at 1 px from the centre, 0.5 at 3 px: the two blocks that see a 2x2
+// weigh it 1.5 together wherever it is), so a strip crossing from one block to the next hands its
+// light over instead of lighting both or switching. Neighbours' light only from about the block's
+// depth: a strip in front gives the background behind it no light. As TMNF's PS_SpillDownSource.
+float4 PS_SpillDownSource(VSOut i) : SV_Target
+{
+    float3 sum = 0, strongest = 0;
+    float zmin = SKY_Z;
+    [unroll] for (int k = 0; k < 4; k++)
+    {
+        float2 suv = i.uv + (float2(k & 1, k >> 1) * 2.0 - 1.0) * u_Screen.zw;
+        float3 light = t0_texL(suv).rgb;
+        sum += light;
+        strongest = max(strongest, light);
+        zmin = min(zmin, engineZ(suv));
+    }
+    float zc = min(zmin, 2000.0); // as the light's depth in out.a above
+    [unroll] for (int y = 0; y < 4; y++)
+    {
+        [unroll] for (int x = 0; x < 4; x++)
+        {
+            float2 d = float2(x, y) * 2.0 - 3.0;
+            if (abs(d.x) < 2.0 && abs(d.y) < 2.0) continue; // the block's own, above
+            float2 suv = i.uv + d * u_Screen.zw;
+            float2 w = abs(d) < 2.0 ? 1.0 : 0.5;
+            float4 s = t0_texL(suv);
+            float z = s.a / max(dot(s.rgb, 1.0), 1e-6);
+            strongest = max(strongest, s.rgb * (w.x * w.y * exp(-abs(z - zc) / (0.25 * zc + 0.5))));
+        }
     }
     return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
 }
@@ -337,6 +422,50 @@ float4 PS_SpillBlur(VSOut i) : SV_Target
         sum += s.rgb * w;
     }
     return float4(sum / 6.4, centre.a);
+}
+
+// The spill over frames (TMNF's PS_SpillTemporal): t0 = this frame's (blurred, view z in a),
+// t1 = the last result, u_Pass0.x = history valid. Each frame finds its sources anew in a
+// quarter-res image: a strip that crosses a texel edge, or the car passing in front of it, switched
+// the light on the wall next to it on and off from one frame to the next. Averaged over about four
+// frames where the history is the same surface; it may only differ from this frame's light by a
+// third, so a light that goes (or moves with a car) leaves no trail. A still image comes out as before.
+float4 PS_SpillTemporal(VSOut i) : SV_Target
+{
+    float2 uv = i.uv;
+    float4 current = t0_tex(uv);
+    float z = current.a;
+    if (u_Pass0.x < 0.5 || z >= SKY_Z) return current;
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
+    // Moving things (the car, the camera fixed to it): the engine's motion vectors, as PS_GITemporal.
+    if (u_Engine.w > 0.5)
+    {
+        float2 motion = t_motion.SampleLevel(g_point, uv, 0).xy;
+        float2 moved = uv - motion;
+        if (distance(moved, prevUV) * u_Screen.y > 2.0)
+        {
+            prevUV = moved;
+            prevZ = z;
+        }
+    }
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return current;
+    float4 history = t1_texL(prevUV);
+    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
+    float weight = lerp(0.3, 1.0, smoothstep(0.04, 0.12, error));
+    // As far as this frame's neighbourhood reaches, and a third of its light around that.
+    float2 t = u_Screen.zw * 4.0 * 1.5; // quarter res
+    float3 lo = current.rgb, hi = current.rgb;
+    [unroll] for (int k = 0; k < 4; k++)
+    {
+        float2 o = k == 0 ? float2(t.x, 0) : (k == 1 ? float2(-t.x, 0) : (k == 2 ? float2(0, t.y) : float2(0, -t.y)));
+        float3 n = t0_tex(uv + o).rgb;
+        lo = min(lo, n);
+        hi = max(hi, n);
+    }
+    float3 margin = (hi - lo) * 0.25 + current.rgb * 0.33 + 0.002;
+    history.rgb = clamp(history.rgb, lo - margin, hi + margin);
+    return float4(lerp(history.rgb, current.rgb, weight), z);
 }
 
 // ---------------------------------------------------------------------------------
@@ -434,7 +563,9 @@ float4 volumetricLight(float2 uv, float3 rd, float daylight)
     return r;
 }
 
-float4 PS_Lighting(VSOut i) : SV_Target
+// blackHoleMoon: the BlackHoleMoon variant (PS_LightingMoon, effects.cpp picks it while the
+// option acts); PS_Lighting is compiled without it, so with the option off nothing changes.
+float4 lightingPass(VSOut i, bool blackHoleMoon)
 {
     float2 uv = i.uv;
     float3 c = engineColour(uv);
@@ -477,11 +608,57 @@ float4 PS_Lighting(VSOut i) : SV_Target
     // sun, the clouds' shadows). Cutting both by the same factor, or the sun's first, left less
     // ambient in sunlight than in the shade: with the sun taken out under a night sky, shadows
     // came out brighter than the ground around them.
-    ambPart = min(ambPart, c);
-    sunPart = min(sunPart, c - ambPart);
+    // EngineLightDraws: what the engine drew as light is light, not surface (no guess); the
+    // engine's sun and ambient take only what is left of the pixel.
+    const bool engineLit = u_Mat.x > 0.5;
+    float3 known = 0;
+    if (engineLit)
+    {
+        known = min(engineLightsAt(uv, e), c);
+        ambPart = min(ambPart, c - known);
+        sunPart = min(sunPart, c - known - ambPart);
+    }
+    else
+    {
+        ambPart = min(ambPart, c);
+        sunPart = min(sunPart, c - ambPart);
+    }
     float3 rest = c - sunPart - ambPart;
-    float3 emissive = emissiveOf(rest, albedo, e, nWorld, rd);
+    float3 emissive = engineLit ? known : emissiveOf(rest, albedo, e, nWorld, rd);
     float3 restLight = rest - emissive; // light maps, local lights, reflections
+    // The sun's glint (its mirror image on metal and glass) is no light map: when a night sky takes
+    // the sun out, it goes too. It stayed at full strength on the darkened surfaces: white spots
+    // on the golden sculptures under the black hole (captures 020/021). The glint is the light in
+    // the sun's mirror direction above the surface's own diffuse light, of the sun's hue; it is
+    // squeezed to about that light. Both shares (lighting, light sources) come down by the same
+    // factor, so the colour stays and no edge shows where emissiveOf counts the light differently
+    // (taking it out of one share left grey holes with hard edges in the gold). On night maps the
+    // moon's glint the same (it stays, but blew out on metal: capture 025). Off with
+    // CleanHighlights (as in 1.4.0). With EngineLightDraws the light sources are known: the glint
+    // is looked for in the rest only, and only the rest comes down.
+    if ((u_SunOut.x > 0.0 || u_Engine2.x < -0.5) && abs(u_Engine2.x) > 0.5 && u_Engine2.w > 0.5)
+    {
+        float3 glintRest = engineLit ? restLight : rest;
+        float3 sunC = max(u_EngineSun.rgb, 1e-4);
+        float level = max(luma(sunPart + ambPart), 1e-4);
+        float3 above = max(glintRest - sunPart - ambPart, 0.0);
+        float mirror = smoothstep(0.55, 0.9, dot(reflect(rd, nWorld), u_SunOut.yzw));
+        // The glint: the most of the sun's colour that fits in that light (none in the gold
+        // floodlight light). Light purer than the sun (neon: blue neon under a blue moon) and
+        // white light (lamps, screens) stay; under a white sun only white light counts.
+        float3 glint = sunC * min(above.r / sunC.r, min(above.g / sunC.g, above.b / sunC.b));
+        float peak = max(above.r, max(above.g, above.b));
+        float sat = (peak - min(above.r, min(above.g, above.b))) / max(peak, 1e-4);
+        float sunPeak = max(sunC.r, max(sunC.g, sunC.b));
+        float sunSat = (sunPeak - min(sunC.r, min(sunC.g, sunC.b))) / sunPeak;
+        float hue = smoothstep(sunSat * 0.1, sunSat * 0.3, sat) * (1.0 - smoothstep(sunSat + 0.1, sunSat + 0.25, sat));
+        float colour = lerp(1.0 - smoothstep(0.55, 0.85, sat), hue, saturate(sunSat * 5.0));
+        float squeeze = 1.0 - 1.0 / (1.0 + luma(glint) / level);
+        float cut = luma(glint) * squeeze * mirror * colour * (u_Engine2.x < -0.5 ? 1.0 : saturate(u_SunOut.x));
+        float keep = 1.0 - cut / max(luma(glintRest), 1e-4);
+        if (!engineLit) emissive *= keep;
+        restLight *= keep;
+    }
 
     float3 occ = upsampleOcclusion(uv, z, n);
     float ao = lerp(1.0, occ.r, u_Light.x);
@@ -505,9 +682,71 @@ float4 PS_Lighting(VSOut i) : SV_Target
     // the sun was, cold and dim).
     float3 sunTint = u_SunColor.rgb / max(luma(u_SunColor.rgb), 1e-3);
     float3 skyTint = u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3);
+    // The engine lights with 2 x its cloud factor (Block_DefReadP1_p: between its CloudsX2min and
+    // CloudsX2max by the cloud texture, 0.3-0.63), engineLight with 2 alone: its sun is about
+    // twice the real one (captures 022/026: 1.6-2.2 x the step at the shadows' edges). Taking all
+    // of it out under a night sky took the light maps' light as well: lit ground came out darker
+    // than its shadows (capture 026, the car's shadow a light silhouette). Only the sun with the
+    // darkest cloud factor goes, so a lit area can't end up below its shadowed neighbours; the
+    // rest stays as light-map light. With CleanHighlights.
+    if (u_SunOut.x > 0.0 && u_Engine2.w > 0.5)
+    {
+        float3 factor = u_EngineClouds.w > 0.5 ? u_EngineClouds.rgb : 0.3;
+        float3 extra = sunPart * (1.0 - saturate(factor)) * saturate(u_SunOut.x);
+        sunPart -= extra;
+        restLight += extra;
+    }
     float3 sun = sunPart * sunVis * lerp(float3(1, 1, 1), sunTint, u_SunColor.w * 0.35);
     float3 moon = sunPart * sunVis * float3(0.35, 0.5, 0.85) * 0.05;
     sun = lerp(sun, moon, saturate(u_SunOut.x));
+    // BlackHoleMoon (u_Moon.x: strength): on a night map under the black hole the engine's moon
+    // makes way for the black hole's light. Its glint (blue on chrome and the ring sculptures) is
+    // rebuilt with the engine's own formula (Block_DefReadP1_p: light x N.L x shadow x (N.H)^n x n
+    // x MSpecular.x^2 x SpecScale x the light's w, n = MSpecular.w x SpecMaxExp + 1, all x 2 x its
+    // cloud factor) and taken out of the rest; its diffuse light (sunPart) goes. The black hole then
+    // lights with the same formulas from its own direction, in its warm colour, as bright as the
+    // moon was. Its shadows: the contact shadows toward it; the engine's shadow map is the moon's
+    // and counts only as far as the two directions agree (no long shadows from the black hole).
+    float3 moonGlint = 0;
+    if (blackHoleMoon && u_Moon.x > 0.0)
+    {
+        float4 spec = t_specular.SampleLevel(g_point, uv, 0);
+        float gloss = spec.w * u_Moon.y + 1.0;
+        float specAmount = spec.x * spec.x * u_Moon.z;
+        float3 toEye = -rd;
+        float3 L = u_SunOut.yzw;
+        float cloud = u_Moon.w;
+        float nl = saturate(dot(nWorld, L));
+        float nh = saturate(dot(nWorld, normalize(toEye + L)));
+        moonGlint = 2.0 * e * cloud * u_EngineSun.rgb * (nl * engineShadow * pow(max(nh, 1e-6), gloss) * gloss * specAmount);
+        // Out of the rest as a whole colour, as much of it as fits: clamping each channel took the
+        // warm light-map light along where the estimate was too big (red gone under a blue glint).
+        float3 restPos = max(restLight, 0.0);
+        float3 g = max(moonGlint, 1e-6);
+        float fit = saturate(min(restPos.r / g.r, min(restPos.g / g.g, restPos.b / g.b)));
+        restLight -= moonGlint * fit;
+        if (!engineLit)
+        {
+            float3 left = moonGlint * (1.0 - fit);
+            float3 em = max(emissive, 0.0);
+            emissive -= left * saturate(min(em.r / max(left.r, 1e-6), min(em.g / max(left.g, 1e-6), em.b / max(left.b, 1e-6))));
+        }
+        // The moon's diffuse light goes whole (sun = the black hole's below). Unlike the day sun
+        // under a night sky (only the darkest cloud factor's part, see above), on the night maps
+        // the estimate is the moon's light: with only that part out the car's moon shadow stayed
+        // at half strength on the road, with all of it out the road is even, no light silhouette
+        // (capture 030); the white ring sculpture shows its own red and gold again (capture 025).
+
+        float3 H = u_SunWorld.xyz; // the black hole (effects.cpp: the effects' light)
+        float rise = smoothstep(-0.05, 0.08, H.y);
+        float agree = smoothstep(0.75, 0.97, dot(H, L));
+        float vis = sunVis * lerp(1.0, engineShadow, agree);
+        float3 holeLight = u_SunColor.rgb / max(luma(u_SunColor.rgb), 1e-3) * luma(u_EngineSun.rgb) * (u_Moon.x * rise);
+        float hl = saturate(dot(nWorld, H)) * vis;
+        float hh = saturate(dot(nWorld, normalize(toEye + H)));
+        sun = 2.0 * e * holeLight * hl * (albedo + cloud * pow(max(hh, 1e-6), gloss) * gloss * specAmount);
+        surf.sunShadow = vis;
+    }
     // Ambient, light maps and reflections: occlusion, the sky's tint (more in shadow).
     float shade = 1.0 - saturate(engineShadow);
     float3 ambient = (ambPart + restLight) * ao * lerp(float3(1, 1, 1), skyTint, u_SkyColor.w * (0.15 + 0.25 * shade));
@@ -558,6 +797,17 @@ float4 PS_Lighting(VSOut i) : SV_Target
     if (debug == 10) return float4(ambPart, 1);
     if (debug == 11) return float4(rest, 1);
     if (debug == 12) return float4(emissive, 1);
+    if (blackHoleMoon && debug == 13) return float4(moonGlint, 1); // BlackHoleMoon: the engine's moon glint as rebuilt
     if (debug == 25) return float4(u_Pass1.x > 0.5 ? g_volume.SampleLevel(g_linear, uv, 0).rgg : float3(0.5, 0, 0.5), 1);
     return float4(result, 1);
+}
+
+float4 PS_Lighting(VSOut i) : SV_Target
+{
+    return lightingPass(i, false);
+}
+
+float4 PS_LightingMoon(VSOut i) : SV_Target
+{
+    return lightingPass(i, true);
 }

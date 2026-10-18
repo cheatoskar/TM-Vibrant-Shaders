@@ -57,6 +57,21 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
+float4 u_Neon      : register(c58); // x: 1 = the neon strips are known by their material (s13 g 0 on them, above 0.1 elsewhere; PS_NeonGlow), 0 = by their colour
+float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
+float4 u_Water2    : register(c51); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
+                                    // y (EngineLights): the part of the added light taken from the lamp's core, 1 - Floodlights x (1 - LampGlare) (0 = as before, below 0 brighter); z: the part added over the sky (LampSkyHalos: Floodlights x (1 - LampGlare); 0 = dropped, as before); w: Floodlights for the light they spill (1 = as before)
+float4 u_LightGrid : register(c52); // LongShadowQuality 1: horizontal light direction (world x, z), the light grid's corner along it and across it (m)
+float4 u_LightGrid2 : register(c53); // 1 / light grid size (m), horizontal length of the light direction, margin growth per m of ray, range (m; 0 = s2 is the height map)
+float4 u_Clean     : register(c45); // x: clean highlights, 8 = on (night maps: floodlit white isn't tamed as sun glare, the car is no lamp); y: s0 of the lighting pass is the game's float image (GameHdr); zw: the lamp material's glow ramp (GameHdr 2.5, -1; else 0, -1)
+float4 u_CasterU   : register(c47); // CasterShadows (occlusion and volumetric passes), the near map in s3: world -> map u
+float4 u_CasterV   : register(c48); // world -> map v
+float4 u_CasterD   : register(c49); // world -> depth along the light, 0..1 as stored
+float4 u_Casters   : register(c50); // x: 1 = the map in s3 is complete; yz: texel size (uv); w: depth bias (map units)
+float4 u_FarU      : register(c54); // the same for the whole-track map in s4
+float4 u_FarV      : register(c55);
+float4 u_FarD      : register(c56);
+float4 u_Far       : register(c57);
 
 sampler2D s0 : register(s0);
 sampler2D s1 : register(s1);
@@ -71,7 +86,9 @@ sampler2D s9 : register(s9);
 sampler2D s10 : register(s10); // volumetric light (lighting pass)
 sampler2D s11 : register(s11); // global illumination (lighting pass)
 sampler3D s12 : register(s12); // colour look-up table (final pass)
-sampler2D s13 : register(s13); // the game's materials: r lamp, g car 1 / glass .5 / grass .25, b water, a light added on top
+sampler2D s13 : register(s13); // the game's materials: r lamp, g car 1 / glass .5 / dirt .3 / grass .25, b water, a light added on top
+sampler2D s14 : register(s14); // the light the game's additive draws added, float (lighting pass, EngineLights)
+sampler2D s15 : register(s15); // GameLight: the light the game's shaders lit each surface with (rgb) and its distance from the eye (w, 0 = none) (lighting pass)
 
 static const float PI = 3.14159265;
 static const float SKY_Z = 60000.0;
@@ -173,11 +190,13 @@ float4 PS_LinearDepth(float2 uv : TEXCOORD0) : COLOR0 {
 // ---------------------------------------------------------------------------------
 // Pass 1: reconstructed view-space normals (full res)
 //   s0 = linear depth (R32F)
+//   s1 = GameGBuffer (PS_PrepareGBuffer): the game's own normals (world xyz, distance from
+//        the eye in w, 0 where no patched shader drew)
 //   out = normal.xyz (view space, facing camera), view z (SKY_Z for sky)
 // ---------------------------------------------------------------------------------
 float sampleZ(float2 uv) { return tex2Dlod(s0, float4(uv, 0, 0)).r; }
 
-float4 PS_Prepare(float2 uv : TEXCOORD0) : COLOR0 {
+float4 prepare(float2 uv, uniform bool gameNormals) {
     float2 px = u_Screen.zw;
     float zc = sampleZ(uv);
     if (zc >= SKY_Z) return float4(0, 0, 0, SKY_Z);
@@ -196,8 +215,24 @@ float4 PS_Prepare(float2 uv : TEXCOORD0) : COLOR0 {
 
     float3 n = normalize(cross(dx, dy));
     if (dot(n, pc) > 0) n = -n; // face the camera regardless of the projection's handedness
+    if (gameNormals) {
+        // The game's normal (normal-mapped on blocks, the car's own shape) only where its shader
+        // drew what is seen here: the same distance from the eye as the depth (a road drawn
+        // over a block later by a shader without normals isn't), and still a unit vector.
+        float4 g = tex2Dlod(s1, float4(uv, 0, 0));
+        float len = length(g.xyz);
+        float dist = length(pc);
+        if (g.w > 0.0 && abs(g.w - dist) < 0.01 * dist + 0.03 && abs(len - 1.0) < 0.05) {
+            float3 game = worldToViewDir(g.xyz / len);
+            // Two-sided faces (fences, leaves) seen from behind: the side towards the camera.
+            n = dot(game, n) < 0.0 ? -game : game;
+        }
+    }
     return float4(n, zc);
 }
+
+float4 PS_Prepare(float2 uv : TEXCOORD0) : COLOR0 { return prepare(uv, false); }
+float4 PS_PrepareGBuffer(float2 uv : TEXCOORD0) : COLOR0 { return prepare(uv, true); }
 
 // Half-resolution copy of the normal/depth buffer (closest of each 2x2 block).
 //   s0 = full normal/depth, u_Pass0.xy = full-res texel size
@@ -220,9 +255,9 @@ float4 PS_DownsampleND(float2 uv : TEXCOORD0) : COLOR0 {
 // ray is traced through it, so shadows can be long and casters can be off screen.
 // Stored heights are offset by +10000 m; 0 = never seen.
 // ---------------------------------------------------------------------------------
-// s0 = previous height map, s1 = this frame's splat, u_Pass0.xy = uv shift of the map
-// origin since last frame, u_Pass0.z = 1 to drop the history, u_Pass0.w = decay (m),
-// u_Pass1.x = texel size of the map
+// s0 = previous height map, s1 = this frame's splat, s2 = linear depth, u_Pass0.xy = uv shift
+// of the map origin since last frame, u_Pass0.z = 1 to drop the history, u_Pass0.w = decay (m,
+// 0: the undersides), u_Pass1.x = texel size of the map, yz its new corner (world x, z), w its size
 float4 PS_HeightMerge(float2 uv : TEXCOORD0) : COLOR0 {
     float2 puv = uv + u_Pass0.xy;
     float previous = (u_Pass0.z > 0.5 || any(puv < 0.0) || any(puv > 1.0)) ? 0.0 : tex2Dlod(s0, float4(puv, 0, 0)).r;
@@ -244,7 +279,25 @@ float4 PS_HeightMerge(float2 uv : TEXCOORD0) : COLOR0 {
     // at once (kept as a running maximum, the noise raised the floor into bumps that shade
     // themselves in blotches under a low moon).
     float drop = previous - seen;
-    return float4(previous > 0.0 && drop > 0.5 ? max(seen, previous - u_Pass0.w) : seen, 0, 0, 1);
+    if (previous <= 0.0 || drop <= 0.5) return float4(seen, 0, 0, 1);
+    if (u_Pass0.w <= 0.0) return float4(previous, 0, 0, 1);
+    // Seen lower than before: gone (a car drove off, the depth missed the top) only where the
+    // camera now sees past the old top. Where it is off screen or hidden, it stays: tilted down
+    // (only a sculpture's foot in view) the tops sank by 2.4 m a second, their shadows came and
+    // went with the camera angle.
+    // The old top and four points half a texel around it (a pole thinner than a texel): the camera
+    // must see past all of them.
+    float3 top = float3(u_Pass1.y + uv.x * u_Pass1.w, previous - 10000.0, u_Pass1.z + uv.y * u_Pass1.w);
+    float h = u_Pass1.x * u_Pass1.w * 0.5;
+    bool past = true;
+    [unroll] for (int k = 0; k < 5; k++) {
+        float2 o = k == 0 ? float2(0, 0) : (k == 1 ? float2(h, 0) : (k == 2 ? float2(-h, 0) : (k == 3 ? float2(0, h) : float2(0, -h))));
+        float3 v = worldToViewDir(top + float3(o.x, 0, o.y) - cameraWorld());
+        float2 suv = projectToUV(v);
+        bool inView = v.z > 0.5 && all(suv > 0.0) && all(suv < 1.0);
+        past = past && inView && tex2Dlod(s2, float4(suv, 0, 0)).r > v.z + max(1.0, 0.03 * v.z);
+    }
+    return float4(past ? max(seen, previous - u_Pass0.w * 3.0) : previous, 0, 0, 1);
 }
 
 float4 PS_HeightSplat(float2 data : TEXCOORD0) : COLOR0 {
@@ -280,6 +333,111 @@ float longShadow(float3 pView, float3 nView, float noise, float2 jitter) {
     return occlusion;
 }
 
+// CasterShadows: the game's own static meshes drawn from the light (INTZ, depth along the
+// light): s3 around the camera (fine), s4 over the whole track (coarse). -1 where the point is
+// outside the map, else 0 (lit) .. 1 (shadowed). Four taps, bilinear weights, moved by
+// `jitter` within a texel: the blur after this pass and TAA turn the texel steps into a soft edge.
+float casterTaps(sampler2D map, float4 ru, float4 rv, float4 rd, float4 prm, float4 w, float2 jitter) {
+    float2 uv = float2(dot(w, ru), dot(w, rv));
+    if (any(uv < 0.0) || any(uv > 1.0)) return -1.0;
+    float d = dot(w, rd) - prm.w;
+    float2 t = prm.yz;
+    float2 cell = uv / t - 0.5 + (jitter - 0.5);
+    float2 f = frac(cell);
+    float2 c = (floor(cell) + 0.5) * t;
+    float s00 = tex2Dlod(map, float4(c, 0, 0)).r < d ? 1.0 : 0.0;
+    float s10 = tex2Dlod(map, float4(c + float2(t.x, 0), 0, 0)).r < d ? 1.0 : 0.0;
+    float s01 = tex2Dlod(map, float4(c + float2(0, t.y), 0, 0)).r < d ? 1.0 : 0.0;
+    float s11 = tex2Dlod(map, float4(c + t, 0, 0)).r < d ? 1.0 : 0.0;
+    return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+float casterShadow(float3 pView, float3 nView, float2 jitter) {
+    // Off the surface a little along its normal: grazing light must not find the surface itself.
+    float4 w = float4(worldPosition(pView) + viewToWorldDir(nView) * (0.1 + 0.002 * pView.z), 1.0);
+    float s = u_Casters.x > 0.5 ? casterTaps(s3, u_CasterU, u_CasterV, u_CasterD, u_Casters, w, jitter) : -1.0;
+    if (s < 0.0 && u_Far.x > 0.5) s = casterTaps(s4, u_FarU, u_FarV, u_FarD, u_Far, w, jitter);
+    return s;
+}
+
+// The same for a point in the haze (volumetric light): one tap, 1 = lit, -1 = outside both maps.
+float casterLit(float3 world) {
+    float4 w = float4(world, 1.0);
+    float2 uv = float2(dot(w, u_CasterU), dot(w, u_CasterV));
+    if (u_Casters.x > 0.5 && all(uv > 0.0) && all(uv < 1.0)) return tex2Dlod(s3, float4(uv, 0, 0)).r < dot(w, u_CasterD) - u_Casters.w ? 0.0 : 1.0;
+    uv = float2(dot(w, u_FarU), dot(w, u_FarV));
+    if (u_Far.x > 0.5 && all(uv > 0.0) && all(uv < 1.0)) return tex2Dlod(s4, float4(uv, 0, 0)).r < dot(w, u_FarD) - u_Far.w ? 0.0 : 1.0;
+    return -1.0;
+}
+
+// LongShadowQuality 1: the same test without stepping. The 24 steps above lie metres apart far
+// along the ray (9 m at the end of 120 m): a wall top one or two map cells thick is hit by some
+// rays and missed by their neighbours, so a low light drew its shadow weak and grainy, cut off
+// where the steps stopped hitting it, and changing with the distance to the wall as the car moved.
+// Here a grid turned to the light holds for every cell the highest the ray from it must clear
+// (PS_LightGridInit / PS_LightGridSweep): every cell along the ray counts, one lookup.
+// s2 = light grid (r: height + 10000 - drop of the ray to it, 0 = nothing; g: distance to it, m)
+float longShadowGrid(float3 pView, float3 nView) {
+    float3 sun = u_SunWorld.xyz;
+    if (sun.y < 0.02) return 0.0;
+    // Off a wall face by more than a grid cell: the grid holds the wall's top one cell wider than
+    // the wall (and the lookups blend the next cell in), its face lit by a low light came out in
+    // dark stripes, one per grid row.
+    float3 nWorld = viewToWorldDir(nView);
+    float3 origin = worldPosition(pView) + nWorld * 0.2 + float3(nWorld.x, 0.0, nWorld.z) * 1.6 / u_LightGrid2.x / 1024.0;
+    const float t0 = 0.7; // as the trace's first step: the receiver's own wall stays out
+    float3 q = origin + sun * t0;
+    float2 along = float2(dot(q.xz, u_LightGrid.xy), dot(q.xz, float2(-u_LightGrid.y, u_LightGrid.x)));
+    float2 uv = (along - u_LightGrid.zw) * u_LightGrid2.x;
+    if (any(uv < 0.0) || any(uv > 1.0)) return 0.0;
+    float2 caster = tex2Dlod(s2, float4(uv, 0, 0)).rg;
+    // Penumbra across the light: four lookups side by side, as far apart as the edge is soft
+    // in height (wider the farther the caster). One row of cells alone ends its shadow where its
+    // own highest cell does: a low light drew each row's end as a tooth metres long.
+    float t = t0 + max(caster.g, 0.0) / u_LightGrid2.y;
+    float width = (0.3 + t * 0.04) * u_LightGrid2.x;
+    float level = q.y + 0.35 + t0 * u_LightGrid2.z + 10000.0; // what a caster must rise above
+    float occlusion = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 c = tex2Dlod(s2, float4(uv.x, uv.y + (k - 1.5) * 0.5 * width, 0, 0)).rg;
+        // r < 5000: nothing seen towards the light (or a blend with nothing). The last fifth of the
+        // range fades: every cell counts now, a tall caster's shadow would end in a straight cut.
+        float tc = t0 + c.g / u_LightGrid2.y;
+        if (c.r > 5000.0) occlusion += saturate((c.r - level) / (0.3 + tc * 0.04)) * saturate((u_LightGrid2.w - tc) * 5.0 / u_LightGrid2.w);
+    }
+    return occlusion * 0.25;
+}
+
+// The light grid: 1024^2 cells of the height map's size, turned so that +x points to the light
+// (horizontally). Corner and direction in u_LightGrid, s0 = height map (point sampled).
+// out.r = highest height of the four map cells around the cell (+10000, 0 = never seen): a wall
+// top thinner than a cell must not fall between two cells of the turned grid.
+float4 PS_LightGridInit(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 a = u_LightGrid.zw + uv / u_LightGrid2.x;
+    float2 xz = a.x * u_LightGrid.xy + a.y * float2(-u_LightGrid.y, u_LightGrid.x);
+    float2 m = (xz - u_HeightMap.xy) / u_HeightMap.z;
+    if (any(m < 0.0) || any(m > 1.0)) return 0;
+    float t = u_Pass0.x; // half a map cell
+    float h = max(max(tex2Dlod(s0, float4(m + float2(-t, -t), 0, 0)).r, tex2Dlod(s0, float4(m + float2(t, -t), 0, 0)).r),
+                  max(tex2Dlod(s0, float4(m + float2(-t, t), 0, 0)).r, tex2Dlod(s0, float4(m + float2(t, t), 0, 0)).r));
+    return float4(h, 0, 0, 1);
+}
+
+// One sweep towards the light: each cell takes the best of itself and three cells further on,
+// lowered by how far the ray climbs (and its margin grows) on the way there. Four sweeps of
+// four cover 256 cells. s0 = previous sweep (point sampled), u_Pass0.xyz = the three offsets
+// (uv), w = drop per uv unit; u_Pass1.x = metres per uv unit.
+float4 PS_LightGridSweep(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 best = tex2Dlod(s0, float4(uv, 0, 0)).rg;
+    [unroll] for (int j = 0; j < 3; j++) {
+        float o = j == 0 ? u_Pass0.x : (j == 1 ? u_Pass0.y : u_Pass0.z);
+        float2 v = tex2Dlod(s0, float4(uv.x + o, uv.y, 0, 0)).rg;
+        float s = v.r - o * u_Pass0.w;
+        if (uv.x + o < 1.0 && v.r > 0.0 && s > best.r) best = float2(s, v.g + o * u_Pass1.x);
+    }
+    return float4(best, 0, 1);
+}
+
 // ---------------------------------------------------------------------------------
 // Volumetric light: sun shafts with real shadows in the haze, also with the sun off screen.
 // 1. Shadow height map (256^2 over the height map's area): for every column, the height
@@ -305,7 +463,7 @@ float4 PS_ShadowHeight(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // 2. March the view ray through the haze (half res). s0 = half normal/depth,
-//    s1 = shadow height map, u_Pass0.x = steps.
+//    s1 = shadow height map, s3/s4 = CasterShadows maps (where complete), u_Pass0.x = steps.
 //    out.r = lit fraction of the haze along the ray, out.g = lit path length / range
 float4 PS_Volumetric(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float z = tex2Dlod(s0, float4(uv, 0, 0)).w;
@@ -325,9 +483,14 @@ float4 PS_Volumetric(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         float dt = t - prev;
         prev = t;
         float3 p = cam + rd * t;
-        float2 m = (p.xz - u_HeightMap.xy) / u_HeightMap.z;
-        float sh = (any(m < 0.0) || any(m > 1.0)) ? 0.0 : tex2Dlod(s1, float4(m, 0, 0)).r;
-        float l = sh > 0.0 ? saturate((p.y - (sh - 10000.0)) * 0.7 + 0.5) : 1.0;
+        // CasterShadows: the same maps as the shadows on the ground (the shafts' gaps line up
+        // with them); the height map's shadow heights beyond them.
+        float l = u_Casters.x > 0.5 || u_Far.x > 0.5 ? casterLit(p) : -1.0;
+        if (l < 0.0) {
+            float2 m = (p.xz - u_HeightMap.xy) / u_HeightMap.z;
+            float sh = (any(m < 0.0) || any(m > 1.0)) ? 0.0 : tex2Dlod(s1, float4(m, 0, 0)).r;
+            l = sh > 0.0 ? saturate((p.y - (sh - 10000.0)) * 0.7 + 0.5) : 1.0;
+        }
         float w = dt * exp(-max(p.y - cam.y, 0.0) * falloff); // thinner haze higher up
         lit += l * w;
         total += w;
@@ -353,7 +516,8 @@ float4 volumetricLight(float2 uv, float3 rd, float daylight) {
 
 // ---------------------------------------------------------------------------------
 // Pass 2: ambient occlusion + ray-marched sun shadows (half res)
-//   s0 = half normal/depth, s1 = full normal/depth, s2 = height map (long shadows)
+//   s0 = half normal/depth, s1 = full normal/depth, s2 = height map (long shadows),
+//   s3/s4 = CasterShadows maps (near, whole track; where complete)
 //   out.r = AO visibility, out.g = sun visibility, out.b = long-shadow visibility
 // ---------------------------------------------------------------------------------
 float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
@@ -422,7 +586,13 @@ float4 PS_OcclusionShadow(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // raw normal that faces away here would leave a lit dot in the middle of a shadow.
     if (u_Temporal.w > 0.0 && u_SunView.w > 0.5 && ndl > -0.25) {
         // Interleaved gradient noise: even, so the blur below removes it (no blotches).
-        longVis = 1.0 - longShadow(p, n, frac(noise + 0.5), float2(noise2, frac(noise2 * 13.71 + noise))) * u_Temporal.w;
+        float2 jitter = float2(noise2, frac(noise2 * 13.71 + noise));
+        // CasterShadows: the map of the game's meshes where it reaches; beyond it the light grid
+        // (LongShadowQuality 1) or the trace.
+        float casters = u_Casters.x > 0.5 || u_Far.x > 0.5 ? casterShadow(p, n, jitter) : -1.0;
+        float occluded = casters >= 0.0 ? casters
+                         : (u_LightGrid2.w > 0.5 ? longShadowGrid(p, n) : longShadow(p, n, frac(noise + 0.5), jitter));
+        longVis = 1.0 - occluded * u_Temporal.w;
         sunVis = min(sunVis, longVis);
     }
     return float4(ao, sunVis, longVis, 1);
@@ -1123,8 +1293,13 @@ float3 clearSky(float3 rd) {
     horizon *= lerp(0.15, 1.0, day);
     float3 col = lerp(horizon, zenith, pow(y, 0.45));
     float mu = dot(rd, sun);
-    col += u_SunColor.rgb * (henyeyGreenstein(mu, 0.75) * 0.25 + pow(saturate(mu), 8.0) * 0.4) * day;
-    col += u_SunColor.rgb * smoothstep(0.9994, 0.99975, mu) * 3.0 * day;
+    // The glow around the sun follows Sun glow (1 = as it always was; only Golden Hour picks this sky).
+    col += u_SunColor.rgb * (henyeyGreenstein(mu, 0.75) * 0.25 + pow(saturate(mu), 8.0) * 0.4) * day * u_Rays.z;
+    // The sun as the game draws it: a soft bright core that blooms into a wide glow, no disc
+    // with an edge (owner's vanilla screen, 2026-10-17). pow(mu, n) ~ exp(-n a^2 / 2): the core
+    // falls to half at about 1.7 degrees, the glow at about 4.3; bright enough to bloom.
+    float sunMu = saturate(mu);
+    col += u_SunColor.rgb * (pow(sunMu, 1500.0) * 16.0 + pow(sunMu, 250.0) * 2.5 * u_Rays.z) * day;
     // Clouds on a plane.
     if (rd.y > 0.01) {
         float2 cp = rd.xz / rd.y * 2.0 + float2(u_Proj2.z * 0.01, u_Proj2.z * 0.004);
@@ -1140,9 +1315,28 @@ float3 clearSky(float3 rd) {
 }
 
 // FSR 1 EASU (AMD FidelityFX Super Resolution, edge-adaptive spatial upsampling), for the
-// effects rendered at half resolution. 12 taps around the sample, an edge direction and
-// length from the luma gradients, then a Lanczos-like kernel stretched along the edge,
-// clamped to the 4 nearest texels so it never rings. size = input w, h, 1/w, 1/h.
+// effects rendered at half resolution and for RenderScale (PS_FsrEasu). 12 taps around the
+// sample, an edge direction and length from the luma gradients, then a Lanczos-like kernel
+// stretched along the edge, clamped to the 4 nearest texels so it never rings. size = input
+// w, h, 1/w, 1/h. Ported from AMD's ffx_fsr1.h (EASU here, RCAS at PS_FsrRcas):
+//
+//   Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a copy of this
+//   software and associated documentation files (the "Software"), to deal in the Software
+//   without restriction, including without limitation the rights to use, copy, modify, merge,
+//   publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+//   to whom the Software is furnished to do so, subject to the following conditions:
+//
+//   The above copyright notice and this permission notice shall be included in all copies or
+//   substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+//   INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+//   PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+//   FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+//   DEALINGS IN THE SOFTWARE.
 void easuSet(inout float2 dir, inout float len, float w, float lA, float lB, float lC, float lD, float lE) {
     float dc = lD - lC, cb = lC - lB;
     float lenX = max(abs(dc), abs(cb));
@@ -1880,6 +2074,70 @@ float3 skyReflection(float3 r, float4 skyAvg, float daylight) {
     return lerp(skyAvg.rgb, zenith, saturate(r.y * 1.5));
 }
 
+// Far water reflections (WaterFarReflections, u_Pass0.x of PS_Reflect): the reflection on the
+// game's water (Clean water, on the exact plane), traced to the screen's edge. The general trace
+// below ends after 120 m, and after only 40 m on water 10 m from the camera: the stands, the
+// floodlight masts and the gates across a pool were never reached, and the water showed the
+// plain sky where they stood. Here the ray runs up to 1.5 km and is clipped to the screen, then
+// stepped evenly on screen (1 / z interpolated): far objects get as many steps as near ones.
+// p = start on the water (view), r = mirrored direction (view).
+float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
+    float tMax = 1500.0 * u_Water.w;
+    // Ending short of the camera's near plane (looking steeply down, the ray comes back).
+    if (r.z < 0.0) tMax = min(tMax, (p.z - 0.3) / -r.z);
+    float3 e = p + r * tMax;
+    float2 uv0 = projectToUV(p);
+    float2 dir = projectToUV(e) - uv0;
+    float k0 = 1.0 / p.z, k1 = 1.0 / e.z;
+    // Clipped to the screen: past its edge there is nothing to mirror (the sky takes over).
+    float2 room = abs(dir) > 1e-6 ? (step(0.0, dir) - uv0) / dir : 1e6;
+    float sEnd = saturate(min(room.x, room.y));
+    dir *= sEnd;
+    k1 = lerp(k0, k1, sEnd);
+    float sPrev = 0.0;
+    [loop] for (int i = 1; i <= (int)steps; i++) {
+        float x = (i - 1 + noise) / steps;
+        // Somewhat finer near the start: where things stand in the water, their mirror image
+        // meets them.
+        float s = x * (0.5 + 0.5 * x);
+        float2 quv = uv0 + dir * s;
+        float rayZ = 1.0 / lerp(k0, k1, s);
+        float sceneZ = tex2Dlod(s1, float4(quv, 0, 0)).w;
+        float delta = rayZ - sceneZ;
+        // Only what stands above the water can be mirrored in it (as below).
+        float level;
+        if (delta > 0.0 && waterLevelMatch(worldPosition(viewPosition(quv, sceneZ)), level) > 0.1) delta = -1.0;
+        float t = length(viewPosition(quv, rayZ) - p);
+        if (delta > 0.0 && delta < 0.4 + t * 0.1) {
+            // Refine between the last two steps.
+            float a = sPrev, b = s;
+            [unroll] for (int k = 0; k < 6; k++) {
+                float m = (a + b) * 0.5;
+                if (1.0 / lerp(k0, k1, m) - tex2Dlod(s1, float4(uv0 + dir * m, 0, 0)).w > 0.0) b = m; else a = m;
+            }
+            quv = uv0 + dir * b;
+            rayZ = 1.0 / lerp(k0, k1, b);
+            t = length(viewPosition(quv, rayZ) - p);
+            // Clean water: only what faces the ray, met without a jump in the depth (else the
+            // ray passed behind it and goes on).
+            float4 hitNd = tex2Dlod(s1, float4(quv, 0, 0));
+            if (dot(hitNd.xyz, r) > 0.0 || rayZ - hitNd.w > 0.1 + t * 0.03) {
+                sPrev = s;
+                continue;
+            }
+            float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
+            float confidence = saturate(edge * 10.0) * saturate((1.0 - t / tMax) * 3.0);
+            float3 hit = toLinear(tex2Dlod(s0, float4(quv, 0, 0)).rgb);
+            // Light sources stay bright in the reflection.
+            float peak = max(hit.r, max(hit.g, hit.b));
+            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak) * u_Engine.z;
+            return float4(hit, confidence);
+        }
+        sPrev = s;
+    }
+    return 0;
+}
+
 // ---------------------------------------------------------------------------------
 // Screen-space reflections (half res) for wet roads, puddles and water.
 //   s0 = scene colour (sRGB), s1 = full normal/depth, s2 = half normal/depth
@@ -1901,7 +2159,14 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (water && u_Water.z > 0.5) {
         float waterY;
         float3 world = worldPosition(p);
-        onWater = waterLevelMatch(world, waterY) > 0.5;
+        float match = waterLevelMatch(world, waterY);
+        // Clean water: this pass reads the half-res depth, the nearest of each 2x2 pixels, at
+        // the 2x2's centre: the point comes out up to half a full-res pixel in front of the plane,
+        // above the water by about that pixel's height. From a high camera at mid distance that
+        // is more than the tolerance: whole rows of the water missed the plane and traced from
+        // the stepped depth, unchecked (horizontal streaks of the ramps in the channels).
+        // The ground lies 1 m above the water, well beyond one pixel up to 600 m.
+        onWater = u_Water2.x > 0.5 ? abs(world.y - waterY) < waterTolerance(waterY) * 0.8 + nd.w / (abs(u_Proj.y) * u_Screen.y) * 1.5 : match > 0.5;
         if (onWater) {
             float3 rdView = normalize(viewPosition(uv, 1.0));
             p = worldToViewDir(waterSurface(viewToWorldDir(rdView), waterY, world) - cameraWorld());
@@ -1916,10 +2181,15 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // While driving too: without TAA the noise stands still, and 16 coarse steps showed as
     // dashed, grainy reflections that only the photo mode didn't have.
     bool photo = u_Water.w > 1.5;
-    float noise = ign(vpos) * (photo ? 0.25 : 0.5);
+    // On the game's water the noise stays put from frame to frame (as with TAA off): TAA takes
+    // much more of the current frame there (see PS_TAA), too much to average a new step
+    // pattern out each frame. The mirror images' edges and the far rim lit and went out from one
+    // frame to the next: the water and its reflections trembled with TAA on.
+    float noise = (onWater ? frac(52.9829189 * frac(dot(vpos, float2(0.06711056, 0.00583715)))) : ign(vpos)) * (photo ? 0.25 : 0.5);
     float tPrev = 0.05;
     // A polished dry track is a mirror: finer steps so the reflection holds together.
     float steps = (u_Nature.w > 1.0 ? 48.0 : 32.0) * (photo ? 2.0 : 1.0);
+    [branch] if (onWater && u_Water2.x > 0.5 && u_Pass0.x > 0.5) return traceWaterFar(p, r, noise, steps);
     [loop] for (int i = 1; i <= (int)steps; i++) {
         float t = (i - 1 + noise) / steps;
         t = t * t * maxDist + 0.1;
@@ -1944,12 +2214,24 @@ float4 PS_Reflect(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
                 if (qm.z - tex2Dlod(s1, float4(projectToUV(qm), 0, 0)).w > 0.0) b = m; else a = m;
             }
             quv = projectToUV(p + r * b);
+            // Clean water: the ray only hits what faces it, and it meets that surface (no jump in
+            // the depth). From above the ray passes under the ramps and bridges over the pools:
+            // it came out behind their tops (facing up, away from the ray) or behind their edges,
+            // and the water mirrored the tops of the ramps in blotches that came and went with
+            // the steps (a noisy, smeared copy of the stands and roads). Those rays go on.
+            if (onWater && u_Water2.x > 0.5) {
+                float4 hitNd = tex2Dlod(s1, float4(quv, 0, 0));
+                if (dot(hitNd.xyz, r) > 0.0 || (p + r * b).z - hitNd.w > 0.1 + b * 0.03) {
+                    tPrev = t;
+                    continue;
+                }
+            }
             float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
             float confidence = saturate(edge * 10.0) * saturate((1.0 - t / maxDist) * 3.0);
             float3 hit = toLinear(tex2Dlod(s0, float4(quv, 0, 0)).rgb);
             // Light sources stay bright in the reflection.
             float peak = max(hit.r, max(hit.g, hit.b));
-            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak);
+            hit *= 1.0 + u_Rays.w * 0.5 * smoothstep(0.75, 1.0, peak) * u_Engine.z;
             return float4(hit, confidence);
         }
         tPrev = t;
@@ -2128,9 +2410,75 @@ float removeGameSun(float3 c, float3 nWorld, float3 rd, float sat, float night) 
     return k * cap * flatten;
 }
 
-float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
-    float3 srgb = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
-    float3 c = toLinear(srgb);
+// EngineLights: the neon strips (road borders) are plain block material to the game, a blue
+// stripe in a grey texture: only their colour tells them. Bright, deeply saturated blue (in the
+// game's float image above 1.0 near by); not the paler, darker blue of platform paint or banner
+// letters, not floodlit grass (green), white or a car. Returns 0..1.
+//   c = linear colour (unclamped), mat = the game's material (g: car, glass, grass; with the neon
+//   strips known by their material, u_Neon.x, also above 0.1 on everything but those materials:
+//   the colour then only picks the strip out of its material's texture)
+float neonStrip(float3 c, float dist, float4 mat) {
+    float peak = max(c.r, max(c.g, c.b));
+    float3 cl = min(c, 1.0);
+    float pl = min(peak, 1.0);
+    float sat = (pl - min(cl.r, min(cl.g, cl.b))) / max(pl, 1e-3);
+    float blue = (cl.b - max(cl.r, cl.g)) / max(pl, 1e-3);
+    // Far away the mipmaps blend the strip with its frame: dimmer.
+    float low = lerp(0.6, 0.35, saturate((dist - 20.0) / 150.0));
+    return smoothstep(0.7, 0.9, sat) * smoothstep(0.25, 0.45, blue) * smoothstep(low, low + 0.4, peak) * (mat.g < 0.1 ? 1.0 : 0.0);
+}
+
+// The same without the saturation test, for PS_NeonGlow inside a wide band of a strip's blue (the
+// curbs). The game's own sheen on the curb (its soft specular, strongest at the flat angle a few
+// metres in front of the car) mixes white into the blue: saturation 0.6-0.8 instead of 0.9, right
+// on the test's ramp, and the worn spots in the curb's texture fell below it and the clean paint
+// above. The curb in front of the car glowed in patches and the rest of it was the darker night
+// surface (the owner, A01 at night, capture_127). Still blue first (the blue test) and bright.
+float neonBand(float3 c, float dist, float4 mat) {
+    float peak = max(c.r, max(c.g, c.b));
+    float3 cl = min(c, 1.0);
+    float pl = min(peak, 1.0);
+    float blue = (cl.b - max(cl.r, cl.g)) / max(pl, 1e-3);
+    float low = lerp(0.6, 0.35, saturate((dist - 20.0) / 150.0));
+    return smoothstep(0.25, 0.45, blue) * smoothstep(low, low + 0.4, peak) * (mat.g < 0.1 ? 1.0 : 0.0);
+}
+
+// GameLight: how much of a surface's light is the game's lamps, from the light the game's own
+// shader lit it with (s15: its debug view's diffuse light, baked lightmap and prelight plus
+// ambient; the car's sun and ambient), not from the image. In the image a white wall in the
+// moonlight and dark asphalt under a lamp can be equally bright; their light is not. 1 is the
+// paint as it is (the day sun's full light on the ground, which the game caps there): at night it
+// should take stacked baked light (lamps over the dome and the moon) to get above it. A first
+// guess: the first F12 with GameLight (.lit16, tools/gbuffer.py --light) shows the real levels.
+// 0 where the light isn't the surface's (drawn by a shader without it, or covered later by one:
+// its distance doesn't match the depth's).
+//   dist = the surface's distance from the eye
+float lampLight(float2 uv, float dist) {
+    float4 g = tex2Dlod(s15, float4(uv, 0, 0));
+    bool known = g.w > 0.0 && abs(g.w - dist) < 0.01 * dist + 0.03;
+    return known ? smoothstep(1.0, 1.6, max(g.r, max(g.g, g.b))) : 0.0;
+}
+
+// engine (PS_LightingEngine, EngineLights): the light sources are what the game drew as light
+// (lamp materials, its additive glows), nothing is guessed from the image. Its own entry point:
+// without the guess it has room, and PS_Lighting stays exactly as it was.
+// gameLight (PS_LightingGameLight, GameLight): engine, and the night spares what the game's lamps
+// light, by the game's own light (s15).
+float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLight) {
+    // s0: with GameHdr the game's float image: the colour keeps the light its 8-bit target cut
+    // (a floodlit ramp, the car body: texture instead of flat white). The lamp guess and the
+    // glow work on the 0..1 range they were tuned on.
+    float3 cGame = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float3 c = toLinear(cGame);
+    // EngineLights: what the game's additive draws added (glows, the lamps' halos) is light, not
+    // surface: taken out here (no AO, haze or night darkening on it) and added back as light below.
+    // The game adds in its own (display) values: the surface is what's left there.
+    float3 added = 0;
+    if (engine && u_Engine.x > 0.5) {
+        float3 surface = toLinear(max(cGame - tex2Dlod(s14, float4(uv, 0, 0)).rgb, 0.0));
+        added = max(c - surface, 0.0);
+        c = surface;
+    }
     float3 albedo = c;
     float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
     float3 rdView = normalize(viewPosition(uv, 1.0));
@@ -2156,8 +2504,10 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             if (u_SunView.w > 0.5) {
                 float mu = dot(rd, u_SunWorld.xyz);
                 c += sunScatter(rd, u_Rays.z * 0.5) * daylight;
-                // Sun disc and a tight halo (feeds the bloom).
-                c += u_SunColor.rgb * (smoothstep(0.9994, 0.99975, mu) * 1.8 + pow(saturate(mu), 900.0) * 0.35) * u_Rays.z * daylight;
+                // The sun as on the clear sky: a soft core that blooms and a wider glow, no disc with an
+                // edge (the game's own sun flare is hidden). All of it follows Sun glow (0 in storms).
+                float sunMu = saturate(mu);
+                c += u_SunColor.rgb * (pow(sunMu, 1500.0) * 16.0 + pow(sunMu, 250.0) * 2.5) * u_Rays.z * daylight;
             }
         }
         // Day-for-night on the game's own sky (storm, manual night setting).
@@ -2176,13 +2526,16 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             c = lerp(c, snowHaze(skyAvg.rgb), saturate(u_Snow.x * 0.35) * (1.0 - saturate(rd.y * 1.5)));
             c = lerp(c, snowHaze(skyAvg.rgb), veil * 0.7);
         }
+        // LampSkyHalos: a lamp's halo reaches past what the lamp sits on, over the sky; the sky
+        // above replaced it and cut the halo at the silhouette (a hard edge along the arch).
+        [branch] if (engine && u_Water2.z > 0.0) c += added * (1.0 + u_Rays.w * u_Engine.y) * u_Water2.z;
         return float4(c, 1);
     }
 
     float3 n = nd.xyz;
     float3 p = viewPosition(uv, nd.w);
     float3 occ = upsampleOcclusion(uv, nd.w, n);
-    float dist = length(p);
+    float dist = sceneDist; // the same length, once (instruction slots)
 
     // Low-frequency normal for relighting: averages neighbours on the same surface so
     // reconstruction noise (z-fighting decals, mesh seams) doesn't flicker the sun term.
@@ -2199,43 +2552,106 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float flatness = smoothstep(0.8, 0.97, nWorld.y);
 
     // Expand the LDR image back toward HDR: light sources glow.
-    float emissive = emissiveAmount(uv, c, nWorld, rd, dist, nd.w);
+    float emissive = engine ? 0.0 : emissiveAmount(uv, min(c, 1.0), nWorld, rd, dist, nd.w);
     // The game's materials (in game; the previewer has none): r lamp, g car / glass / grass,
     // b water, a light the game added on top. Added light (headlight pools, glows over a
     // surface) keeps the game's brightness but is no light source of its own: it was boosted
     // to flat white. Lamps keep their guess.
     float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
-    float3 glow = c * u_Rays.w * emissive;
-    // White lights and screens glow less than coloured ones, or they bleach to flat white.
+    // Clean highlights: a car is no lamp. At night its bright body (white, facing up) passed for
+    // one and glowed x HighlightBoost: a washed-out, pink-white car. Its lights have the game's
+    // own glow sprites.
+    // GameHdr: what the engine draws as a light (self-illuminated materials, the cars' lights)
+    // glows whatever the guess says. In the game's float image a lamp is no brighter than
+    // floodlit concrete (both about 1.0..1.5): the longer shoulder turned missed lamps grey.
     float peakC = max(c.r, max(c.g, c.b));
-    glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3)));
+    emissive = max(emissive * saturate(6.0 - mat.g * u_Clean.x), // car (g 1) 0; glass (.5), grass, off: 1
+                   mat.r * saturate(peakC * u_Clean.z + u_Clean.w)); // its bright parts (0.4..0.8); no GameHdr: 0
+    // EngineLights: the neon strips glow as the guess let them (its neon branch, x 0.75), by their
+    // own strength (u_Engine.w, Neon strips glow). No reflection, wet sheen or grass on them.
+    float3 glow = min(c, 1.0) * u_Rays.w * emissive;
+    if (engine) {
+        float neon = neonStrip(c, dist, mat) * 0.75;
+        glow = min(c, 1.0) * u_Rays.w * max(emissive, neon * u_Engine.w);
+        emissive = max(emissive, neon);
+    }
+    // White lights and screens glow less than coloured ones, or they bleach to flat white.
+    float sat = (peakC - min(c.r, min(c.g, c.b))) / max(peakC, 1e-3);
+    glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, sat));
 
     // The game bakes a bright sun glare into the asphalt; tame it so the road doesn't
     // wash out to white (it's a reflection, it gets its sun highlight further down).
-    float sat = (max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) / max(max(c.r, max(c.g, c.b)), 1e-3);
     // Below the tonemapper's knee the asphalt keeps its texture contrast.
-    float glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, luma(c)) * (1.0 - smoothstep(0.25, 0.5, sat));
+    // Clean highlights (EngineLights): how bright the surface is around the pixel, not the pixel
+    // itself. Keyed to each pixel, the tame took the most off the bright concrete and the least
+    // off its darker stains and tyre marks: the game's road texture came out flat grey (a third
+    // of its contrast, capture_105). The average of eight taps on a ring (2.2 % of the screen's
+    // height, 32 px at 1440p), those within 35 % of the pixel's brightness only: a dark seam, a
+    // tyre or a barrier next to the road leaves no lighter halo on it. The road's average stays
+    // as dark as before. Only in the EngineLights entry points (PS_Lighting has no slots left
+    // and is as it was); CleanHighlights off is the old look. Hard weights, not a ramp: the
+    // GameLight entry point is at its slot limit.
+    float glare = 0.0;
+    if (engine) {
+        float around = luma(c);
+        [branch] if (u_Clean.x > 0.5) {
+            float centre = luma(cGame);
+            float2 sum = float2(centre, 1.0);
+            float2 step = float2(u_Screen.y * u_Screen.z, 1.0) * 0.022; // a circle on screen
+            float2 dir = float2(0.92387953, 0.38268343); // 22.5 degrees, turned by 45 each tap
+            [loop] for (int k = 0; k < 8; k++) {
+                float t = luma(tex2Dlod(s0, float4(uv + dir * step, 0, 0)).rgb);
+                sum += float2(t, 1.0) * (abs(t - centre) < centre * 0.35 ? 1.0 : 0.0);
+                dir = float2(dir.x - dir.y, dir.x + dir.y) * 0.70710678;
+            }
+            around = toLinear(sum.x / sum.y).x; // grey: its luma
+        }
+        glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, around) * (1.0 - smoothstep(0.25, 0.5, sat));
+    } else {
+        glare = smoothstep(0.6, 0.9, nWorld.y) * (1.0 - emissive) * smoothstep(0.18, 0.55, luma(c)) * (1.0 - smoothstep(0.25, 0.5, sat));
+    }
+    // Clean highlights: only where the game baked a sun. Night maps (and day maps lit at
+    // midnight) have none: floodlit white got x0.6 wherever the lamp guess said "no lamp" and
+    // stayed where it said "lamp", so the same white of the game became a patchwork (frost on
+    // the start ramp).
+    if (u_Clean.x > 0.5 && u_Light2.y < -0.5) glare = 0.0;
     c *= lerp(1.0, 0.6, glare);
     c *= removeGameSun(c, nWorld, rd, sat, u_Sky.y);
 
     // --- Grass ---
     float grass = grassMask(c, nWorld, emissive);
+    // The game's grass material (g .25): no mirror, gloss, puddle or water on it, whatever its
+    // colour. The colour guess above loses the grass in a low sun (orange light: A01 at sunset,
+    // capture_112, 98 % of the lawn under half) and the dry track's reflection turned the lawn
+    // into a lake mirroring the supports. Only the reflections take it: the grass's look
+    // (detail, back light, wet sheen) keeps the guess as before.
+    // The game's dirt (g .30, its Soil shaders) counts too: no mirror and no water on it. In
+    // shadow its colour no longer read as dirt (below) and the dry track's reflection made a
+    // dirt platform a mirror of the walls (capture_133). Only puddles tell them apart.
+    float grassMat = abs(mat.g - 0.25) < 0.1 ? 1.0 : 0.0;
     if (u_Nature.x + u_Nature.y > 0.0 && grass > 0.0) c = grassDetail(c, world, rd, dist, grass);
 
     // --- Wet surfaces, puddles, water ---
     float wet = u_Weather.x * (1.0 - grass * 0.5) * (1.0 - emissive);
-    float puddle = puddleMask(world, flatness, grass) * (1.0 - emissive);
+    // Puddles form on dirt (g .30), not on grass (.25).
+    float puddle = puddleMask(world, flatness, engine ? max(grass, mat.g < 0.275 ? grassMat : 0.0) : grass) * (1.0 - emissive);
     float water = waterMask(c, nWorld, world, nd.w, emissive);
     // The game's own water material (the TMUF sea, which reports no height): water wherever
     // it is flat, at any distance.
     water = max(water, mat.b * smoothstep(0.9, 0.98, nWorld.y) * u_Weather.w);
+    // Grass at the water's height (Island shores, the Stadium lawn 1 m above its water blocks)
+    // is no water. Puddles and this only in the EngineLights entry points: PS_Lighting has
+    // no slots left (3900).
+    if (engine) water *= 1.0 - grassMat;
     // Stadium water blocks (u_Water.z 2-3): only their height is known (8 m), and dirt lies
     // there too. Once the map's water was seen as the water material, only on it; before,
     // no dark brown (dirt).
     if (u_Water.z > 2.5) water = min(water, mat.b);
     else if (u_Water.z > 1.5) water *= 1.0 - smoothstep(1.05, 1.2, albedo.r / max(albedo.b, 1e-4)) * (1.0 - smoothstep(0.06, 0.15, luma(albedo)));
     // The open sea far out (other materials than near the shore): whatever lies at its level.
-    if (u_Water.z > 0.5 && u_Water.z < 1.5 && nd.w > 400.0) water = max(water, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * u_Weather.w);
+    // Computed once for here and the night sky's sea below (saves instruction slots).
+    float seaFar = u_Water.z > 0.5 && u_Water.z < 1.5 ? step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) : 0.0;
+    if (nd.w > 400.0) water = max(water, seaFar * u_Weather.w);
     // --- Snow on the ground (dry, matte: no wet sheen or puddles under it) ---
     float3 snowColour;
     float snow = snowCover(c, world, nWorld, dist, grass, emissive, water, snowColour);
@@ -2254,7 +2670,10 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Dirt (warm brown, rough) mirrored the banners like a polished floor: a faint sheen only.
     float dirt = smoothstep(0.3, 0.45, sat) * (1.0 - smoothstep(0.75, 0.9, sat)) * saturate((c.r - c.g) / max(c.r, 1e-3) * 8.0) *
                  saturate((c.g - c.b) / max(c.r, 1e-3) * 8.0);
-    dry *= 1.0 - 0.85 * dirt;
+    // Clean water (u_Water2.x): the game's water is no dry track either. It took the dry track's
+    // reflection blur (ReflectionBlur, a disc of 8 taps) and polish: what it mirrored came out
+    // soft and grainy.
+    dry *= saturate(1.0 - 0.85 * dirt - water * u_Water2.x) * (1.0 - grassMat);
     reflectivity = max(reflectivity, min(u_Nature.w, 1.0) * dry * lerp(0.35, 1.0, polish));
     polish *= dry;
     float2 slope = 0;
@@ -2281,7 +2700,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         }
     }
     // Water is flat: the normal from the depth steps row by row far out (striped mirror images).
-    float3 nRefl = normalize(lerp(nWorld, float3(0.0, 1.0, 0.0), saturate(water * 2.0)) + float3(-slope.x, 0.0, -slope.y));
+    // Clean water: the mirrored direction (sky, Fresnel, glint) takes a quarter of the waves'
+    // slope; the full slope still moves the mirror image and the pool floor on screen. Seen at a
+    // flat angle (a camera 24 m up, the water 100-160 m away: 14 px per wave) the full slope
+    // swung the mirrored sky between the bright horizon and the darker sky above and the Fresnel
+    // term with it: the regular wave field came out as a checker of bright and dark dashes.
+    float3 nRefl = normalize(lerp(nWorld, float3(0.0, 1.0, 0.0), saturate(water * 2.0)) + float3(-slope.x, 0.0, -slope.y) * (1.0 - water * u_Water2.x * 0.75));
     // Refraction: the pool floor seen through moving waves, a little bluer with depth.
     if (water > 0.0) {
         float2 refr = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.03;
@@ -2294,7 +2718,7 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (u_Mat.z > 0.5) {
         // Far out the sea is drawn by other materials: whatever lies at the sea level.
         float sea = mat.b;
-        if (u_Water.z > 0.5 && u_Water.z < 1.5) sea = max(sea, step(abs(world.y - u_Water.x), 1.0 + nd.w * 0.003) * saturate(nd.w / 200.0 - 1.0));
+        sea = max(sea, seaFar * saturate(nd.w / 200.0 - 1.0));
         // The sunset painted on a ring around the map (TMUF Island), far islands: no sunset at night.
         sea = max(sea, smoothstep(1000.0, 1600.0, nd.w));
         c = lerp(c, luma(c) * float3(0.7, 0.85, 1.0), sea * 0.85);
@@ -2420,7 +2844,16 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Day-for-night for the night skies: darker, cooler, less saturated - but lights keep glowing.
     float night = u_Sky.y;
     float3 unlit = c;
-    c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55) * lerp(1.0, 0.16, night);
+    // GameLight: where the game's lamps light the surface (its own light, s15), the darkening and
+    // the moon's blue step back: the lamp-lit stays as bright and as warm as the game drew it,
+    // everything else gets the night as before. Only where the game's light is the night's (a
+    // night map or a map lit at midnight: no sun baked in to pass for a lamp).
+    float lamp = 0.0;
+    if (gameLight && night > 0.0 && u_Light2.y < -0.5) lamp = lampLight(uv, dist);
+    // (No "lamp > 0" test: with lamp 0 the line below is the else line, and the test cost the
+    // GameLight entry point the slots the glare tame's taps above needed.)
+    if (gameLight) c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55 * (1.0 - lamp)) * lerp(lerp(1.0, 0.16, night), 1.0, lamp);
+    else c = lerp(c, luma(c) * float3(0.55, 0.72, 1.0), night * 0.55) * lerp(1.0, 0.16, night);
     // A black hole in the sky is the brightest light around: warm light on everything that
     // faces it, and the haze glows towards it.
     float4 bh = blackHoleLight();
@@ -2430,6 +2863,12 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
         c += bhColor * pow(saturate(dot(rd, bh.xyz)), 6.0) * saturate(fogAmount * 2.0 + 0.05) * 0.4;
     }
     c += glow * (1.0 - 0.6 * saturate(fogAmount)); // lights shine through the haze
+    // The game's glows, brighter by the highlight boost (light source intensity).
+    if (engine) c += added * (1.0 + u_Rays.w * u_Engine.y) * (1.0 - 0.6 * saturate(fogAmount));
+    // Floodlights (their own strength) and LampGlare (this part of them is spread around the lamp
+    // in the final pass instead): taken off or added on. A branch: without it the line above came
+    // out a bit different, 1 in 255 on a few pixels.
+    [branch] if (engine && u_Water2.y != 0.0) c -= added * (1.0 + u_Rays.w * u_Engine.y) * (1.0 - 0.6 * saturate(fogAmount)) * u_Water2.y;
     // Light the game added on top (headlight pools) is no darker than the game drew it: the
     // night darkening turned the pools grey and flat. Only the part the game added (above
     // the night-darkened surface), a little below its brightness so it keeps a falloff.
@@ -2440,6 +2879,10 @@ float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     if (u_Snow.x > 0.0) c = lerp(c, snowHaze(skyAvg.rgb), veil * 0.7);
     return float4(c, 1);
 }
+
+float4 PS_Lighting(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, false, false); }
+float4 PS_LightingEngine(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, true, false); }
+float4 PS_LightingGameLight(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 { return lighting(uv, vpos, true, true); }
 
 // ---------------------------------------------------------------------------------
 // Neon light spill: coloured light sources light up the surfaces around them.
@@ -2472,6 +2915,200 @@ float4 PS_SpillDown(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
 }
 
+// EngineLights: the light comes from what the game drew as light, as in the lighting pass,
+// not from bright colours (floodlit grass, banners and car paint passed for neon): what its
+// additive draws added (halos, floodlight heads, start lights), the lamp material, and the neon
+// strips (block material to the game, found by colour) by their glow (BorderGlow). Each in
+// its own colour; white lamps light things too, white paint is no source any more.
+//   s0 = the game's float image (bilinear), s14 = its added light (bilinear), s1, s13 as above
+float4 PS_SpillDownEngine(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 sum = 0, strongest = 0;
+    float zmin = SKY_Z;
+    [unroll] for (int j = 0; j < 2; j++) {
+        [unroll] for (int i = 0; i < 2; i++) {
+            float2 suv = uv + (float2(i, j) * 2.0 - 1.0) * u_Screen.zw;
+            float3 cGame = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
+            float3 c = toLinear(cGame);
+            float3 added = 0;
+            if (u_Engine.x > 0.5) {
+                float3 surface = toLinear(max(cGame - tex2Dlod(s14, float4(suv, 0, 0)).rgb, 0.0));
+                added = max(c - surface, 0.0);
+                c = surface;
+            }
+            float4 nd = tex2Dlod(s1, float4(suv, 0, 0));
+            float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(suv, 0, 0)) : float4(0, 0, 0, 0);
+            float peak = max(c.r, max(c.g, c.b));
+            // The lamp material's bright parts, the same ramp as its glow in the lighting pass.
+            float lamp = mat.r * saturate(peak * u_Clean.z + u_Clean.w);
+            float neon = neonStrip(c, length(viewPosition(suv, nd.w)), mat) * u_Engine.w;
+            // On the 0..1 range the guess had: the float image's 2..3 would burn the road white.
+            // Floodlights (u_Water2.w): the lamps light their surroundings by their own strength.
+            float3 light = max(min(added * u_Water2.w, 1.0), min(c, 1.0) * max(lamp, neon)) * (nd.w < SKY_Z ? 1.0 : 0.0);
+            // White lamps light less than coloured ones, as they glow less: the stadium's rows of
+            // floodlights washed the roof around them out to a white haze.
+            float lp = max(light.r, max(light.g, light.b));
+            light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-3)));
+            sum += light;
+            strongest = max(strongest, light);
+            zmin = min(zmin, nd.w);
+        }
+    }
+    return float4(lerp(sum * 0.25, strongest, 0.5), zmin);
+}
+
+// Quality 2: the spill's sources pixel by pixel (full res), the same tests as the two passes
+// above but on each pixel instead of the mean of 2x2 (PS_SpillDownSource then takes them down).
+// Far away a neon strip is 1-2 px high: averaged with the dark wall beside it first, it counted or
+// not by where it fell in the 4x4 block, and the blue light on the wall flickered as the camera
+// crept towards it (the owner, A01 at night). out.rgb = light (linear)
+float4 PS_SpillSource(float2 uv : TEXCOORD0) : COLOR0 {
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float3 c = toLinear(tex2Dlod(s0, float4(uv, 0, 0)).rgb);
+    float peak = max(c.r, max(c.g, c.b));
+    float sat = (peak - min(c.r, min(c.g, c.b))) / max(peak, 1e-3);
+    float low = lerp(0.45, 0.28, saturate((z - 20.0) / 150.0));
+    float e = smoothstep(0.45, 0.8, sat) * smoothstep(low, low + 0.4, peak) * (z < SKY_Z ? 1.0 : 0.0);
+    // The car's paint is bright and coloured too, but it is no lamp.
+    [branch] if (e > 0.0) e *= 1.0 - onCar(worldPosition(viewPosition(uv, z)));
+    return float4(c * e, 0);
+}
+
+// EngineLights, as PS_SpillDownEngine. s0 = the game's float image, s14 = its added light, s1, s13
+// neonPass: the neon strips' light from PS_NeonGlow (s2), x BorderGlow (u_Pass0.x).
+float4 spillSourceEngine(float2 uv, uniform bool neonPass) {
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float3 cGame = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float3 c = toLinear(cGame);
+    float3 added = 0;
+    if (u_Engine.x > 0.5) {
+        float3 surface = toLinear(max(cGame - tex2Dlod(s14, float4(uv, 0, 0)).rgb, 0.0));
+        added = max(c - surface, 0.0);
+        c = surface;
+    }
+    float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
+    float peak = max(c.r, max(c.g, c.b));
+    float lamp = mat.r * saturate(peak * u_Clean.z + u_Clean.w);
+    float neon = neonPass ? 0.0 : neonStrip(c, length(viewPosition(uv, z)), mat) * u_Engine.w;
+    float3 light = max(min(added * u_Water2.w, 1.0), min(c, 1.0) * max(lamp, neon));
+    float3 strips = tex2Dlod(s2, float4(uv, 0, 0)).rgb;
+    if (neonPass) light = max(light, strips * strips * u_Pass0.x);
+    light *= z < SKY_Z ? 1.0 : 0.0;
+    float lp = max(light.r, max(light.g, light.b));
+    light *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (lp - min(light.r, min(light.g, light.b))) / max(lp, 1e-3)));
+    return float4(light, 0);
+}
+float4 PS_SpillSourceEngine(float2 uv : TEXCOORD0) : COLOR0 { return spillSourceEngine(uv, false); }
+float4 PS_SpillSourceNeon(float2 uv : TEXCOORD0) : COLOR0 { return spillSourceEngine(uv, true); }
+
+// Quality 2 (EngineLights, BorderGlow): the neon strips' glow by how much of a strip each pixel
+// covers. Far away a strip is 1-2 px high and the game blends it over two rows wherever it doesn't
+// sit on one (texture filtering, MSAA): neonStrip() on each pixel took the half-blue, half-frame
+// pixels for no strip, and the strips' glow (the bloom and the spill on the wall between them)
+// pulsed as the camera crept towards them (the owner, A01 at night). Here a pixel that is part of
+// a strip with a neighbour counts by its share of the strip's blue: the two halves add up to the
+// whole strip wherever it falls. A pixel neonStrip() takes on its own keeps its old glow.
+//   The game's float image less its added light, in its own (display) values: blends are linear
+//   there. s0, s14 point sampled.
+float3 neonSurface(float2 uv) {
+    float3 g = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    if (u_Engine.x > 0.5) g = max(g - tex2Dlod(s14, float4(uv, 0, 0)).rgb, 0.0);
+    return g;
+}
+// The four neighbours: below, above, right, left.
+float2 neonStep(int k) { return k == 0 ? float2(0, 1) : (k == 1 ? float2(0, -1) : (k == 2 ? float2(1, 0) : float2(-1, 0))); }
+// How much bluer than its red and green: a neutral frame or wall blended in adds nothing.
+float neonExcess(float3 g) { return max(g.b - max(g.r, g.g), 0.0); }
+
+// The neon material (u_Neon.x 1, the only way this pass runs): the mask's g is 0 on the strips'
+// materials and above 0.1 on everything else (Pipeline::kNotNeonG), the test neonStrip() makes.
+float neonMaterialAt(float2 uv) { return tex2Dlod(s13, float4(uv, 0, 0)).g < 0.1 ? 1.0 : 0.0; }
+
+// s0 = the game's float image, s14 = its added light (both point), s1 = full normal/depth,
+// s13 = materials. out.rgb = the square root of the strips' light in the pixel (linear, as the
+// lighting pass's neon glow before its x 0.75, BorderGlow and the highlight boost): 8 bits a
+// channel, half the bandwidth, and the root keeps the faint far ones apart.
+// Only pixels of a neon material glow (the road borders' and curbs' textures; the engine tells
+// them, Material::Neon), and only their neighbours of a neon material lend them a share: a blue
+// floor, the lanes' paint or the start banner's letters are another material however blue and
+// bright they are. The colour only says how much of the material's texture is its blue strip and
+// how bright it glows. (Before, an 8 m ring of the same blue around the pixel told a floor from a
+// strip: from far away and at some angles the floors still glowed, capture_116, 121, 124.)
+float4 PS_NeonGlow(float2 uv : TEXCOORD0) : COLOR0 {
+    // Most of the screen has no blue at all: done after one read (no glow without a share of it).
+    [branch] if (neonExcess(tex2Dlod(s0, float4(uv, 0, 0)).rgb) <= 0.01) return 0;
+    float4 mat = u_Mat.x > 0.5 ? tex2Dlod(s13, float4(uv, 0, 0)) : float4(0, 0, 0, 0);
+    [branch] if (mat.g >= 0.1) return 0;
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float dist = length(viewPosition(uv, z));
+    float3 gp = neonSurface(uv);
+    float3 cp = toLinear(gp);
+    float3 glow = min(cp, 1.0) * neonStrip(cp, dist, mat);
+    float exP = neonExcess(gp);
+    [branch] if (exP > 0.01 && z < SKY_Z) {
+        float3 gn[4];
+        float exN[4], own[4];
+        [unroll] for (int k = 0; k < 4; k++) {
+            float2 nuv = uv + neonStep(k) * u_Screen.zw;
+            gn[k] = neonSurface(nuv);
+            own[k] = neonMaterialAt(nuv);
+            exN[k] = neonExcess(gn[k]) * own[k];
+        }
+        [unroll] for (int j = 0; j < 4; j++) {
+            // Another material next door lends nothing (its blue is no strip's).
+            // A strip on its own next door (the edge of a wide one): this pixel's share of its blue.
+            float3 cn = toLinear(gn[j]);
+            glow = max(glow, min(cn, 1.0) * neonStrip(cn, dist, mat) * saturate(exP / max(exN[j], 1e-3)) * own[j]);
+            // A thin one split over the two: their blue together, less the neighbour's grey (the
+            // frame's share of it). Only with no blue on either side of the pair: inside a wide
+            // blue band (the curbs) two pixels are just twice its colour.
+            float outside = max(exN[j % 2 == 0 ? j + 1 : j - 1], neonExcess(neonSurface(uv + neonStep(j) * 2.0 * u_Screen.zw)));
+            float alone = saturate(2.0 - 3.0 * outside / max(exP + exN[j], 1e-3));
+            float3 cs = toLinear(gp + gn[j] - min(gn[j].r, min(gn[j].g, gn[j].b)));
+            glow = max(glow, min(cs, 1.0) * neonStrip(cs, dist, mat) * saturate(exP / max(exP + exN[j], 1e-3)) * alone * own[j]);
+        }
+        // Inside a wide band (all four neighbours of a neon material and about as blue): the curb's
+        // own blue, whatever white the game's sheen mixed in (neonBand), and only its blue glows
+        // (the white taken off: the sheen is no light of the strip's). A thin strip's rows next
+        // to the frame have the frame above or below: as before.
+        float inside = smoothstep(0.3, 0.6, min(min(exN[0], exN[1]), min(exN[2], exN[3])) / exP);
+        [branch] if (inside > 0.0) glow = max(glow, min(cp - min(cp.r, min(cp.g, cp.b)), 1.0) * neonBand(cp, dist, mat) * inside);
+    }
+    return float4(z < SKY_Z ? sqrt(glow) : 0.0, 0);
+}
+
+// The sources found above to quarter res: s0 = them (bilinear), s1 = full normal/depth. Half
+// the block's mean (its four 2x2 taps), half the brightest 2x2 over the block and half of each
+// neighbour's, by a tent (1 at 1 px from the centre, 0.5 at 3 px: the two blocks that see a 2x2
+// weigh it 1.5 together wherever it is), so a strip crossing from one block to the next hands its
+// light over instead of lighting both or switching. A plain brightest of the block's own four
+// still flickered at about three quarters of the old strength. Neighbours' light only from about
+// the block's depth: a strip in front gives the background behind it no light.
+float4 PS_SpillDownSource(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 sum = 0, strongest = 0;
+    float zmin = SKY_Z;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 suv = uv + (float2(k % 2, k / 2) * 2.0 - 1.0) * u_Screen.zw;
+        float3 light = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
+        sum += light;
+        strongest = max(strongest, light);
+        zmin = min(zmin, tex2Dlod(s1, float4(suv, 0, 0)).w);
+    }
+    [unroll] for (int j = 0; j < 4; j++) {
+        [unroll] for (int i = 0; i < 4; i++) {
+            float2 d = float2(i, j) * 2.0 - 3.0;
+            if (abs(d.x) < 2.0 && abs(d.y) < 2.0) continue; // the block's own, above
+            float2 suv = uv + d * u_Screen.zw;
+            float2 w = abs(d) < 2.0 ? 1.0 : 0.5;
+            float z = tex2Dlod(s1, float4(suv, 0, 0)).w;
+            float3 light = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
+            strongest = max(strongest, light * (w.x * w.y * exp(-abs(z - zmin) / (0.25 * zmin + 0.5))));
+        }
+    }
+    // A little less: the blocks beside a strip get its light too now (A01's wall came out 7 %
+    // brighter without it).
+    return float4(lerp(sum * 0.25, strongest, 0.5) * 0.93, zmin);
+}
+
 // s0 = light buffer, u_Pass0.xy = direction * texel. Radius scales with 1/z (about 3 m).
 float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
     float4 center = tex2Dlod(s0, float4(uv, 0, 0));
@@ -2490,6 +3127,37 @@ float4 PS_SpillBlur(float2 uv : TEXCOORD0) : COLOR0 {
     // Normalised by the kernel, not by the depth-rejected weights: light from a strip
     // must fall off, not be renormalised up.
     return float4(sum / 6.4, center.a);
+}
+
+// The spill over frames: s0 = this frame's (blurred, view z in a), s1 = the last result,
+// u_Pass0.x = history valid. Each frame finds its sources anew in a quarter-res image: a strip
+// that crosses a texel edge, a highlight on it that changes its colour, the car passing in front
+// of it switched light on the wall on and off from one frame to the next (the owner: "the blue
+// light flickers a bit on the wall" driving along it). Averaged over about four frames, where the
+// history is the same surface; it may only differ from this frame's light by a third, so a light
+// that goes (or moves with a car) leaves no trail. A still image comes out as before.
+float4 PS_SpillTemporal(float2 uv : TEXCOORD0) : COLOR0 {
+    float4 current = tex2Dlod(s0, float4(uv, 0, 0));
+    float z = current.a;
+    if (u_Pass0.x < 0.5 || z >= SKY_Z) return current;
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return current;
+    float4 history = tex2Dlod(s1, float4(prevUV, 0, 0));
+    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
+    float weight = lerp(0.3, 1.0, smoothstep(0.04, 0.12, error));
+    // As far as this frame's neighbourhood reaches, and a third of its light around that.
+    float2 t = u_Screen.zw * 4.0 * 1.5; // quarter res
+    float3 lo = current.rgb, hi = current.rgb;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 o = k == 0 ? float2(t.x, 0) : (k == 1 ? float2(-t.x, 0) : (k == 2 ? float2(0, t.y) : float2(0, -t.y)));
+        float3 n = tex2Dlod(s0, float4(uv + o, 0, 0)).rgb;
+        lo = min(lo, n);
+        hi = max(hi, n);
+    }
+    float3 margin = (hi - lo) * 0.25 + current.rgb * 0.33 + 0.002;
+    history.rgb = clamp(history.rgb, lo - margin, hi + margin);
+    return float4(lerp(history.rgb, current.rgb, weight), z);
 }
 
 // ---------------------------------------------------------------------------------
@@ -2513,6 +3181,31 @@ float4 PS_Focus(float2 uv : TEXCOORD0) : COLOR0 {
             }
         }
         focus = 9.0 / inv;
+        // DofAutofocus Car: u_Pass1.xyz = the player's car from the engine (world, about its
+        // wheel centres), w = 1. Projected with this frame's camera; off screen or behind the
+        // camera the middle above stays. The car's own pixels: a 5x5 grid over a metre each
+        // side of its middle, only depths close to the car's distance count (the road beside
+        // it, the sky, a pillar in front don't). None of them (all of it hidden): the car's
+        // distance itself, so it is sharp when it comes out and the thing in front blurs.
+        if (u_Pass1.w > 0.5) {
+            float3 car = worldToViewDir(u_Pass1.xyz + float3(0.0, 0.3, 0.0) - cameraWorld());
+            float2 carAt = projectToUV(car);
+            if (car.z > 0.5 && all(abs(carAt - 0.5) < 0.47)) {
+                float2 step = float2(u_Proj.x, u_Proj.y) * 0.25 / car.z; // 0.5 m in uv (ndc / 2)
+                float tolerance = max(2.5, 0.1 * car.z);
+                float carInv = 0.0, count = 0.0;
+                [unroll] for (int cj = -2; cj <= 2; cj++) {
+                    [unroll] for (int ci = -2; ci <= 2; ci++) {
+                        float z = tex2Dlod(s0, float4(carAt + float2(ci, cj) * step, 0, 0)).w;
+                        if (abs(z - car.z) < tolerance) {
+                            carInv += 1.0 / z;
+                            count += 1.0;
+                        }
+                    }
+                }
+                focus = count > 0.0 ? count / carInv : car.z;
+            }
+        }
     }
     float previous = tex2Dlod(s1, float4(0.5, 0.5, 0, 0)).r;
     if (u_Pass0.y > 0.5 || !(previous > 0.0 && previous < 1e5)) previous = focus;
@@ -2681,6 +3374,119 @@ float4 PS_BloomUp(float2 uv : TEXCOORD0) : COLOR0 {
 }
 
 // ---------------------------------------------------------------------------------
+// Lamp glare (LampGlare, LampHaze; EngineLights): the lamps' own light, spread wide and soft.
+// The bloom spreads everything bright (the neon borders too) and mostly close by; this takes
+// only the light the game's additive draws added (floodlight heads and their halos, start
+// lights, car lights), not the lamp material (screens, banners, lit walls) or the neon strips.
+// Quarter resolution, then a pyramid from an eighth down to 1/128.
+// ---------------------------------------------------------------------------------
+// The haze between the camera and a point `dist` away along rd (0..1): the lighting pass's
+// aerial perspective (written out there: it is at its instruction limit).
+float hazeAmount(float3 rd, float dist) {
+    float density = (u_Atmo.x * 0.0009 + u_Snow.x * 0.005) * u_Sky3.w;
+    float falloff = max(u_Atmo.y * 0.012, 1e-4);
+    float base = density * exp(-u_UpView.w * falloff);
+    float f = abs(rd.y) > 1e-4 ? base * (1.0 - exp(-dist * rd.y * falloff)) / (rd.y * falloff) : base * dist;
+    return saturate(1.0 - exp(-max(f, 0.0)));
+}
+
+// The strips' glow onto the lit image (blend one, one), as the lighting pass adds it (which then
+// leaves it out: c46.w 0). s0 = PS_NeonGlow, s1 = full normal/depth, u_Pass0.x = BorderGlow.
+float4 PS_NeonAdd(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 glow = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    glow *= glow * (0.75 * u_Pass0.x * u_Rays.w);
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float pk = max(glow.r, max(glow.g, glow.b));
+    glow *= lerp(0.6, 1.0, smoothstep(0.25, 0.6, (pk - min(glow.r, min(glow.g, glow.b))) / max(pk, 1e-3)));
+    float3 v = viewPosition(uv, 1.0);
+    float fog = z < SKY_Z ? hazeAmount(viewToWorldDir(normalize(v)), length(v) * z) : 1.0;
+    return float4(glow * (1.0 - 0.6 * fog), 0);
+}
+
+// The strips' glow over frames: s0 = this frame's PS_NeonGlow (point), s1 = the history (rgb its
+// glow, a its depth; bilinear), s2 = full normal/depth, u_Pass0.x = history valid. Without the
+// game's MSAA a strip 1-2 px high far away is drawn all or nothing per row: as the camera creeps,
+// rows of it come and go from one frame to the next, and their glow (BorderGlow, squared in
+// PS_NeonAdd, then the bloom and the spill over it) pulsed on the wall below (the owner, A01 at
+// night). Averaged over about four frames where the history is the same surface (fewer while the
+// view moves, none from 8 px a frame). It may only reach as far as this frame's glow next door:
+// a row that went this frame still has its neighbour, a strip that went or moved with the car
+// leaves no trail.
+float4 PS_NeonTemporal(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 current = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float z = tex2Dlod(s2, float4(uv, 0, 0)).w;
+    if (u_Pass0.x < 0.5 || z >= SKY_Z) return float4(current, z);
+    float prevZ;
+    float2 prevUV = reproject(worldPosition(viewPosition(uv, z)), prevZ);
+    if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(current, z);
+    float4 history = tex2Dlod(s1, float4(prevUV, 0, 0));
+    float error = abs(history.a - prevZ) / max(prevZ, 0.1);
+    float speed = length((uv - prevUV) * u_Screen.xy);
+    // Moving fast, this frame alone: the rows pop while the view is (nearly) still, and a strip
+    // 1-2 px high read back from a blurred history kept less and less of its glow.
+    float weight = max(lerp(0.28, 1.0, smoothstep(0.04, 0.12, error)), lerp(0.28, 1.0, saturate((speed - 1.0) / 7.0)));
+    // The rows next to it and two away (a strip two rows high can go at once).
+    float3 lo = current, hi = current;
+    [unroll] for (int k = 0; k < 6; k++) {
+        float2 o = k < 4 ? neonStep(k) : neonStep(k - 4) * 2.0;
+        float3 n = tex2Dlod(s0, float4(uv + o * u_Screen.zw, 0, 0)).rgb;
+        lo = min(lo, n);
+        hi = max(hi, n);
+    }
+    float3 margin = (hi - lo) * 0.25 + current * 0.33 + 0.004;
+    history.rgb = clamp(history.rgb, max(lo - margin, 0.0), hi + margin);
+    // Blended as light (the glow is stored as its root).
+    return float4(sqrt(lerp(history.rgb * history.rgb, current * current, weight)), z);
+}
+
+// s0 = the game's float image (bilinear), s14 = its added light (bilinear), s1 = full normal/depth.
+// out.rgb = the lamps' light as the lighting pass adds it (x the highlight boost, less what the
+// haze takes on the way), out.a = what the haze took (luminance): it scatters around the lamp.
+float4 PS_LampSource(float2 uv : TEXCOORD0) : COLOR0 {
+    float3 sum = 0;
+    // Four bilinear taps cover the 4x4 block: a bulb a few pixels wide isn't missed.
+    [unroll] for (int j = 0; j < 2; j++) {
+        [unroll] for (int i = 0; i < 2; i++) {
+            float2 suv = uv + (float2(i, j) * 2.0 - 1.0) * u_Screen.zw;
+            float3 cGame = tex2Dlod(s0, float4(suv, 0, 0)).rgb;
+            sum += max(toLinear(cGame) - toLinear(max(cGame - tex2Dlod(s14, float4(suv, 0, 0)).rgb, 0.0)), 0.0);
+        }
+    }
+    float3 added = sum * 0.25 * (1.0 + u_Rays.w * u_Engine.y);
+    // The haze once for the block (the pass reads mostly bandwidth: three full-resolution
+    // targets). A halo over the sky: the lighting pass doesn't haze it either.
+    float z = tex2Dlod(s1, float4(uv, 0, 0)).w;
+    float3 v = viewPosition(uv, 1.0);
+    float fog = z < SKY_Z ? hazeAmount(viewToWorldDir(normalize(v)), length(v) * z) : 0.0;
+    return float4(added * (1.0 - 0.6 * fog), luma(added) * 0.6 * fog);
+}
+
+// s0 = the level above, u_Pass0.xy = its texel: the bloom's 13-tap filter, on all four channels.
+float4 PS_LampDown(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 t = u_Pass0.xy;
+    float4 r = (tex2D(s0, uv + t * float2(-1, -1)) + tex2D(s0, uv + t * float2(1, -1)) + tex2D(s0, uv + t * float2(-1, 1)) +
+                tex2D(s0, uv + t * float2(1, 1))) * 0.125;
+    r += (tex2D(s0, uv + t * float2(-2, -2)) + tex2D(s0, uv + t * float2(2, -2)) + tex2D(s0, uv + t * float2(-2, 2)) +
+          tex2D(s0, uv + t * float2(2, 2))) * 0.03125;
+    r += (tex2D(s0, uv + t * float2(0, -2)) + tex2D(s0, uv + t * float2(-2, 0)) + tex2D(s0, uv + t * float2(2, 0)) +
+          tex2D(s0, uv + t * float2(0, 2))) * 0.0625;
+    return r + tex2D(s0, uv) * 0.125;
+}
+
+// s0 = the lower level (its sum so far), s1 = this level, u_Pass0.xy = lower texel, u_Pass0.z / w =
+// the lower level's weight for the glare (rgb) / the haze (a). A weight near 1 keeps much of the
+// light in the wide levels: a long, soft tail instead of a tight glow.
+float4 PS_LampUp(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 t = u_Pass0.xy;
+    float4 s = tex2D(s0, uv + t * float2(-1, -1)) + tex2D(s0, uv + t * float2(1, -1)) + tex2D(s0, uv + t * float2(-1, 1)) +
+               tex2D(s0, uv + t * float2(1, 1));
+    s += (tex2D(s0, uv + t * float2(0, -1)) + tex2D(s0, uv + t * float2(-1, 0)) + tex2D(s0, uv + t * float2(1, 0)) +
+          tex2D(s0, uv + t * float2(0, 1))) * 2.0;
+    s += tex2D(s0, uv) * 4.0;
+    return tex2D(s1, uv) + s / 16.0 * u_Pass0.zzzw;
+}
+
+// ---------------------------------------------------------------------------------
 // Auto exposure: average log luminance (1x1) and temporal adaptation.
 // ---------------------------------------------------------------------------------
 // s0 = small bloom level (HDR), out.r = average log2 luminance
@@ -2718,7 +3524,10 @@ float3 shoulderCurve(float3 x) {
     // exponential shoulder that only reaches white for real light sources.
     const float knee = u_Mat.w > 0.0 ? clamp(u_Mat.w, 0.2, 0.95) : 0.5;
     float3 over = max(x - knee, 0.0);
-    float3 shoulder = knee + (1.0 - knee) * (1.0 - exp(-over / ((1.0 - knee) * 1.7)));
+    // GameHdr: light above the game's white is real, not guessed. A longer shoulder spreads it
+    // (1..3 linear) over visible steps instead of pressing it all just under white.
+    const float width = u_Clean.y > 0.5 ? 3.0 : 1.7;
+    float3 shoulder = knee + (1.0 - knee) * (1.0 - exp(-over / ((1.0 - knee) * width)));
     return x < knee ? x : shoulder;
 }
 float3 tonemap(float3 x) {
@@ -2802,6 +3611,14 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 
     float3 bloom = tex2D(s1, uv).rgb;
     c = lerp(c, bloom, u_Bloom.x);
+    // Lamp glare (s10, an eighth of the resolution): some of the light the lighting pass took from
+    // the lamps' core (LampGlare, u_Pass1.x with the pyramid's weights), and the light the haze
+    // took from them, scattered around them in the air (LampHaze, u_Pass1.y), in their colour.
+    [branch] if (u_Pass1.x + u_Pass1.y > 0.0) {
+        float4 lamp = tex2D(s10, uv);
+        float3 tint = min((lamp.rgb + 1e-5) / (luma(lamp.rgb) + 1e-5), 3.0);
+        c += lamp.rgb * u_Pass1.x + tint * lamp.a * u_Pass1.y;
+    }
 
     // Light shafts.
     if (u_SunScreen.w > 0.0) {
@@ -2955,6 +3772,40 @@ float4 PS_FXAA(float2 uv : TEXCOORD0) : COLOR0 {
     float pixelOffsetSubpix = max(pixelOffsetGood, subpixH);
     if (!horzSpan) uv.x += pixelOffsetSubpix * lengthSign; else uv.y += pixelOffsetSubpix * lengthSign;
     return float4(tex2Dlod(s0, float4(uv, 0, 0)).rgb, lumaM);
+}
+
+// ---------------------------------------------------------------------------------
+// SMAA 1x (Jimenez et al., MIT licence, shaders/SMAA.hlsl as published), the alternative to
+// FXAA on the same image: three passes, u_Pass0 = (1 / width, 1 / height, width, height).
+// The quad's vertex shader already moves D3D9's pixel centres onto the texel centres, so the
+// texture coordinate is what SMAA's D3D10 path expects; its vertex shader parts (a few mads)
+// run here, in the pixel shader, as the pipeline has one vertex shader for all passes.
+// ---------------------------------------------------------------------------------
+#define SMAA_HLSL_3
+#define SMAA_RT_METRICS u_Pass0
+#define SMAA_PRESET_HIGH
+#include "SMAA.hlsl"
+
+// s0 = LDR (gamma, as FXAA sees it) -> edges (rg). No edge: discarded, the target is cleared.
+float4 PS_SmaaEdges(float2 uv : TEXCOORD0) : COLOR0 {
+    float4 offset[3];
+    SMAAEdgeDetectionVS(uv, offset);
+    return float4(SMAALumaEdgeDetectionPS(uv, offset, s0), 0.0, 0.0);
+}
+
+// s0 = edges (bilinear), s1 = area texture (bilinear), s2 = search texture (point).
+float4 PS_SmaaWeights(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 pixcoord;
+    float4 offset[3];
+    SMAABlendingWeightCalculationVS(uv, pixcoord, offset);
+    return SMAABlendingWeightCalculationPS(uv, pixcoord, offset, s0, s1, s2, 0.0);
+}
+
+// s0 = LDR read as sRGB (blended in linear light, written back as sRGB), s1 = blending weights.
+float4 PS_SmaaBlend(float2 uv : TEXCOORD0) : COLOR0 {
+    float4 offset;
+    SMAANeighborhoodBlendingVS(uv, offset);
+    return SMAANeighborhoodBlendingPS(uv, offset, s0, s1);
 }
 
 // ---------------------------------------------------------------------------------
@@ -3116,10 +3967,19 @@ float4 PS_CopyDepth(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0)).r, 0, 0, 1);
 }
 
+// The game's image drawn into a float target (GameHdr), cut to 0..1 as the game's own 8-bit
+// target would have: s0 = float scene, u_Pass0 = area (xy offset, zw size, in uv). u_Pass1.x 1:
+// as it is (the added light, blended one-one into the float scene); u_Pass1.y 1: alpha too (the
+// previewer's RenderScale: normals with their distance, the material mask), else 1.
+float4 PS_Resolve(float2 uv : TEXCOORD0) : COLOR0 {
+    float4 c = tex2Dlod(s0, float4(u_Pass0.xy + uv * u_Pass0.zw, 0, 0));
+    return float4(u_Pass1.x > 0.5 ? c.rgb : saturate(c.rgb), u_Pass1.y > 0.5 ? c.a : 1);
+}
+
 // ---------------------------------------------------------------------------------
 // Temporal anti-aliasing / stabilisation (full res, after FXAA, before sharpening).
-// The game's projection can't be jittered, so this mainly calms flicker (thin lines,
-// AO/shadow noise, specular sparkle); camera motion adds sub-pixel samples on its own.
+// Without TAAJitter it mainly calms flicker (thin lines, AO/shadow noise, specular sparkle);
+// camera motion adds sub-pixel samples on its own. With it the projection is jittered.
 //   s0 = current (sRGB), s1 = history (rgb, a = view z), s2 = full normal/depth
 //   out.rgb = resolved colour, out.a = view z (for the next frame's depth check)
 // ---------------------------------------------------------------------------------
@@ -3192,7 +4052,27 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     // Disocclusion and moving objects (the car, opponents): the history must have seen
     // this surface at the depth the reprojection expects.
     float historyZ = tex2Dlod(s1, float4(prevUV, 0, 0)).a;
-    if (z < SKY_Z) {
+    if (any(u_Pass0 != 0.0)) {
+        // Jitter: the raster moves by up to a pixel from frame to frame, and at every depth
+        // edge a pixel's depth flips between the near and the far surface. Checked against the
+        // centre alone the history was thrown away there each time: edges, thin masts and stars
+        // showed the raw jittered frame and shook. The history passes when its depth lies
+        // between the nearest and farthest of the 3x3 around (as far apart as the jitter moves).
+        weight = lerp(0.1, 0.04, still);
+        float zNear = z, zFar = z;
+        [unroll] for (int j = 0; j < 9; j++) {
+            float zj = tex2Dlod(s2, float4(cuv + float2(j % 3 - 1, j / 3 - 1) * u_Screen.zw, 0, 0)).w;
+            zNear = min(zNear, zj);
+            zFar = max(zFar, zj);
+        }
+        float k = prevZ / min(z, 20000.0); // the camera's move along its axis
+        float lo = zNear * k, hi = zFar >= SKY_Z ? 1e30 : zFar * k;
+        float error = max(max(lo - historyZ, historyZ - hi), 0.0);
+        float refZ = clamp(historyZ, lo, hi);
+        float near = 1.0 - smoothstep(12.0, 25.0, refZ);
+        float reset = max(smoothstep(0.02, 0.08, error / max(refZ, 0.1)), near * smoothstep(0.06, 0.2, error));
+        weight = lerp(weight, 1.0, reset);
+    } else if (z < SKY_Z) {
         float error = abs(historyZ - prevZ);
         // Close to the camera the car moves with it: the road just behind it lies only a
         // few dm deeper than the car did a frame ago, too little in relative terms - the car
@@ -3213,7 +4093,10 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
         float level = abs(y - u_Water.x) < abs(y - u_Water.y) ? u_Water.x : u_Water.y;
         float tol = waterTolerance(level); // as waterLevelMatch
         float onWater = saturate(1.0 - (y - level) / tol) * saturate((y - level + 3.0) / 0.3);
-        weight = lerp(weight, max(weight, 0.5), onWater);
+        // Standing still (or nearly) the mirror stands still too: there the jittered raster's
+        // sub-pixel changes on the waves and the mirror images' edges came through at half
+        // strength and trembled (TAAJitter). Less of the current frame then, down to 0.15.
+        weight = lerp(weight, max(weight, lerp(0.5, 0.15, still)), onWater);
     }
     // The neon trail (s3: the HDR image, alpha above 1 where it lies) floats above the road
     // whose depth the reprojection uses: at speed its history came from the wrong place and
@@ -3227,6 +4110,46 @@ float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR0 {
     float3 drop = lensDrops(uv);
     float4 flake = lensSnow(uv);
     return float4(lerp(tex2Dlod(s0, float4(uv + drop.xy, 0, 0)).rgb * drop.z, flake.rgb, flake.a), 1);
+}
+
+// ---------------------------------------------------------------------------------
+// RenderScale: the game drew its 3D image smaller and every pass above ran at that size; the
+// finished image (after TAA, the lens drops and the rain) goes up to the screen's size with
+// FSR 1, before the HUD is drawn. In display space (sRGB), the perceptual space AMD's EASU and
+// RCAS expect, not linear light. AMD's MIT notice is at easuSample.
+// ---------------------------------------------------------------------------------
+// EASU: s0 = the small image (point sampled: the filter is its own), u_Pass0 = its w, h, 1/w, 1/h.
+float4 PS_FsrEasu(float2 uv : TEXCOORD0) : COLOR0 {
+    return float4(easuSample(s0, uv, u_Pass0), 1);
+}
+
+// RCAS (robust contrast-adaptive sharpening) at the screen's size: a cross of 5 taps and the
+// strongest negative lobe that keeps every channel of the result between the cross's darkest
+// and brightest (it never rings past its neighbours), weakened where the cross looks like noise
+// (film grain, TAA's left-over flicker). s0 = the EASU image (point), u_Pass0.xy = its texel
+// size, u_Pass0.z = sharpness, 2^-stops (1 = AMD's strongest).
+float4 PS_FsrRcas(float2 uv : TEXCOORD0) : COLOR0 {
+    float2 t = u_Pass0.xy;
+    float3 b = tex2Dlod(s0, float4(uv + float2(0, -t.y), 0, 0)).rgb;
+    float3 d = tex2Dlod(s0, float4(uv + float2(-t.x, 0), 0, 0)).rgb;
+    float3 e = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    float3 f = tex2Dlod(s0, float4(uv + float2(t.x, 0), 0, 0)).rgb;
+    float3 h = tex2Dlod(s0, float4(uv + float2(0, t.y), 0, 0)).rgb;
+    // Noise: the centre's distance from the cross's average, against the cross's range (luma x 2).
+    float bL = b.b * 0.5 + (b.r * 0.5 + b.g), dL = d.b * 0.5 + (d.r * 0.5 + d.g), eL = e.b * 0.5 + (e.r * 0.5 + e.g);
+    float fL = f.b * 0.5 + (f.r * 0.5 + f.g), hL = h.b * 0.5 + (h.r * 0.5 + h.g);
+    float range = max(max(max(bL, dL), max(eL, fL)), hL) - min(min(min(bL, dL), min(eL, fL)), hL);
+    float nz = saturate(abs(0.25 * (bL + dL + fL + hL) - eL) / max(range, 1e-5));
+    nz = 1.0 - 0.5 * nz;
+    // The lobe that would push a channel below 0 or above 1 around this pixel, per channel.
+    float3 mn4 = min(min(b, d), min(f, h));
+    float3 mx4 = max(max(b, d), max(f, h));
+    float3 hitMin = min(mn4, e) / max(4.0 * mx4, 1e-5);
+    float3 hitMax = (1.0 - max(mx4, e)) / min(4.0 * mn4 - 4.0, -1e-5);
+    float3 lobeRGB = max(-hitMin, hitMax);
+    // 0.1875 = 1/4 - 1/16: AMD's limit (no more than a cross of -0.1875 around a centre of 1).
+    float lobe = max(-0.1875, min(max(lobeRGB.r, max(lobeRGB.g, lobeRGB.b)), 0.0)) * u_Pass0.z * nz;
+    return float4((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 1);
 }
 
 // ---------------------------------------------------------------------------------
@@ -3274,7 +4197,9 @@ float4 PS_Spray(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 // u_Pass1.xyz: where the car is drawn, about the height of the wheel centres), else found in
 // the depth buffer below the screen centre (like the spray), lowered to the middle of the tyres.
 //   s0 = full normal/depth, u_Pass0.x = time stamp (< 0: a new line starts here)
+//   u_Pass0.z = 1: the car's up at the point instead (u_Pass1.xyz, the ring's lower half)
 float4 PS_TrailPoint(float2 uv : TEXCOORD0) : COLOR0 {
+    if (u_Pass0.z > 0.5) return float4(u_Pass1.xyz, 1.0);
     if (u_Pass0.y > 0.5) return float4(u_Pass1.xyz, u_Pass0.x);
     float z0 = tex2Dlod(s0, float4(0.5, 0.6, 0, 0)).w;
     float z1 = tex2Dlod(s0, float4(0.5, 0.65, 0, 0)).w;
@@ -3292,7 +4217,9 @@ float4 PS_TrailPoint(float2 uv : TEXCOORD0) : COLOR0 {
 //   s0 = full normal/depth, u_Pass0.rgb = colour * strength
 float4 PS_Trail(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float2 uv = (vpos + 0.5) * u_Screen.zw;
-    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - data.z * 0.995);
+    // Hidden behind the scene, with 0.5 % and 3 cm to spare (the road seen at a grazing angle on
+    // slopes comes close to the line's depth; the line itself now lies along the road, see trailVS).
+    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - (data.z * 0.995 - 0.03));
     float x = data.x;
     float light = exp(-x * x * 10.0) * 2.5 + exp(-x * x * 2.5) * 0.4;
     // data.w: metres from the car (fresh points): the line comes out behind it.

@@ -7,7 +7,12 @@
 #include <cmath>
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
+#include <string>
+#include <vector>
 #include <cwchar>
+#include <cstdio>
+#include <intrin.h>
 
 namespace tmshaders {
 namespace engine {
@@ -20,7 +25,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kBaseRgb, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -40,6 +45,11 @@ struct GameBuild {
     uintptr_t clipGroupStop;       // void CGameCtnMediaClipViewer::ClipGroupStop()
     uintptr_t raceClipStop;        // void CGameRace::MediaClipStop()
     uintptr_t interpolatedLocation; // const GmIso4* CSceneMobil::GetInterpolatedLocation(CSceneSector*) const (vtable slot 32)
+    uintptr_t coreCmdBuffer;       // CMwCmdBufferCore* CMwCmdBufferCore::TheCoreCmdBuffer (the game's clock)
+    // CMotionManagerWeathers::UpdateAsync, the moon's branch: its calls of GmMat3::SetDOV (the
+    // moon's direction) and GxLight::SetBaseRGB (its colour), and those two functions.
+    uintptr_t moonDirectionCall, setDov, moonColorCall, setBaseRgb;
+    uintptr_t shaderApplyVTable;   // ??_7CPlugShaderApply@@6B@ (the materials whose textures are read)
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -49,14 +59,18 @@ constexpr size_t kChallengeComments = 0x19c; // CFastStringInt (SHeaderThumbnail
 constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
-     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
-     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0},
+     {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0,
+      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+     0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
+     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
-     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
-     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500},
+     {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
+      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+     0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
+     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c},
 };
 const GameBuild* g_build = nullptr;
 
@@ -89,6 +103,24 @@ struct InlineSite {
 constexpr InlineSite kClipTracksUpdate = {kClipTracks, {0xd9, 0xe8, 0x83, 0xec, 0x08}, 5, -1, "CGameCtnMediaClipPlayer::TracksUpdate"};
 constexpr InlineSite kClipViewerCams = {kClipCams, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnMediaClipViewer::UpdateCams"};
 constexpr InlineSite kVideoShootSite = {kVideoShoot, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CGameCtnMediaVideoShooter::DoShoot"};
+// The export's settings (the same in both builds, from DoShoot): the shooter holds the dialog's
+// CGameCtnMediaVideoParams at +0x4c (Fps +0x14, Width +0x18, Height +0x1c, Hq +0x20,
+// HqSampleSize +0x24, HqMB +0x28, Stereo3d +0x38, from its parameter table); +0x14 set means
+// this run opens no video output. With Hq and a sample size n > 1 the camera gets a
+// CSceneFxSuperSample of n x n (n at most 11). With HqMB and n x n >= 9 the samples are spread
+// over time ("external loop"): every rendered frame is one sample, the clock advances by
+// 1 / (fps n n), and only the last of them is written. Otherwise its FxRender renders the
+// camera n x n times within the frame, each with a sub-pixel offset, into the same texture.
+constexpr size_t kShooterNoVideo = 0x14;
+constexpr size_t kShooterParams = 0x4c;
+constexpr size_t kVideoParamsSize = 0x3c;
+// CMwCmdBufferCore::EnableFixedTickTime(enable, ms, fraction): while +0x38 or +0x3c is set,
+// each Run() advances the game's clock by +0x38 ms plus +0x3c / 2^31 ms instead of the real
+// time (the export sets 1 / (fps x samples per video frame)). The clock (CMwTimer at +0x70)
+// keeps its time in ms at +0x78 (CMwTimer::GetTickTime). Checked in both builds.
+constexpr size_t kCoreFixedMs = 0x38;
+constexpr size_t kCoreFixedFraction = 0x3c;
+constexpr size_t kCoreTickTime = 0x78;
 // Map load (CGameCtnApp::ChallengeCreateSceneGraph): the zone gets the sea level of the
 // environment's decoration, -1 when it has none.
 constexpr InlineSite kWaterTileHeight = {kTileHeight, {0x55, 0x8b, 0xe9, 0xd9, 0x85, 0x08, 0x01, 0x00, 0x00}, 9, -1, "CHmsZone::WaterRenderTileHeightSet"};
@@ -162,6 +194,49 @@ constexpr int kInterpolatedLocationSlot = 32;
 // here too, or the later jump puts the map's own time back.
 constexpr InlineSite kJumpTimeSite = {kJumpTime, {0x51, 0x56, 0x8b, 0xf1, 0xd9, 0x46, 0x28}, 7, -1, "CMotionManagerWeathers::JumpToTimeRemapped"};
 constexpr size_t kDecorationMood = 0x60; // CGameCtnDecorationMood*
+// The weather sets the scene's directional light (CMotionManagerWeathers::UpdateAsync, at every
+// time jump and frame). Where its moon colour is brighter than the sun's (night) it builds the
+// light's travel direction itself, a horizontal one from the time of day (A01 lit at midnight:
+// (-1, 0, 0)), turns it into the light's location (GmMat3::SetDOV, then the CSceneLight's
+// SetLocation) and gives the light the moon's colour (GxLight::SetBaseRGB). The same vector
+// makes its specular cube. At night the map's lightmap (CHmsPackLightMap, fid parameter IsNight)
+// is baked in colour at map load from that light: ambient dome, the moon with its shadows, the
+// lamps; the block shaders take their light from it (PreLightGen) and add no moon of their own.
+// So the direction or colour given to these two calls is the moon of the whole map: the bake,
+// the glints, the car. Both calls are in the moon's branch only (the sun has its own matrix).
+// The lightmap cache (ProgramData/TrackMania/Cache/*.LightMap.zip) is keyed by map, decoration
+// and IsNight, not by the light: a night bake saved there would come back as it is.
+// The lightmap cache of a map (CHmsPackLightMap): whether the saved one still fits, and saving
+// a new one. With the moon changed the cache is neither used nor written: a saved bake of the
+// game's moon would come back without the change, and a changed one would stay when it is off.
+constexpr InlineSite kCacheUpToDateSite = {kCacheUpToDate, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CHmsPackLightMap::CacheIsUpToDate"};
+constexpr InlineSite kCacheSaveSite = {kCacheSave, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CHmsPackLightMap::CacheSaveLightMap"};
+// The video export's file (CVisionVideoAvi, VfW; the same code in both builds, 0x70 lower in
+// TMUF). DoShoot creates it and OpenToWrite makes the .avi (Documents\TrackMania\Video). The
+// viewport's RenderFrameEnd opens the video stream at the first frame (VideoStreamOpen: the
+// size rounded up to 8 and written back, AVISaveOptions - the codec dialog -, a BI_RGB header
+// at +0x0c of its data [this+4], the image size at +0x20 for GetImageByteSize, the frame
+// counter at +0x40) and writes every finished frame (VideoStreamWrite: bottom-up BGR, 3 bytes
+// a pixel, with supersampling only the averaged frame). DoShoot opens the sound
+// (AudioStreamOpen, an SWaveFormat = WAVEFORMATEX without cbSize) and writes it in pieces
+// between the frames (AudioStreamWrite, a count of blocks). Close and the destructor end it.
+constexpr InlineSite kAviOpenSite = {kAviOpen, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04}, 6, -1, "CVisionVideoAvi::OpenToWrite"};
+constexpr InlineSite kAviVideoOpenSite = {kAviVideoOpen, {0x81, 0xec, 0x0c, 0x01, 0x00, 0x00}, 6, -1, "CVisionVideoAvi::VideoStreamOpen"};
+constexpr InlineSite kAviVideoWriteSite = {kAviVideoWrite, {0x8b, 0x41, 0x04, 0x83, 0x78, 0x08, 0x00}, 7, -1, "CVisionVideoAvi::VideoStreamWrite"};
+constexpr InlineSite kAviAudioOpenSite = {kAviAudioOpen, {0x81, 0xec, 0xd0, 0x00, 0x00, 0x00}, 6, -1, "CVisionVideoAvi::AudioStreamOpen"};
+constexpr InlineSite kAviAudioWriteSite = {kAviAudioWrite, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04}, 6, -1, "CVisionVideoAvi::AudioStreamWrite"};
+constexpr InlineSite kAviDestroySite = {kAviDestroy, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04}, 6, -1, "CVisionVideoAvi::~CVisionVideoAvi"};
+// The editor takes a block out of the map (every way of removing one ends here: the block and
+// puzzle editors, undo, replacing a block; only the editor and the map's clip update call it).
+// CasterShadows keeps the meshes it saw: a removed block would keep casting its shadow.
+constexpr InlineSite kRemoveBlockSite = {kRemoveBlock, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnChallenge::RemoveBlock"};
+// GxLight::SetBaseRGB(rgb), every writer of a light's colour (21 call sites in each build: the
+// weather's sun and moon, CFuncLightColor, CSceneFxSuperSample::FxRender, CSceneLight::Create*,
+// CPlugLight::Make*, ...). Hooked for the log only (sun diag): which one lights the end-of-race
+// replay under Real night. A leaf function; its first two instructions (mov eax,[esp+4];
+// fld [eax]) run unchanged in the trampoline. GxLight: +0x14 flags, +0x18 base rgb, +0x24 and
+// +0x28 the intensity factors, +0x2c rgb * both (what the shaders get).
+constexpr InlineSite kBaseRgbSite = {kBaseRgb, {0x8b, 0x44, 0x24, 0x04, 0xd9, 0x00}, 6, -1, "GxLight::SetBaseRGB"};
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
 
@@ -198,6 +273,7 @@ DWORD g_lastWater = 0;          // GetTickCount of the last water reflection ren
 using TileHeightFn = void(__fastcall*)(void*, void*, float);
 using RaceResetFn = void(__fastcall*)(void*, void*);
 using RespawnFn = void(__fastcall*)(void*, void*, void*, int);
+using RemoveBlockFn = int(__fastcall*)(void*, void*, void*);
 RaceResetFn g_raceReset = nullptr;
 using LoadDecorationFn = void(__fastcall*)(void*, void*, const void*);
 using IdGetStringFn = const char*(__fastcall*)(const void*, void*);
@@ -210,8 +286,10 @@ using SetChallengeFn = void(__fastcall*)(void*, void*, void*);
 SetChallengeFn g_setChallenge = nullptr;
 void* g_app = nullptr;          // CGameCtnApp (holds the current map)
 RespawnFn g_respawn = nullptr;
+RemoveBlockFn g_removeBlock = nullptr;
 volatile LONG g_raceResets = 0; // counters: the plugin compares them every frame
 volatile LONG g_respawns = 0;
+volatile LONG g_blocksRemoved = 0;
 TileHeightFn g_tileHeight = nullptr;
 bool g_mapLoaded = false;       // a map load was seen, so its sea level is known
 float g_seaLevel = -1.0f;       // -1 = no sea
@@ -225,6 +303,17 @@ float g_zoom = 1.0f;             // photo mode zoom (>= 1: the engine culls with
 // the reflection cameras (water planes, the cube maps of the car, which need their 90 degrees).
 const void* g_mainCamera = nullptr;
 bool g_loggedMainProjection = false;
+// The matrices the engine computed last (ComputeDriverViewMatrix / ComputeDriverProjection), as
+// it hands them to SetTransform, and those it had computed when a camera began. A camera drawn
+// into a texture (TexRender_RenderTexture: TransformStackCameraPush, then RenderCameraBegin; the
+// video export's supersampling renders every sample that way) gets its view and projection set
+// on the device BEFORE its RenderCameraBegin, with the dirty bits cleared, so the plugin's
+// SetTransform hook sees none within the camera. A camera drawn to the viewport
+// (RenderCameraNormal) gets them lazily at its first draw (UpdateCameraAndRect), within it.
+Matrix4 g_lastView{}, g_lastProjection{};
+bool g_lastViewSet = false, g_lastProjectionSet = false;
+Matrix4 g_beginView{}, g_beginProjection{};
+bool g_beginMatrices = false;
 bool g_hideOverlay = false;      // skip the game's HUD and menus (photo mode)
 using FreeCamFn = void(__fastcall*)(void*, void*, int);
 FreeCamFn g_freeCamSet = nullptr;
@@ -244,6 +333,34 @@ volatile bool g_hideGameSky = false;   // a night sky replaces the game's: its p
 using LoadSceneFn = void(__fastcall*)(void*, void*);
 LoadSceneFn g_loadScene = nullptr;
 bool (*g_wantNight)(float dayTime) = nullptr; // the plugin: light this map at midnight?
+bool (*g_moonAtLoad)(float dayTime, bool litAtNight, MoonLight& moon) = nullptr; // the plugin: what the moon does on this map
+using SetDovFn = void*(__fastcall*)(void*, void*, float*, int);
+using SetBaseRgbFn = void*(__fastcall*)(void*, void*, const float*);
+SetDovFn g_setDov = nullptr;
+SetBaseRgbFn g_setBaseRgb = nullptr;
+int g_moonMode = 0;                // this map: 0 the game's moon, 1 along g_moonTravel, 2 off
+float g_moonTravel[3] = {};        // the light's travel direction (away from the black hole)
+bool g_moonApplied = false;        // the weather reached the moon's code since the load
+bool g_moonBaked = false;          // this load decided a changed moon: its lightmap is never saved
+bool g_moonLogged = false;
+float g_moonGameTravel[3] = {};    // the direction the game wanted (for the log)
+using CacheFn = int(__fastcall*)(void*, void*);
+CacheFn g_cacheUpToDate = nullptr;
+CacheFn g_cacheSave = nullptr;
+using AviOpenFn = int(__fastcall*)(void*, void*, const void*);
+using AviVideoOpenFn = int(__fastcall*)(void*, void*, DWORD*, DWORD*, float, int);
+using AviVideoWriteFn = int(__fastcall*)(void*, void*, void*);
+using AviAudioOpenFn = int(__fastcall*)(void*, void*, const void*);
+using AviAudioWriteFn = int(__fastcall*)(void*, void*, void*, DWORD);
+using AviDestroyFn = void(__fastcall*)(void*, void*);
+AviOpenFn g_aviOpen = nullptr;
+AviVideoOpenFn g_aviVideoOpen = nullptr;
+AviVideoWriteFn g_aviVideoWrite = nullptr;
+AviAudioOpenFn g_aviAudioOpen = nullptr;
+AviAudioWriteFn g_aviAudioWrite = nullptr;
+AviDestroyFn g_aviDestroy = nullptr;
+VideoFileHooks g_videoFile;
+bool g_cacheLogged = false;
 using JumpTimeFn = void(__fastcall*)(void*, void*, float);
 JumpTimeFn g_jumpTime = nullptr;
 int g_jumpsLogged = 0;
@@ -257,6 +374,24 @@ float g_mapDayTime = -1.0f;                   // the loaded map's own time of da
 bool g_nightForced = false;                   // the game lights it at midnight instead
 void* g_weather = nullptr;                    // this map's weather (the last to jump in time)
 float g_weatherTime = -1.0f;                  // the time of day the game asked it for last
+// The game loads a map (CGameCtnApp::InitChallengeDataWithLoadScreen: LoadDecorationAndCollection
+// -> LoadScene3d, the weather's jumps) before SetChallenge makes it the current one
+// (StartChallengeMinimal, Ghidra). The map whose decoration load set the state above, so that
+// its own SetChallenge keeps it: clearing it there left every map without its time of day and
+// its forced midnight (no live relight, no keepNight, the mood from the light's colour).
+const void* g_loadingChallenge = nullptr;     // inside its LoadDecorationAndCollection
+const void* g_sceneChallenge = nullptr;       // the map the state above belongs to
+// Real night kept (keepNight): the weather's own clock (a CMotionTimerLoop at +0x1c: +0x14 mode,
+// +0x18 / +0x1c its two times in ms, +0x20 the length of a day in ms, +0x28 speed) as the forced
+// midnight left it, and the weather's vtable then (the object is checked before it is used again).
+constexpr size_t kWeatherTimer = 0x1c;
+float g_nightClock = -1.0f;
+float g_nightClockAsync = -1.0f; // its other time then (each clock is compared with its own)
+const void* g_weatherVtable = nullptr;
+int g_nightLogged = 0;
+int g_nightJumps = 0;            // keepNight's jumps back to midnight on this map (logged at the next)
+DWORD g_nightJumpTick = 0;       // the last one (at most one a second)
+volatile LONG g_flares[3] = {}; // lens flares since the last read: other lights, the sun, the sun hidden
 using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
 ReadInputFn g_readInput = nullptr;
 volatile bool g_swallowEscape = false; // the menu or photo mode took this Esc press
@@ -275,6 +410,10 @@ FxCanActiveFn g_fxCanActive[2] = {};
 bool g_skipGameFx = false;
 DWORD g_lastCinematic = 0;      // GetTickCount of the last cinematic hook call
 unsigned g_cinematicSources = 0;
+DWORD g_lastNotClip = 0;         // ... of the clip viewer's cameras or the video export (not the clip player)
+unsigned g_engineFrames = 0;    // RenderFrameBegin calls
+void* g_shooter = nullptr;      // the video shooter whose DoShoot ran last
+unsigned g_shootFrame = 0;      // and in which frame (g_engineFrames)
 
 uintptr_t rebase(uintptr_t linkAddress) {
     return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) - kPreferredBase + linkAddress;
@@ -309,15 +448,21 @@ void patch(const Slot& slot, void* detour, Fn& original) {
 
 // Jumps from the function's start to the detour; the trampoline runs the copied prologue
 // and jumps back behind it. Returns the trampoline (the "original" to call), or null.
-void* inlineHook(const InlineSite& site, void* detour) {
-    BYTE* target = reinterpret_cast<BYTE*>(rebase(g_build->sites[site.id]));
+// The function at the site starts with the expected bytes (this executable has it there).
+bool prologueMatches(const InlineSite& site) {
+    const BYTE* target = reinterpret_cast<const BYTE*>(rebase(g_build->sites[site.id]));
     unsigned char expected[12];
     memcpy(expected, site.prologue, sizeof(expected));
     if (site.handlerAt >= 0) {
         const uint32_t handler = static_cast<uint32_t>(rebase(g_build->handlers[site.id]));
         memcpy(expected + site.handlerAt, &handler, sizeof(handler));
     }
-    if (!readable(target, site.length) || memcmp(target, expected, site.length) != 0) {
+    return readable(target, site.length) && memcmp(target, expected, site.length) == 0;
+}
+
+void* inlineHook(const InlineSite& site, void* detour) {
+    BYTE* target = reinterpret_cast<BYTE*>(rebase(g_build->sites[site.id]));
+    if (!prologueMatches(site)) {
         TMVS_LOG("engine: %s does not match this executable, not hooked", site.name);
         return nullptr;
     }
@@ -337,9 +482,216 @@ void* inlineHook(const InlineSite& site, void* detour) {
     return trampoline;
 }
 
+// Points one call instruction (E8 rel32) inside a function at the detour, after checking that it
+// calls the function the map names there. Returns that function (the original), or null.
+void* patchCall(uintptr_t site, uintptr_t callee, void* detour, const char* name) {
+    BYTE* call = reinterpret_cast<BYTE*>(rebase(site));
+    const uintptr_t expected = rebase(callee);
+    if (!site || !readable(call, 5) || call[0] != 0xE8 ||
+        reinterpret_cast<uintptr_t>(call + 5) + static_cast<uintptr_t>(*reinterpret_cast<const int32_t*>(call + 1)) != expected) {
+        TMVS_LOG("engine: %s does not match this executable, not hooked", name);
+        return nullptr;
+    }
+    DWORD old = 0;
+    VirtualProtect(call, 5, PAGE_EXECUTE_READWRITE, &old);
+    *reinterpret_cast<int32_t*>(call + 1) = static_cast<int32_t>(static_cast<BYTE*>(detour) - (call + 5));
+    VirtualProtect(call, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), call, 5);
+    return reinterpret_cast<void*>(expected);
+}
+
+// --- Sun diag (log only) ----------------------------------------------------
+// Under Real night the end-of-race replay of A01 is lit by a warm directional light although
+// the map's only weather stays at midnight (capture_117/118 against capture_120). Which code
+// gives the light the replay draws its colour? Read-only: per "epoch" (a scene load, then every
+// start of a cinematic) the sun light the lens flares see is logged next to the weather's own
+// GxLight (+0xc4), at the first sun flare and again 2 s later, and the first callers of
+// GxLight::SetBaseRGB (de-duplicated by return address) with the light and colour they set.
+// When the epoch ends, how often each of them was called. Nothing in the game is written.
+bool weatherClock(float& async, float& timed, int& mode, float& speed);
+constexpr size_t kWeatherLight = 0xc4;   // GxLight* of the weather's directional light
+constexpr int kSunDiagCallers = 8;       // distinct SetBaseRGB callers logged per epoch
+constexpr int kSunDiagEpochsPerMap = 12; // cinematic starts logged per scene load
+volatile LONG g_sunDiagBusy = 0;         // one writer at a time (the others pass untouched)
+LONG g_sunDiagEpoch = 0;
+int g_sunDiagEpochsThisMap = 0;
+bool g_sunDiagOn = false;                // within the epochs of this map
+DWORD g_sunDiagTick = 0;                 // the epoch's start
+int g_sunFlareLogged = 0;                // this epoch: 0 none, 1 the first sun flare, 2 also 2 s later
+const void* g_sunFlareLight = nullptr;   // the sun's GxLight as the flares saw it last
+struct RgbCaller {
+    uintptr_t ret;
+    unsigned calls;
+};
+RgbCaller g_rgbCallers[kSunDiagCallers] = {};
+int g_rgbCallerCount = 0;
+unsigned g_rgbOtherCalls = 0;            // by callers beyond the logged ones
+using BaseRgbFn = void(__fastcall*)(void*, void*, const float*);
+BaseRgbFn g_baseRgb = nullptr;           // the trampoline
+
+bool sunDiagLock() {
+    return InterlockedCompareExchange(&g_sunDiagBusy, 1, 0) == 0;
+}
+
+void sunDiagUnlock() {
+    InterlockedExchange(&g_sunDiagBusy, 0);
+}
+
+// A code address as Ghidra and TmForever.map name it (link time, base 0x00400000), or the
+// module and offset outside the game (the mod's own moon colour call).
+void describeCode(uintptr_t address, char* out, size_t size) {
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(address), &module) || !module) {
+        sprintf_s(out, size, "%08x (no module)", static_cast<unsigned>(address));
+        return;
+    }
+    if (module == GetModuleHandleW(nullptr)) {
+        sprintf_s(out, size, "TmForever %08x", static_cast<unsigned>(address - reinterpret_cast<uintptr_t>(module) + kPreferredBase));
+        return;
+    }
+    char path[MAX_PATH] = {};
+    GetModuleFileNameA(module, path, MAX_PATH);
+    const char* name = strrchr(path, '\\');
+    sprintf_s(out, size, "%s+%x", name ? name + 1 : path, static_cast<unsigned>(address - reinterpret_cast<uintptr_t>(module)));
+}
+
+// A GxLight as text: flags, base rgb, the two intensity factors, rgb * both.
+void describeLight(const void* light, char* out, size_t size) {
+    __try {
+        const BYTE* l = static_cast<const BYTE*>(light);
+        if (!l || !readable(l, 0x38)) {
+            sprintf_s(out, size, "gx %p (unreadable)", light);
+            return;
+        }
+        const float* f = reinterpret_cast<const float*>(l);
+        sprintf_s(out, size, "gx %p flags 0x%x rgb %.3f %.3f %.3f int %.3f x %.3f final %.3f %.3f %.3f", light,
+                  *reinterpret_cast<const unsigned*>(l + 0x14), f[0x18 / 4], f[0x1c / 4], f[0x20 / 4], f[0x24 / 4], f[0x28 / 4],
+                  f[0x2c / 4], f[0x30 / 4], f[0x34 / 4]);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        sprintf_s(out, size, "gx %p (fault)", light);
+    }
+}
+
+const void* weatherLight() {
+    __try {
+        const BYTE* weather = static_cast<const BYTE*>(g_weather);
+        if (!weather || !readable(weather + kWeatherLight, sizeof(void*))) return nullptr;
+        return *reinterpret_cast<const void* const*>(weather + kWeatherLight);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+// How often the logged callers were called in the epoch that ends (one line).
+void reportRgbCallers() {
+    if (!g_baseRgb || (g_rgbCallerCount == 0 && g_rgbOtherCalls == 0)) return;
+    char line[768] = {};
+    size_t used = 0;
+    for (int i = 0; i < g_rgbCallerCount && used < sizeof(line) - 64; i++) {
+        char where[96];
+        describeCode(g_rgbCallers[i].ret, where, sizeof(where));
+        const int n = sprintf_s(line + used, sizeof(line) - used, "%s%s x%u", i ? ", " : "", where, g_rgbCallers[i].calls);
+        if (n > 0) used += static_cast<size_t>(n);
+    }
+    TMVS_LOG("engine: sun diag: epoch %ld SetBaseRGB calls: %s; others x%u", g_sunDiagEpoch, line, g_rgbOtherCalls);
+}
+
+// A new epoch: a scene load (map: true) or the start of a cinematic.
+void sunDiagEpoch(bool map, unsigned source) {
+    if (!map && (!g_sunDiagOn || g_sunDiagEpochsThisMap >= kSunDiagEpochsPerMap)) return;
+    int tries = 0;
+    while (!sunDiagLock()) {
+        if (++tries > 100) return; // another thread is stuck in its log line: this epoch goes unlogged
+        Sleep(0);
+    }
+    reportRgbCallers();
+    g_sunDiagEpoch++;
+    g_sunDiagEpochsThisMap = map ? 0 : g_sunDiagEpochsThisMap + 1;
+    g_sunDiagOn = true;
+    g_sunDiagTick = GetTickCount();
+    g_sunFlareLogged = 0;
+    g_rgbCallerCount = 0;
+    g_rgbOtherCalls = 0;
+    TMVS_LOG("engine: sun diag: epoch %ld: %s", g_sunDiagEpoch, map ? "scene load" : source == 1 ? "cinematic on (clip player)" : source == 2 ? "cinematic on (clip viewer)" : "cinematic on (video export)");
+    sunDiagUnlock();
+}
+
+// The lens flares' sun light (and the weather's) at the first sun flare of an epoch and 2 s later.
+void sunDiagFlare(const void* corpusLight) {
+    if (!g_sunDiagOn || g_sunFlareLogged >= 2) return;
+    const DWORD age = GetTickCount() - g_sunDiagTick;
+    if (g_sunFlareLogged == 1 && age < 2000) return;
+    if (!sunDiagLock()) return;
+    if (g_sunFlareLogged >= 2) {
+        sunDiagUnlock();
+        return;
+    }
+    const char* when = g_sunFlareLogged == 0 ? "first sun flare" : "+2 s";
+    g_sunFlareLogged++;
+    const void* item = nullptr;
+    const void* light = nullptr;
+    __try {
+        item = *reinterpret_cast<const void* const*>(static_cast<const BYTE*>(corpusLight) + 0x48);
+        light = item ? *reinterpret_cast<const void* const*>(static_cast<const BYTE*>(item) + 0x88) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    g_sunFlareLight = light;
+    const void* weatherGx = weatherLight();
+    char sun[192], weather[192];
+    describeLight(light, sun, sizeof(sun));
+    if (weatherGx) describeLight(weatherGx, weather, sizeof(weather));
+    else strcpy_s(weather, "gx none");
+    float async = -1.0f, timed = -1.0f, speed = 0.0f;
+    int mode = 0;
+    const bool clock = g_weatherVtable && weatherClock(async, timed, mode, speed);
+    TMVS_LOG("engine: sun diag: epoch %ld %s (%u ms, cinematic %d): flare light %p item %p %s", g_sunDiagEpoch, when, age, cinematicActive() ? 1 : 0,
+             corpusLight, item, sun);
+    TMVS_LOG("engine: sun diag: epoch %ld %s: weather %p %s, clock %.3f/%.3f%s; %s", g_sunDiagEpoch, when, g_weather, weather, timed, async,
+             clock ? "" : " (not known)", light && light == weatherGx ? "SAME light" : "DIFFERENT lights");
+    sunDiagUnlock();
+}
+
+// Who sets a light's colour: the first distinct callers of the epoch, then only counted.
+void sunDiagBaseRgb(uintptr_t ret, const void* light, const float* rgb) {
+    if (!g_sunDiagOn || !sunDiagLock()) return;
+    for (int i = 0; i < g_rgbCallerCount; i++) {
+        if (g_rgbCallers[i].ret == ret) {
+            g_rgbCallers[i].calls++;
+            sunDiagUnlock();
+            return;
+        }
+    }
+    if (g_rgbCallerCount >= kSunDiagCallers) {
+        g_rgbOtherCalls++;
+        sunDiagUnlock();
+        return;
+    }
+    g_rgbCallers[g_rgbCallerCount++] = {ret, 1};
+    char where[96];
+    describeCode(ret, where, sizeof(where));
+    float c[3] = {-1.0f, -1.0f, -1.0f};
+    __try {
+        if (rgb && readable(rgb, sizeof(c))) memcpy(c, rgb, sizeof(c));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    const void* weatherGx = weatherLight();
+    TMVS_LOG("engine: sun diag: epoch %ld SetBaseRGB from %s: gx %p rgb %.3f %.3f %.3f%s%s", g_sunDiagEpoch, where, light, c[0], c[1], c[2],
+             light && light == weatherGx ? " (the weather's light)" : "", light && light == g_sunFlareLight ? " (the flares' sun)" : "");
+    sunDiagUnlock();
+}
+
+void __fastcall baseRgbDetour(void* light, void* edx, const float* rgb) {
+    sunDiagBaseRgb(reinterpret_cast<uintptr_t>(_ReturnAddress()), light, rgb);
+    g_baseRgb(light, edx, rgb);
+}
+
 void markCinematic(unsigned source) {
-    g_lastCinematic = GetTickCount();
+    const DWORD now = GetTickCount();
+    if (g_lastCinematic == 0 || now - g_lastCinematic >= 500) sunDiagEpoch(false, source);
+    g_lastCinematic = now;
     g_cinematicSources |= source;
+    if (source != 1) g_lastNotClip = g_lastCinematic;
 }
 
 void __fastcall tracksUpdateDetour(void* self, void* edx, float time, float delta) {
@@ -355,7 +707,74 @@ void __fastcall updateCamsDetour(void* self, void* edx) {
 // Runs once per frame while the export shoots (a fiber that is resumed every frame).
 void __fastcall doShootDetour(void* self, void* edx, void* fiber) {
     markCinematic(4);
+    g_shooter = self;
+    g_shootFrame = g_engineFrames;
     g_doShoot(self, edx, fiber);
+}
+
+// --- The video export's file ------------------------------------------------
+
+BYTE* aviData(void* self) {
+    BYTE* const* data = reinterpret_cast<BYTE* const*>(static_cast<BYTE*>(self) + 4);
+    return readable(data, sizeof(void*)) && *data && readable(*data, 0x64) ? *data : nullptr;
+}
+
+int __fastcall aviOpenDetour(void* self, void* edx, const void* name) {
+    const int ok = g_aviOpen(self, edx, name);
+    // CFastStringInt: +0 length, +4 the text.
+    const wchar_t* const* text = reinterpret_cast<const wchar_t* const*>(static_cast<const BYTE*>(name) + 4);
+    if (g_videoFile.opened && readable(text, sizeof(void*)) && *text && readable(*text, sizeof(wchar_t))) g_videoFile.opened(self, *text, ok != 0);
+    return ok;
+}
+
+// The mod writes the video itself: the game's stream stays closed (no codec dialog), but its
+// data looks as after a successful open (the frame buffer is sized from the image size).
+int __fastcall aviVideoOpenDetour(void* self, void* edx, DWORD* width, DWORD* height, float fps, int alpha) {
+    BYTE* data = aviData(self);
+    if (g_videoFile.videoOpen && data && width && height) {
+        const DWORD w = (*width + 7) / 8 * 8, h = (*height + 7) / 8 * 8, bpp = alpha ? 4 : 3;
+        if (g_videoFile.videoOpen(self, static_cast<int>(w), static_cast<int>(h), fps, static_cast<int>(bpp))) {
+            *width = w;
+            *height = h;
+            BITMAPINFOHEADER header{};
+            header.biSize = sizeof(header);
+            header.biWidth = static_cast<LONG>(w);
+            header.biHeight = static_cast<LONG>(h);
+            header.biPlanes = 1;
+            header.biBitCount = static_cast<WORD>(bpp * 8);
+            header.biCompression = BI_RGB;
+            header.biSizeImage = w * h * bpp;
+            memcpy(data + 0x0c, &header, sizeof(header));
+            *reinterpret_cast<DWORD*>(data + 0x40) = 0;
+            return 1;
+        }
+    }
+    return g_aviVideoOpen(self, edx, width, height, fps, alpha);
+}
+
+int __fastcall aviVideoWriteDetour(void* self, void* edx, void* image) {
+    if (g_videoFile.videoFrame && image && g_videoFile.videoFrame(self, image)) {
+        if (BYTE* data = aviData(self)) ++*reinterpret_cast<DWORD*>(data + 0x40);
+        return 1;
+    }
+    return g_aviVideoWrite(self, edx, image);
+}
+
+int __fastcall aviAudioOpenDetour(void* self, void* edx, const void* format) {
+    const int ok = g_aviAudioOpen(self, edx, format);
+    if (g_videoFile.audioOpen && format && readable(format, 16)) g_videoFile.audioOpen(self, format);
+    return ok;
+}
+
+int __fastcall aviAudioWriteDetour(void* self, void* edx, void* data, DWORD blocks) {
+    const int ok = g_aviAudioWrite(self, edx, data, blocks);
+    if (g_videoFile.audioData && data) g_videoFile.audioData(self, data, blocks);
+    return ok;
+}
+
+void __fastcall aviDestroyDetour(void* self, void* edx) {
+    g_aviDestroy(self, edx); // closes the .avi if it is still open
+    if (g_videoFile.closed) g_videoFile.closed(self);
 }
 
 // The game draws the reflection of each visible water plane: that plane is where its water is.
@@ -437,6 +856,8 @@ bool nodFilePath(const void* nod, wchar_t* out, size_t size);
 //   Vehicles\...Glass               car windows
 //   Vehicles\...                    the cars
 //   Grass ...                        grass
+//   Soil ...                         the terrain's dirt (Stadium: SoilGen21, SoilFix, SoilFixToGen21:
+//                                    the dirt ground, platforms and dirt roads)
 //   ...Sea... / ...Water...          the sea and other engine water (not in the menus)
 Material classify(const wchar_t* path) {
     const wchar_t* file = wcsrchr(path, L'\\');
@@ -449,9 +870,118 @@ Material classify(const wchar_t* path) {
         return wcsstr(file, L"Glass") ? Material::Glass : Material::Car;
     }
     if (!_wcsnicmp(file, L"Grass", 5)) return Material::Grass;
+    if (!_wcsnicmp(file, L"Soil", 4)) return Material::Dirt;
     const wchar_t* sea = wcsstr(file, L"Sea");
     if ((sea && sea[3] != L't') || wcsstr(file, L"Water")) return Material::Water; // not "Seat..."
     return Material::Other;
+}
+
+// The textures a material draws with. Every block material is its own copy of a shared shader
+// file (CPlugMaterial::DuplicateShaderFromMaterialModel: "TDiff_Spec_Nrm ... .Shader.Gbx?113")
+// with the material's own bitmaps put in: CPlugShaderApply's texture list (AddTextureApply: +0x94
+// the count, +0x98 the CPlugBitmapApply*), each holding its CPlugBitmap at +0x1c
+// (CPlugBitmapSampler::SetBitmap). The same offsets in both builds; only a CPlugShaderApply (its
+// vtable, from the build's table) is read. Returns the number of bitmaps, -1 for another class.
+constexpr size_t kShaderTextureCount = 0x94;
+constexpr size_t kShaderTextures = 0x98;
+constexpr size_t kSamplerBitmap = 0x1c;
+int shaderBitmaps(const void* shader, const void** out, int max) {
+    if (!g_build || !g_build->shaderApplyVTable) return -1;
+    __try {
+        const BYTE* s = static_cast<const BYTE*>(shader);
+        if (*reinterpret_cast<const uintptr_t*>(s) != rebase(g_build->shaderApplyVTable)) return -1;
+        const uint32_t count = *reinterpret_cast<const uint32_t*>(s + kShaderTextureCount);
+        const BYTE* const* list = *reinterpret_cast<const BYTE* const* const*>(s + kShaderTextures);
+        if (count > 64 || (count && !list)) return 0;
+        int n = 0;
+        for (uint32_t i = 0; i < count && n < max; i++) {
+            const void* bitmap = list[i] ? *reinterpret_cast<const void* const*>(list[i] + kSamplerBitmap) : nullptr;
+            if (bitmap) out[n++] = bitmap;
+        }
+        return n;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// The neon strips: plain block material to the game (TDiff_Spec_Nrm, lit like the road, nothing
+// added on top: the same class and shader file as the lane paint and the start banner's letters),
+// their blue is painted into the textures of two Stadium materials: the road borders' walls
+// (StadiumRoadBorderD, the one texture with its own night and sunset versions in Moods\) and the
+// curbs (StadiumRoadCircuitBorderD). The material decides, not the colour: a blue floor or a blue
+// letter is no strip however bright it is. Within the material its colour still tells the blue
+// strip from the grey and orange of the same texture.
+bool neonTexture(const wchar_t* path) {
+    const wchar_t* file = wcsrchr(path, L'\\');
+    const wchar_t* slash = wcsrchr(path, L'/');
+    if (slash > file) file = slash;
+    file = file ? file + 1 : path;
+    return !_wcsnicmp(file, L"StadiumRoadBorder", 17) || !_wcsnicmp(file, L"StadiumRoadCircuitBorder", 24);
+}
+
+volatile bool g_textureNames = false; // a material's texture had a file name (neon by material works)
+
+uintptr_t vtableOf(const void* nod) {
+    __try {
+        return *static_cast<const uintptr_t*>(nod);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// Whether a material draws with a neon strip texture. Logs each neon texture once per map
+// ("engine: neon material ..."), and once when the textures can't be read.
+bool neonMaterial(const void* shader) {
+    const void* bitmaps[16] = {};
+    const int n = shaderBitmaps(shader, bitmaps, 16);
+    static bool s_loggedClass = false;
+    if (n < 0 && !s_loggedClass && g_build && g_build->shaderApplyVTable) {
+        s_loggedClass = true;
+        TMVS_LOG("engine: material %p is no CPlugShaderApply (vtable %08x), its textures are not read", shader, static_cast<unsigned>(vtableOf(shader)));
+    }
+    static std::vector<std::wstring> s_logged;
+    static LONG s_loggedLoads = -1;
+    if (s_loggedLoads != g_mapLoads) {
+        s_logged.clear();
+        s_loggedLoads = g_mapLoads;
+    }
+    bool neon = false;
+    for (int i = 0; i < n; i++) {
+        wchar_t path[512] = {};
+        if (!nodFilePath(bitmaps[i], path, 512)) continue;
+        if (!g_textureNames) {
+            g_textureNames = true;
+            TMVS_LOG("engine: materials' textures readable (%ls), neon strips by their material", path);
+        }
+        if (!neonTexture(path)) continue;
+        neon = true;
+        if (s_logged.size() < 32 && std::find(s_logged.begin(), s_logged.end(), path) == s_logged.end()) {
+            s_logged.push_back(path);
+            TMVS_LOG("engine: neon material %p: %ls", shader, path);
+        }
+    }
+    return neon;
+}
+
+// The file names of a material's textures, "; " between them (F12's capture_NNN.mat).
+bool textureFiles(const void* shader, wchar_t* out, size_t size) {
+    const void* bitmaps[16] = {};
+    const int n = shaderBitmaps(shader, bitmaps, 16);
+    size_t used = 0;
+    out[0] = L'\0';
+    for (int i = 0; i < n; i++) {
+        wchar_t path[512] = {};
+        if (!nodFilePath(bitmaps[i], path, 512)) continue;
+        const size_t length = wcslen(path);
+        if (used + length + 3 >= size) break;
+        if (used) {
+            wcscpy_s(out + used, size - used, L"; ");
+            used += 2;
+        }
+        wcscpy_s(out + used, size - used, path);
+        used += length;
+    }
+    return used > 0;
 }
 
 Material materialOf(const void* shader) {
@@ -466,7 +996,8 @@ Material materialOf(const void* shader) {
     if (it != known.end()) return it->second;
     wchar_t path[512] = {};
     const bool named = nodFilePath(shader, path, 512);
-    const Material m = named ? classify(path) : Material::Other;
+    Material m = named ? classify(path) : Material::Other;
+    if (m == Material::Other && neonMaterial(shader)) m = Material::Neon;
     if (known.size() < 8192) known.emplace(shader, m);
     return m;
 }
@@ -537,7 +1068,14 @@ bool isSunLight(const void* corpusLight) {
 // The sun's flare is reported as hidden: the engine fades it out as when the sun goes behind
 // something (no abrupt cut, and it comes back the same way).
 void __fastcall lensFlareDetour(void* self, void* edx, void* light, const void* position, float size, int testVisible, float extra) {
-    if (g_hideSunFlare && testVisible && isSunLight(light)) testVisible = 0;
+    // Counted for the log (the sun came back in end-of-race replays: is it its flare?).
+    const bool sun = isSunLight(light);
+    g_flares[sun ? 1 : 0]++;
+    if (sun) sunDiagFlare(light);
+    if (g_hideSunFlare && testVisible && sun) {
+        testVisible = 0;
+        g_flares[2]++;
+    }
     g_lensFlare(self, edx, light, position, size, testVisible, extra);
 }
 
@@ -574,6 +1112,11 @@ void applyInterfaceVisibility() {
 void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
     InterlockedIncrement(&g_respawns);
     g_respawn(self, edx, player, flag);
+}
+
+int __fastcall removeBlockDetour(void* self, void* edx, void* block) {
+    InterlockedIncrement(&g_blocksRemoved);
+    return g_removeBlock(self, edx, block);
 }
 
 // The file a loaded map came from, through the engine's file system: the map's file node
@@ -640,14 +1183,26 @@ void readMapComments(const void* challenge) {
     InterlockedIncrement(&g_mapLoads);
 }
 
+// Once a map: how often keepNight put the weather back (a replay or a clip that keeps setting
+// the clock would otherwise jump it unseen once the drift log's 20 lines are used up).
+void reportNightJumps() {
+    if (g_nightJumps > 0) TMVS_LOG("engine: real night kept: the weather was put back to midnight %d times on the last map", g_nightJumps);
+    g_nightJumps = 0;
+}
+
 void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     g_app = self;
-    // Another map (or none: back to the menu): the objects of the last one go with it.
+    // Another map (or none: back to the menu): the objects of the last one go with it. Not the
+    // weather, time of day and forced midnight of the map just loaded (its load came first).
     g_freeCam = nullptr;
-    g_weather = nullptr;
     g_racePlayer = nullptr;
-    g_nightForced = false;
-    g_mapDayTime = -1.0f;
+    if (!challenge || challenge != g_sceneChallenge) {
+        reportNightJumps();
+        g_weather = nullptr;
+        g_nightForced = false;
+        g_mapDayTime = -1.0f;
+        g_sceneChallenge = nullptr;
+    }
     g_setChallenge(self, edx, challenge);
     if (!challenge) InterlockedIncrement(&g_mapCloses);
 }
@@ -677,7 +1232,9 @@ bool writeComments(void* challenge, const wchar_t* text, uint32_t length) {
 
 // SGameCtnIdentifier of the decoration at +0xc4: id, collection (the environment), author.
 void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMods) {
+    g_loadingChallenge = self;
     g_loadDecoration(self, edx, forcedMods);
+    g_loadingChallenge = nullptr;
     readMapComments(self);
     const void* collection = static_cast<const BYTE*>(self) + 0xc8;
     if (!readable(collection, sizeof(uint32_t))) return;
@@ -685,6 +1242,39 @@ void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMo
     if (!name || !readable(name, 1)) return;
     if (strncmp(name, g_environment, sizeof(g_environment)) != 0) TMVS_LOG("engine: environment %s", name);
     strncpy_s(g_environment, name, _TRUNCATE);
+}
+
+// The weather's clock as a fraction of the day: its two times (async, timed). False when the
+// weather isn't the one that jumped last (gone, or another object at its address).
+bool weatherClock(float& async, float& timed, int& mode, float& speed) {
+    __try {
+        const BYTE* weather = static_cast<const BYTE*>(g_weather);
+        if (!weather || !readable(weather, kWeatherTimer + 4) || *reinterpret_cast<const void* const*>(weather) != g_weatherVtable) return false;
+        const BYTE* timer = *reinterpret_cast<const BYTE* const*>(weather + kWeatherTimer);
+        if (!timer || !readable(timer, 0x2c)) return false;
+        const int period = *reinterpret_cast<const int*>(timer + 0x20);
+        if (period <= 0) return false;
+        async = static_cast<float>(*reinterpret_cast<const unsigned*>(timer + 0x18) % static_cast<unsigned>(period)) / static_cast<float>(period);
+        timed = static_cast<float>(*reinterpret_cast<const unsigned*>(timer + 0x1c) % static_cast<unsigned>(period)) / static_cast<float>(period);
+        mode = *reinterpret_cast<const int*>(timer + 0x14);
+        speed = *reinterpret_cast<const float*>(timer + 0x28);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void noteNightClock() {
+    __try {
+        g_weatherVtable = g_weather && readable(g_weather, 4) ? *reinterpret_cast<const void* const*>(g_weather) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_weatherVtable = nullptr;
+    }
+    float async = 0.0f, timed = 0.0f, speed = 0.0f;
+    int mode = 0;
+    const bool known = weatherClock(async, timed, mode, speed);
+    g_nightClock = known ? timed : -1.0f;
+    g_nightClockAsync = known ? async : -1.0f;
 }
 
 void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
@@ -696,6 +1286,7 @@ void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
         TMVS_LOG("engine: weather %p jumps to time of day %.3f%s", self, time, g_nightForced ? " -> 0 (real night)" : "");
     }
     g_jumpTime(self, edx, wanted);
+    if (g_nightForced) noteNightClock();
 }
 
 void __fastcall raceTriggersDetour(void* self, void* edx, void* player, void* group) {
@@ -709,15 +1300,91 @@ void __fastcall clipTriggersDetour(void* self, void* edx) {
     g_clipTriggers(self, edx);
 }
 
+// The moon's direction, as the game passes it to SetDOV: replaced in place, so the specular cube
+// (built from the same vector afterwards) follows.
+void* __fastcall moonDirectionDetour(void* matrix, void* edx, float* direction, int flag) {
+    if (g_moonMode != 0 && direction) {
+        __try {
+            memcpy(g_moonGameTravel, direction, sizeof(g_moonGameTravel));
+            if (g_moonMode == 1) memcpy(direction, g_moonTravel, sizeof(g_moonTravel));
+            g_moonApplied = true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    return g_setDov(matrix, edx, direction, flag);
+}
+
+// The moon's colour: none with the moon off (the light's intensity and flags stay).
+void* __fastcall moonColorDetour(void* light, void* edx, const float* rgb) {
+    static const float kNone[3] = {};
+    if (g_moonMode != 0 && rgb && !g_moonLogged) {
+        g_moonLogged = true;
+        __try {
+            TMVS_LOG("engine: the game's moon (colour %.2f %.2f %.2f, towards %.2f %.2f %.2f) %s", rgb[0], rgb[1], rgb[2], -g_moonGameTravel[0],
+                     -g_moonGameTravel[1], -g_moonGameTravel[2], g_moonMode == 1 ? "shines from the black hole" : "is off");
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    if (g_moonMode == 2) {
+        g_moonApplied = true;
+        return g_setBaseRgb(light, edx, kNone);
+    }
+    return g_setBaseRgb(light, edx, rgb);
+}
+
+int __fastcall cacheUpToDateDetour(void* self, void* edx) {
+    if (g_moonMode == 0) return g_cacheUpToDate(self, edx);
+    if (!g_cacheLogged) {
+        g_cacheLogged = true;
+        TMVS_LOG("engine: lightmap cache not used: the game bakes this map's light with the changed moon (and doesn't save it)");
+    }
+    return 0;
+}
+
+int __fastcall cacheSaveDetour(void* self, void* edx) {
+    // Not g_moonMode: real night switched off during the map clears it (relightNight), and a save
+    // after that would store the changed moon's bake as the map's own.
+    return g_moonBaked ? 0 : g_cacheSave(self, edx);
+}
+
+// EngineMoon, once per map load, before the scene (and with it the lightmap) is made: the
+// lightmap is baked once, so the moon stays as decided here for the whole map.
+void decideMoon(float dayTime, bool litAtNight) {
+    g_moonMode = 0;
+    g_moonApplied = false;
+    g_moonBaked = false;
+    g_moonLogged = false;
+    g_cacheLogged = false;
+    MoonLight moon;
+    if (!g_moonAtLoad || !g_moonAtLoad(dayTime, litAtNight, moon) || moon.mode < 1 || moon.mode > 2) return;
+    if (!g_setDov || !g_setBaseRgb || !g_cacheUpToDate || !g_cacheSave) {
+        TMVS_LOG("engine: the moon can't be changed in this build (hooks missing), the game's moon stays");
+        return;
+    }
+    const float len = sqrtf(moon.toward[0] * moon.toward[0] + moon.toward[1] * moon.toward[1] + moon.toward[2] * moon.toward[2]);
+    if (!(len > 1e-4f && len < 1e4f)) return;
+    for (int i = 0; i < 3; i++) g_moonTravel[i] = -moon.toward[i] / len;
+    g_moonMode = moon.mode;
+    g_moonBaked = true;
+    if (moon.mode == 1)
+        TMVS_LOG("engine: this map's moon shines from the black hole (towards %.3f %.3f %.3f)", -g_moonTravel[0], -g_moonTravel[1], -g_moonTravel[2]);
+    else
+        TMVS_LOG("engine: this map's moon is off (ambient and lamps stay)");
+}
+
 void __fastcall loadSceneDetour(void* self, void* edx) {
     const BYTE* decoration = static_cast<const BYTE*>(self);
     void* mood = readable(decoration + kDecorationMood, sizeof(void*)) ? *reinterpret_cast<void* const*>(decoration + kDecorationMood) : nullptr;
     float* time = mood && readable(static_cast<BYTE*>(mood) + kMoodDayTime, sizeof(float)) ? reinterpret_cast<float*>(static_cast<BYTE*>(mood) + kMoodDayTime) : nullptr;
+    // A map's load (null: the editor changing the decoration, a menu scene).
+    g_sceneChallenge = g_loadingChallenge;
+    sunDiagEpoch(true, 0);
     if (!time || !(*time >= 0.0f && *time <= 1.0f)) {
         // Nothing of the last map carries over (its forced midnight, its time of day).
         g_weather = nullptr;
         g_nightForced = false;
         g_mapDayTime = -1.0f;
+        decideMoon(-1.0f, false);
         g_loadScene(self, edx);
         return;
     }
@@ -727,6 +1394,7 @@ void __fastcall loadSceneDetour(void* self, void* edx) {
     g_nightForced = g_wantNight && g_wantNight(original);
     TMVS_LOG("engine: map time of day %.3f%s", original, g_nightForced ? ", lit at midnight (night sky)" : "");
     if (g_nightForced) *time = 0.0f;
+    decideMoon(original, g_nightForced);
     g_loadScene(self, edx);
     *time = original;
     g_weatherTime = original; // the load's jumps asked for the midnight forced above
@@ -778,6 +1446,7 @@ int __fastcall frameBeginDetour(void* self, void* edx) {
                  static_cast<unsigned>(*reinterpret_cast<const unsigned short*>(rebase(g_build->shaderLevel))));
     }
     logDisplayConfig();
+    g_engineFrames++;
     if (g_callbacks.frameBegin) g_callbacks.frameBegin();
     return g_frameBegin(self, edx);
 }
@@ -786,6 +1455,14 @@ void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* cle
     g_camera.camera = camera;
     g_camera.hasView = false;
     g_camera.hasProjection = false;
+    // This camera's matrices, computed just before its begin (both paths); the next camera
+    // computes its own.
+    g_beginMatrices = g_lastViewSet && g_lastProjectionSet;
+    if (g_beginMatrices) {
+        g_beginView = g_lastView;
+        g_beginProjection = g_lastProjection;
+    }
+    g_lastViewSet = g_lastProjectionSet = false;
     if (g_callbacks.cameraBegin) g_callbacks.cameraBegin(camera);
     g_cameraBegin(self, edx, camera, clearDesc);
 }
@@ -815,6 +1492,8 @@ void __fastcall viewMatrixDetour(void* self, void* edx, void* location) {
     memcpy(g_camera.location, base, sizeof(g_camera.location));
     memcpy(&g_camera.view, base + 0x60, sizeof(Matrix4));
     g_camera.hasView = true;
+    memcpy(&g_lastView, base + 0x60, sizeof(Matrix4)); // what SetTransform(D3DTS_VIEW) gets
+    g_lastViewSet = true;
 }
 
 // SHmsCameraProjection: +0x00 GmMat4 projection, +0x40 transposed copy.
@@ -859,6 +1538,8 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
     }
     memcpy(&g_camera.projection, projection, sizeof(Matrix4));
     g_camera.hasProjection = true;
+    memcpy(&g_lastProjection, m + 16, sizeof(Matrix4)); // the D3D layout SetTransform(D3DTS_PROJECTION) gets
+    g_lastProjectionSet = true;
 }
 
 // EShadow: 0 None, 1 Minimum, 2 Medium, 3 High, 4 VeryHigh, 5 Complex (assumed launcher order).
@@ -906,6 +1587,7 @@ bool install(const Callbacks& callbacks) {
     g_tileHeight = reinterpret_cast<TileHeightFn>(inlineHook(kWaterTileHeight, reinterpret_cast<void*>(&tileHeightDetour)));
     g_raceReset = reinterpret_cast<RaceResetFn>(inlineHook(kRaceResetSite, reinterpret_cast<void*>(&raceResetDetour)));
     g_respawn = reinterpret_cast<RespawnFn>(inlineHook(kRespawnSite, reinterpret_cast<void*>(&respawnDetour)));
+    g_removeBlock = reinterpret_cast<RemoveBlockFn>(inlineHook(kRemoveBlockSite, reinterpret_cast<void*>(&removeBlockDetour)));
     g_loadDecoration = reinterpret_cast<LoadDecorationFn>(inlineHook(kLoadDecorationSite, reinterpret_cast<void*>(&loadDecorationDetour)));
     g_setChallenge = reinterpret_cast<SetChallengeFn>(inlineHook(kSetChallengeSite, reinterpret_cast<void*>(&setChallengeDetour)));
     g_freeCamSet = reinterpret_cast<FreeCamFn>(inlineHook(kFreeCamSite, reinterpret_cast<void*>(&freeCamDetour)));
@@ -919,6 +1601,33 @@ bool install(const Callbacks& callbacks) {
     g_clipTriggers = reinterpret_cast<ClipTriggersFn>(inlineHook(kClipTriggersSite, reinterpret_cast<void*>(&clipTriggersDetour)));
     g_jumpTime = reinterpret_cast<JumpTimeFn>(inlineHook(kJumpTimeSite, reinterpret_cast<void*>(&jumpTimeDetour)));
     g_raceTriggers = reinterpret_cast<RaceTriggersFn>(inlineHook(kRaceTriggersSite, reinterpret_cast<void*>(&raceTriggersDetour)));
+    g_cacheUpToDate = reinterpret_cast<CacheFn>(inlineHook(kCacheUpToDateSite, reinterpret_cast<void*>(&cacheUpToDateDetour)));
+    g_cacheSave = reinterpret_cast<CacheFn>(inlineHook(kCacheSaveSite, reinterpret_cast<void*>(&cacheSaveDetour)));
+    g_baseRgb = reinterpret_cast<BaseRgbFn>(inlineHook(kBaseRgbSite, reinterpret_cast<void*>(&baseRgbDetour)));
+    // The export's file: all six or none (a frame written without the open would go nowhere).
+    {
+        const struct {
+            const InlineSite* site;
+            void* detour;
+            void** original;
+        } avi[] = {{&kAviOpenSite, reinterpret_cast<void*>(&aviOpenDetour), reinterpret_cast<void**>(&g_aviOpen)},
+                   {&kAviVideoOpenSite, reinterpret_cast<void*>(&aviVideoOpenDetour), reinterpret_cast<void**>(&g_aviVideoOpen)},
+                   {&kAviVideoWriteSite, reinterpret_cast<void*>(&aviVideoWriteDetour), reinterpret_cast<void**>(&g_aviVideoWrite)},
+                   {&kAviAudioOpenSite, reinterpret_cast<void*>(&aviAudioOpenDetour), reinterpret_cast<void**>(&g_aviAudioOpen)},
+                   {&kAviAudioWriteSite, reinterpret_cast<void*>(&aviAudioWriteDetour), reinterpret_cast<void**>(&g_aviAudioWrite)},
+                   {&kAviDestroySite, reinterpret_cast<void*>(&aviDestroyDetour), reinterpret_cast<void**>(&g_aviDestroy)}};
+        bool all = true;
+        for (const auto& a : avi) all = all && prologueMatches(*a.site);
+        if (all) {
+            for (const auto& a : avi) *a.original = inlineHook(*a.site, a.detour);
+        } else {
+            TMVS_LOG("engine: the video export's file writer does not match this executable: MP4 export off");
+        }
+    }
+    g_setDov = reinterpret_cast<SetDovFn>(patchCall(g_build->moonDirectionCall, g_build->setDov, reinterpret_cast<void*>(&moonDirectionDetour),
+                                                    "CMotionManagerWeathers::UpdateAsync (moon direction)"));
+    g_setBaseRgb = reinterpret_cast<SetBaseRgbFn>(patchCall(g_build->moonColorCall, g_build->setBaseRgb, reinterpret_cast<void*>(&moonColorDetour),
+                                                            "CMotionManagerWeathers::UpdateAsync (moon colour)"));
     patchFx(0, reinterpret_cast<void*>(&bloomCanActiveDetour));
     patchFx(1, reinterpret_cast<void*>(&colorsCanActiveDetour));
     g_active = true;
@@ -942,10 +1651,24 @@ bool mapLitAtNight() {
     return g_nightForced;
 }
 
+void setMoonAtLoad(bool (*decide)(float dayTime, bool litAtNight, MoonLight& moon)) {
+    g_moonAtLoad = decide;
+}
+
+bool moonReplaced() {
+    return g_moonMode != 0 && g_moonApplied;
+}
+
 bool relightNight(bool night) {
     if (night == g_nightForced) return true;
     if (!g_jumpTime || !g_weather || g_weatherTime < 0.0f || g_mapDayTime < 0.0f || !readable(g_weather, 0x30)) return false;
     g_nightForced = night;
+    // The lightmap stays as it was baked: a moon changed at load ends with the night (back to
+    // the game's light by day); one switched on now is the game's own until the next map.
+    if (!night && g_moonMode != 0) {
+        g_moonMode = 0;
+        g_moonApplied = false;
+    }
     TMVS_LOG("engine: real night %s during the map: weather %p to time of day %.3f", night ? "on" : "off", g_weather,
              night ? 0.0f : g_weatherTime);
     __try {
@@ -954,7 +1677,52 @@ bool relightNight(bool night) {
         g_weather = nullptr;
         return false;
     }
+    if (night) noteNightClock();
+    else g_nightClock = -1.0f;
     return true;
+}
+
+bool keepNight(bool fix) {
+    if (!g_nightForced || !g_jumpTime || g_nightClock < 0.0f) return false;
+    float async = 0.0f, timed = 0.0f, speed = 0.0f;
+    int mode = 0;
+    if (!weatherClock(async, timed, mode, speed)) return false;
+    // Around the clock: 0.99 and 0.01 are 0.02 apart.
+    auto apart = [](float a, float b) {
+        const float d = fabsf(a - b);
+        return d < 0.5f ? d : 1.0f - d;
+    };
+    const float movedTimed = apart(timed, g_nightClock), movedAsync = g_nightClockAsync >= 0.0f ? apart(async, g_nightClockAsync) : 0.0f;
+    const float moved = movedTimed > movedAsync ? movedTimed : movedAsync;
+    if (moved < 0.01f) return false; // a quarter of an hour of the game's day
+    // At most one jump a second: a clock that doesn't come back within 0.01 (or a replay that keeps
+    // setting it) would otherwise jump the weather every frame.
+    const DWORD now = GetTickCount();
+    if (fix && g_nightJumps > 0 && now - g_nightJumpTick < 1000) return false;
+    if (g_nightLogged < 20) {
+        g_nightLogged++;
+        TMVS_LOG("engine: the weather's time of day moved away from the forced midnight (%.3f -> timed %.3f, async %.3f; clock mode %d, speed %.3f, "
+                 "cinematic %d)%s",
+                 g_nightClock, timed, async, mode, speed, cinematicActive() ? 1 : 0, fix ? ": back to midnight" : "");
+    }
+    if (!fix) return false;
+    __try {
+        g_jumpTime(g_weather, nullptr, 0.0f); // the original (trampoline): the detour doesn't see it
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_weather = nullptr;
+        return false;
+    }
+    // Where the clocks are now is the midnight to keep (the next frame compares with this).
+    noteNightClock();
+    g_nightJumps++;
+    g_nightJumpTick = now;
+    return true;
+}
+
+void flareCounts(unsigned& other, unsigned& sun, unsigned& hidden) {
+    other = static_cast<unsigned>(InterlockedExchange(&g_flares[0], 0));
+    sun = static_cast<unsigned>(InterlockedExchange(&g_flares[1], 0));
+    hidden = static_cast<unsigned>(InterlockedExchange(&g_flares[2], 0));
 }
 
 const CameraInfo& currentCamera() {
@@ -993,7 +1761,7 @@ std::string mapComments() {
     return g_mapComments;
 }
 
-bool carLocation(float position[3]) {
+bool carLocation(float position[3], float up[3]) {
     // Only the player of a race that runs now (the hook calls come every frame); the build's
     // own GetInterpolatedLocation in the slot, or nothing is called.
     if (!g_build || !g_build->interpolatedLocation || !g_racePlayer || GetTickCount() - g_racePlayerTick > 300) return false;
@@ -1011,6 +1779,54 @@ bool carLocation(float position[3]) {
         for (int i = 0; i < 3; i++) {
             position[i] = iso[9 + i];
             if (!(fabsf(position[i]) < 1e5f)) return false;
+        }
+        if (up) {
+            // The car's up is one column of the 3x3 (the model's y, column 1, if TMNF is like
+            // ManiaPlanet). Which one is taken from the car standing level (at the start: one
+            // column within 18 degrees of the world's up), its sign with it; until then the world's
+            // up. Picked again on every map, and only once the same column and sign held for 30
+            // frames: a car on its roof the moment it was first seen made it upside down for the
+            // whole session. Logged when it differs from the last pick.
+            static int s_axis = -1, s_logged = -1;
+            static float s_sign = 1.0f;
+            static LONG s_loads = -1;
+            static int s_candidate = -1, s_frames = 0;
+            if (s_loads != g_mapLoads) {
+                s_loads = g_mapLoads;
+                s_axis = s_candidate = -1;
+                s_frames = 0;
+            }
+            float column[3][3];
+            float length[3];
+            for (int c = 0; c < 3; c++) {
+                for (int r = 0; r < 3; r++) column[c][r] = iso[r * 3 + c];
+                length[c] = sqrtf(column[c][0] * column[c][0] + column[c][1] * column[c][1] + column[c][2] * column[c][2]);
+            }
+            if (s_axis < 0) {
+                int level = -1; // column * 2 + (negated)
+                for (int c = 0; c < 3 && level < 0; c++) {
+                    if (length[c] > 1e-3f && fabsf(column[c][1]) > 0.95f * length[c]) level = c * 2 + (column[c][1] < 0.0f ? 1 : 0);
+                }
+                s_frames = level >= 0 && level == s_candidate ? s_frames + 1 : (level >= 0 ? 1 : 0);
+                s_candidate = level;
+                if (s_frames >= 30) {
+                    s_axis = level / 2;
+                    s_sign = (level & 1) ? -1.0f : 1.0f;
+                    if (level != s_logged) {
+                        s_logged = level;
+                        const int c = s_axis;
+                        TMVS_LOG("engine: the car's up is column %d of its matrix%s (columns %.2f %.2f %.2f / %.2f %.2f %.2f / %.2f %.2f %.2f)",
+                                 c, s_sign < 0.0f ? ", negated" : "", column[0][0], column[0][1], column[0][2], column[1][0], column[1][1],
+                                 column[1][2], column[2][0], column[2][1], column[2][2]);
+                    }
+                }
+            }
+            up[0] = 0.0f;
+            up[1] = 1.0f;
+            up[2] = 0.0f;
+            if (s_axis >= 0 && length[s_axis] > 1e-3f && length[s_axis] < 1e3f) {
+                for (int r = 0; r < 3; r++) up[r] = column[s_axis][r] * s_sign / length[s_axis];
+            }
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1054,6 +1870,10 @@ int respawns() {
     return static_cast<int>(g_respawns);
 }
 
+int blocksRemoved() {
+    return static_cast<int>(g_blocksRemoved);
+}
+
 void setProjectionJitter(float x, float y) {
     g_jitter[0] = x;
     g_jitter[1] = y;
@@ -1068,6 +1888,13 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 
 void setMainCamera(const void* camera) {
     g_mainCamera = camera;
+}
+
+bool cameraMatrices(float view[16], float projection[16]) {
+    if (!g_beginMatrices) return false;
+    memcpy(view, &g_beginView, sizeof(g_beginView));
+    memcpy(projection, &g_beginProjection, sizeof(g_beginProjection));
+    return true;
 }
 
 void setProjectionZoom(float zoom) {
@@ -1108,6 +1935,22 @@ Material currentMaterial() {
     return materialOf(g_currentShader);
 }
 
+Material materialClass(const void* shader) {
+    return materialOf(shader);
+}
+
+bool materialFile(const void* shader, wchar_t* out, size_t size) {
+    return shader && nodFilePath(shader, out, size);
+}
+
+bool materialTextures(const void* shader, wchar_t* out, size_t size) {
+    return shader && size > 0 && textureFiles(shader, out, size);
+}
+
+bool neonMaterialsKnown() {
+    return g_drawShader && g_drawPass && g_textureNames;
+}
+
 void fullViewDistance(bool full) {
     g_fullViewDistance = full;
 }
@@ -1130,10 +1973,67 @@ bool cinematicActive() {
     return g_lastCinematic != 0 && GetTickCount() - g_lastCinematic < 500;
 }
 
+bool clipInRace() {
+    // The map's own clips (in-game triggers) only run the clip player; replays, the end of race
+    // replay and the editor also run the clip viewer's cameras (the owner's log: "sources 3"
+    // there, "sources 1" for the clips on the track). The race checks its player's trigger zones
+    // every frame it runs, also while such a clip plays.
+    const DWORD now = GetTickCount();
+    if (!cinematicActive() || !g_tracksUpdate || (g_lastNotClip != 0 && now - g_lastNotClip < 500)) return false;
+    return g_racePlayer && now - g_racePlayerTick <= 300;
+}
+
 unsigned cinematicSources() {
     const unsigned s = g_cinematicSources;
     g_cinematicSources = 0;
     return s;
+}
+
+void setVideoFileHooks(const VideoFileHooks& hooks) {
+    g_videoFile = hooks;
+}
+
+bool videoFileHooked() {
+    return g_aviOpen && g_aviVideoOpen && g_aviVideoWrite && g_aviAudioOpen && g_aviAudioWrite && g_aviDestroy;
+}
+
+bool videoExport(VideoExport& out) {
+    out = VideoExport();
+    // Counted in frames, not ms: one frame of a 4K export with supersampling takes seconds.
+    if (!g_doShoot || !g_shooter || g_engineFrames - g_shootFrame > 3) return false;
+    const BYTE* shooter = static_cast<const BYTE*>(g_shooter);
+    __try {
+        if (!readable(shooter, kShooterParams + sizeof(void*))) return false;
+        const BYTE* params = *reinterpret_cast<const BYTE* const*>(shooter + kShooterParams);
+        if (!params || !readable(params, kVideoParamsSize)) return false;
+        const auto at = [params](size_t offset) { return *reinterpret_cast<const int*>(params + offset); };
+        out.fps = static_cast<float>(at(0x14));
+        out.width = at(0x18);
+        out.height = at(0x1c);
+        out.hq = at(0x20) != 0;
+        out.hqSamples = out.hq && at(0x24) > 1 ? (at(0x24) > 11 ? 11 : at(0x24)) : 1;
+        out.hqMotionBlur = at(0x28) != 0;
+        out.stereo = at(0x38);
+        out.writesVideo = *reinterpret_cast<const int*>(shooter + kShooterNoVideo) == 0;
+        // Not the dialog's numbers (another build, a patched game): no export as far as we know.
+        if (out.fps < 1.0f || out.fps > 1000.0f || out.width < 16 || out.height < 16 || out.width > 16384 || out.height > 16384) return false;
+        const int samples = out.hqSamples * out.hqSamples;
+        out.subFrames = samples > 1 && out.hqMotionBlur && samples >= 9 && out.writesVideo;
+        out.samplesPerFrame = samples > 1 && !out.subFrames ? samples : 1;
+        out.samplesPerVideoFrame = out.subFrames ? samples : 1;
+        const BYTE* const* core = reinterpret_cast<const BYTE* const*>(rebase(g_build->coreCmdBuffer));
+        if (readable(core, sizeof(void*)) && *core && readable(*core, kCoreTickTime + sizeof(DWORD))) {
+            const DWORD ms = *reinterpret_cast<const DWORD*>(*core + kCoreFixedMs);
+            const DWORD fraction = *reinterpret_cast<const DWORD*>(*core + kCoreFixedFraction);
+            out.step = (static_cast<double>(ms) + static_cast<double>(fraction) / 2147483648.0) / 1000.0;
+            if (out.step > 1.0) out.step = 0.0; // not a frame step: the real clock
+            out.gameClock = static_cast<double>(*reinterpret_cast<const DWORD*>(*core + kCoreTickTime)) / 1000.0;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out = VideoExport();
+        return false;
+    }
+    return true;
 }
 
 } // namespace engine

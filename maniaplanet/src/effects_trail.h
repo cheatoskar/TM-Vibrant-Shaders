@@ -2,7 +2,8 @@
 // Neon trail behind the car (the TMNF mod's): the car's position from the engine (hooks.cpp reads
 // it from the car's ObjectV at its G-buffer draw), kept 60 times a second (and every metre) while
 // it moves, in a ring buffer, drawn as a glowing ribbon into the HDR image. It stays until the run
-// starts again (the car back at its start) or the map changes. Shaders: shaders/trail.hlsl.
+// starts again (the car back at its start; TrailKeepRuns keeps earlier runs, dimmer) or the map
+// changes. Shaders: shaders/trail.hlsl.
 #include <d3d11.h>
 #include <vector>
 
@@ -25,27 +26,62 @@ public:
     // fx.currentRtv().
     void draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s);
 
+    // The recording alone (also for the offline test): dt (s), the car's position (null: not seen
+    // this frame) and its up (null: the world's). True: the live end (slot head()) is drawn after
+    // the kept points.
+    bool record(float dt, const float* car, const float* up = nullptr);
+    void startRecording() {
+        if (m_points.empty()) m_points.assign(kPoints * 4, 0.0f);
+        clear();
+    }
+    void tick(float dt) {
+        m_time += dt;
+        m_clock += dt;
+    }
+    // The compare split's preset side draws `from`'s trail (null: its own), recording none.
+    void shareFrom(const TrailStage* from) { m_from = from != this ? from : nullptr; }
+    UINT head() const { return m_head; }
+    UINT count() const { return m_count; }
+    const float* point(UINT i) const { return &m_points[(i % kPoints) * 4]; }
+
 private:
     static constexpr UINT kPoints = 16384; // 4.5 min at 60 points a second, ~3 min at full speed
+    static constexpr int kRunsMax = 5;      // TrailKeepRuns' most
     void clear();
+    // A restart: a new run, the earlier ones kept as `keepRuns` says (0: clear).
+    void newRun(int keepRuns);
+    // `from`'s points, stamps and runs (this stage's own, or the one it shares).
+    void drawPoints(ID3D11DeviceContext* ctx, Effects& fx, const tmshaders::Settings& s, const TrailStage& from, UINT points, UINT next);
     static constexpr float kMinStep = 0.3f; // m: closer points are no line (the car shaking in place)
+    static constexpr float kLift = 0.1f;    // m over the car's origin (on the road), see draw()
     ID3D11VertexShader* m_vs = nullptr;
     ID3D11PixelShader* m_ps = nullptr;
     ID3D11Texture2D* m_pointsTex = nullptr;
     ID3D11ShaderResourceView* m_pointsSrv = nullptr;
     ID3D11Buffer* m_cb = nullptr;
     ID3D11BlendState* m_add = nullptr;
-    std::vector<float> m_points; // kPoints x (xyz, stamp)
+    std::vector<float> m_points; // kPoints x (xyz, stamp), then kPoints x (the car's up, 1): the texture's 2 rows
+    int m_dirty = -2;            // the slot written since the last upload (-1 none, -2 all)
     UINT m_head = 0, m_count = 0;
     float m_clock = 0.0f, m_time = 0.0f;
     float m_kept[3] = {};
     bool m_keptValid = false;
     bool m_break = true;
+    int m_liveFrames = 0; // frames the live end may stay without the car
     double m_lastTime = -1.0;
     float m_start[3] = {};   // where the run began (the first point after a clear)
     bool m_startValid = false;
     int m_mapSerial = -1;
+    // Runs (TrailKeepRuns): per run (0 this one, k the k-th before it) its first time stamp and the
+    // points kept before it began; runs older than the kept ones are cut off the drawn points.
+    UINT m_written = 0; // points kept since the clear
+    int m_runs = 0;     // earlier runs kept
+    float m_runStart[kRunsMax + 1] = {};
+    UINT m_runFirst[kRunsMax + 1] = {};
+    unsigned m_track = 0; // the car's (EngineCar::track)
     bool m_ready = false;
+    const TrailStage* m_from = nullptr;     // shareFrom
+    UINT m_drawnPoints = 0, m_drawnNext = 0; // what the last draw showed (for a stage sharing it)
 };
 
 } // namespace tmvs_mp

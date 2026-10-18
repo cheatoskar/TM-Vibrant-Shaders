@@ -45,6 +45,10 @@ const CameraInfo& currentCamera();
 // True while a MediaTracker clip plays (replays, intros, the replay editor) or the video
 // export runs: the moments for motion blur and depth of field. False while driving.
 bool cinematicActive();
+// True while only the clip player runs (no clip viewer's cameras, no video export) and a race
+// checks its player every frame: a clip of the map (its in-game triggers: a camera in a loop,
+// texts at the start) plays while the player drives. cinematicActive() is true then too.
+bool clipInRace();
 
 // Sub-pixel offset (NDC) added to every perspective projection the engine computes from now
 // on, for TAA: each frame samples the pixels at a slightly different spot. 0, 0 = off.
@@ -56,6 +60,10 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 
 // The camera (CHmsCamera) the plugin shades: zoom and tiles apply to its projection only.
 void setMainCamera(const void* camera);
+
+// The view and projection (D3D layout, as SetTransform gets them) the engine computed for the
+// camera that began last, before its RenderCameraBegin. False when it computed none.
+bool cameraMatrices(float view[16], float projection[16]);
 
 // Photo mode zoom: every perspective projection magnified about the centre (1 = off; only
 // in, never out, since the engine culls with its own field of view).
@@ -92,15 +100,45 @@ void hideGameSky(bool hide);
 // night outside (0.25, 0.75]) and answers whether the game lights the map at midnight
 // instead (its own moon, fog and sky; no baked sun). Visual only: the map stays as it is.
 void setNightAtLoad(bool (*decide)(float dayTime));
+// The game's moon on night maps under the black hole (EngineMoon). At each map load, before the
+// scene is made, `decide` gets the map's time of day and whether it is lit at midnight, and
+// answers what the game's moon does there: mode 1 shines from `toward` (world direction towards
+// the light: the lightmap baked at load, the glints, the car), 2 off (ambient and lamps stay).
+// Fixed for the map: its lightmap is baked once.
+struct MoonLight {
+    int mode = 0;
+    float toward[3] = {0.0f, 1.0f, 0.0f};
+};
+void setMoonAtLoad(bool (*decide)(float dayTime, bool litAtNight, MoonLight& moon));
+// The moon of this map is changed and the game's weather has used it.
+bool moonReplaced();
 // The loaded map's own time of day (-1 unknown) and whether it is lit at midnight instead.
 float mapDayTime();
 bool mapLitAtNight();
 // Real night switched on or off while a map runs: the weather jumps to midnight or back to the
 // map's time (only call it in gameplay: the weather of a map that was left may be gone).
 bool relightNight(bool night);
-// What the material being drawn is (from its shader file), Other between draws.
-enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5 };
+// Real night kept: when the weather's clock left the forced midnight (an end-of-race replay may
+// set it itself, the sun came back), it is logged and, with `fix`, jumped back. Once a frame in
+// gameplay, before the scene is drawn. True when it jumped.
+bool keepNight(bool fix);
+// The game's lens flares since the last call (for the log): other lights, the sun, the sun's hidden.
+void flareCounts(unsigned& other, unsigned& sun, unsigned& hidden);
+// What the material being drawn is (from its shader file; Neon: from its textures, the neon
+// strips of Stadium's road borders and curbs; Dirt: the terrain's Soil shaders), Other between
+// draws. Seven at most: the class takes the stencil's low three bits.
+enum class Material : unsigned char { Other = 0, Light = 1, Car = 2, Glass = 3, Grass = 4, Water = 5, Neon = 6, Dirt = 7 };
 Material currentMaterial();
+// The class and shader file of a material (currentShader; false: no name). For F12's
+// material ids (capture_NNN.mat).
+Material materialClass(const void* shader);
+bool materialFile(const void* shader, wchar_t* out, size_t size);
+// Its textures' files, "; " between them (false: none read).
+bool materialTextures(const void* shader, wchar_t* out, size_t size);
+// The draws' materials are known and their textures can be read: the neon strips are told by
+// their material (Material::Neon), not by their colour. False on an unknown build, without the
+// draw hooks, or while no texture had a file name yet.
+bool neonMaterialsKnown();
 // Development: log each material once with its file (tmvs.log "shader ...").
 void shaderCensus(bool on);
 
@@ -110,6 +148,8 @@ bool freeCamActive();
 // Counters of race (re)starts / map loads and of respawns (for the neon trail).
 int raceResets();
 int respawns();
+// Counts the blocks the editor took out of the map (CasterShadows forgets the meshes it saw).
+int blocksRemoved();
 
 // The map is a Stadium map (always in Nations Forever; United Forever has six more
 // environments).
@@ -130,8 +170,10 @@ int mapCloses();
 bool mapOpen();
 
 // Where the player's car is drawn now (world space), while a race runs (also with the car off
-// screen). False otherwise, or without the hooks (another game build).
-bool carLocation(float position[3]);
+// screen). False otherwise, or without the hooks (another game build). up (if given): the car's
+// up axis in the world (unit length), its roof's way: on a banked curve, a wall or in a loop
+// the road's up under the car.
+bool carLocation(float position[3], float up[3] = nullptr);
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.
 bool currentMapComments(std::string& comments);
@@ -140,6 +182,45 @@ bool setCurrentMapComments(const std::string& comments);
 // Which of the cinematic hooks fired since the last call (bit 0 clip player, 1 clip viewer,
 // 2 video export), for the log.
 unsigned cinematicSources();
+
+// The game's video export (replay editor, "Shoot video"), as its dialog set it up. The game
+// renders each frame at the export's size into its own target, then copies it into the AVI
+// at the end of the frame (CVisionViewportDx9::RenderFrameEnd): the mod's image is what it
+// writes. Its clock runs at a fixed step instead of the real time.
+struct VideoExport {
+    int width = 0, height = 0; // the video's size
+    float fps = 0.0f;
+    bool hq = false;           // "high quality": supersampling, hqSamples x hqSamples samples
+    int hqSamples = 1;         // per side (1 = none, the game takes at most 11)
+    bool hqMotionBlur = false; // the dialog's motion blur
+    bool subFrames = false;    // each rendered frame is one sample at its own moment, the game
+                               // averages samplesPerVideoFrame of them (real motion blur)
+    int samplesPerFrame = 1;   // main camera renders per rendered frame (sub-pixel samples, all
+                               // into the same target; averaged by the game)
+    int samplesPerVideoFrame = 1;
+    bool writesVideo = true;   // false: a run that writes no video (DoShoot skipped the output)
+    int stereo = 0;            // the dialog's 3D stereo mode (0 off)
+    double step = 0.0;         // seconds the game's clock advances per rendered frame, 0 = real time
+    double gameClock = 0.0;    // the game's clock (s), for the log
+};
+// The video export's file (the game's AVI writer, CVisionVideoAvi): the mod can write the
+// frames and the sound into a file of its own. `file` identifies one export.
+struct VideoFileHooks {
+    void (*opened)(void* file, const wchar_t* path, bool ok) = nullptr; // the game made its .avi
+    // The video starts (size already rounded up to 8, bottom-up BGR frames of bytesPerPixel):
+    // true = the mod takes the frames; the game then opens no video stream (no codec dialog).
+    bool (*videoOpen)(void* file, int width, int height, float fps, int bytesPerPixel) = nullptr;
+    bool (*videoFrame)(void* file, const void* pixels) = nullptr; // true = taken
+    void (*audioOpen)(void* file, const void* waveFormat) = nullptr; // WAVEFORMATEX without cbSize (16 bytes)
+    void (*audioData)(void* file, const void* data, unsigned long blocks) = nullptr;
+    void (*closed)(void* file) = nullptr; // the game is done with it (its .avi closed)
+};
+void setVideoFileHooks(const VideoFileHooks& hooks);
+bool videoFileHooked(); // false: another build, the game's AVI as always
+
+// True while the export runs (its fiber ran this frame or the one before), with its settings.
+// False without the hook or when the game's memory doesn't look as expected.
+bool videoExport(VideoExport& out);
 
 } // namespace engine
 } // namespace tmshaders

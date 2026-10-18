@@ -43,7 +43,16 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
-      # The configured version must be the one inside the shipped DLL.
+      # TrackMania 2 (ManiaPlanet): a separate 64-bit D3D11 project. Its d3d11.dll goes into the
+      # same zip (the setup installs either game), so it is built before the package.
+      - name: Configure ManiaPlanet
+        shell: bash
+        run: cmake -S maniaplanet -B build-mp -A x64 ${{ steps.v.outputs.flag }}
+
+      - name: Build ManiaPlanet
+        run: cmake --build build-mp --config Release --target tmvs_mp
+
+      # The configured version must be the one inside both shipped DLLs.
       - name: Verify version
         shell: pwsh
         run: |
@@ -51,28 +60,40 @@ jobs:
           $want = $line.Matches[0].Groups[1].Value
           Write-Host "configured version: '$want'"
           if ($want -notmatch '^\d+\.\d+\.\d+') { Write-Host "::error::'$want' is not a version"; exit 1 }
-          $bytes = [System.IO.File]::ReadAllBytes("build/Release/TMVibrantShaders.dll")
-          if (-not [System.Text.Encoding]::ASCII.GetString($bytes).Contains($want)) {
-            Write-Host "::error::TMVibrantShaders.dll does not contain '$want'"; exit 1
+          foreach ($dll in "build/Release/TMVibrantShaders.dll", "build-mp/Release/d3d11.dll") {
+            $bytes = [System.IO.File]::ReadAllBytes($dll)
+            if (-not [System.Text.Encoding]::ASCII.GetString($bytes).Contains($want)) {
+              Write-Host "::error::$dll does not contain '$want'"; exit 1
+            }
           }
-          Write-Host "OK - the DLL carries $want"
+          Write-Host "OK - both DLLs carry $want"
 
-      # dist/: TM-Vibrant-Shaders.zip, TMVibrantShaders.dll, SHA256SUMS.txt
+      # dist/: TM-Vibrant-Shaders.zip (TMNF/TMUF and TM2), TMVibrantShaders.dll, SHA256SUMS.txt
       - name: Package
         run: cmake --build build --config Release --target release_zip
+
+      # dist/TMVS-modloader.zip: what the ModLoader downloads from the update server (the DLL
+      # alone; the ModLoader unpacks it into products/TM Vibrant Shaders/<version>/).
+      - name: ModLoader zip
+        shell: bash
+        run: |
+          python tools/modloader_server.py zip --dll dist/TMVibrantShaders.dll --out dist/TMVS-modloader.zip
+          cmake -DDIR=dist -P packaging/sha256sums.cmake
 
       # Release notes: RELEASE_NOTES.md, then a SHA-256 table (where people actually look).
       - name: Release notes
         shell: pwsh
         run: |
           $body = @()
-          if (Test-Path RELEASE_NOTES.md) { $body += Get-Content RELEASE_NOTES.md -Encoding utf8; $body += "" }
+          # {{TAG}} in the notes: this build's tag (pictures from the tagged tree, also for a pre-release).
+          if (Test-Path RELEASE_NOTES.md) { $body += (Get-Content RELEASE_NOTES.md -Encoding utf8) -replace '\{\{TAG\}\}', $env:GITHUB_REF_NAME; $body += "" }
           $body += @("<details>", "<summary>SHA-256 checksums</summary>", "", "| File | SHA-256 |", "|---|---|")
           foreach ($line in Get-Content dist/SHA256SUMS.txt) {
             $h, $f = $line -split "  ", 2
             $body += "| ``$f`` | ``$h`` |"
           }
-          $body += @("", "Check a download in PowerShell: ``Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256``", "</details>")
+          $body += @("", "Check a download in PowerShell: ``Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256``", "")
+          $body += @("``TMVS-modloader.zip`` is what the ModLoader's update server hands out (the DLL alone). To install by hand, take ``TM-Vibrant-Shaders.zip``.", "</details>")
           $body | Set-Content -Encoding utf8 dist/release-notes.md
           Get-Content dist/SHA256SUMS.txt
 
@@ -90,61 +111,64 @@ jobs:
           files: |
             dist/TM-Vibrant-Shaders.zip
             dist/TMVibrantShaders.dll
+            dist/TMVS-modloader.zip
             dist/SHA256SUMS.txt
           body_path: dist/release-notes.md
           fail_on_unmatched_files: true
           generate_release_notes: true
 
-  # TM Vibrant Shaders for ManiaPlanet (TrackMania 2): a separate 64-bit D3D11 project. A tag adds
-  # its zip to the release the windows job made (after it, so there is one release).
-  maniaplanet:
-    runs-on: windows-latest
+  # The ModLoader update server: modloader/index.json (stable releases) and
+  # modloader/beta/index.json (with pre-releases) on GitHub Pages, served from the gh-pages
+  # branch. Rebuilt after every tag's release from all releases that carry TMVS-modloader.zip,
+  # so the index lists every version. Run the workflow by hand to rebuild it without a release.
+  # One-time setup: Settings -> Pages -> Deploy from a branch -> gh-pages, / (root).
+  modloader-server:
     needs: windows
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: modloader-server
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Version
-        id: v
-        shell: bash
+      # Releases from before the server get their TMVS-modloader.zip made from their own
+      # TMVibrantShaders.dll (the ModLoader zip holds nothing else). Only missing ones; once.
+      # Off unless the repository variable MODLOADER_BACKFILL is 1: it changes published releases.
+      - name: Backfill older releases
+        if: ${{ vars.MODLOADER_BACKFILL == '1' }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "flag=-DTM_SHADERS_VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "flag=" >> "$GITHUB_OUTPUT"
-          fi
+          for tag in $(python3 tools/modloader_server.py missing); do
+            rm -rf backfill && mkdir backfill
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" -p TMVibrantShaders.dll -D backfill
+            python3 tools/modloader_server.py zip --dll backfill/TMVibrantShaders.dll --out backfill/TMVS-modloader.zip
+            gh release upload "$tag" -R "$GITHUB_REPOSITORY" backfill/TMVS-modloader.zip
+          done
 
-      - name: Configure
-        shell: bash
-        run: cmake -S maniaplanet -B build-mp -A x64 ${{ steps.v.outputs.flag }}
-
-      - name: Build
-        run: cmake --build build-mp --config Release --target tmvs_mp
-
-      # dist-mp/TM-Vibrant-Shaders-ManiaPlanet.zip: the DLL, the install and uninstall scripts and
-      # the README; next to it the DLL and its SHA-256.
-      - name: Package
-        shell: pwsh
+      # Hashes come from downloading each zip through its release link, as the ModLoader will.
+      - name: Index
         run: |
-          $stage = "package-mp/TM Vibrant Shaders for ManiaPlanet"
-          New-Item -ItemType Directory -Force $stage, dist-mp | Out-Null
-          Copy-Item build-mp/Release/d3d11.dll, maniaplanet/install.ps1, maniaplanet/Install.cmd, maniaplanet/Uninstall.cmd $stage
-          Copy-Item maniaplanet/README.md "$stage/README.md"
-          Copy-Item LICENSE "$stage/LICENSE.txt"
-          Copy-Item THIRD_PARTY_NOTICES.md "$stage/THIRD_PARTY_NOTICES.txt"
-          Compress-Archive -Path $stage -DestinationPath dist-mp/TM-Vibrant-Shaders-ManiaPlanet.zip
-          Get-FileHash dist-mp/TM-Vibrant-Shaders-ManiaPlanet.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  TM-Vibrant-Shaders-ManiaPlanet.zip" } | Set-Content -Encoding ascii dist-mp/SHA256SUMS-ManiaPlanet.txt
-          Get-Content dist-mp/SHA256SUMS-ManiaPlanet.txt
+          python3 tools/modloader_server.py index --out-dir site/modloader
+          python3 tools/modloader_server.py check site/modloader/index.json site/modloader/beta/index.json
+          touch site/.nojekyll
+          # The icon both indexes and packaging/description.yaml point at: served with the index,
+          # so it shows in the ModLoader from the first release on (not only once it is on main).
+          cp packaging/icons/icon_a.png site/modloader/icon.png
+          for dir in site/modloader site/modloader/beta; do
+            printf '<!doctype html><meta charset="utf-8"><title>TM Vibrant Shaders ModLoader server</title><p>TrackMania ModLoader update server for <a href="https://github.com/%s">TM Vibrant Shaders</a>. Add <code>https://%s.github.io/%s/%s/</code> under <code>servers:</code> in <code>%%LOCALAPPDATA%%\\TMLoader\\config.yaml</code>. Versions: <a href="index.json">index.json</a>.</p>\n' \
+              "$GITHUB_REPOSITORY" "${GITHUB_REPOSITORY_OWNER,,}" "${GITHUB_REPOSITORY#*/}" "${dir#site/}" > "$dir/index.html"
+          done
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: TM-Vibrant-Shaders-ManiaPlanet
-          path: dist-mp/
-
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist-mp/TM-Vibrant-Shaders-ManiaPlanet.zip
-            dist-mp/SHA256SUMS-ManiaPlanet.txt
-          fail_on_unmatched_files: true
+      # The site is generated whole each time: one fresh commit, force-pushed.
+      - name: Publish to gh-pages
+        run: |
+          cd site
+          git init -q -b gh-pages
+          git config user.name "cheatoskar"
+          git config user.email "140116603+cheatoskar@users.noreply.github.com"
+          git add -A
+          git commit -q -m "ModLoader server from ${GITHUB_REF_NAME} (${GITHUB_SHA::7})"
+          git push -f -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

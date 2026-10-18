@@ -264,13 +264,67 @@ void traceDraw(ID3D11DeviceContext* ctx, const char* shader, Role role, unsigned
     describe(rtv[1], rt1, sizeof(rt1));
     describe(dsv, ds, sizeof(ds));
     for (int i = 0; i < 4; i++) describe(srv[i], t[i], sizeof(t[i]));
-    fprintf(g_trace, "%5u %-7s %-48s rt0[%s] rt1[%s] ds[%s] t0[%s] t1[%s] t2[%s] t3[%s]\n", index,
-            shaderdb::roleName(role), shader ? shader : "?", rt0, rt1, ds, t[0], t[1], t[2], t[3]);
+    // rt0's blending (D3D11_BLEND / D3D11_BLEND_OP numbers): which passes add light (one, one, add).
+    char blend[48] = "off";
+    ID3D11BlendState* bs = nullptr;
+    float factor[4];
+    UINT mask = 0;
+    ctx->OMGetBlendState(&bs, factor, &mask);
+    if (bs) {
+        D3D11_BLEND_DESC d;
+        bs->GetDesc(&d);
+        const D3D11_RENDER_TARGET_BLEND_DESC& b = d.RenderTarget[0];
+        if (b.BlendEnable) snprintf(blend, sizeof(blend), "s%d d%d op%d", b.SrcBlend, b.DestBlend, b.BlendOp);
+        bs->Release();
+    }
+    // The state that decides whether a draw lands (a light mask that stayed frozen while its
+    // passes drew every frame): viewport, scissor, depth-stencil and rasterizer.
+    char vp[64] = "none", sc[64] = "none", dss[96] = "default", rs[64] = "default";
+    UINT count = 1;
+    D3D11_VIEWPORT port = {};
+    ctx->RSGetViewports(&count, &port);
+    if (count)
+        snprintf(vp, sizeof(vp), "%.0f %.0f %.0fx%.0f z%.1f-%.1f", port.TopLeftX, port.TopLeftY, port.Width, port.Height,
+                 port.MinDepth, port.MaxDepth);
+    count = 1;
+    D3D11_RECT r = {};
+    ctx->RSGetScissorRects(&count, &r);
+    if (count) snprintf(sc, sizeof(sc), "%ld %ld %ld %ld", r.left, r.top, r.right, r.bottom);
+    ID3D11DepthStencilState* ds_ = nullptr;
+    UINT ref = 0;
+    ctx->OMGetDepthStencilState(&ds_, &ref);
+    if (ds_) {
+        D3D11_DEPTH_STENCIL_DESC d;
+        ds_->GetDesc(&d);
+        // Depth: on, write mask, func; stencil: on, read/write masks, front func and pass op, ref.
+        snprintf(dss, sizeof(dss), "z%d w%d f%d s%d %02x/%02x f%d p%d ref%u", d.DepthEnable, d.DepthWriteMask, d.DepthFunc,
+                 d.StencilEnable, d.StencilReadMask, d.StencilWriteMask, d.FrontFace.StencilFunc, d.FrontFace.StencilPassOp, ref);
+        ds_->Release();
+    } else {
+        snprintf(dss, sizeof(dss), "default ref%u", ref);
+    }
+    ID3D11RasterizerState* rs_ = nullptr;
+    ctx->RSGetState(&rs_);
+    if (rs_) {
+        D3D11_RASTERIZER_DESC d;
+        rs_->GetDesc(&d);
+        // Fill, cull, front counter-clockwise, depth clip, scissor on, depth bias.
+        snprintf(rs, sizeof(rs), "fill%d cull%d ccw%d clip%d sc%d bias%d", d.FillMode, d.CullMode, d.FrontCounterClockwise,
+                 d.DepthClipEnable, d.ScissorEnable, d.DepthBias);
+        rs_->Release();
+    }
+    fprintf(g_trace, "%5u %-7s %-48s rt0[%s] rt1[%s] ds[%s] blend[%s] t0[%s] t1[%s] t2[%s] t3[%s] vp[%s] sc[%s] dss[%s] rs[%s]\n",
+            index, shaderdb::roleName(role), shader ? shader : "?", rt0, rt1, ds, blend, t[0], t[1], t[2], t[3], vp, sc, dss, rs);
     for (auto* v : rtv)
         if (v) v->Release();
     if (dsv) dsv->Release();
     for (auto* v : srv)
         if (v) v->Release();
+}
+
+void traceNote(const char* text) {
+    if (!g_trace || !text || !*text) return;
+    fprintf(g_trace, "      ^ %s\n", text);
 }
 
 void onToneMap(ID3D11Device* device, ID3D11DeviceContext* ctx) {
@@ -394,6 +448,14 @@ void onGraded(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Texture2D* i
 
 void onPresent(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* backBuffer) {
     save(device, ctx, backBuffer, L"output");
+}
+
+void writeText(const wchar_t* name, const std::string& text) {
+    if (!g_active || g_folder.empty()) return;
+    if (FILE* f = _wfopen((g_folder + L"\\" + name).c_str(), L"w")) {
+        fwrite(text.data(), 1, text.size(), f);
+        fclose(f);
+    }
 }
 
 void endFrame() {

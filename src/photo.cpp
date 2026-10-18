@@ -3,6 +3,7 @@
 #include "engine.h"
 #include "image.h"
 #include "log.h"
+#include "pipeline.h"
 #include "settings.h"
 #include <cmath>
 #include <cstdio>
@@ -22,6 +23,7 @@ float g_zoom = 1.0f;        // Shift+wheel, 1..8
 bool g_split = false;       // Shift+F6: the game's image on one side of a line
 float g_splitAt = 0.5f;     // the line, 0..1 from the left
 bool g_splitSwap = false;   // the game's image on the right
+std::string g_splitPreset;  // the other side: "" the game's image, else this preset's look
 
 enum class Job { None, Single, Tiles };
 Job g_job = Job::None;
@@ -62,10 +64,16 @@ struct SaveJob {
     std::vector<unsigned char> rgb;
     int width;
     int height;
+    // The compare split's names (SplitPhotoLabels), "" = none.
+    std::string left, right;
+    float splitAt = 0.5f;
 };
 
 DWORD WINAPI saveThread(LPVOID param) {
     SaveJob* job = static_cast<SaveJob*>(param);
+    // On this thread too: GDI draws the names in a few ms, a hi-res photo's in a few more.
+    if (!job->left.empty() || !job->right.empty())
+        image::drawSplitLabels(job->rgb.data(), job->width, job->height, 3, static_cast<size_t>(job->width) * 3, job->splitAt, job->left, job->right);
     const bool ok = image::writePng(job->path, job->rgb.data(), job->width, job->height);
     const size_t slash = job->path.find_last_of(L"\\/");
     const std::wstring file = slash == std::wstring::npos ? job->path : job->path.substr(slash + 1);
@@ -77,8 +85,21 @@ DWORD WINAPI saveThread(LPVOID param) {
     return 0;
 }
 
+// The photo has the compare split (the line and the other side are in the frame): which side
+// shows what, as the bar at the line names them on the screen (never in photos).
+void splitLabels(SaveJob& job) {
+    const Config& config = Config::get();
+    if (!g_split || !g_active || !config.splitPhotoLabels) return;
+    const std::string mine = !config.settings.enabled ? std::string("Shaders off") : (config.preset.empty() ? std::string("Your look") : config.preset);
+    const std::string other = g_splitPreset.empty() ? std::string("Game") : g_splitPreset;
+    job.splitAt = g_splitAt;
+    job.left = g_splitSwap ? mine : other;
+    job.right = g_splitSwap ? other : mine;
+}
+
 void save(std::vector<unsigned char>&& rgb, int width, int height) {
     SaveJob* job = new SaveJob{L"", std::move(rgb), width, height};
+    splitLabels(*job);
     wchar_t name[64];
     for (int n = 0;; n++) {
         swprintf(name, 64, L"\\photo_%03d.png", n);
@@ -361,11 +382,12 @@ void toggleSplit() {
     g_split = !g_split;
     if (g_split && !g_active) g_manual = 1; // comparing is a photo mode thing: it comes on too
     TMVS_LOG("photo: compare split %s", g_split ? "on" : "off");
-    setStatus(g_split ? "Compare: the game's image | the mod's   Ctrl+Shift+wheel: move the line" : "Compare off", 3);
+    const std::string other = g_splitPreset.empty() ? std::string("the game's image") : g_splitPreset;
+    setStatus(g_split ? "Compare: " + other + " | your look   Ctrl+Shift+wheel: move the line" : std::string("Compare off"), 3);
 }
 
 bool splitShown() {
-    return g_split && g_active && g_job != Job::Tiles;
+    return g_split && g_active;
 }
 
 bool& splitOn() {
@@ -380,6 +402,10 @@ bool& splitSwapped() {
     return g_splitSwap;
 }
 
+std::string& splitPreset() {
+    return g_splitPreset;
+}
+
 void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3DSurface9* shaded) {
     if (!splitShown() || !original || !shaded) return;
     D3DSURFACE_DESC out{}, in{};
@@ -388,17 +414,63 @@ void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3D
     if (out.Width != in.Width || out.Height != in.Height) return;
     const LONG w = static_cast<LONG>(out.Width), h = static_cast<LONG>(out.Height);
     const float at = g_splitAt < 0.0f ? 0.0f : (g_splitAt > 1.0f ? 1.0f : g_splitAt);
-    const LONG x = static_cast<LONG>(lroundf(at * static_cast<float>(w)));
-    const RECT game = g_splitSwap ? RECT{x, 0, w, h} : RECT{0, 0, x, h};
+    LONG x = static_cast<LONG>(lroundf(at * static_cast<float>(w)));
+    LONG photoHeight = h;
+    // A hi-res photo's tile: the line where it falls in the whole photo (the tiles' inner parts
+    // put together show the screen's view), so it runs straight through the stitched photo and
+    // not through every tile. Not before the first tile's projection (that frame isn't kept).
+    if (g_job == Job::Tiles && g_width == out.Width && g_height == out.Height && g_innerW > 0) {
+        const LONG n = g_tiles, i = g_tile % g_tiles;
+        x = static_cast<LONG>(g_marginX) + static_cast<LONG>(lroundf(at * static_cast<float>(g_innerW * n))) - i * static_cast<LONG>(g_innerW);
+        photoHeight = static_cast<LONG>(g_innerH) * n;
+    }
+    const LONG cut = x < 0 ? 0 : (x > w ? w : x);
+    const RECT game = g_splitSwap ? RECT{cut, 0, w, h} : RECT{0, 0, cut, h};
     if (game.right > game.left) device->StretchRect(original, &game, shaded, &game, D3DTEXF_NONE);
-    // The line: light with dark edges, so it shows on sky and snow as on asphalt. 2 px at 1080p.
-    const LONG t = h >= 1080 ? h / 540 : 1;
+    // The line: light with dark edges, so it shows on sky and snow as on asphalt. 2 px at 1080p
+    // (of the photo: a hi-res one gets it as wide, relative to its size).
+    const LONG t = photoHeight >= 1080 ? photoHeight / 540 : 1;
     const auto fill = [&](LONG left, LONG right, D3DCOLOR colour) {
         const RECT r{left < 0 ? 0 : left, 0, right > w ? w : right, h};
         if (r.right > r.left) device->ColorFill(shaded, &r, colour);
     };
     fill(x - 2 * t, x + 2 * t, D3DCOLOR_XRGB(16, 16, 16));
     fill(x - t, x + t, D3DCOLOR_XRGB(235, 235, 235));
+}
+
+std::string splitLightNote() {
+    if (g_splitPreset.empty()) return std::string();
+    const Config& config = Config::get();
+    const Settings& mine = config.settings;
+    if (!mine.enabled) return std::string();
+    // Asked every frame by the bar at the bottom: your own presets are files, read again only
+    // when another one is picked or after a second.
+    static std::string s_name;
+    static DWORD s_read = 0;
+    static Settings s_other;
+    static bool s_known = false;
+    if (s_name != g_splitPreset || GetTickCount() - s_read > 1000) {
+        s_name = g_splitPreset;
+        s_read = GetTickCount();
+        s_other = mine;
+        s_known = config.presetSettings(g_splitPreset, s_other);
+    }
+    if (!s_known) return std::string();
+    const Settings& other = s_other;
+    // As the plugin decides them: real night and the moon at map load (or on a switch), the
+    // game's sky and its sun's halo every frame (onFrameBegin), all from your look.
+    const float dayTime = engine::mapDayTime();
+    const bool ownNight = dayTime >= 0.0f && moodOfDayTime(dayTime) == Mood::Night;
+    const bool otherNightSky = Pipeline::skyReplacesSun(other);
+    if (engine::mapLitAtNight() && !otherNightSky && !ownNight)
+        return "Lit at midnight for your look: " + g_splitPreset + "'s sun can't show here";
+    if (engine::moonReplaced() && !Pipeline::blackHoleLights(other))
+        return "The game's moon is changed for your look: " + g_splitPreset + " can't show it";
+    if (Pipeline::skyReplacesSun(mine) && !otherNightSky)
+        return "The game's sky and sun are hidden for your look: " + g_splitPreset + " can't show them";
+    if (!Pipeline::skyReplacesSun(mine) && otherNightSky && mine.gameNight && !ownNight)
+        return "Lit by the game's sun for your look: " + g_splitPreset + "'s real night can't show here";
+    return std::string();
 }
 
 void notify(const char* text, DWORD seconds) {
@@ -417,9 +489,9 @@ const char* status() {
         const float dof = Config::get().photoDof;
         char aperture[32] = "Depth of field off";
         if (dof > 0.0f) snprintf(aperture, sizeof(aperture), "f/%.1f", fNumber(dof));
-        char line[96];
-        snprintf(line, sizeof(line), "%s   Zoom %.1fx   Focus %s%s", aperture, g_zoom, g_focus[0] >= 0.0f ? "point" : "auto",
-                 g_split ? "   Compare" : "");
+        char line[160];
+        snprintf(line, sizeof(line), "%s   Zoom %.1fx   Focus %s%s%s", aperture, g_zoom, g_focus[0] >= 0.0f ? "point" : "auto",
+                 g_split ? "   Compare" : "", g_split && !g_splitPreset.empty() ? (" with " + g_splitPreset).c_str() : "");
         std::string text = line;
         if (!g_status.empty()) text += "\n" + g_status;
         strncpy_s(g_statusCopy, text.c_str(), _TRUNCATE);

@@ -6,11 +6,13 @@
 #include "config.h"
 #include "engine_frame.h"
 #include "hooks.h"
+#include "keys.h"
 #include "log.h"
 #include "menu.h"
 #include "options.h"
 #include "renderer.h"
 #include "shaderdb.h"
+#include "softshadow.h"
 #include "thumbnails11.h"
 #include "photo11.h"
 #include "maplook.h"
@@ -42,6 +44,9 @@ bool g_ready = false;
 std::atomic<bool> g_open{false};
 std::atomic<bool> g_wantMouse{false};
 std::atomic<bool> g_wantKeyboard{false};
+// The compare split's bar at the bottom (the other side switchable) is on screen: it gets the
+// mouse with the menu closed too (presses only while ImGui wants them, i.e. over the bar).
+std::atomic<bool> g_splitBar{false};
 ULONGLONG g_toastUntil = 0;
 std::string g_toast;
 
@@ -197,13 +202,16 @@ bool isKeyboard(UINT msg) {
 }
 
 bool isHotkey(WPARAM w) {
-    return w == VK_F5 || w == VK_F6 || w == VK_F8 || w == VK_F12;
+    return tmshaders::keys::used(static_cast<unsigned>(w));
 }
 
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    // The menu's "Change" button waits for the next key: only it sees the key (Esc cancels).
+    if (tmshaders::keys::capturing() && tmshaders::keys::feed(msg, w, l)) return 0;
     // Photo mode: focus click, aperture wheel and Esc, unless the menu has the mouse or keyboard
     // (the game may read the mouse directly too: it still sees them there).
-    if (!(g_open && ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard))) && photo::handleMessage(hwnd, msg, w, l))
+    if (!(g_open && ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard))) &&
+        !(g_splitBar && isMouse(msg) && g_wantMouse) && photo::handleMessage(hwnd, msg, w, l))
         return 0;
     if (g_open && (isMouse(msg) || isKeyboard(msg) || msg == WM_SETFOCUS || msg == WM_KILLFOCUS)) {
         {
@@ -213,6 +221,14 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         // Keep clicks and typing in the menu away from the game (its window messages; the game may
         // also read the mouse directly).
         if ((isMouse(msg) && g_wantMouse) || (isKeyboard(msg) && g_wantKeyboard && !isHotkey(w))) return 0;
+    } else if (g_splitBar && isMouse(msg)) {
+        // The split's bar with the menu closed: the moves always (hover; the game keeps them too),
+        // presses and the wheel only over the bar (or while ImGui holds a press of its own).
+        {
+            std::lock_guard<std::mutex> lock(g_queueLock);
+            if (g_queue.size() < 512) g_queue.push_back({msg, w, l});
+        }
+        if (msg != WM_MOUSEMOVE && g_wantMouse) return 0;
     }
     return CallWindowProcW(g_originalProc, hwnd, msg, w, l);
 }
@@ -222,29 +238,27 @@ void toast(const std::string& text, ULONGLONG ms = 3000) {
     g_toastUntil = GetTickCount64() + ms;
 }
 
-bool pressed(int key, bool& was) {
-    const bool down = (GetAsyncKeyState(key) & 0x8000) != 0;
-    const bool edge = down && !was;
-    was = down;
-    return edge;
-}
-
-// TMNF's keys: F8 menu, F5 effects on/off (TMNF: F7, ManiaPlanet's friends list here), F6 photo mode, F12 capture (photo in
-// photo mode).
+// The keys come from tmshaders::keys (defaults: F8 menu, F5 effects on/off - ManiaPlanet's F7 is its friends list -, F6 photo
+// mode, Shift+F6 its compare split, F12 capture (photo in photo mode)); the player can rebind them in the menu.
 void hotkeys() {
-    static bool f5 = false, f6 = false, f8 = false, f12 = false;
+    namespace keys = tmshaders::keys;
+    // Polled every frame so the edge state stays current, also while another window has the focus.
+    const bool menuKey = keys::edge(keys::Action::Menu), effectsKey = keys::edge(keys::Action::Effects);
+    const bool photoKey = keys::edge(keys::Action::Photo), splitKey = keys::edge(keys::Action::PhotoSplit);
+    const bool captureKey = keys::edge(keys::Action::Capture);
     if (GetForegroundWindow() != g_window) return;
     Config& config = Config::get();
-    if (pressed(VK_F5, f5)) {
+    // A text field in the menu has the keyboard: only F keys count (typing must not trigger a hotkey).
+    const bool typing = g_open && ImGui::GetIO().WantTextInput;
+    auto allowed = [&](keys::Action a) { return !typing || (keys::get(a).vk >= VK_F1 && keys::get(a).vk <= VK_F24); };
+    if (effectsKey && allowed(keys::Action::Effects)) {
         config.settings.enabled = !config.settings.enabled;
         config.markDirty();
         toast(config.settings.enabled ? "TM Vibrant Shaders: on" : "TM Vibrant Shaders: off (the game's own image)");
     }
-    if (pressed(VK_F6, f6)) {
-        if (GetKeyState(VK_SHIFT) < 0) photo::toggleSplit();
-        else photo::toggle();
-    }
-    if (pressed(VK_F12, f12)) {
+    if (splitKey && allowed(keys::Action::PhotoSplit)) photo::toggleSplit();
+    if (photoKey && allowed(keys::Action::Photo)) photo::toggle();
+    if (captureKey && allowed(keys::Action::Capture)) {
         if (photo::active()) {
             photo::request();
         } else {
@@ -252,7 +266,7 @@ void hotkeys() {
             toast("Frame captured (Documents\\ManiaPlanet\\TMVS\\captures)");
         }
     }
-    if (pressed(VK_F8, f8)) config.showOverlay = !config.showOverlay;
+    if (menuKey && allowed(keys::Action::Menu)) config.showOverlay = !config.showOverlay;
 }
 
 // What the ManiaPlanet build can do so far; the menu shows only these.
@@ -274,28 +288,57 @@ void gamePanel() {
     Options& o = options::current();
     const hooks::Stats& st = hooks::stats();
     const ImVec4 good(0.45f, 0.85f, 0.45f, 1), warn(0.95f, 0.75f, 0.3f, 1), bad(0.95f, 0.4f, 0.35f, 1);
-    bool changed = ImGui::Checkbox("HDR stage (the look on the engine's HDR image)", &o.hdrStage);
+    bool changed = ImGui::Checkbox("HDR stage", &o.hdrStage);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("On: the mod replaces the engine's tone map; bright lights and sky keep colour and detail.\n"
                           "Off: the engine's tone map stays and the look goes on its finished image.");
     int placement = static_cast<int>(o.placement);
-    changed |= ImGui::RadioButton("Before the interface", &placement, 0);
+    changed |= ImGui::RadioButton("Before HUD", &placement, 0);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The look is applied before the interface is drawn, so the HUD stays untouched.");
     ImGui::SameLine();
-    changed |= ImGui::RadioButton("End of frame (interface too)", &placement, 1);
+    changed |= ImGui::RadioButton("End of frame", &placement, 1);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The look is applied to the finished frame, interface included.");
     o.placement = static_cast<Placement>(placement);
-    changed |= ImGui::Checkbox("End of frame when the interface start isn't found", &o.fallbackAtEnd);
+    changed |= ImGui::Checkbox("Fallback: end of frame", &o.fallbackAtEnd);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Use the end of the frame when the start of the interface isn't found.");
+    changed |= ImGui::Checkbox("Game light sources", &o.engineLightDraws);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("On: lamps, light strips, screens, halos and the car's lights glow as the engine draws them\n"
+                          "(drawn a second time into a buffer of their own); nothing is guessed from colours.\n"
+                          "Off: the light sources are guessed from the image (as before). F12 saves the buffer.");
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+    ImGui::SliderFloat("Soft sun shadows", &o.softShadows, 0.0f, 4.0f, o.softShadows > 0.0f ? "%.2f deg" : "Off");
+    if (o.softShadows < 0.05f) o.softShadows = 0.0f;
+    changed |= ImGui::IsItemDeactivatedAfterEdit();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("The sun's shadows soft like real ones: sharp where a thing touches the ground, wider the farther\n"
+                          "they fall from it. The value is the sun's size in the sky (the real sun: 0.5 degrees; more is softer).\n"
+                          "Off: the game's own shadows.\n"
+                          "The mod draws the game's shadow pass with its own shader (nothing in the game's memory changes).\n"
+                          "Whether ManiaPlanet's anti-cheat minds that is not known.");
+    // Only while Game moonlight is Black hole (engineMoonChoice): its brightness. Off is that choice's job.
+    if (o.blackHoleMoon > 0.0f) {
+        ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+        ImGui::SliderFloat("Black hole light", &o.blackHoleMoon, 0.25f, 2.0f, "%.2f");
+        if (o.blackHoleMoon < 0.25f) o.blackHoleMoon = 0.25f;
+        changed |= ImGui::IsItemDeactivatedAfterEdit();
+        if (ImGui::IsItemHovered())
+            if (const char* tip = tmshaders::menu::tooltip("BlackHoleMoon")) ImGui::SetTooltip("%s", tip);
+    }
     if (changed) options::save();
     int view = static_cast<int>(o.view);
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
     if (ImGui::Combo("View", &view,
-                     "The mod\0Compare with the game (split)\0Check: depth\0Check: normals\0Check: motion\0Check: albedo\0"
+                     "The mod\0Split with the game\0Check: depth\0Check: normals\0Check: motion\0Check: albedo\0"
                      "Check: world grid\0"))
         o.view = static_cast<View>(view);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compare with the game or check what the mod reads from the engine (debug views).");
     if (o.view == View::Split) {
         ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
         ImGui::SliderFloat("Split", &o.split, 0.0f, 1.0f);
     }
-    if (ImGui::Button("Capture this frame (F12)")) capture::request();
+    if (ImGui::Button(("Capture (" + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Capture)) + ")").c_str()))
+        capture::request();
     if (!capture::lastFolder().empty()) {
         ImGui::SameLine();
         if (ImGui::Button("Open capture")) ShellExecuteW(nullptr, L"open", capture::lastFolder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -317,8 +360,27 @@ void gamePanel() {
         found += engineTextureName(i);
     }
     ImGui::TextDisabled("Engine textures: %s", found.empty() ? "none" : found.c_str());
+    ImGui::TextDisabled("Soft shadows: %s", softshadow::status());
     ImGui::TextDisabled("Shaders recognised: %u of %u, %u draws, %ux%u", st.shadersKnown, st.shadersCreated, st.drawsLastFrame,
                         st.width, st.height);
+}
+
+// Game moonlight (EngineMoon) in TrackMania 2. Its moon can't be moved (TMNF's Black hole moves it
+// when the map's light is built, a write into the game), so EngineMoon 0 and 1 did the same here and
+// the menu's "Black hole" changed nothing. The three choices are what this build can do: Game's keeps
+// the moon; Black hole is BlackHoleMoon (maniaplanet.ini: the shaders take the moon out and the black
+// hole lights the scene instead, at the last brightness); Off takes the moon's light out (EngineMoon 2).
+bool engineMoonChoice(tmshaders::Settings& s, const char* label) {
+    Options& o = options::current();
+    static float brightness = 1.0f; // the black hole's last brightness, for choosing it again
+    if (o.blackHoleMoon > 0.0f) brightness = o.blackHoleMoon;
+    int choice = o.blackHoleMoon > 0.0f ? 1 : (s.engineMoon == 2 ? 2 : 0);
+    static const char* kMoons[] = {"Game's", "Black hole", "Off"};
+    if (!ImGui::Combo(label, &choice, kMoons, IM_ARRAYSIZE(kMoons))) return false;
+    s.engineMoon = choice == 2 ? 2 : 1;
+    o.blackHoleMoon = choice == 1 ? brightness : 0.0f;
+    options::save();
+    return true;
 }
 
 } // namespace
@@ -338,7 +400,9 @@ void init(HWND window, ID3D11Device* device, ID3D11DeviceContext* ctx) {
     ImGui_ImplDX11_Init(device, ctx);
     g_originalProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&windowProc)));
     g_ready = true;
-    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - F8 menu, F5 on/off", 8000);
+    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - " + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Menu)) +
+              " menu, " + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Effects)) + " on/off",
+          8000);
     TMVS_LOG("overlay: ready on window %p", static_cast<void*>(window));
 }
 
@@ -348,9 +412,13 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     config.tick(); // saves settings.ini a moment after a change
     hotkeys();
     g_open = config.showOverlay;
+    if (!config.showOverlay) tmshaders::keys::cancelCapture(); // the menu was closed meanwhile
     const bool showToast = GetTickCount64() < g_toastUntil;
     const char* photoLine = photo::status();
     if (!config.showOverlay) config.previewPreset.clear();
+    // With photo mode's line on screen only, as TMNF's (drawn at Present: never in the photos).
+    g_splitBar = photo::splitShown() && *photoLine;
+    if (!g_splitBar && !config.showOverlay) g_wantMouse = false;
     if (!config.showOverlay && !showToast && !*photoLine && !photo::splitShown()) return;
 
     std::vector<Message> messages;
@@ -364,7 +432,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     ImGui_ImplWin32_NewFrame();
     ImGuiIO& io = ImGui::GetIO();
     // ImGui's pointer over the menu (the game hides the OS cursor), the game's elsewhere.
-    io.MouseDrawCursor = config.showOverlay && io.WantCaptureMouse;
+    io.MouseDrawCursor = (config.showOverlay || g_splitBar) && io.WantCaptureMouse;
     ImGui::NewFrame();
     if (config.showOverlay) {
         // The effects' GPU times for the Performance page (as TMNF's pipeline reports them).
@@ -386,9 +454,9 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             h.picture = [](const std::string& preset) {
                 return reinterpret_cast<ImTextureID>(thumbnails::get(g_device, preset));
             };
+            h.icon = [](int size) { return reinterpret_cast<ImTextureID>(thumbnails::icon(g_device, size)); };
             h.supports = supports;
             h.timings = &timings;
-            h.toggleKey = "F5"; // ManiaPlanet's F7 opens the friends list
             h.reloadShaders = false;
             h.autoQualityReduced = [] { return hooks::autoQualityReduced(); };
             // The scene effects' debug views (scene.hlsl PS_Lighting; the stages use 20-49).
@@ -401,6 +469,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {10, "Engine light: ambient"},
                             {11, "Engine light: the rest"},
                             {12, "Light sources (lamps, neon)"},
+                            {13, "The moon's glint (Game moonlight: Black hole)"},
                             {20, "Light shafts"},
                             {21, "Volumetric clouds"},
                             {22, "Sky"},
@@ -409,10 +478,30 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {25, "Volumetric light (lit haze)"},
                             {40, "Depth of field: blur size"},
                             {41, "Motion"}};
+            // What works differently here than in TMNF (the shared tooltips describe TMNF's).
+            h.tips = {{"GameNight", "Day and sunset maps under a night sky (Starry night, Black hole, Aurora): TrackMania 2's time "
+                                    "of day can't be changed, so the mod brings the map's sky light, light maps and reflections "
+                                    "down to moonlight itself (the sun goes either way). Lamps and neon stay. Nothing on night "
+                                    "maps, which are night already (only with Game moonlight Off it darkens their sky light too)."},
+                      {"EngineMoon", "Night maps under a night sky (Starry night, Black hole, Aurora). TrackMania 2's moon can't be "
+                                     "moved. Game's: the moon stays as the game has it. Black hole: under the black hole the mod "
+                                     "takes the moon's light and its blue glint out and the black hole lights the scene instead, "
+                                     "warm (brightness: Black hole light, ManiaPlanet panel); under the other skies the moon stays. "
+                                     "Off: the moon's light and glint go (with Real night on, the sky light comes down too); "
+                                     "lamps and neon stay. At once, no map reload."},
+                      {"CinematicOnlyInReplays", "Motion blur and depth of field only in photo mode (TrackMania 2's replays can't "
+                                                 "be told from driving yet). Off: always."},
+                      {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, "
+                                       "wherever the camera puts it; the middle again while the car is off screen. A click in "
+                                       "the photo mode still wins."}};
+            h.engineMoon = engineMoonChoice;
             h.fNumber = photo::fNumber;
             h.splitOn = &photo::splitOn();
             h.splitPosition = &photo::splitPosition();
             h.splitSwapped = &photo::splitSwapped();
+            h.splitPreset = &photo::splitPreset();
+            h.splitNote = "In photos too. A preset side gets the aperture too; the game's image stays sharp. "
+                          "Soft shadows and the light draws are the game's, the same on both sides.";
             h.photoOn = [] {
                 if (!photo::active()) photo::toggle();
             };
@@ -434,21 +523,12 @@ void frame(ID3D11RenderTargetView* backBuffer) {
         ImGui::TextUnformatted(photoLine);
         ImGui::End();
     }
-    if (photo::splitShown()) {
-        // Which side is which, next to the line near the bottom (drawn at Present: not in photos).
-        const float sc = tmshaders::menu::scale();
-        ImDrawList* draw = ImGui::GetForegroundDrawList();
-        const float x = photo::splitPosition() * io.DisplaySize.x, y = io.DisplaySize.y - 48.0f * sc, pad = 10.0f * sc;
-        const char* left = photo::splitSwapped() ? "TMVS" : "Game";
-        const char* right = photo::splitSwapped() ? "Game" : "TMVS";
-        const auto label = [&](float at, const char* text) {
-            const ImVec2 s = ImGui::CalcTextSize(text);
-            draw->AddRectFilled(ImVec2(at - 4.0f * sc, y - 2.0f * sc), ImVec2(at + s.x + 4.0f * sc, y + s.y + 2.0f * sc),
-                                IM_COL32(0, 0, 0, 140), 3.0f * sc);
-            draw->AddText(ImVec2(at, y), IM_COL32(235, 235, 235, 255), text);
-        };
-        label(x - pad - ImGui::CalcTextSize(left).x, left);
-        label(x + pad, right);
+    if (g_splitBar) {
+        // The compare split: which side is which at the line near the bottom, the other side a
+        // list to switch it without the menu (the menu's, shared with TMNF).
+        const bool mineLeft = photo::splitSwapped();
+        tmshaders::menu::drawSplitBar(photo::splitName(!mineLeft), photo::splitPreset(), photo::splitPosition(), mineLeft, std::string(),
+                                      48.0f);
     }
     if (showToast) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 40), ImGuiCond_Always, ImVec2(0.5f, 0));

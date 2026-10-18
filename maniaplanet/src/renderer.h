@@ -63,6 +63,7 @@ struct EngineView {
     const EngineCar* car = nullptr;       // the player's car (null: not seen this frame)
     double time = 0.0;                    // seconds (animated effects)
     bool photo = false;
+    bool video = false;                   // the replay editor's Shoot video renders this frame (VideoExportBest)
     float focus[2] = {-1.0f, -1.0f};      // photo mode: the focus point clicked (uv), -1 = auto focus
 };
 
@@ -74,7 +75,16 @@ struct Look {
     float sun[3] = {1, 1, 1}; // the engine's light colour (split toning)
     unsigned frame = 0;       // grain seed
     float split = 0.0f;       // compare: the game's image left of this (0 = off)
+    // Compare split with a preset on the other side: each look has a Renderer of its own and
+    // draws only its side of the line (u from..to, 0..1 = the whole frame); `line` is where the
+    // line is drawn (0 = none). The game's-image split above stays the one-renderer way.
+    float from = 0.0f, to = 1.0f;
+    float line = 0.0f;
 };
+
+// One side of the compare split with a preset: `base` drawn only left (or right) of the line at
+// `at` (0..1, kept 0.01..0.99 as the game's-image split), the line at its edge.
+Look splitSide(const Look& base, float at, bool left);
 
 class Renderer {
 public:
@@ -114,6 +124,8 @@ private:
     void uploadLook(ID3D11DeviceContext* ctx, const Look& look);
     ID3D11ShaderResourceView* textureView(int index, ID3D11Resource* res);
     void updateLut(const std::string& name);
+    // The final draw only on the look's side of the compare line (Look::from/to), by scissor.
+    void clipToSide(ID3D11DeviceContext* ctx, const Look& look, UINT width, UINT height);
     void pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, UINT width, UINT height,
               ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY, float z = 0.0f,
               float w = 0.0f);
@@ -131,6 +143,7 @@ private:
     ID3D11SamplerState* m_linear = nullptr;
     ID3D11SamplerState* m_point = nullptr;
     ID3D11RasterizerState* m_rs = nullptr;
+    ID3D11RasterizerState* m_rsScissor = nullptr; // m_rs with the scissor test (clipToSide)
     ID3D11DepthStencilState* m_dss = nullptr;
     ID3D11BlendState* m_blend = nullptr;
 
@@ -157,7 +170,7 @@ private:
     };
     static constexpr int kViewsPerTexture = 4;
     TexView m_tex[kTexCount][kViewsPerTexture] = {};
-    int m_texCurrent[kTexCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+    int m_texCurrent[kTexCount] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     int m_texNext[kTexCount] = {};
     int m_texLogged[kTexCount] = {};
 

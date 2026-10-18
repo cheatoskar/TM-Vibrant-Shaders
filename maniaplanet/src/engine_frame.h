@@ -28,8 +28,12 @@ constexpr UINT kScenePFog = 0;
 constexpr UINT kScenePLightAmbientLinear = 128;
 constexpr UINT kScenePLightDirRgbLinear0 = 144;
 constexpr UINT kScenePLightDirInWorld0 = 160;
+// GbxP_LightGenPHdrScale_SelfIllumScale_SpecMaxExp_SpecScale: z = the specular exponent's range
+// (n = MSpecular.w * z + 1), w = the specular's scale (Block_DefReadP1_p, BlackHoleMoon).
+constexpr UINT kScenePLightGenSpec = 176;
 constexpr UINT kScenePCloudsMin = 304;
 constexpr UINT kScenePCloudsMax = 320;
+constexpr UINT kScenePDayTime = 464; // GbxP_DayTime: x = the map's time of day (0..1, 0.5 noon)
 
 struct Camera {
     bool valid = false;
@@ -51,7 +55,13 @@ struct Camera {
     unsigned char raw[kSceneVSize] = {}; // the whole buffer, for captures
     unsigned char rawP[kScenePSize] = {};
     bool hasSceneP = false;
+    float dayTime = -1.0f; // the map's time of day from SceneP (0..1, 0.5 noon), -1 unknown
 };
+
+// The map's mood from its time of day: 0 night, 1 sunrise or sunset, 2 day; -1 unknown.
+// (Stadium: night 0.10, sunrise 0.32, day 0.50, sunset 0.81. Its night "sun" is the moon,
+// (0.36, 0.53, 1.16): bright enough to pass for day by its colour.)
+int dayTimeMood(const Camera& c);
 
 enum EngineTexture : int {
     kTexHdr = 0,      // the tone map's input (R11G11B10 float)
@@ -65,6 +75,9 @@ enum EngineTexture : int {
     kTexShadowDepth,  // the sun shadow pass's linear depth (Tech3/DeferredShadowPssm_p t0, R32 float)
     kTexShadowMap0,   // its two shadow maps (t1, t2: 4096 x 4096, 16 bit)
     kTexShadowMap1,
+    kTexShadowSplits, // its split atlas (t3: 6400 x 1280, 16 bit, five tiles; variants with splits)
+    kTexShadowNormal, // the face normal it reads (TMapVNormalInC; variants with splits), for captures
+    kTexLights,       // EngineLightDraws: the light the engine drew as light (engine_lights.cpp), float
     kTexCount
 };
 
@@ -90,6 +103,38 @@ struct EngineCar {
     bool valid = false;     // seen this frame
     float position[3] = {}; // world
     float right[3] = {}, up[3] = {}, forward[3] = {}; // the car's axes in the world (x, y, z of its model)
+    unsigned track = 0;     // another number: another car taken up (the trail starts a new line)
+};
+
+// Which of the frame's cars is the player's. Ghosts and other players are drawn like it (the same
+// G-buffer shader). The player's is the one the camera follows: the chase cameras hold it in the
+// middle of the picture a few metres ahead (captures 029/030: 0.0001 m off the middle, 6.4 m
+// ahead) at the same distance (5 mm a frame at most). Once taken up it is followed by its place
+// and speed (within 3 m, also over a few frames without it); a car is taken up only where the
+// camera follows one, and when the chase camera holds another car for 6 frames it takes that
+// one. (It took the one that continued last frame's within 30 m, else the nearest, and a frame
+// without any car forgot it: after a camera switch next to a ghost the trail went to the ghost
+// and stayed with it. mp_preview --cartest plays such scenes.)
+struct CarCandidate {
+    float view[3];  // its place in camera space (x right, y up, z ahead)
+    float world[3]; // and in the world
+};
+class CarTracker {
+public:
+    // The player's car among this frame's (an index, -1: none), now in seconds.
+    int pick(const CarCandidate* cars, int count, double now);
+    unsigned track() const { return m_id; }
+
+private:
+    bool m_valid = false;
+    double m_seen = 0.0;
+    float m_position[3] = {}, m_velocity[3] = {};
+    bool m_speedKnown = false;
+    unsigned m_id = 0;
+    int m_otherFrames = 0;
+    float m_lastView[8][3] = {}; // last frame's cars in camera space
+    int m_lastSteady[8] = {};    // and how many frames each kept its distance from the camera
+    int m_lastCount = 0;
 };
 
 const char* engineTextureName(int index);

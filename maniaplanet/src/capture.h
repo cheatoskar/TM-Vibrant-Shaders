@@ -21,11 +21,15 @@ bool active();            // this frame is being captured
 const std::wstring& lastFolder();
 
 void traceDraw(ID3D11DeviceContext* ctx, const char* shader, Role role, unsigned index);
+// A note under the last traced draw ("^ ...").
+void traceNote(const char* text);
 void onToneMap(ID3D11Device* device, ID3D11DeviceContext* ctx);
 void onGraded(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Texture2D* input, DXGI_FORMAT viewFormat,
               const EngineView& engine);
 void onPresent(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* backBuffer);
 void endFrame();
+// A text file into the capture being written (car.txt, ...).
+void writeText(const wchar_t* name, const std::string& text);
 
 } // namespace capture
 } // namespace tmvs_mp

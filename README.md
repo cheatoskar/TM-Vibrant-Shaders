@@ -14,17 +14,36 @@
 
 ![Realistic: the start line in the late sun, with haze and soft shadows](docs/images/realistic-start.jpg)
 
-A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
+A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
 
-**New in 1.4.0-preview: TrackMania 2 (ManiaPlanet 4).** The same mod for ManiaPlanet's Direct3D 11 renderer: download `TM-Vibrant-Shaders-ManiaPlanet.zip` from the [release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases), close the game, double-click `Install.cmd`. `F8` menu, `F5` on/off. Details in [maniaplanet/README.md](maniaplanet/README.md).
+**New in 1.4.1: TrackMania 2 (ManiaPlanet 4).** The same mod for ManiaPlanet's Direct3D 11 renderer: download `TM-Vibrant-Shaders.zip` from the [release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases) (one zip for both games), close the game, run `TM-Vibrant-Shaders-Setup.exe`. `F8` menu, `F5` on/off. Details in [maniaplanet/README.md](maniaplanet/README.md).
 
 ![TrackMania 2 Stadium, photo mode's compare split: left the game, right with the mod and the black hole sky](docs/images/tm2-black-hole-split.jpg)
 
 ---
 
 ## Install
+
+**Full installation guide: [docs/install.md](docs/install.md)** (Deutsch: [docs/INSTALL_DE.md](docs/INSTALL_DE.md)): ModLoader, setup, by hand, updating, uninstalling.
+
+### With the ModLoader: installs and updates itself
+
+If you start TrackMania Nations/United Forever through the [ModLoader (TMLoader)](https://tomashu.dev/software/tmloader/), let it install the mod and every update:
+
+1. Close the ModLoader. Open `%LOCALAPPDATA%\TMLoader\config.yaml` with Notepad (paste the path into the Explorer address bar).
+2. Add this line under `servers:` (two spaces in front, like the lines there) and save:
+
+   ```yaml
+     - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'
+   ```
+
+3. Start the ModLoader, tick *TM Vibrant Shaders* in your profile and start the game.
+
+New versions then come through the ModLoader's auto update; nothing to download. For pre-releases use `https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/` instead (one of the two, not both). TrackMania 2 has no ModLoader: use the setup.
+
+### With the setup
 
 1. Download **`TM-Vibrant-Shaders.zip`** from the [latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest) and extract the whole zip.
 2. Close TrackMania and run **`TM-Vibrant-Shaders-Setup.exe`**.
@@ -34,11 +53,12 @@ A Direct3D 9 mod that lights the game again: shadows, ambient occlusion, light s
    |---|---|
    | **Install for the TrackMania ModLoader** | You use the [ModLoader (TMLoader)](https://tomashu.dev/software/tmloader/). Afterwards tick *TM Vibrant Shaders* in your ModLoader profile. |
    | **Install into TrackMania Nations Forever** / **United Forever** | No ModLoader. The setup lists every TrackMania it finds, each with its own button, and puts a `d3d9.dll` next to `TmForever.exe`. |
-   | **Install into another game folder** | Your game isn't in the list. Pick the folder that contains `TmForever.exe`. |
+   | **Install into TrackMania 2 (ManiaPlanet)** | The setup puts a 64-bit `d3d11.dll` next to `ManiaPlanet.exe`. Details: [maniaplanet/README.md](maniaplanet/README.md). |
+   | **Install into another game folder** | Your game isn't in the list. Pick the folder that contains `TmForever.exe` or `ManiaPlanet.exe`. |
 
 4. Start the game. Press **`F8`** for the menu.
 
-Run the setup again to update or uninstall; your settings stay. Windows SmartScreen may warn because the setup isn't code-signed: *More info → Run anyway*, or install by hand. Manual install, updating and the recommended game settings: **[docs/install.md](docs/install.md)**. Deutsche Anleitung: **[docs/INSTALL_DE.md](docs/INSTALL_DE.md)**.
+By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `ManiaPlanet.exe` (start ManiaPlanet 64-bit). Run the setup again to update or uninstall; your settings stay. Windows SmartScreen may warn because the setup isn't code-signed: *More info → Run anyway*, or install by hand. Manual install, updating and the recommended game settings: **[docs/install.md](docs/install.md)**. Deutsche Anleitung: **[docs/INSTALL_DE.md](docs/INSTALL_DE.md)**.
 
 ---
 
@@ -50,21 +70,13 @@ Run the setup again to update or uninstall; your settings stay. Windows SmartScr
 | **Weather** | Rain as particles that streak with the camera, splashes, ripples, streams down walls, drops on the lens. Wet roads and puddles with reflections. Thunderstorms with lightning bolts and flashes. Spray behind the car. |
 | **Snow** | Falling snow up to a blizzard, flakes on the lens, snow on the ground in piles and drifts or as a closed blanket, sparkling in the sun. Your car keeps its paint and throws up powder snow. A wind sound for the storm. |
 | **Sound** | Rain and thunder from real recordings, wind in a snow storm: a rain loop that follows the rain amount and ten different thunders, from close cracks to far rumbles. Each strike sounds a little different and comes from the side of the flash. |
-| **Water** | Pools, rivers and the TMUF seas get waves, refraction and reflections. The mod takes the water height from the game, so nothing else turns into water. |
+| **Water** | Pools, rivers and the TMUF seas get waves, refraction and reflections, with the stands and ramps around a pool mirrored in it. The mod knows water by the game's own water surface, so dirt, grass or roads at the same height stay what they are. |
 | **Sky** | Volumetric clouds. Clear sky, starry night with shooting stars, aurora, a black hole that bends light and lights the scene, and the Ring World: Saturn, Jupiter, an ice giant or an exotic planet, seen from far away, next to the rings or right above them. Night skies work on day maps. |
-| **Camera** | HDR bloom, auto exposure, filmic tone curve, colour looks from `.cube` LUT files. FXAA, temporal anti-aliasing, AMD CAS sharpening. Motion blur and depth of field that switch on by themselves in replays and the video export. |
+| **Camera** | HDR bloom, auto exposure, filmic tone curve, colour looks from `.cube` LUT files. SMAA or FXAA, temporal anti-aliasing, AMD CAS sharpening, a render scale with AMD FSR 1 upscaling. Motion blur and depth of field that switch on by themselves in replays and the video export. |
 | **Extras** | A neon light trail behind your car for the whole run. Track reflections up to a mirror finish. Grass detail and mowing stripes. |
-| **Comfort** | `F8` menu with a gallery of every preset: a picture of each, its GPU load, and a live preview in the game while you point at it. *Customize* for the main settings, *Studio* for every setting in panels side by side, with a search box and a reset arrow for every changed setting. The menu tells you when a new version is out (one request to GitHub per game start, can be switched off). Auto quality holds your frame rate. A live per-effect cost panel. A preset per map mood (day, sunset, night). Your own presets as shareable text files. Map authors can ship a look inside their map ([Author's Shader](#authors-shader)). |
+| **Comfort** | `F8` menu with a gallery of every preset: a picture of each, its GPU load, and a live preview in the game while you point at it. *Customize* for the main settings, *Studio* for every setting in panels side by side, with a search box and a reset arrow for every changed setting. The menu tells you when a new version is out (one request to GitHub per game start, can be switched off). Auto quality holds your frame rate. A live per-effect cost panel. A preset per map mood (day, sunset, night). Your own presets as files, or any look as one line of text to paste into a chat (*Copy share code*). Map authors can ship a look inside their map ([Author's Shader](#authors-shader)). |
 
-![Original and Realistic](docs/images/compare-realistic.jpg)
-
-![Original and Storm](docs/images/compare-rain.jpg)
-
-| | |
-|---|---|
-| ![Sunset: original and Vibrant](docs/images/compare-sunset.jpg) | ![Day: original and Golden Hour](docs/images/compare-day.jpg) |
-| ![Night: original and Neon](docs/images/compare-night.jpg) | ![On the rings of a gas giant, with a black hole in the sky](docs/images/ring-world.jpg) |
-| ![Black hole](docs/images/black-hole.jpg) | ![Aurora](docs/images/aurora.jpg) |
+![Day: original and Golden Hour](docs/images/compare-day.jpg)
 
 ---
 
@@ -111,17 +123,21 @@ You can also write a readable line by hand into the comments, with the preset an
 [TMVS] Preset=Snowstorm Snow=1.5 SnowCover=0.8 SkyMode=3
 ```
 
-Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (auto quality, target FPS, sound volume, the neon trail, *Only in replays and video export*, TAA jitter, the MSAA and depth options) are never taken from a map.
+Preset names with spaces take an underscore (`Golden_Hour`). Machine settings (auto quality, target FPS, sound volume, the neon trail, *Cinematic in replays only*, TAA jitter, the MSAA and depth options) are never taken from a map.
 
 ---
 
 ## Controls
 
+Default keys; every one can be changed in the menu (*Settings* → *Hotkeys*, [details](docs/settings.md#hotkeys)).
+
 | Key | Action |
 |---|---|
-| `F8` | Open or close the menu |
+| `F8` | Open or close the menu (`F5` when CenterSpeed is loaded) |
 | `F7` | Shaders on or off, for a before/after look |
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
+| `Ctrl+F9` | Reload the shaders (development). Not `F9`: that opens the menu of the 100% TMX mod. Hotkeys only react while the game window is in front |
+| `F11` | Trace the next frame (development) |
 | `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms, `Shift+F6` splits the screen: the game without and with the mod |
 
 ![The F8 menu: every preset as a card with a picture](docs/images/menu.jpg)
@@ -136,7 +152,7 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 - **Comfortable at 1080p:** GTX 1060, RX 580, Radeon 780M, Intel Arc 140V.
 - **Everything on at 1440p:** RTX 3060, GTX 1080 Ti and faster.
 
-**Auto quality** is on by default. It turns the effect quality down when your frame rate drops below the target and back up when there is room, without touching your settings. The *Performance* section in the menu shows what each effect costs on your GPU, live. Measured numbers and the most expensive settings: **[docs/performance.md](docs/performance.md)**.
+**Auto quality** is on by default. When your frame rate drops below the target it turns off the effects that cost the most on your GPU, only as many as it has to, and brings them back when there is room. Your settings stay as they are. On a weak GPU, *Render scale (FSR)* at 0.77 or 0.67 is another way to more FPS. The *Performance* section in the menu shows what each effect costs on your GPU, live. Measured numbers and the most expensive settings: **[docs/performance.md](docs/performance.md)**.
 
 ---
 
@@ -146,8 +162,10 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 |---|---|
 | TrackMania Nations Forever | Yes |
 | TrackMania United Forever | Yes (the mod detects the game build and the map's environment) |
-| TrackMania Nations ESWC, TrackMania 2 / 2020 | No |
+| TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) |
+| TrackMania Nations ESWC, Trackmania (2020) | No |
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
+| CenterSpeed (speedometer) | Yes. With both loaded, this mod's menu opens with `F5` (CenterSpeed uses `F8`) |
 | Other `d3d9.dll` mods (ReShade and similar) | Not as `d3d9.dll` in the same game folder. Together with the ModLoader install: untested |
 | Windows | 10 and 11 |
 
@@ -155,8 +173,8 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 
 - **Snow on the ground** (*Snow on the ground*, off in every preset) doesn't follow the game's textures and surfaces well (it can lie across markings, kerbs and edges). For snowy roads a snow texture pack looks better.
 - **Headlights on very bright blocks** (United Forever Island at night): the game itself draws the light pool pure white, so there is no texture left under it.
-- **Floodlit stadiums at night** keep part of the game's burned-out white (*Floodlit surfaces at night* sets how much).
-- **Shaders off with the game's FX post-processing** was reported once (TMNF, shadows *High*). *Turn off the game's FX post-processing* (on by default) should prevent it; if not, switch FX off in the launcher.
+- **Floodlit stadiums at night** keep part of the game's burned-out white (*Floodlit surfaces* sets how much).
+- **Shaders off with the game's FX post-processing** was reported once (TMNF, shadows *High*). *Turn off game FX* (on by default) should prevent it; if not, switch FX off in the launcher.
 - **Bloom costs ~3 ms on integrated GPUs**; *Performance* preset or auto quality help.
 - If something flickers or looks wrong, press `F12` there and attach the screenshot and the capture to an [issue](https://github.com/cheatoskar/TM-Vibrant-Shaders/issues).
 
@@ -187,7 +205,7 @@ This mod was developed with the help of [Claude Code](https://claude.com/claude-
 
 - [Dear ImGui](https://github.com/ocornut/imgui) (MIT) for the menu, [minimp3](https://github.com/lieff/minimp3) (CC0) for the sound. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Rain and thunder recordings from [freesound.org](https://freesound.org) (CC0) by Rubaoliva, loganzsound, seth-m, Fission9, TRP, Kinoton, Martineerok, kingsrow and bastipictures. See [sounds/CREDITS.md](sounds/CREDITS.md).
-- Anti-aliasing and sharpening follow FXAA 3.11 (Timothy Lottes) and AMD FidelityFX CAS. The look is inspired by the Minecraft shader packs Sildur's Vibrant, BSL and IterationT; no code from them is used.
+- Anti-aliasing and sharpening: SMAA (Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, Diego Gutierrez; the reference shader and its area and search textures), FXAA 3.11 (Timothy Lottes) and AMD FidelityFX CAS; the render scale's upscaling is AMD FidelityFX FSR 1. The look is inspired by the Minecraft shader packs Sildur's Vibrant, BSL and IterationT; no code from them is used.
 - TrackMania is a trademark of Ubisoft / Nadeo. This is a fan project and has nothing to do with them.
 
 ## License

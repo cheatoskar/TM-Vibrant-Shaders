@@ -45,6 +45,27 @@ struct Field {
 };
 const std::vector<Field>& fields();
 
+// Share codes: a look as one line of text ("TMVS1:..."), for Discord and the like. All of the
+// look's settings (not the machine's) that differ from the Settings defaults, so a code reads the
+// same in TrackMania Nations/United and TrackMania 2.
+struct ShareStats {
+    int applied = 0; // settings taken from the code
+    int unknown = 0; // keys this version doesn't have (or machine settings): ignored
+    int invalid = 0; // known keys with a value that can't be read: ignored
+    int clamped = 0; // values outside the setting's range, moved into it
+};
+std::string shareCodeFor(const Settings& settings);
+// What a TMVS1 code does not mention: the Settings defaults as they were when the format came out
+// (Sharpen was 0.35 then, 0.8 since 1.4), so old codes keep their look and old versions read new ones.
+Settings shareCodeBase();
+// `look` comes in with your machine settings and leaves with the code's look on success; on
+// failure it is untouched and `error` says why in a sentence for the menu.
+bool decodeShareCode(const std::string& text, Settings& look, ShareStats& stats, std::string& error);
+std::string shareStatusLine(const ShareStats& stats); // "Loaded 37 settings, 2 unknown ignored"
+// The Windows clipboard as Unicode text. Reading refuses text of more than 1 MB.
+bool copyTextToClipboard(const std::string& ascii);
+bool textFromClipboard(std::string& text, std::string& error);
+
 // Name of the state after the user changed a value by hand.
 constexpr const char* kCustomPreset = "Custom";
 // Name of the state while the look comes from the map's comments.
@@ -75,6 +96,7 @@ public:
     bool photoHideHud = true;
     int photoTiles = 2;
     float photoDof = 0.5f;
+    bool splitPhotoLabels = true; // the compare split's names burnt into photos (TMNF)
     // Colour look-up table on top of every preset: a .cube file in TMVS\luts ("" = none)
     // and how much of it (0..1).
     std::string lutFile;
@@ -87,6 +109,15 @@ public:
     bool previewSettings(Settings& s) const { return !previewPreset.empty() && namedSettings(previewPreset, s); }
     // Any preset's values (for the menu's cost estimate); false = unknown name.
     bool presetSettings(const std::string& name, Settings& s) const { return namedSettings(name, s); }
+    // When your preset's file was last written (zero for a built-in one or no file): a cached
+    // copy of its values is stale when this changes.
+    unsigned long long presetWritten(const std::string& name) const;
+
+    // The current look as a share code, and a code applied as your unsaved look ("Custom" on top of
+    // the built-in preset it is closest to; an exact copy of a built-in preset selects it). Nothing
+    // saved is touched. false = `message` is the reason, else the status line.
+    std::string shareCode() const;
+    bool applyShareCode(const std::string& text, std::string& message);
 
     // Presets: the built-in ones, then the user's own (Documents\TrackMania\TMVS\presets\*.ini).
     std::vector<std::string> presetNames() const;
@@ -119,6 +150,12 @@ public:
     bool autoMood = true;
     std::string moodPreset[static_cast<int>(Mood::Count)] = {"Vibrant", "Golden Hour", "Horizon"};
     Mood mood = Mood::Unknown;
+    // You picked a preset in the menu (with "Picked preset applies to all maps of this type"
+    // off): it holds on every map, also on ones of another type, until you choose a preset for
+    // a map type again (Maps page) or resumeMoodPresets(). Before, the next map of another type
+    // switched to its preset: Horizon picked, the replay's video export loaded Golden Hour.
+    bool manualPick = false;
+    void resumeMoodPresets();
     void onMoodDetected(Mood m);
     // The look a map of this mood gets once loaded (its mood preset, or the current look).
     Settings lookForMood(Mood m) const;

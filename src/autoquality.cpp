@@ -8,30 +8,49 @@ namespace tmshaders {
 namespace {
 constexpr double kWindow = 2.0;   // seconds of frames per decision
 constexpr double kSettle = 3.0;   // after a change, let the new frame rate show
+// Against cutting and restoring in a loop (the owner, target 61: at 57 FPS six effects off,
+// one back every 4 - 6 s, all off again 20 s later, the long shadows popping in front of the
+// car): a cut stays at least kHold, a knob comes back only after kCalmWindows windows in a row
+// with room for it (the tightest of them counts), and one cut again within kBounce of coming
+// back stays off for kBlocked.
+constexpr double kHold = 20.0;
+constexpr int kCalmWindows = 3;
+constexpr double kBounce = 60.0;
+constexpr double kBlocked = 300.0;
+// No decisions for a while after a map start or a pause of the frames (loading, device reset,
+// alt-tab, photo mode), and after a hitch: the game compiles shaders and the caster maps record
+// new meshes, the frame rate says nothing about the effects. The owner's log (2026-10-17): hitches
+// of 0.3 - 0.75 s up to 16 s after a map's first 3D frame (5 map starts: 7, 8, 11, 12, 16 s);
+// the 8 s grace ended into that and cut nine effects at 76 FPS.
+constexpr double kRestartGrace = 20.0;
+constexpr double kHitchGrace = 4.0;
 
 // What auto quality can turn down, in order: the most milliseconds for the least look
-// first, the glowing neon (the look itself) last. `share` = the part of the passes' time
+// first. The light shafts and the glowing neon (the look itself) keep their places but are
+// never turned off (keepsLook). `share` = the part of the passes' time
 // the knob saves (fewer samples make the same passes cheaper, long shadows are a part of
-// the AO/shadow pass).
+// the AO/shadow pass); `whole` = passes the knob saves entirely. Exact pass names: the
+// lighting and spill passes have engine variants (SpillDownEngine), each listed.
 struct Knob {
     const char* name;
     const char* passes[4];
     float share;
+    const char* whole[4];
 };
 constexpr Knob kKnobTable[AutoQuality::kKnobs] = {
     {"volumetric light", {"Volumetric", "ShadowHeight"}, 1.0f},
     {"GI", {"GI", "GITemporal"}, 1.0f},
     {"fewer samples", {"OcclusionShadow", "Clouds", "Volumetric", "GI"}, 0.3f},
-    {"long shadows", {"OcclusionShadow", "HeightSplat", "HeightMerge"}, 0.4f},
+    {"long shadows", {"OcclusionShadow", "HeightSplat", "HeightMerge"}, 0.4f, {"LightGridInit", "LightGridSweep", "Casters"}},
     {"reflections, grass detail", {"Reflect"}, 1.0f},
     {"volumetric clouds", {"Clouds"}, 1.0f},
     {"TAA", {"TAA"}, 1.0f},
-    {"FXAA", {"FXAA"}, 1.0f},
+    {"edge smoothing", {"FXAA", "SmaaEdges", "SmaaWeights", "SmaaBlend"}, 1.0f},
     {"lowest samples", {"OcclusionShadow", "Clouds", "Volumetric", "GI"}, 0.3f},
     {"depth of field, motion blur", {"Focus", "DofBlur", "Cinematic"}, 1.0f},
     {"light shafts", {"RayMask", "RayBlur"}, 1.0f},
     {"lens flare, sharpening", {"Sharpen"}, 1.0f},
-    {"neon light", {"SpillDown", "SpillBlur"}, 1.0f},
+    {"neon light", {"SpillDown", "SpillDownEngine", "SpillBlur", "SpillTemporal"}, 1.0f},
 };
 
 void applyKnob(int knob, Settings& s) {
@@ -72,16 +91,31 @@ bool matters(int knob, const Settings& s) {
         default: return false;
     }
 }
+// The light shafts and the neon light are the look itself: auto quality never turns them off.
+// They cost little (0.2 - 0.4 ms), and cut for a fraction of a millisecond (or for a target no
+// cut could reach: 240 FPS on a 144 Hz game) the presets lost what they are picked for.
+// The long shadows stay too: cut, a stand's shadow on the road is only the game's light tint
+// far off and turns dark as the car drives up to it, and photo mode (never cut) shows it dark
+// (the owner, Mini Hunt #27, target 109: cut at a map start's 76 FPS, and as 98 FPS never
+// reached the target they stayed off for the rest of the session). Their cost is small
+// (light grid and height map, ~0.3 ms on a GTX 1080 Ti at 1440p).
+bool keepsLook(int knob) {
+    return knob == 3 || knob == 10 || knob == 12;
+}
+// The order cuts go in (restores in reverse): the table's. The look knobs aren't in it.
+constexpr int kCutOrder[] = {0, 1, 2, 4, 5, 6, 7, 8, 9, 11};
+constexpr int kCutKnobs = static_cast<int>(sizeof(kCutOrder) / sizeof(kCutOrder[0]));
 } // namespace
 
 void AutoQuality::measure(const Pipeline& pipeline) {
     if (!m_passesKnown) {
         for (int k = 0; k < kKnobs; k++) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 8; i++) {
                 m_passes[k][i] = -1;
-                if (!kKnobTable[k].passes[i]) continue;
+                const char* name = i < 4 ? kKnobTable[k].passes[i] : kKnobTable[k].whole[i - 4];
+                if (!name) continue;
                 for (int p = 0; p < pipeline.passCount(); p++) {
-                    if (!strcmp(Pipeline::passName(p), kKnobTable[k].passes[i])) m_passes[k][i] = p;
+                    if (!strcmp(Pipeline::passName(p), name)) m_passes[k][i] = p;
                 }
             }
         }
@@ -90,19 +124,24 @@ void AutoQuality::measure(const Pipeline& pipeline) {
     // A knob's cost is known while it is on; once off, its last measurement stands.
     for (int k = 0; k < kKnobs; k++) {
         if (m_reduced[k]) continue;
-        float ms = 0.0f;
-        for (int i = 0; i < 4; i++) {
-            if (m_passes[k][i] >= 0) ms += pipeline.passTime(m_passes[k][i]);
+        float ms = 0.0f, whole = 0.0f;
+        for (int i = 0; i < 8; i++) {
+            if (m_passes[k][i] >= 0) (i < 4 ? ms : whole) += pipeline.passTime(m_passes[k][i]);
         }
-        m_cost[k] = ms * kKnobTable[k].share;
+        m_cost[k] = ms * kKnobTable[k].share + whole;
     }
 }
 
 void AutoQuality::reduce(int knob, double now) {
     m_reduced[knob] = true;
     m_order[m_reducedCount++] = knob;
-    // Brought back a moment ago and too slow again: leave it off for a while.
-    if (now - m_restoredAt[knob] < kSettle + kWindow * 3.0) m_blockUntil[knob] = now + 90.0;
+    m_cutAt[knob] = now;
+    // Brought back not long ago and too slow again: leave it off for a while.
+    if (m_restoredAt[knob] > 0.0 && now - m_restoredAt[knob] < kBounce) {
+        m_blockUntil[knob] = now + kBlocked;
+        TMVS_LOG("auto quality: %s came back %.0f s ago and the frame rate dropped again: it stays off for %.0f s", kKnobTable[knob].name,
+                 now - m_restoredAt[knob], kBlocked);
+    }
 }
 
 void AutoQuality::restore(int knob, double now) {
@@ -115,11 +154,19 @@ void AutoQuality::restore(int knob, double now) {
     m_restoredAt[knob] = now;
 }
 
+void AutoQuality::startGrace(double now, double seconds, const char* reason) {
+    if (now + seconds <= m_quietUntil) return; // a longer grace already runs
+    if (now >= m_quietUntil) m_graceStart = now;
+    m_quietUntil = now + seconds;
+    m_graceReason = reason;
+}
+
 void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, const Settings& s) {
     if (!s.autoQuality || !s.enabled) {
         for (bool& r : m_reduced) r = false;
         m_reducedCount = 0;
         m_lastCutCount = 0;
+        m_calm = 0;
         m_windowStart = -1.0;
         m_lastFrame = -1.0;
         return;
@@ -130,16 +177,47 @@ void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, c
         if (dt > 0.0 && dt < 0.25) {
             m_frames++;
             m_frameTime += dt;
+            if (now < m_quietUntil && gameplay) {
+                m_graceFrames++;
+                m_graceTime += dt;
+            }
         } else if (dt >= 0.25) {
-            m_quietUntil = now + 4.0;
+            // A second or more without frames: a loading screen, a device reset, alt-tab or
+            // photo mode (auto quality doesn't run in it); after it the game settles like at
+            // a map start. A shorter hitch (a shader compiled) needs less.
+            if (dt >= 1.0) {
+                startGrace(now, kRestartGrace, "a pause of the frames (loading, device reset, alt-tab, photo mode)");
+            } else {
+                startGrace(now, kHitchGrace, "a hitch");
+            }
         }
     }
     m_lastFrame = now;
-    if (gameplay && !m_wasGameplay) m_quietUntil = now + 8.0; // a map just started
+    if (gameplay && !m_wasGameplay) startGrace(now, kRestartGrace, "a map start");
     m_wasGameplay = gameplay;
     if (gameplay) {
         m_gameplayFrames++;
         m_pipelineSum += pipeline.totalTime();
+    }
+    // In the grace no frame counts: the first window starts when it ends, so a map's first
+    // seconds never decide a cut (16:59:07 the window still held frames of the grace: 76 FPS,
+    // nine effects off for the rest of the session at 92 - 98 FPS).
+    if (now < m_quietUntil) {
+        m_windowStart = now;
+        m_frames = 0;
+        m_frameTime = 0.0;
+        m_gameplayFrames = 0;
+        m_pipelineSum = 0.0;
+        return;
+    }
+    if (m_graceFrames > 0) {
+        const float graceFps = m_graceTime > 0.0 ? static_cast<float>(m_graceFrames / m_graceTime) : 0.0f;
+        if (m_graceFrames > 10 && graceFps < s.targetFps * 0.95f) {
+            TMVS_LOG("auto quality: %.0f FPS (target %.0f) in the %.0f s after %s: no decision on them, measuring starts now", graceFps,
+                     s.targetFps, m_quietUntil - m_graceStart, m_graceReason);
+        }
+        m_graceFrames = 0;
+        m_graceTime = 0.0;
     }
     if (m_windowStart < 0.0) m_windowStart = now;
     if (now - m_windowStart < kWindow) return;
@@ -179,6 +257,7 @@ void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, c
     }
 
     if (m_fps < target * 0.95f && now > m_noCutUntil) {
+        m_calm = 0;
         // Turn off just enough (by the measured cost) to win back the missing time, with a
         // little margin, in one step.
         const float need = frameMs - targetMs * 0.97f;
@@ -198,14 +277,54 @@ void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, c
                      m_fps, target, need, m_pipelineMs);
             return;
         }
+        // Everything it may still turn off wouldn't win the missing time either (a target the
+        // GPU can't reach with these effects at all: 83 FPS, target 240, 7.8 ms missing, the
+        // effects 5.6 ms): cutting all of it would leave the plainest look and still miss.
+        if (timed) {
+            float available = 0.0f;
+            for (int k = 0; k < kKnobs; k++) {
+                if (!m_reduced[k] && !keepsLook(k) && matters(k, s) && m_cost[k] >= 0.05f) available += m_cost[k];
+            }
+            if (need > available) {
+                m_noCutUntil = now + 30.0;
+                m_lastChange = now;
+                TMVS_LOG("auto quality: %.0f FPS (target %.0f), %.1f ms missing but turning effects off could win only %.1f ms: target out of reach, nothing (more) turned off",
+                         m_fps, target, need, available);
+                return;
+            }
+        }
+        auto candidate = [&](int k) { return !m_reduced[k] && matters(k, s) && !(timed && m_cost[k] < 0.05f); };
+        int picks[kCutKnobs] = {};
+        int count = 0;
         float expected = 0.0f;
+        // One knob that wins it all alone, the first in the order (the least look): 1.3 ms
+        // missing turned off five effects in a row when the reflections alone were 1.5 ms.
+        for (int i = 0; i < kCutKnobs && timed; i++) {
+            const int k = kCutOrder[i];
+            if (!candidate(k) || m_cost[k] < need) continue;
+            picks[count++] = k;
+            expected = m_cost[k];
+            break;
+        }
+        // Else in order until the sum wins it (without timings: one at a time), then the ones
+        // it can do without go back out (from the back: the earlier ones cost the least look).
+        if (count == 0) {
+            for (int i = 0; i < kCutKnobs && (count == 0 || (timed && expected < need)); i++) {
+                if (!candidate(kCutOrder[i])) continue;
+                picks[count++] = kCutOrder[i];
+                expected += m_cost[kCutOrder[i]];
+            }
+            for (int j = count - 2; j >= 0 && timed; j--) {
+                if (expected - m_cost[picks[j]] < need) continue;
+                expected -= m_cost[picks[j]];
+                for (int m = j; m < count - 1; m++) picks[m] = picks[m + 1];
+                count--;
+            }
+        }
         m_lastCutCount = 0;
-        for (int k = 0; k < kKnobs; k++) {
-            if (m_reduced[k] || !matters(k, s) || (timed && m_cost[k] < 0.05f)) continue;
-            reduce(k, now);
-            m_lastCut[m_lastCutCount++] = k;
-            expected += m_cost[k];
-            if (!timed || expected >= need) break; // without timings: one at a time
+        for (int i = 0; i < count; i++) {
+            reduce(picks[i], now);
+            m_lastCut[m_lastCutCount++] = picks[i];
         }
         if (m_lastCutCount > 0) {
             m_expectedGain = expected;
@@ -215,16 +334,26 @@ void AutoQuality::onFrame(double now, bool gameplay, const Pipeline& pipeline, c
                      frameMs - targetMs, summary());
         }
     } else if (m_reducedCount > 0) {
-        // Time to spare: the effect that matters most for the look (the last in the list)
-        // comes back, if its measured cost fits.
+        // Time to spare, several windows in a row: the effect that matters most for the look
+        // (the last in the order) comes back, if its measured cost fits the tightest of them.
         const float spare = targetMs - frameMs;
-        for (int k = kKnobs - 1; k >= 0; k--) {
-            if (!m_reduced[k] || now < m_blockUntil[k] || spare < m_cost[k] * 1.2f + targetMs * 0.03f) continue;
+        if (spare <= 0.0f) {
+            m_calm = 0;
+            return;
+        }
+        m_worstSpare = m_calm == 0 ? spare : (spare < m_worstSpare ? spare : m_worstSpare);
+        if (++m_calm < kCalmWindows) return;
+        m_calm = 0; // fits or not, the next one needs a new run of windows
+        for (int i = kCutKnobs - 1; i >= 0; i--) {
+            const int k = kCutOrder[i];
+            if (!m_reduced[k] || now < m_blockUntil[k] || now - m_cutAt[k] < kHold || m_worstSpare < m_cost[k] * 1.2f + targetMs * 0.03f) continue;
             restore(k, now);
             m_lastChange = now;
             TMVS_LOG("auto quality: %.0f FPS (target %.0f): %s back on (%.1f ms)", m_fps, target, kKnobTable[k].name, m_cost[k]);
             break;
         }
+    } else {
+        m_calm = 0;
     }
 }
 

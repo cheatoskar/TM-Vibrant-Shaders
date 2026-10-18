@@ -21,6 +21,15 @@ void check();
 // What the last check found.
 Info latest();
 
+// The ModLoader update server (tools/modloader_server.py, deployed by CI to GitHub Pages).
+constexpr const char* kModLoaderServer = "https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/";
+
+// How this copy was installed, for the update hint. ModLoaderServer: loaded from the
+// ModLoader's products folder and its config.yaml lists kModLoaderServer, so the ModLoader
+// installs new versions by itself.
+enum class Install { Other, ModLoader, ModLoaderServer };
+Install install();
+
 // "1.3.10" > "1.3.9"; a suffix ("-beta.1") is ignored.
 bool newer(const std::string& version, const std::string& than);
 

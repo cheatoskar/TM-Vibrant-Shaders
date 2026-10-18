@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(tm_vibrant_shaders VERSION 1.4.0 LANGUAGES CXX RC)
+project(tm_vibrant_shaders VERSION 1.4.1 LANGUAGES CXX RC)
 
 if(NOT DEFINED TM_SHADERS_VERSION)
   set(TM_SHADERS_VERSION "${PROJECT_VERSION}")
@@ -61,7 +61,11 @@ set(TMVS_ENTRIES
   PS_SkyClear PS_SkyStars PS_SkyBlackHole PS_SkyAurora PS_SkyRing PS_AuroraHalf PS_SkyAverage PS_Shelter PS_Clouds PS_Reflect PS_SpillDown PS_SpillBlur PS_Lighting PS_RainDrop PS_RainSplash PS_Spray PS_TrailPoint PS_Trail PS_SnowFlake
   PS_Focus PS_DofBlur PS_Cinematic
   PS_RayMask PS_RayBlur PS_BloomDown PS_BloomUp PS_Luminance PS_Adapt PS_Final PS_FXAA PS_TAA PS_Sharpen PS_Copy
-  PS_CopyDepth PS_WaterLevel)
+  PS_CopyDepth PS_WaterLevel PS_Resolve PS_LightingEngine PS_SpillDownEngine PS_LightGridInit PS_LightGridSweep PS_PrepareGBuffer
+  PS_LampSource PS_LampDown PS_LampUp PS_LightingGameLight PS_FsrEasu PS_FsrRcas PS_SpillTemporal
+  PS_SpillSource PS_SpillSourceEngine PS_SpillDownSource
+  PS_SmaaEdges PS_SmaaWeights PS_SmaaBlend
+  PS_SpillSourceNeon PS_NeonGlow PS_NeonAdd PS_NeonTemporal)
 
 file(GLOB TMVS_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
 list(SORT TMVS_SDK_BINS ORDER DESCENDING)
@@ -86,7 +90,7 @@ foreach(entry ${TMVS_ENTRIES})
     COMMAND "${TMVS_FXC}" /nologo /O3 /T ps_3_0 /E ${entry} /Vn g_${entry} /Fh "${out}" "${TMVS_SHADER}"
     # Stay below the 4096 instruction slots many drivers allow (with a little headroom).
     COMMAND "${CMAKE_COMMAND}" -DHEADER=${out} -DLIMIT=3900 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shader_slots.cmake"
-    DEPENDS "${TMVS_SHADER}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shader_slots.cmake"
+    DEPENDS "${TMVS_SHADER}" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/SMAA.hlsl" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_shader_slots.cmake"
     COMMENT "fxc ${entry}"
     VERBATIM)
   list(APPEND TMVS_SHADER_HEADERS "${out}")
@@ -114,17 +118,23 @@ add_library(tmvs_core STATIC
   src/gfx.cpp
   src/noise.cpp
   src/framecap.cpp
+  src/capwriter.cpp
   src/config.cpp
+  src/keys.cpp
+  src/inlinehook.cpp
+  src/inifile.cpp
   src/gbx.cpp
   src/log.cpp
   src/weather.cpp
   src/image.cpp
   src/lut.cpp
+  src/mp4writer.cpp
+  src/gbufpatch.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(tmvs_core PRIVATE ${stb_SOURCE_DIR})
-target_link_libraries(tmvs_core PUBLIC d3d9 d3dcompiler dxguid)
+target_link_libraries(tmvs_core PUBLIC d3d9 d3dcompiler dxguid ole32 oleaut32)
 
 set(TMVS_DEFINITIONS WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 set(TMVS_OPTIONS /W4 /EHsc /permissive- /utf-8)
@@ -134,11 +144,14 @@ target_compile_options(tmvs_core PRIVATE ${TMVS_OPTIONS})
 add_library(tm_vibrant_shaders SHARED
   src/dllmain.cpp
   src/plugin.cpp
+  src/casters.cpp
+  src/perflog.cpp
   src/engine.cpp
   src/hook.cpp
   src/depth.cpp
   src/tracer.cpp
   src/capture.cpp
+  src/gameshaders.cpp
   src/overlay.cpp
   src/menu.cpp
   src/thumbnails.cpp
@@ -147,6 +160,7 @@ add_library(tm_vibrant_shaders SHARED
   src/autoquality.cpp
   src/audio.cpp
   src/proxy.cpp
+  src/videofile.cpp
   src/exports.def
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
   sounds/sounds.rc
@@ -176,11 +190,60 @@ target_include_directories(tmvs_preview PRIVATE ${minimp3_SOURCE_DIR})
 set_property(SOURCE sounds/sounds.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/sounds")
 file(GLOB TMVS_SOUND_FILES "${CMAKE_CURRENT_SOURCE_DIR}/sounds/*.mp3")
 set_source_files_properties(sounds/sounds.rc PROPERTIES OBJECT_DEPENDS "${TMVS_SOUND_FILES}")
-# The preset pictures (tools/make-thumbnails.ps1), found next to thumbnails.rc.
-set_property(SOURCE thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails")
-file(GLOB TMVS_THUMBNAIL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails/*.jpg")
+# The preset pictures (tools/make-thumbnails.ps1), found next to thumbnails.rc, and the menu's icon.
+set_property(SOURCE thumbnails/thumbnails.rc APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails"
+  "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icons")
+file(GLOB TMVS_THUMBNAIL_FILES "${CMAKE_CURRENT_SOURCE_DIR}/thumbnails/*.jpg" "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icons/icon_a_64.png")
 set_source_files_properties(thumbnails/thumbnails.rc PROPERTIES OBJECT_DEPENDS "${TMVS_THUMBNAIL_FILES}")
 target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
+
+# MP4 writer test: synthetic frames and sound through Media Foundation (development tool).
+add_executable(tmvs_mp4test tools/mp4test.cpp)
+target_link_libraries(tmvs_mp4test PRIVATE tmvs_core)
+target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
+
+# Hotkey table test: key names round-trip, conflicts, the ini (development tool).
+add_executable(tmvs_keystest tools/keystest.cpp)
+target_link_libraries(tmvs_keystest PRIVATE tmvs_core)
+target_compile_options(tmvs_keystest PRIVATE ${TMVS_OPTIONS})
+
+# Inline hooker test: instruction lengths, chaining onto another hook's jump, removal (development tool).
+add_executable(tmvs_inlinehooktest tools/inlinehooktest.cpp)
+target_link_libraries(tmvs_inlinehooktest PRIVATE tmvs_core)
+target_compile_options(tmvs_inlinehooktest PRIVATE ${TMVS_OPTIONS})
+
+# settings.ini writer test: the same bytes as WritePrivateProfileString, in one write (development tool).
+add_executable(tmvs_initest tools/initest.cpp)
+target_link_libraries(tmvs_initest PRIVATE tmvs_core)
+target_compile_options(tmvs_initest PRIVATE ${TMVS_OPTIONS})
+
+# Auto quality test: the grace after a map start, a hitch and a pause (development tool).
+add_executable(tmvs_aqtest tools/aqtest.cpp src/autoquality.cpp)
+target_link_libraries(tmvs_aqtest PRIVATE tmvs_core)
+target_compile_options(tmvs_aqtest PRIVATE ${TMVS_OPTIONS})
+
+# Share code test: every preset round-trips, garbage is refused, the clipboard (development tool).
+add_executable(tmvs_sharetest tools/sharetest.cpp)
+target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)
+target_compile_options(tmvs_sharetest PRIVATE ${TMVS_OPTIONS})
+
+# GameGBuffer test: the game's dumped pixel shaders through the compile patch with the game's own
+# compiler, and (--device) drawn next to the game's on a D3D9 device (development tool).
+add_executable(tmvs_gbuftest tools/gbuftest.cpp)
+target_link_libraries(tmvs_gbuftest PRIVATE tmvs_core)
+target_compile_options(tmvs_gbuftest PRIVATE ${TMVS_OPTIONS})
+
+# CasterShadows CPU test: a synthetic track through casters::recordDraw, the recording's cost per
+# draw (development tool).
+add_executable(tmvs_castertest tools/castertest.cpp src/casters.cpp)
+target_link_libraries(tmvs_castertest PRIVATE tmvs_core)
+target_compile_options(tmvs_castertest PRIVATE ${TMVS_OPTIONS})
+
+# Capture writer test: the F12 capture's writer thread, its order, files complete or not at all, and the
+# formats byte for byte as before (--device: the screenshot from a real D3D9 surface) (development tool).
+add_executable(tmvs_capwritertest tools/capwritertest.cpp src/capture.cpp)
+target_link_libraries(tmvs_capwritertest PRIVATE tmvs_core)
+target_compile_options(tmvs_capwritertest PRIVATE ${TMVS_OPTIONS})
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an

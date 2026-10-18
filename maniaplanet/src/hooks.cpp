@@ -9,6 +9,7 @@
 #include "hooks.h"
 #include "autoquality11.h"
 #include "capture.h"
+#include "engine_lights.h"
 #include "engine_frame.h"
 #include "log.h"
 #include "overlay.h"
@@ -19,7 +20,9 @@
 #include "photo11.h"
 #include "maplook.h"
 #include "shaderdb.h"
+#include "softshadow.h"
 #include <windows.h>
+#include <atomic>
 #include <dxgi1_2.h>
 #include <d3d11_4.h>
 #include <mutex>
@@ -173,18 +176,32 @@ struct Frame {
     ID3D11Resource* postImage = nullptr;   // where the tone map / post effects wrote last
     ID3D11RenderTargetView* postRtv = nullptr; // the view they wrote it through (not owned)
     bool toneMapped = false;               // the mod's HDR stage replaced the engine's tone map
+    bool sideB = false;                    // and the compare split's preset drew its side in it
     bool toneMapSeen = false;
     bool injected = false;
-    bool texturesTaken = false;
+    unsigned texturesTaken = 0;            // the engine textures taken this frame (bit 1 << kTex*)
     Placed placed = Placed::None;
     const char* hudShader = nullptr;
     uint32_t draws = 0;
     uint32_t commandLists = 0;
+    lights::Draw light;                    // EngineLightDraws: the current draw's redraws (engine_lights.cpp)
 };
 Frame g_frame;
 // The look of the frame being drawn: your settings, or the preset the menu points at (prepareLook).
 tmshaders::Settings g_lookSettings;
 Look g_look;
+// Photo mode's compare split with a preset on the other side (TMNF's renderSideB): that look
+// from a Renderer of its own, on the same engine inputs. Its TAA, exposure, bounce light, focus
+// and sky history stay its own: one renderer's history shared by two looks would blend each
+// into the other. Each draws only its side of the line. Only while shown (it doubles the
+// effects' cost and memory); with no preset chosen nothing of it runs.
+Renderer g_rendererB;
+bool g_rendererBReady = false;
+bool g_rendererBFailed = false;  // not retried every frame (another preset tries again)
+std::string g_sideBPreset;       // the preset g_rendererB's history belongs to
+tmshaders::Settings g_lookSettingsB;
+Look g_lookB;
+bool g_sideBWanted = false;      // this frame's split shows a preset (prepareLook)
 AutoQuality g_autoQuality;
 unsigned g_frameCounter = 0;
 tmshaders::Mood g_seenMood = tmshaders::Mood::Unknown;
@@ -201,6 +218,157 @@ double nowSeconds() {
         start = now;
     }
     return static_cast<double>(now.QuadPart - start.QuadPart) / static_cast<double>(frequency.QuadPart);
+}
+
+// ManiaPlanet's video export (replay editor, Shoot video: WebM, VP8, its own encoder), seen from the
+// D3D11 side only, nothing in the game's memory. To encode a frame the game must bring it to the
+// CPU, and in D3D11 the only way is Map(READ) of a staging texture on the immediate context. A
+// staging texture of picture size read back frame after frame is taken for the export (a
+// screenshot or the mod's own F12 reads one; the mod's other read-back is a buffer).
+// While it runs, with VideoExportBest on (TMNF's): the effects on the video's clock, one step of
+// 1/VideoFps (maniaplanet.ini) per video frame, spread evenly over the renders between two
+// read-backs (the game may render several per frame for its HQ options); full quality (auto
+// quality neither cuts nor measures) and the cinematic effects as in a replay. On the real clock
+// a frame that took half a second to render and encode moved the rain, the exposure, the focus
+// and the trail by half a second. After the export the clock goes on from where the video ended.
+// Unconfirmed in the game: the log says what was seen (size and format of the read-back, renders
+// per read-back and per Present).
+struct VideoWatch {
+    std::atomic<unsigned> readbacks{0}; // picture-sized read-backs since the last tone map
+    std::atomic<unsigned> lastW{0}, lastH{0}, lastFormat{0};
+    unsigned sinceReadback = 1000;      // tone maps since the last read-back
+    unsigned gap = 1;                   // tone maps between the last two read-backs
+    int streak = 0;                     // read-backs in a row with at most kMaxGap tone maps between
+    bool active = false;
+    double clock = 0.0;                 // the effects' clock while active (s)
+    double offset = 0.0;                // added to the real clock after an export
+    unsigned frames = 0;                // tone maps of this export
+    unsigned videoFrames = 0;           // read-backs of this export
+    unsigned perPresent = 0, mostPerPresent = 0; // tone maps between two Presents (most during it)
+    double startedAt = 0.0;
+    // Recorders (OBS's memory capture and the like) read the frame back every frame too, also in a
+    // race; TM2 has no replay signal to rule that out. An export renders far slower than real time
+    // (encoding, the HQ samples) or doesn't present at all, a recorder doesn't slow the game much:
+    // the Present rate over a second of read-backs against the second before them decides.
+    enum class Verdict { Unknown, Export, Recorder };
+    Verdict verdict = Verdict::Unknown;
+    bool winReading = false;            // the current one-second window has read-backs
+    double winStart = -1.0;
+    unsigned winPresents = 0;
+    double baseFps = 0.0;               // Presents a second without read-backs (0: not measured yet)
+    static constexpr unsigned kMaxGap = 16;
+};
+VideoWatch g_video;
+
+// The effects' clock (animated effects, history blends): the real one, or the video's.
+double effectTime() {
+    return g_video.active ? g_video.clock : nowSeconds() + g_video.offset;
+}
+
+bool videoExporting() {
+    return g_video.active;
+}
+
+// At Map on the immediate context (any thread: the game may encode on another one).
+void noteReadback(ID3D11Resource* res, D3D11_MAP type) {
+    if (type != D3D11_MAP_READ && type != D3D11_MAP_READ_WRITE) return;
+    D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    res->GetType(&dim);
+    if (dim != D3D11_RESOURCE_DIMENSION_TEXTURE2D) return;
+    D3D11_TEXTURE2D_DESC d;
+    static_cast<ID3D11Texture2D*>(res)->GetDesc(&d);
+    // A small video (480p) packed four pixels a texel is still 160 x 360; the engine's own small
+    // read-backs (picking in the editor) are a few texels.
+    if (d.Usage != D3D11_USAGE_STAGING || d.Width < 128 || d.Height < 96 || d.Width * d.Height < 160u * 120u) return;
+    g_video.lastW.store(d.Width, std::memory_order_relaxed);
+    g_video.lastH.store(d.Height, std::memory_order_relaxed);
+    g_video.lastFormat.store(d.Format, std::memory_order_relaxed);
+    g_video.readbacks.fetch_add(1, std::memory_order_relaxed);
+}
+
+void videoStop(const char* why) {
+    VideoWatch& v = g_video;
+    if (!v.active) return;
+    v.active = false;
+    v.offset = v.clock - nowSeconds();
+    TMVS_LOG("video: export %s after %u video frames (%u renders, at most %u per Present) in %.1f s; the clock goes on from %.2f s", why,
+             v.videoFrames, v.frames, v.mostPerPresent, nowSeconds() - v.startedAt, v.clock);
+}
+
+// The Present rate in one-second windows, with and without read-backs (VideoWatch::Verdict).
+// Called at every render and every Present: an export that doesn't present still gets a verdict.
+void videoPacing() {
+    VideoWatch& v = g_video;
+    const double now = nowSeconds();
+    const bool reading = v.streak > 0 && v.sinceReadback <= VideoWatch::kMaxGap;
+    if (reading != v.winReading || v.winStart < 0.0) {
+        if (!reading) v.verdict = VideoWatch::Verdict::Unknown;
+        v.winReading = reading;
+        v.winStart = now;
+        v.winPresents = 0;
+        return;
+    }
+    const double elapsed = now - v.winStart;
+    if (elapsed < 1.0) return;
+    const double fps = v.winPresents / elapsed;
+    if (!reading) {
+        if (elapsed < 2.0) v.baseFps = fps; // longer: a loading screen or a pause, not a rate
+    } else if (v.verdict != VideoWatch::Verdict::Recorder) {
+        // Without a rate from before (read-backs since the start), 30 Presents a second is real time.
+        const bool realTime = v.baseFps > 0.0 ? fps >= 0.7 * v.baseFps : fps >= 30.0;
+        if (realTime) {
+            TMVS_LOG("video: frames read back every frame at %.0f Presents/s (%.0f before): a recorder, not the game's export; "
+                     "the effects stay on the real clock", fps, v.baseFps);
+            videoStop("taken for a recorder");
+        }
+        v.verdict = realTime ? VideoWatch::Verdict::Recorder : VideoWatch::Verdict::Export;
+    }
+    v.winStart = now;
+    v.winPresents = 0;
+}
+
+// At each of the effects' tone maps (one per render), before the effects run.
+void videoTick(UINT w, UINT h) {
+    VideoWatch& v = g_video;
+    v.perPresent++;
+    const unsigned seen = v.readbacks.exchange(0, std::memory_order_relaxed);
+    const bool wanted = tmshaders::Config::get().settings.videoExportBest;
+    if (seen) {
+        v.streak = v.sinceReadback <= VideoWatch::kMaxGap ? v.streak + 1 : 1;
+        if (v.sinceReadback <= VideoWatch::kMaxGap) v.gap = std::max(1u, v.sinceReadback);
+        v.sinceReadback = 0;
+    }
+    v.sinceReadback++;
+    videoPacing();
+    // Only once a second of read-backs ran clearly slower than real time (the first second of an
+    // export stays on the real clock).
+    if (!v.active && wanted && v.streak >= 3 && v.sinceReadback <= VideoWatch::kMaxGap && v.verdict == VideoWatch::Verdict::Export) {
+        v.active = true;
+        v.clock = nowSeconds() + v.offset;
+        v.frames = v.videoFrames = 0;
+        v.mostPerPresent = 0;
+        v.startedAt = nowSeconds();
+        TMVS_LOG("video: export seen (a %ux%u staging texture, format %u, read back after every %u render(s); renders %ux%u): "
+                 "effects on a %.0f fps clock at full quality",
+                 v.lastW.load(), v.lastH.load(), v.lastFormat.load(), v.gap, w, h, options::current().videoFps);
+    } else if (v.active && (!wanted || v.sinceReadback > 2 * v.gap + 8)) {
+        v.streak = 0;
+        videoStop("over");
+    }
+    if (!v.active) return;
+    if (seen) v.videoFrames++;
+    v.frames++;
+    const double fps = std::clamp(static_cast<double>(options::current().videoFps), 10.0, 240.0);
+    v.clock += 1.0 / (fps * v.gap);
+}
+
+// At Present: how many renders it showed (the export may render several frames per Present).
+void videoPresent() {
+    VideoWatch& v = g_video;
+    if (v.active) v.mostPerPresent = std::max(v.mostPerPresent, v.perPresent);
+    v.perPresent = 0;
+    v.winPresents++;
+    videoPacing();
 }
 
 // The engine's textures of this frame (owned references, kept until replaced) and its camera.
@@ -236,6 +404,8 @@ void releaseTextures() {
 
 // The engine's sun shadow pass of this frame (volumetric light).
 EngineShadow g_shadow;
+// The mod's soft shadow shader is bound for the engine's shadow draw (softshadow::end after it).
+bool g_softShadowBound = false;
 
 void releaseShadow() {
     if (g_shadow.constants) g_shadow.constants->Release();
@@ -278,6 +448,23 @@ void takeShadowPass(ID3D11DeviceContext* ctx) {
         setTexture(kTexShadowDepth + i, res);
         if (res) res->Release();
     }
+    // Variants with splits: their atlas (t3) and the face normal they read, for captures.
+    ID3D11PixelShader* ps = nullptr;
+    ctx->PSGetShader(&ps, nullptr, nullptr);
+    const softshadow::Variant variant = softshadow::variantOf(ps);
+    if (ps) ps->Release();
+    const int slots[2] = {3, variant.normalSlot()};
+    for (int i = 0; i < 2; i++) {
+        ID3D11ShaderResourceView* view = nullptr;
+        if (variant.known) ctx->PSGetShaderResources(slots[i], 1, &view);
+        ID3D11Resource* res = nullptr;
+        if (view) {
+            view->GetResource(&res);
+            view->Release();
+        }
+        setTexture(kTexShadowSplits + i, res);
+        if (res) res->Release();
+    }
     ID3D11SamplerState* sampler = nullptr;
     ctx->PSGetSamplers(0, 1, &sampler);
     if (g_shadow.sampler) g_shadow.sampler->Release();
@@ -309,13 +496,20 @@ std::unordered_map<ID3D11Resource*, UINT> g_isSceneV;
 
 // The size of the engine's per-camera constant buffer this is (SceneV 704, SceneP 672), else 0.
 UINT sceneBufferSize(ID3D11Resource* res) {
-    auto it = g_isSceneV.find(res);
-    if (it != g_isSceneV.end()) return it->second;
     D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+    D3D11_BUFFER_DESC d = {};
+    auto it = g_isSceneV.find(res);
+    if (it != g_isSceneV.end()) {
+        if (!it->second) return 0;
+        // The pointer is not held: a freed buffer's address can come back as a smaller buffer,
+        // which must not be copied with the old size.
+        res->GetType(&dim);
+        if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) static_cast<ID3D11Buffer*>(res)->GetDesc(&d);
+        if (d.ByteWidth == it->second) return it->second;
+    }
     res->GetType(&dim);
     UINT size = 0;
     if (dim == D3D11_RESOURCE_DIMENSION_BUFFER) {
-        D3D11_BUFFER_DESC d;
         static_cast<ID3D11Buffer*>(res)->GetDesc(&d);
         if ((d.ByteWidth == kSceneVSize || d.ByteWidth == kScenePSize || d.ByteWidth == kObjectVCarSize) &&
             (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER))
@@ -357,13 +551,26 @@ bool scenePRaster(ID3D11Buffer* buffer, float out[4]) {
 }
 
 // The cars of this frame (their G-buffer draws, VisualToCamera): resolved into the world once this
-// frame's camera is known (it is read later, at the lighting pass). The player's car is the one
-// that continues last frame's, else the one nearest the camera (the chase camera follows it).
+// frame's camera is known (it is read later, at the lighting pass). The player's car among them:
+// see CarTracker (engine_frame.h).
 EngineCar g_car;
-float g_carLast[3] = {};
-bool g_carLastValid = false;
+CarTracker g_carTracker;
 float g_carCandidates[8][12] = {};
 int g_carCount = 0;
+// The car of the last frames, for captures (car.txt): does it move evenly from frame to frame,
+// and where are the other cars (ghosts) in the camera's view?
+struct CarLogEntry {
+    double time;
+    int candidates;
+    bool valid;
+    float position[3];
+    float eye[3];
+    int picked;
+    unsigned track;
+    float view[8][3];
+};
+CarLogEntry g_carLog[240] = {};
+unsigned g_carLogNext = 0;
 
 // A 3x4 matrix (rows) that places an object near the camera: its 3x3 a rotation (unit, orthogonal
 // rows), its origin within 400 m (replay cameras can be far).
@@ -441,29 +648,45 @@ void takeCar(ID3D11DeviceContext* ctx) {
 
 void resolveCar() {
     g_car.valid = false;
-    if (!cameraUsable() || !g_carCount) return;
+    const int count = cameraUsable() ? g_carCount : 0; // frames without the car are logged too
     const float* w = g_camera.worldToCamera; // camera space -> world: its rows are the camera's axes
     auto toWorld = [&](float x, float y, float z, float out[3]) {
         for (int i = 0; i < 3; i++) out[i] = x * w[i] + y * w[4 + i] + z * w[8 + i];
     };
-    float best = g_carLastValid ? 30.0f * 30.0f : 1e30f;
-    for (int c = 0; c < g_carCount; c++) {
+    CarCandidate cars[8];
+    int index[8];
+    int usable = 0;
+    for (int c = 0; c < count; c++) {
         const float* m = g_carCandidates[c];
-        float pos[3];
-        toWorld(m[3], m[7], m[11], pos);
-        for (int i = 0; i < 3; i++) pos[i] += g_camera.eye[i];
-        if (!std::isfinite(pos[0] + pos[1] + pos[2])) continue;
-        const float* ref = g_carLastValid ? g_carLast : g_camera.eye;
-        const float dx = pos[0] - ref[0], dy = pos[1] - ref[1], dz = pos[2] - ref[2];
-        const float score = dx * dx + dy * dy + dz * dz;
-        if (score >= best) continue;
-        best = score;
+        CarCandidate& car = cars[usable];
+        car.view[0] = m[3];
+        car.view[1] = m[7];
+        car.view[2] = m[11];
+        toWorld(m[3], m[7], m[11], car.world);
+        for (int i = 0; i < 3; i++) car.world[i] += g_camera.eye[i];
+        if (!std::isfinite(car.world[0] + car.world[1] + car.world[2])) continue;
+        index[usable++] = c;
+    }
+    const double now = effectTime(); // the neon trail's clock
+    const int pick = g_carTracker.pick(cars, usable, now);
+    if (pick >= 0) {
+        const float* m = g_carCandidates[index[pick]];
         g_car.valid = true;
-        memcpy(g_car.position, pos, sizeof(pos));
+        memcpy(g_car.position, cars[pick].world, sizeof(g_car.position));
         toWorld(m[0], m[4], m[8], g_car.right);
         toWorld(m[1], m[5], m[9], g_car.up);
         toWorld(m[2], m[6], m[10], g_car.forward);
+        g_car.track = g_carTracker.track();
     }
+    CarLogEntry& e = g_carLog[g_carLogNext++ % 240];
+    e.time = now;
+    e.candidates = usable;
+    e.valid = g_car.valid;
+    memcpy(e.position, g_car.position, sizeof(e.position));
+    memcpy(e.eye, g_camera.eye, sizeof(e.eye));
+    e.picked = pick;
+    e.track = g_carTracker.track();
+    for (int c = 0; c < usable; c++) memcpy(e.view[c], cars[c].view, sizeof(e.view[c]));
     static bool logged = false;
     if (g_car.valid && !logged) {
         logged = true;
@@ -518,15 +741,16 @@ void takeCamera(ID3D11DeviceContext* ctx) {
     }
 }
 
-// The textures a scene shader reads by name (normals, light buffers, motion).
-void takeSceneTextures(ID3D11DeviceContext* ctx, const ShaderInfo& ps) {
+// The textures a scene shader reads by name (normals, light buffers, motion), each one not taken
+// yet this frame (taken: bits 1 << kTex*).
+void takeSceneTextures(ID3D11DeviceContext* ctx, const ShaderInfo& ps, unsigned& taken) {
     static const struct {
         Slot slot;
         int tex;
     } kWanted[] = {{kSlotNormal, kTexNormal},       {kSlotDiffuse, kTexDiffuse}, {kSlotSpecular, kTexSpecular},
                 {kSlotLightMask, kTexLightMask}, {kSlotMotion, kTexMotion}};
     for (const auto& m : kWanted) {
-        if (!ps.reads(m.slot)) continue;
+        if (!ps.reads(m.slot) || (taken & (1u << m.tex))) continue;
         ID3D11ShaderResourceView* srv = nullptr;
         ctx->PSGetShaderResources(ps.slots[m.slot], 1, &srv);
         if (!srv) continue;
@@ -536,6 +760,7 @@ void takeSceneTextures(ID3D11DeviceContext* ctx, const ShaderInfo& ps) {
         if (res) {
             setTexture(m.tex, res);
             res->Release();
+            taken |= 1u << m.tex;
         }
     }
 }
@@ -560,8 +785,20 @@ ID3D11Resource* resourceOf(ID3D11View* view) {
     return res;
 }
 
+// The thread that presents. While the game streams it turns on multithread protection and a loader
+// thread may use the immediate context too; the camera copies and draw bookkeeping are not locked,
+// so they only follow the presenting thread.
+std::atomic<DWORD> g_renderThread{0};
+
 bool isMain(ID3D11DeviceContext* ctx) {
-    return ctx == g_ctx && !t_inside;
+    if (ctx != g_ctx || t_inside) return false;
+    const DWORD render = g_renderThread.load(std::memory_order_relaxed);
+    if (render && render != GetCurrentThreadId()) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true)) TMVS_LOG("hooks: the immediate context is used from thread %lu too (presents on %lu): its calls are left alone", GetCurrentThreadId(), render);
+        return false;
+    }
+    return true;
 }
 
 // A render target big enough and with the screen's shape to be the game's view (not a shadow map,
@@ -586,12 +823,51 @@ bool readsResource(ID3D11DeviceContext* ctx, ID3D11Resource* res) {
     return found;
 }
 
+void releaseSideB() {
+    if (g_rendererBReady) TMVS_LOG("hooks: compare split with a preset off, its renderer released");
+    g_rendererB.release();
+    g_rendererBReady = false;
+    g_rendererBFailed = false;
+    g_sideBPreset.clear();
+}
+
+// The compare split's second renderer, made when the preset side is first shown.
+bool ensureSideB() {
+    if (g_rendererBReady) return true;
+    if (g_rendererBFailed || !g_device) return false;
+    Inside guard; // the mod's own shaders aren't the game's
+    g_rendererBReady = g_rendererB.init(g_device);
+    if (!g_rendererBReady) {
+        g_rendererB.release();
+        g_rendererBFailed = true;
+        TMVS_LOG("hooks: compare split with %s: its renderer failed, the game's image stays on that side", g_sideBPreset.c_str());
+        return false;
+    }
+    g_rendererB.effects().setSound(false); // the weather sound stays your look's
+    g_rendererB.effects().shareTrail(&g_renderer.effects()); // and the neon trail yours (its own starts empty)
+    TMVS_LOG("hooks: compare split with the preset %s (a second renderer)", g_sideBPreset.c_str());
+    return true;
+}
+
+// One side of the compare split with a preset: the look draws only there, the line at its edge.
+// The other side (the preset's) is left of the line unless swapped, as the game's image is.
+Look sideLook(const Look& base, bool presetSide) {
+    return splitSide(base, photo::splitPosition(), presetSide != photo::splitSwapped());
+}
+
 void inject(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, Placed where) {
     if ((!g_lookSettings.enabled && !photo::active()) || !g_rendererReady) return;
     EngineView view{g_tex, cameraUsable() ? &g_camera : nullptr};
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
-    if (!g_renderer.apply(ctx, target, view, g_look, options::current(), g_frame.toneMapped)) return;
+    // The compare split's preset side: when it drew its half of the HDR stage, or without the HDR
+    // stage (the whole look on the finished image, each look on its side). Else the game's image
+    // stays there (g_look.split).
+    const bool sideB = g_sideBWanted && (g_frame.toneMapped ? g_frame.sideB : ensureSideB());
+    if (!g_renderer.apply(ctx, target, view, sideB ? sideLook(g_look, false) : g_look, options::current(), g_frame.toneMapped)) return;
+    if (sideB) g_rendererB.apply(ctx, target, view, sideLook(g_lookB, true), options::current(), g_frame.toneMapped);
     g_frame.placed = where;
+    // The mod's own read-backs (captures, preset pictures, photos) are not the game's (VideoWatch).
+    Inside own;
     if (capture::active()) capture::onGraded(g_device, ctx, g_renderer.lastInput(), g_renderer.lastViewFormat(), view);
     // A picture for a preset you saved: the finished frame without the interface.
     tmshaders::Config& config = tmshaders::Config::get();
@@ -616,10 +892,18 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     view.shadow = g_shadow.valid ? &g_shadow : nullptr;
     resolveCar();
     view.car = g_car.valid ? &g_car : nullptr;
-    view.time = nowSeconds();
+    view.time = effectTime();
     view.photo = photo::active();
+    view.video = videoExporting();
     photo::focusPoint(view.focus);
-    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, g_look, view);
+    // Compare split with a preset: its side first (only its half of the target), then yours on
+    // the other half. If the preset's renderer can't run, yours draws all of it with the game's
+    // image on that side, as without a preset.
+    bool sideB = false;
+    if (g_sideBWanted && ensureSideB())
+        sideB = g_rendererB.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, sideLook(g_lookB, true), view);
+    const bool done = g_renderer.toneMap(ctx, g_frame.rtv, in[0], in[1], constants, sideB ? sideLook(g_look, false) : g_look, view);
+    g_frame.sideB = sideB && done;
     for (auto* v : in)
         if (v) v->Release();
     if (constants) constants->Release();
@@ -667,18 +951,28 @@ bool hideInterfaceDraw(ID3D11DeviceContext* ctx) {
 bool onDraw(ID3D11DeviceContext* ctx) {
     Frame& f = g_frame;
     f.draws++;
+    f.light = lights::Draw{};
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
     // Only the effects' tone maps are the tone map: the editor draws Engines/CopyColor0_ToneMapT3
     // into the HDR image in the middle of the scene (with depth), and the effects ran there, on
     // half a scene (the editor was dark and foggy until Alt).
     Role role = f.ps.role;
     if (role == Role::ToneMap && (!f.ps.name || strncmp(f.ps.name, "Effects/", 8) != 0)) role = Role::Scene;
-    if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/DeferredShadowPssm_p")) takeShadowPass(ctx);
+    if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/DeferredShadowPssm_p")) {
+        takeShadowPass(ctx);
+        // Soft shadows: the mod's shader draws this pass (the engine's is bound again after it).
+        softshadow::Params soft;
+        soft.lightSize = g_lookSettings.enabled ? options::current().softShadows : 0.0f;
+        g_softShadowBound = softshadow::begin(ctx, soft);
+    }
     if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/CarSkin_DefWrite_p") && f.rt && screenSized(f.rtW, f.rtH))
         takeCar(ctx);
 
     if (role == Role::ToneMap && f.rt && screenSized(f.rtW, f.rtH)) {
-        if (capture::active() && !f.toneMapSeen) capture::onToneMap(g_device, ctx);
+        if (capture::active() && !f.toneMapSeen) {
+            Inside own; // its read-backs are the mod's, not the game's (VideoWatch)
+            capture::onToneMap(g_device, ctx);
+        }
         // The tone map reads the HDR image (t0) and the exposure (t1).
         ID3D11ShaderResourceView* in[2] = {};
         ctx->PSGetShaderResources(0, 2, in);
@@ -690,29 +984,62 @@ bool onDraw(ID3D11DeviceContext* ctx) {
             setTexture(i == 0 ? kTexHdr : kTexExposure, res);
             if (res) res->Release();
         }
+        // EngineLightDraws: the light the engine drew as light, when it was drawn into this HDR image.
+        setTexture(kTexLights, options::current().engineLightDraws ? lights::frameTexture(g_tex[kTexHdr]) : nullptr);
         f.phase = Phase::Post;
         f.postImage = f.rt;
         f.postRtv = f.rtv;
         f.toneMapSeen = true;
+        videoTick(f.rtW, f.rtH);
         f.toneMapped = replaceToneMap(ctx);
         return f.toneMapped;
+    }
+    if (role == Role::ToneMap && f.rt) {
+        // A tone map into a target not of the screen's shape: the effects leave it alone (a video
+        // export of another aspect than the window would be one). Logged per size, for the test.
+        static UINT logged[8][2] = {};
+        for (auto& l : logged) {
+            if (l[0] == f.rtW && l[1] == f.rtH) break;
+            if (l[0]) continue;
+            l[0] = f.rtW;
+            l[1] = f.rtH;
+            TMVS_LOG("hooks: a tone map into %ux%u (screen %ux%u): not the screen's shape, no effects there", f.rtW, f.rtH,
+                     g_stats.width, g_stats.height);
+            break;
+        }
     }
     if (f.phase == Phase::Scene) {
         // The scene's depth: the last screen-shaped depth buffer a scene draw used.
         if (role == Role::Scene && f.ds && screenSized(f.dsW, f.dsH)) setSceneDepth(f.ds);
+        // EngineLightDraws: what this draw adds to the light buffer (drawn again after it, below).
+        if (role == Role::Scene && options::current().engineLightDraws && g_lookSettings.enabled && g_rendererReady) {
+            Inside guard;
+            f.light = lights::classify(g_device, ctx, f.ps, f.rtv, f.rt, f.rt && screenSized(f.rtW, f.rtH));
+            if (f.light.kind != lights::Kind::None && capture::active()) capture::traceNote(lights::kindName(f.light.kind));
+        }
         // The lighting-read pass (it reads the normal and light buffers) runs with the main camera.
-        if (f.ps.reads(kSlotNormal) || f.ps.reads(kSlotDiffuse)) {
-            if (!g_cameraThisFrame) takeCamera(ctx);
-            if (!f.texturesTaken && f.rt && screenSized(f.rtW, f.rtH)) {
-                f.texturesTaken = true;
-                takeSceneTextures(ctx, f.ps);
-                // Its second target is the motion buffer (R16G16 float) that the motion blur reads.
+        const bool lightingRead = f.ps.reads(kSlotNormal) || f.ps.reads(kSlotDiffuse);
+        if (lightingRead && !g_cameraThisFrame) takeCamera(ctx);
+        // Each texture from the first screen-sized draw of the frame that reads it. (Once for all
+        // at the first draw that read the normals left the light mask behind: the engine's
+        // DeferredDeCompFaceNormal_p comes first and doesn't read it. The light mask kept from
+        // the first map stayed, frozen, after the engine made new targets for the next one: dark
+        // ghost shapes on the road, captures 023/024. The motion buffer was kept the same way.)
+        if ((lightingRead || f.ps.reads(kSlotSpecular) || f.ps.reads(kSlotLightMask) || f.ps.reads(kSlotMotion)) && f.rt &&
+            screenSized(f.rtW, f.rtH)) {
+            takeSceneTextures(ctx, f.ps, f.texturesTaken);
+            // The lighting pass's second target is the motion buffer (R16G16 float) that the
+            // motion blur reads.
+            if (!(f.texturesTaken & (1u << kTexMotion))) {
                 ID3D11RenderTargetView* rtv[2] = {};
                 ctx->OMGetRenderTargets(2, rtv, nullptr);
                 if (rtv[1]) {
                     D3D11_RENDER_TARGET_VIEW_DESC d;
                     rtv[1]->GetDesc(&d);
-                    if (d.Format == DXGI_FORMAT_R16G16_FLOAT) setTexture(kTexMotion, resourceOf(rtv[1]));
+                    if (d.Format == DXGI_FORMAT_R16G16_FLOAT) {
+                        setTexture(kTexMotion, resourceOf(rtv[1]));
+                        f.texturesTaken |= 1u << kTexMotion;
+                    }
                 }
                 for (auto* v : rtv)
                     if (v) v->Release();
@@ -751,13 +1078,28 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     return hideInterfaceDraw(ctx);
 }
 
+// EngineLightDraws: the engine's draw that was just made, again into the light buffer (once or
+// twice, engine_lights.cpp), with the same call. The engine's state is put back afterwards.
+template <typename F> void drawLights(ID3D11DeviceContext* ctx, F&& draw) {
+    const lights::Draw d = g_frame.light;
+    g_frame.light = lights::Draw{};
+    if (d.kind == lights::Kind::None) return;
+    Inside guard;
+    lights::Saved saved;
+    lights::save(ctx, saved);
+    for (int pass = 0; lights::setup(ctx, d, pass, saved); pass++) draw();
+    lights::restore(ctx, saved);
+}
+
 // ---- device ----
 
 HRESULT STDMETHODCALLTYPE createPixelShaderDetour(ID3D11Device* device, const void* code, SIZE_T size,
                                                   ID3D11ClassLinkage* linkage, ID3D11PixelShader** out) {
     const HRESULT hr = g_createPixelShader.get<CreatePixelShaderFn>(device)(device, code, size, linkage, out);
     if (SUCCEEDED(hr) && out && *out && !t_inside) {
-        const ShaderInfo info = shaderdb::identify(code, size);
+        ShaderInfo info = shaderdb::identify(code, size);
+        if (info.role == Role::Scene) info.lightSlot = shaderdb::lightTextureSlot(code, size);
+        if (info.name && !strcmp(info.name, "Tech3/DeferredShadowPssm_p")) softshadow::noteEngineShader(*out, code, size);
         {
             std::unique_lock<std::shared_mutex> lock(g_shaderLock);
             g_shaders[*out] = info;
@@ -826,24 +1168,51 @@ void STDMETHODCALLTYPE omSetRenderTargetsAndUAVsDetour(ID3D11DeviceContext* ctx,
     g_omSetRenderTargetsAndUAVs.get<OMSetRenderTargetsAndUAVsFn>(ctx)(ctx, count, rtvs, dsv, uavStart, uavCount, uavs, initialCounts);
 }
 
+// After a draw of the game: the engine's shader back where the mod's soft shadows drew.
+void afterDraw(ID3D11DeviceContext* ctx) {
+    if (!g_softShadowBound) return;
+    g_softShadowBound = false;
+    softshadow::end(ctx);
+}
+
 void STDMETHODCALLTYPE drawIndexedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, INT c) {
-    if (isMain(ctx) && onDraw(ctx)) return;
-    g_drawIndexed.get<DrawIndexedFn>(ctx)(ctx, a, b, c);
+    if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
+    const DrawIndexedFn original = g_drawIndexed.get<DrawIndexedFn>(ctx);
+    original(ctx, a, b, c);
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c); });
+    }
 }
 
 void STDMETHODCALLTYPE drawDetour(ID3D11DeviceContext* ctx, UINT a, UINT b) {
-    if (isMain(ctx) && onDraw(ctx)) return;
-    g_draw.get<DrawFn>(ctx)(ctx, a, b);
+    if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
+    const DrawFn original = g_draw.get<DrawFn>(ctx);
+    original(ctx, a, b);
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b); });
+    }
 }
 
 void STDMETHODCALLTYPE drawIndexedInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, INT d, UINT e) {
-    if (isMain(ctx) && onDraw(ctx)) return;
-    g_drawIndexedInstanced.get<DrawIndexedInstancedFn>(ctx)(ctx, a, b, c, d, e);
+    if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
+    const DrawIndexedInstancedFn original = g_drawIndexedInstanced.get<DrawIndexedInstancedFn>(ctx);
+    original(ctx, a, b, c, d, e);
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c, d, e); });
+    }
 }
 
 void STDMETHODCALLTYPE drawInstancedDetour(ID3D11DeviceContext* ctx, UINT a, UINT b, UINT c, UINT d) {
-    if (isMain(ctx) && onDraw(ctx)) return;
-    g_drawInstanced.get<DrawInstancedFn>(ctx)(ctx, a, b, c, d);
+    if (isMain(ctx) && onDraw(ctx)) return afterDraw(ctx);
+    const DrawInstancedFn original = g_drawInstanced.get<DrawInstancedFn>(ctx);
+    original(ctx, a, b, c, d);
+    if (isMain(ctx)) {
+        afterDraw(ctx);
+        drawLights(ctx, [&] { original(ctx, a, b, c, d); });
+    }
 }
 
 void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11CommandList* list, BOOL restore) {
@@ -854,6 +1223,7 @@ void STDMETHODCALLTYPE executeCommandListDetour(ID3D11DeviceContext* ctx, ID3D11
 HRESULT STDMETHODCALLTYPE mapDetour(ID3D11DeviceContext* ctx, ID3D11Resource* res, UINT sub, D3D11_MAP type, UINT flags,
                                     D3D11_MAPPED_SUBRESOURCE* out) {
     const HRESULT hr = g_map.get<MapFn>(ctx)(ctx, res, sub, type, flags, out);
+    if (SUCCEEDED(hr) && res && ctx == g_ctx && !t_inside) noteReadback(res, type);
     if (isMain(ctx)) repairDraws(ctx);
     if (SUCCEEDED(hr) && out && isMain(ctx) && sub == 0 && (type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE)) {
         if (const UINT size = sceneBufferSize(res)) {
@@ -1015,6 +1385,7 @@ void beginWith(IDXGISwapChain* sc) {
     {
         Inside guard; // the mod's own shaders aren't the game's
         g_rendererReady = g_renderer.init(device);
+        softshadow::init(device);
         prepareLook();
         overlay::init(desc.OutputWindow, device, g_ctx);
     }
@@ -1028,47 +1399,12 @@ void prepareLook() {
     tmshaders::Config& config = tmshaders::Config::get();
     g_lookSettings = config.settings;
     if (config.showOverlay && config.hoverPreview) config.previewSettings(g_lookSettings);
-    // Photo mode is full quality: auto quality pauses (as in TMNF).
-    if (!photo::active()) g_autoQuality.apply(g_lookSettings);
+    // Photo mode and the video export are full quality: auto quality pauses (as in TMNF).
+    if (!photo::active() && !videoExporting()) g_autoQuality.apply(g_lookSettings);
     photo::adjust(g_lookSettings);
     float lutAmount = config.lutAmount;
     if (!config.settings.enabled && photo::active()) {
-        // Vanilla photo mode: neutral look with only DoF and Sharpen on the game's image
-        g_lookSettings.aoStrength = 0.0f;
-        g_lookSettings.shadowStrength = 0.0f;
-        g_lookSettings.globalIllumination = 0.0f;
-        g_lookSettings.neonLight = 0.0f;
-        g_lookSettings.sunLight = 0.0f;
-        g_lookSettings.ambientTint = 0.0f;
-        g_lookSettings.fogDensity = 0.0f;
-        g_lookSettings.skyMode = 0;
-        g_lookSettings.skyEnhance = 0.0f;
-        g_lookSettings.volumetricClouds = 0.0f;
-        g_lookSettings.godRays = 0.0f;
-        g_lookSettings.volumetricLight = 0.0f;
-        g_lookSettings.bloom = 0.0f;
-        g_lookSettings.lensFlare = 0.0f;
-        g_lookSettings.wetness = 0.0f;
-        g_lookSettings.rain = 0.0f;
-        g_lookSettings.snow = 0.0f;
-        g_lookSettings.puddles = 0.0f;
-        g_lookSettings.reflections = 0.0f;
-        g_lookSettings.lightning = 0.0f;
-        g_lookSettings.neonTrail = 0.0f;
-        g_lookSettings.exposure = 0.0f;
-        g_lookSettings.contrast = 1.0f;
-        g_lookSettings.saturation = 1.0f;
-        g_lookSettings.vibrance = 0.0f;
-        g_lookSettings.temperature = 0.0f;
-        g_lookSettings.tint = 0.0f;
-        g_lookSettings.shadowTint = 0.0f;
-        g_lookSettings.lift = 0.0f;
-        g_lookSettings.gamma = 1.0f;
-        g_lookSettings.gain = 1.0f;
-        g_lookSettings.vignette = 0.0f;
-        g_lookSettings.filmGrain = 0.0f;
-        g_lookSettings.chromaticAberration = 0.0f;
-        g_lookSettings.toneCurve = 0; // game's curve
+        photo::vanillaLook(g_lookSettings);
         lutAmount = 0.0f;
     }
     g_look.settings = &g_lookSettings;
@@ -1084,12 +1420,88 @@ void prepareLook() {
     g_look.frame = ++g_frameCounter;
     const Options& o = options::current();
     g_look.split = o.view == View::Split ? o.split : photo::splitForLook();
+
+    // The compare split's other side as a preset's look: your machine settings with the
+    // preset's look and photo mode's lens (as TMNF's renderSideB). Released when the split,
+    // photo mode or the preset goes; another preset starts with a fresh history.
+    g_sideBWanted = false;
+    const std::string& name = photo::splitPreset();
+    if (!photo::splitShown() || name.empty() || o.view == View::Split || !g_rendererReady) {
+        if (g_rendererBReady || g_rendererBFailed) releaseSideB();
+        return;
+    }
+    if (name != g_sideBPreset) {
+        if (g_rendererBReady || g_rendererBFailed) releaseSideB();
+        g_sideBPreset = name;
+    }
+    // Your own preset is a file read field by field (about 100 GetPrivateProfileString calls, several
+    // ms): read once, again when another preset is picked, its file is written or your settings
+    // change (the machine settings are yours), not every frame (TMNF's renderSideB).
+    static std::string s_name;
+    static unsigned long long s_written = 0;
+    static tmshaders::Settings s_mine, s_look;
+    static bool s_known = false;
+    const unsigned long long written = config.presetWritten(name);
+    if (s_name != name || s_written != written || memcmp(&s_mine, &config.settings, sizeof(tmshaders::Settings)) != 0) {
+        s_name = name;
+        s_written = written;
+        memcpy(&s_mine, &config.settings, sizeof(tmshaders::Settings));
+        s_look = config.settings;
+        s_known = config.presetSettings(name, s_look);
+    }
+    if (!s_known) return; // a preset deleted meanwhile: the game's image
+    tmshaders::Settings b = s_look;
+    b.enabled = true; // with the shaders off (F5): the preset next to the game's image
+    b.debugView = g_lookSettings.debugView;
+    photo::adjust(b);
+    g_lookSettingsB = b;
+    g_lookB = g_look;
+    g_lookB.settings = &g_lookSettingsB;
+    g_lookB.lutAmount = config.lutAmount;
+    g_sideBWanted = true;
+}
+
+// A perf line every 2000 shaded frames in a row (TMNF's perflog, shorter): the frame rate and the
+// effects' GPU time with their three most expensive passes, so a report about the frame rate
+// comes with numbers without a capture. A gap (a menu, loading) starts the count over.
+void logPerf(const Profiler& profiler) {
+    static unsigned frames = 0;
+    static double since = -1.0, last = -1.0;
+    static int lines = 0;
+    const double now = nowSeconds();
+    if (last < 0.0 || now - last > 0.25) {
+        frames = 0;
+        since = now;
+    }
+    last = now;
+    if (++frames < 2000 || lines >= 200) return;
+    const double ms = (now - since) * 1000.0 / (frames - 1);
+    int top[3] = {-1, -1, -1};
+    for (int p = 0; p < kPassCount; p++) {
+        for (int k = 0; k < 3; k++) {
+            if (top[k] < 0 || profiler.time(p) > profiler.time(top[k])) {
+                for (int j = 2; j > k; j--) top[j] = top[j - 1];
+                top[k] = p;
+                break;
+            }
+        }
+    }
+    char passes[160] = {};
+    int used = 0;
+    for (int k = 0; k < 3 && top[k] >= 0 && used >= 0 && used < static_cast<int>(sizeof(passes)); k++)
+        used += snprintf(passes + used, sizeof(passes) - used, "%s%s %.2f", k ? ", " : "", passName(top[k]), profiler.time(top[k]));
+    lines++;
+    TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames; mod GPU %.2f ms a frame (most: %s)", ms > 0.0 ? 1000.0 / ms : 0.0,
+             ms, frames, profiler.total(), passes);
+    frames = 0;
+    since = now;
 }
 
 // True: the frame isn't shown (its draws went past the mod: the engine's own look, a flash).
 bool onPresent(IDXGISwapChain* sc) {
     if (!g_swapChain) beginWith(sc);
     if (sc != g_swapChain || !g_ctx) return false;
+    g_renderThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     bool drop = false;
     static bool lastToneMapped = false;
     static int dropsInARow = 0;
@@ -1137,21 +1549,60 @@ bool onPresent(IDXGISwapChain* sc) {
     for (int i = 0; i < kTexCount; i++)
         if (g_tex[i]) g_stats.textures |= 1u << i;
     if (g_cameraThisFrame) memcpy(g_stats.eye, g_camera.eye, sizeof(g_stats.eye));
-    if (g_rendererReady)
+    // Gameplay = the scene effects ran (the engine's tone map replaced with a camera found): the
+    // menus have no such frame. ManiaPlanet has no better "in a race" signal that needs no game
+    // memory; the editors and replays count too, their frame rate is the GPU's as well.
+    // Not in photo mode (as in TMNF): its frames are drawn at full quality, auto quality's cuts
+    // aren't applied to them, and decisions on them cut effects for the race after it.
+    // Nor in the video export: its frames take as long as the encoder needs.
+    videoPresent();
+    if (g_rendererReady && !photo::active() && !videoExporting())
         g_autoQuality.onFrame(nowSeconds(), g_stats.effectsRan, g_renderer.effects().profiler(), tmshaders::Config::get().settings);
+    if (g_rendererReady && g_stats.effectsRan) logPerf(g_renderer.effects().profiler());
 
     {
         Inside guard;
         overlay::frame(g_backBufferRtv);
     }
     // The frame as it is shown (with the menu when it's open).
-    if (capture::active()) capture::onPresent(g_device, g_ctx, g_backBuffer);
+    if (capture::active()) {
+        {
+            Inside own; // its read-backs are the mod's, not the game's (VideoWatch)
+            capture::onPresent(g_device, g_ctx, g_backBuffer);
+        }
+        // The car in the last frames (neon trail: an even step from frame to frame?).
+        std::string text = "# time (s), dt (ms), car found, candidates, position, step (m), camera eye, track, picked, "
+                           "the candidates in camera space (x,y,z ...)\n";
+        const unsigned n = std::min(g_carLogNext, 240u);
+        const CarLogEntry* prev = nullptr;
+        for (unsigned i = g_carLogNext - n; i < g_carLogNext; i++) {
+            const CarLogEntry& e = g_carLog[i % 240];
+            float step = 0.0f;
+            if (prev && prev->valid && e.valid) {
+                const float dx = e.position[0] - prev->position[0], dy = e.position[1] - prev->position[1], dz = e.position[2] - prev->position[2];
+                step = sqrtf(dx * dx + dy * dy + dz * dz);
+            }
+            char line[512];
+            int used = snprintf(line, sizeof(line), "%.4f %.2f %d %d %.3f %.3f %.3f %.4f %.3f %.3f %.3f %u %d", e.time,
+                                prev ? (e.time - prev->time) * 1000.0 : 0.0, e.valid ? 1 : 0, e.candidates, e.position[0], e.position[1],
+                                e.position[2], step, e.eye[0], e.eye[1], e.eye[2], e.track, e.picked);
+            for (int c = 0; c < e.candidates && c < 8 && used < static_cast<int>(sizeof(line)) - 40; c++)
+                used += snprintf(line + used, sizeof(line) - used, " %.3f,%.3f,%.3f", e.view[c][0], e.view[c][1], e.view[c][2]);
+            text += line;
+            text += "\n";
+            prev = &e;
+        }
+        capture::writeText(L"car.txt", text);
+    }
     capture::endFrame();
+    lights::endFrame();
 
     // The map's time of day from the engine's light (day, sunset, night presets, as in TMNF):
     // only in frames with a scene, and only once it holds for a second.
     if (g_cameraThisFrame && f.toneMapSeen) {
-        const tmshaders::Mood mood = tmshaders::classifyMood(g_camera.sunColour);
+        static const tmshaders::Mood kByDayTime[] = {tmshaders::Mood::Night, tmshaders::Mood::Dusk, tmshaders::Mood::Day};
+        const int dayMood = dayTimeMood(g_camera);
+        const tmshaders::Mood mood = dayMood >= 0 ? kByDayTime[dayMood] : tmshaders::classifyMood(g_camera.sunColour);
         g_moodFrames = mood == g_seenMood ? g_moodFrames + 1 : 0;
         g_seenMood = mood;
         if (g_moodFrames == 60) tmshaders::Config::get().onMoodDetected(mood);
@@ -1166,9 +1617,6 @@ bool onPresent(IDXGISwapChain* sc) {
     g_shadowMissed = g_shadowSeen ? 0 : g_shadowMissed + 1;
     if (g_shadowMissed >= 4) g_shadow.valid = false;
     g_shadowSeen = false;
-    // The car: what this frame found is the one to continue next frame.
-    g_carLastValid = g_car.valid;
-    if (g_car.valid) memcpy(g_carLast, g_car.position, sizeof(g_carLast));
     g_car.valid = false;
     g_carCount = 0;
     const ShaderInfo ps = f.ps;
@@ -1216,9 +1664,11 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
     if (sc == g_swapChain) {
         releaseBackBuffer();
         g_renderer.releaseTargets();
+        g_rendererB.releaseTargets(); // the compare split's preset side
         overlay::releaseTargets();
         releaseTextures();
         releaseShadow();
+        lights::release();
         g_isSceneV.clear();
         g_frame = Frame{};
         TMVS_LOG("hooks: ResizeBuffers %ux%u", w, h);

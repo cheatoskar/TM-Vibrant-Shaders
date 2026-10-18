@@ -51,6 +51,7 @@ enum Pass : int {
     kReflect,
     kSpillDown,
     kSpillBlur,
+    kSpillTemporal,
     kLighting,
     kRainDrop,
     kRainSplash,
@@ -85,7 +86,8 @@ public:
     float total() const { return m_total; }
 
 private:
-    static constexpr int kFrames = 4, kStamps = 48;
+    // Room for every pass of a frame with everything on (bloom pyramid, sky, weather, cinema).
+    static constexpr int kFrames = 4, kStamps = 64;
     struct Frame {
         ID3D11Query* disjoint = nullptr;
         ID3D11Query* stamps[kStamps] = {};
@@ -172,6 +174,13 @@ public:
     // the sky stage from the engine's tone-map constants: in effect from the next frame's constants.
     void setTmnfScale(float scale) { m_tmnfScale = scale; }
     float tmnfScale() const { return m_tmnfScale; }
+    // Off for the compare split's second look: one weather sound, the one of your look.
+    void setSound(bool on) { m_sound = on; }
+    // The previewer's A/B of the neon spill over frames (--nospillhistory: each frame on its own,
+    // as before 1.4.0).
+    void setSpillHistory(bool on) { m_spillHistoryOn = on; }
+    // The compare split's preset side draws your neon trail (`from`'s), recording none.
+    void shareTrail(const Effects* from) { m_trail.shareFrom(from ? &from->m_trail : nullptr); }
 
 private:
     bool ensureTargets(UINT w, UINT h);
@@ -186,8 +195,12 @@ private:
     ID3D11PixelShader* m_gi = nullptr;
     ID3D11PixelShader* m_giTemporal = nullptr;
     ID3D11PixelShader* m_spillDown = nullptr;
+    ID3D11PixelShader* m_spillSource = nullptr;
+    ID3D11PixelShader* m_spillDownSource = nullptr;
     ID3D11PixelShader* m_spillBlur = nullptr;
+    ID3D11PixelShader* m_spillTemporal = nullptr;
     ID3D11PixelShader* m_lighting = nullptr;
+    ID3D11PixelShader* m_lightingMoon = nullptr; // with BlackHoleMoon's relight (scene.hlsl)
     ID3D11PixelShader* m_volumetric = nullptr;
     ID3D11Buffer* m_frameCb = nullptr;
     ID3D11Buffer* m_passCb = nullptr;
@@ -205,6 +218,11 @@ private:
     Target m_giHistory[2]; // quarter: accumulated (rgb, view z)
     int m_giIndex = 0;
     Target m_spill[2];     // quarter: neon light (rgb, view z)
+    Target m_spillSource_; // full: the neon light's sources pixel by pixel (Quality 2), made when first used
+    Target m_spillHistory[2]; // quarter: the spill over frames (rgb, view z), what the lighting uses
+    int m_spillIndex = 0;
+    bool m_spillValid = false;
+    bool m_spillHistoryOn = true;
     Target m_volume[2];    // half: volumetric light (lit fraction, lit path / range), ping-pong for the blur
     Target m_hdr[2];       // full: the result (exposed HDR), ping-pong for the passes after the composite
     int m_currentHdr = 0;
@@ -216,7 +234,7 @@ private:
     CinemaStage m_cinema;
     TrailStage m_trail;
 
-    float m_c[48][4] = {};
+    float m_c[49][4] = {};
     float m_prevW2C[12] = {};
     float m_prevProj[4] = {};
     bool m_havePrevious = false;
@@ -225,6 +243,7 @@ private:
     double m_lastTime = 0.0;
     // About what the engine's usual tone map gives (a sunset capture: 1.82) until it is read back.
     float m_tmnfScale = 1.8f;
+    bool m_sound = true;
     int m_boltSlot = -1000000; // lightning strike the bolt direction belongs to
     float m_boltAzimuth = 0.0f;
 };

@@ -53,7 +53,7 @@ cbuffer Frame : register(b0)
     float4 u_PrevView2; // c30: row 2
     float4 u_PrevProj;  // c31: previous frame's P00, P11, P20, P21
     float4 u_Engine;    // c32: engine textures present: normals, albedo, light mask, motion
-    float4 u_Engine2;   // c33: engine sun known (1; -1 = night map, the moon), specular present, ambient strength, 0
+    float4 u_Engine2;   // c33: engine sun known (1; -1 = night map, the moon), specular present, ambient strength, CleanHighlights (1: the sun's glint goes with the sun under night skies)
     float4 u_Temporal;  // c34: TAA on, history valid, noise frame (0..63), 0
     float4 u_Ambient;   // c35: the engine's ambient light (rgb, linear), 0
     float4 u_Light2;    // c36: neon light, game sun (1 known, -1 night map), lightning flash, lightning bolt
@@ -62,13 +62,15 @@ cbuffer Frame : register(b0)
     float4 u_Snow;      // c39: snowfall, snow cover, wind direction (world x, z)
     float4 u_BlackHole; // c40: black hole direction (world, turns with the sky), size (0 = none)
     float4 u_Sky3;      // c41: aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
-    float4 u_Lut;       // c42: (unused here: the look runs in hdr.hlsl)
+    float4 u_EngineClouds; // c42: the engine's cloud factor at its darkest (SceneP CloudsX2minRGB), 1 = known
     float4 u_SunOut;    // c43: how much of the engine's sun comes out (night skies), engine sun direction (world)
-    float4 u_Mat;       // c44: 0, real night (GameNight), a night sky replaces the game's, tone knee
+    float4 u_Mat;       // c44: EngineLightDraws (1: t17 holds the engine's light draws), real night (GameNight), a night sky replaces the game's, tone knee
     float4 u_EngineSun; // c45: the engine's sun colour (rgb, linear, as it lights with it), 1 = known
     float4 u_Fog;       // c46: the engine's fog colour (rgb, linear), 0
     float4 u_Misc;      // c47: engine exposure is applied in the input (1) or read here (0), photo mode,
                         //      TMNF colours -> display linear here (sky.hlsli tmnfScale), 0
+    float4 u_Moon;      // c48: BlackHoleMoon (0 off, else the black hole's light strength), the engine's
+                        //      SpecMaxExp, SpecScale x light w (SceneP), its cloud factor (luma, between min and max)
 };
 
 cbuffer PassParams : register(b1)

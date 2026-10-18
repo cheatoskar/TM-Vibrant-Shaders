@@ -1,6 +1,7 @@
 #pragma once
 #include <d3d9.h>
 #include <windows.h>
+#include <string>
 
 namespace tmshaders {
 struct Settings;
@@ -45,16 +46,25 @@ void focusPoint(float out[2]);
 void afterRender(IDirect3DDevice9* device, IDirect3DSurface9* frame);
 
 // Compare split (Shift+F6, also turns photo mode on): one side of the line shows the game's
-// image as it came in, without the mod's effects; in photos too, not in hi-res ones (the line
-// would sit in every tile). Ctrl+Shift+wheel moves the line.
+// image as it came in, without the mod's effects (only photo mode's depth of field, the same
+// lens as your side); in photos too, hi-res ones included (each tile gets its part of the line),
+// with both sides' names burnt in at the bottom (SplitPhotoLabels). Ctrl+Shift+wheel moves the line.
 void toggleSplit();
-bool splitShown();      // switched on, photo mode on, no hi-res photo being taken
+bool splitShown();      // switched on, photo mode on (also while a hi-res photo is taken)
 bool& splitOn();        // the switch (for the menu)
 float& splitPosition(); // 0..1 from the left
 bool& splitSwapped();   // the game's image on the right instead of the left
-// Copies the unshaded image (`original`, same size) onto its side of `shaded` and draws the
-// line. Call it before afterRender, so the photo has it.
+// What the other side shows: "" the game's image, else a preset's look (rendered by a pipeline
+// of its own, see plugin.cpp). Your look stays on the mod's side.
+std::string& splitPreset();
+// Copies the other side's image (`original`: the unshaded one, the game's through photo mode's
+// lens, or the preset's; same size) onto its side of `shaded` and draws the line (in a hi-res
+// photo's tile: where the line falls in the whole photo). Call it before afterRender, so the photo has it.
 void applySplit(IDirect3DDevice9* device, IDirect3DSurface9* original, IDirect3DSurface9* shaded);
+// The game draws one frame, lit for your look: real night, its moon, its sky and its sun's halo
+// follow your look on both sides. "" when the preset on the other side would get the same light,
+// else a short line saying what it misses (its sun effects can't show on a frame lit otherwise).
+std::string splitLightNote();
 
 // A line for the screen (photo mode on, progress, saved as ...), "" = nothing to show.
 const char* status();

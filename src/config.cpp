@@ -1,6 +1,9 @@
 #include "config.h"
+#include "inifile.h"
+#include "keys.h"
 #include "log.h"
 #include <windows.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -17,115 +20,142 @@ namespace tmshaders {
 
 const std::vector<Field>& fields() {
     static const std::vector<Field> table = {
-        TMVS_FIELD("AOStrength", "Ambient occlusion", "Lighting", Float, aoStrength, 0.0f, 2.0f),
-        TMVS_FIELD("AORadius", "AO radius (m)", "Lighting", Float, aoRadius, 0.3f, 5.0f),
         TMVS_FIELD("ShadowStrength", "Sun shadows", "Lighting", Float, shadowStrength, 0.0f, 1.0f),
-        TMVS_FIELD("ShadowLength", "Shadow ray length (m)", "Lighting", Float, shadowLength, 1.0f, 30.0f),
-        TMVS_FIELD("LongShadows", "Long-range shadows", "Lighting", Float, longShadows, 0.0f, 1.0f),
+        TMVS_FIELD("LongShadows", "Long shadows", "Lighting", Float, longShadows, 0.0f, 1.0f),
+        TMVS_FIELD("AOStrength", "Ambient occlusion", "Lighting", Float, aoStrength, 0.0f, 2.0f),
+        TMVS_FIELD("NeonLight", "Neon light spill", "Lighting", Float, neonLight, 0.0f, 2.0f),
+        TMVS_FIELD("GlobalIllumination", "Bounce light", "Lighting", Float, globalIllumination, 0.0f, 2.0f),
+        TMVS_FIELD("SunLight", "Sun tint", "Lighting", Float, sunLight, 0.0f, 1.5f),
+        TMVS_FIELD("AmbientTint", "Ambient tint", "Lighting", Float, ambientTint, 0.0f, 1.5f),
+        TMVS_FIELD("ShadowLength", "Shadow length (m)", "Lighting", Float, shadowLength, 1.0f, 30.0f),
         TMVS_FIELD("LongShadowRange", "Long shadow range (m)", "Lighting", Float, longShadowRange, 30.0f, 250.0f),
-        TMVS_FIELD("NeonLight", "Neon light on surroundings", "Lighting", Float, neonLight, 0.0f, 2.0f),
-        TMVS_FIELD("GlobalIllumination", "Bounce light (global illumination)", "Lighting", Float, globalIllumination, 0.0f, 2.0f),
-        TMVS_FIELD("SunLight", "Sunlight warmth", "Lighting", Float, sunLight, 0.0f, 1.5f),
-        TMVS_FIELD("AmbientTint", "Sky ambient tint", "Lighting", Float, ambientTint, 0.0f, 1.5f),
+        TMVS_FIELD("LongShadowQuality", "Gap-free long shadows", "Lighting", Int, longShadowQuality, 0.0f, 1.0f),
+        TMVS_FIELD("AORadius", "AO radius (m)", "Lighting", Float, aoRadius, 0.3f, 5.0f),
         TMVS_FIELD("SunColor", "Sun colour", "Lighting", Color, sunColor, 0.0f, 1.0f),
-        TMVS_FIELD("GameSunColor", "Use game's sun colour", "Lighting", Float, gameSunColor, 0.0f, 1.0f),
+        TMVS_FIELD("GameSunColor", "Game sun colour", "Lighting", Float, gameSunColor, 0.0f, 1.0f),
         TMVS_FIELD("SkyColor", "Sky colour", "Lighting", Color, skyColor, 0.0f, 1.0f),
-        TMVS_FIELD("SunElevation", "Sun elevation override (-1 = game)", "Lighting", Float, sunElevationOverride, -1.0f, 90.0f),
-        TMVS_FIELD("SunAzimuth", "Sun azimuth override", "Lighting", Float, sunAzimuthOverride, 0.0f, 360.0f),
+        TMVS_FIELD("SunElevation", "Sun height", "Lighting", Float, sunElevationOverride, -1.0f, 90.0f),
+        TMVS_FIELD("SunAzimuth", "Sun direction", "Lighting", Float, sunAzimuthOverride, 0.0f, 360.0f),
 
-        TMVS_FIELD("SkyMode", "Sky", "Sky & Atmosphere", Int, skyMode, 0.0f, 5.0f),
-        TMVS_FIELD("SkyNight", "Night darkening (-1 = auto)", "Sky & Atmosphere", Float, skyNight, -1.0f, 1.0f),
-        TMVS_FIELD("SkyRotation", "Sky rotation", "Sky & Atmosphere", Float, skyRotation, 0.0f, 360.0f),
-        TMVS_FIELD("SkyBrightness", "Sky brightness", "Sky & Atmosphere", Float, skyBrightness, 0.2f, 3.0f),
-        TMVS_FIELD("CloudAmount", "Clouds (clear sky)", "Sky & Atmosphere", Float, cloudAmount, 0.0f, 1.0f),
-        TMVS_FIELD("StarAmount", "Stars", "Sky & Atmosphere", Float, starAmount, 0.0f, 3.0f),
-        TMVS_FIELD("AuroraSpeed", "Aurora movement", "Sky & Atmosphere", Float, auroraSpeed, 0.0f, 4.0f),
-        TMVS_FIELD("SkyEffectSize", "Black hole size (0 = off, > 3: up close)", "Sky & Atmosphere", Float, skyEffectSize, 0.0f, 6.0f),
-        TMVS_FIELD("BlackHoleAzimuth", "Black hole direction", "Sky & Atmosphere", Float, blackHoleAzimuth, 0.0f, 360.0f),
-        TMVS_FIELD("BlackHoleElevation", "Black hole height", "Sky & Atmosphere", Float, blackHoleElevation, -10.0f, 60.0f),
-        TMVS_FIELD("PlanetSize", "Ringed planet (0 = off)", "Sky & Atmosphere", Float, planetSize, 0.0f, 2.5f),
-        TMVS_FIELD("PlanetType", "Ring world planet", "Sky & Atmosphere", Int, planetType, 0.0f, 3.0f),
-        TMVS_FIELD("PlanetView", "Ring world view", "Sky & Atmosphere", Int, planetView, 0.0f, 2.0f),
-        TMVS_FIELD("PlanetAzimuth", "Planet direction", "Sky & Atmosphere", Float, planetAzimuth, 0.0f, 360.0f),
-        TMVS_FIELD("PlanetElevation", "Planet height", "Sky & Atmosphere", Float, planetElevation, -10.0f, 60.0f),
-        TMVS_FIELD("VolumetricClouds", "Volumetric clouds", "Sky & Atmosphere", Float, volumetricClouds, 0.0f, 1.0f),
-        TMVS_FIELD("CloudCoverage", "Cloud coverage", "Sky & Atmosphere", Float, cloudCoverage, 0.05f, 1.0f),
-        TMVS_FIELD("CloudHeight", "Cloud height (m)", "Sky & Atmosphere", Float, cloudHeight, 300.0f, 4000.0f),
-        TMVS_FIELD("SkyEnhance", "Sky enhancement", "Sky & Atmosphere", Float, skyEnhance, 0.0f, 1.0f),
-        TMVS_FIELD("SunGlow", "Sun glow", "Sky & Atmosphere", Float, sunGlow, 0.0f, 2.0f),
-        TMVS_FIELD("FogDensity", "Haze density", "Sky & Atmosphere", Float, fogDensity, 0.0f, 6.0f),
-        TMVS_FIELD("FogHeightFalloff", "Haze height falloff", "Sky & Atmosphere", Float, fogHeightFalloff, 0.0f, 3.0f),
-        TMVS_FIELD("FogSunScatter", "Haze sun scattering", "Sky & Atmosphere", Float, fogSunScatter, 0.0f, 2.0f),
-        TMVS_FIELD("HazeDistance", "Haze distance", "Sky & Atmosphere", Float, hazeDistance, 0.1f, 1.0f),
-        TMVS_FIELD("GodRays", "Light shafts", "Sky & Atmosphere", Float, godRays, 0.0f, 2.0f),
-        TMVS_FIELD("VolumetricLight", "Volumetric light (shadowed haze)", "Sky & Atmosphere", Float, volumetricLight, 0.0f, 2.0f),
-        TMVS_FIELD("GodRayDecay", "Light shaft length", "Sky & Atmosphere", Float, godRayDecay, 0.9f, 0.995f),
+        TMVS_FIELD("SkyMode", "Sky", "Sky", Int, skyMode, 0.0f, 5.0f),
+        TMVS_FIELD("SkyEnhance", "Sky enhancement", "Sky", Float, skyEnhance, 0.0f, 1.0f),
+        TMVS_FIELD("SkyBrightness", "Sky brightness", "Sky", Float, skyBrightness, 0.2f, 3.0f),
+        TMVS_FIELD("SkyNight", "Night darkening", "Sky", Float, skyNight, -1.0f, 1.0f),
+        TMVS_FIELD("SkyRotation", "Sky rotation", "Sky", Float, skyRotation, 0.0f, 360.0f),
+        TMVS_FIELD("SunGlow", "Sun glow", "Sky", Float, sunGlow, 0.0f, 2.0f),
+        TMVS_FIELD("CloudAmount", "Sky clouds", "Sky", Float, cloudAmount, 0.0f, 1.0f),
+        TMVS_FIELD("StarAmount", "Stars", "Sky", Float, starAmount, 0.0f, 3.0f),
+        TMVS_FIELD("AuroraSpeed", "Aurora movement", "Sky", Float, auroraSpeed, 0.0f, 4.0f),
+        TMVS_FIELD("SkyEffectSize", "Black hole size", "Sky", Float, skyEffectSize, 0.0f, 6.0f),
+        TMVS_FIELD("BlackHoleAzimuth", "Black hole direction", "Sky", Float, blackHoleAzimuth, 0.0f, 360.0f),
+        TMVS_FIELD("BlackHoleElevation", "Black hole height", "Sky", Float, blackHoleElevation, -10.0f, 60.0f),
+        TMVS_FIELD("PlanetType", "Planet", "Sky", Int, planetType, 0.0f, 3.0f),
+        TMVS_FIELD("PlanetSize", "Planet size", "Sky", Float, planetSize, 0.0f, 2.5f),
+        TMVS_FIELD("PlanetView", "Ring world view", "Sky", Int, planetView, 0.0f, 2.0f),
+        TMVS_FIELD("PlanetAzimuth", "Planet direction", "Sky", Float, planetAzimuth, 0.0f, 360.0f),
+        TMVS_FIELD("PlanetElevation", "Planet height", "Sky", Float, planetElevation, -10.0f, 60.0f),
+        TMVS_FIELD("VolumetricClouds", "Volumetric clouds", "Sky", Float, volumetricClouds, 0.0f, 1.0f),
+        TMVS_FIELD("CloudCoverage", "Cloud coverage", "Sky", Float, cloudCoverage, 0.05f, 1.0f),
+        TMVS_FIELD("CloudHeight", "Cloud height (m)", "Sky", Float, cloudHeight, 300.0f, 4000.0f),
 
-        TMVS_FIELD("Bloom", "Bloom", "Bloom & Lens", Float, bloom, 0.0f, 0.4f),
-        TMVS_FIELD("BloomRadius", "Bloom radius", "Bloom & Lens", Float, bloomRadius, 0.3f, 1.2f),
-        TMVS_FIELD("HighlightBoost", "Light source intensity", "Bloom & Lens", Float, highlightBoost, 0.0f, 8.0f),
-        TMVS_FIELD("LensFlare", "Lens flare", "Bloom & Lens", Float, lensFlare, 0.0f, 1.5f),
-        TMVS_FIELD("ChromaticAberration", "Chromatic aberration", "Bloom & Lens", Float, chromaticAberration, 0.0f, 1.0f),
-        TMVS_FIELD("Vignette", "Vignette", "Bloom & Lens", Float, vignette, 0.0f, 1.0f),
-        TMVS_FIELD("FilmGrain", "Film grain", "Bloom & Lens", Float, filmGrain, 0.0f, 0.15f),
+        TMVS_FIELD("FogDensity", "Haze density", "Haze and light shafts", Float, fogDensity, 0.0f, 6.0f),
+        TMVS_FIELD("HazeDistance", "Haze distance", "Haze and light shafts", Float, hazeDistance, 0.1f, 1.0f),
+        TMVS_FIELD("FogHeightFalloff", "Haze height falloff", "Haze and light shafts", Float, fogHeightFalloff, 0.0f, 3.0f),
+        TMVS_FIELD("FogSunScatter", "Haze sun scattering", "Haze and light shafts", Float, fogSunScatter, 0.0f, 2.0f),
+        TMVS_FIELD("GodRays", "Light shafts", "Haze and light shafts", Float, godRays, 0.0f, 2.0f),
+        TMVS_FIELD("GodRayDecay", "Light shaft length", "Haze and light shafts", Float, godRayDecay, 0.9f, 0.995f),
+        TMVS_FIELD("VolumetricLight", "Volumetric light", "Haze and light shafts", Float, volumetricLight, 0.0f, 2.0f),
+
+        TMVS_FIELD("Bloom", "Bloom", "Bloom and lens", Float, bloom, 0.0f, 0.4f),
+        TMVS_FIELD("BloomRadius", "Bloom radius", "Bloom and lens", Float, bloomRadius, 0.3f, 1.2f),
+        TMVS_FIELD("HighlightBoost", "Light intensity", "Bloom and lens", Float, highlightBoost, 0.0f, 8.0f),
+        TMVS_FIELD("BorderGlow", "Neon strip glow", "Bloom and lens", Float, borderGlow, 0.0f, 5.0f),
+        TMVS_FIELD("Floodlights", "Floodlights", "Bloom and lens", Float, floodlights, 0.0f, 3.0f),
+        TMVS_FIELD("LampGlare", "Lamp glare", "Bloom and lens", Float, lampGlare, 0.0f, 1.0f),
+        TMVS_FIELD("LampHaze", "Lamp haze glow", "Bloom and lens", Float, lampHaze, 0.0f, 4.0f),
+        TMVS_FIELD("LampSkyHalos", "Lamp halos over the sky", "Bloom and lens", Bool, lampSkyHalos, 0.0f, 1.0f),
+        TMVS_FIELD("LensFlare", "Lens flare", "Bloom and lens", Float, lensFlare, 0.0f, 1.5f),
+        TMVS_FIELD("ChromaticAberration", "Chromatic aberration", "Bloom and lens", Float, chromaticAberration, 0.0f, 1.0f),
+        TMVS_FIELD("Vignette", "Vignette", "Bloom and lens", Float, vignette, 0.0f, 1.0f),
+        TMVS_FIELD("FilmGrain", "Film grain", "Bloom and lens", Float, filmGrain, 0.0f, 0.15f),
 
         TMVS_FIELD("Exposure", "Exposure (EV)", "Colour", Float, exposure, -2.0f, 2.0f),
-        TMVS_FIELD("AutoExposure", "Auto exposure", "Colour", Float, autoExposure, 0.0f, 1.0f),
         TMVS_FIELD("Contrast", "Contrast", "Colour", Float, contrast, 0.7f, 1.5f),
-        TMVS_FIELD("ToneKnee", "Highlight roll-off (tone curve knee)", "Colour", Float, toneKnee, 0.3f, 0.9f),
-        TMVS_FIELD("ToneCurve", "Tone curve", "Colour", Int, toneCurve, 0.0f, 2.0f),
-        TMVS_FIELD("NightSurfaces", "Floodlit surfaces at night (1 = game white)", "Colour", Float, nightSurfaces, 0.4f, 1.0f),
         TMVS_FIELD("Saturation", "Saturation", "Colour", Float, saturation, 0.0f, 2.0f),
         TMVS_FIELD("Vibrance", "Vibrance", "Colour", Float, vibrance, -0.5f, 1.0f),
         TMVS_FIELD("Temperature", "Temperature", "Colour", Float, temperature, -1.0f, 1.0f),
         TMVS_FIELD("Tint", "Tint", "Colour", Float, tint, -1.0f, 1.0f),
+        TMVS_FIELD("AutoExposure", "Auto exposure", "Colour", Float, autoExposure, 0.0f, 1.0f),
         TMVS_FIELD("Lift", "Lift", "Colour", Float, lift, -0.1f, 0.1f),
         TMVS_FIELD("Gamma", "Gamma", "Colour", Float, gamma, 0.6f, 1.6f),
         TMVS_FIELD("Gain", "Gain", "Colour", Float, gain, 0.6f, 1.6f),
         TMVS_FIELD("SplitToning", "Split toning", "Colour", Float, shadowTint, 0.0f, 1.0f),
+        TMVS_FIELD("ToneKnee", "Highlight roll-off", "Colour", Float, toneKnee, 0.3f, 0.9f),
+        TMVS_FIELD("NightSurfaces", "Floodlit surfaces", "Colour", Float, nightSurfaces, 0.4f, 1.0f),
+        TMVS_FIELD("ToneCurve", "Tone curve", "Colour", Int, toneCurve, 0.0f, 2.0f),
 
-        TMVS_FIELD("Wetness", "Wet roads", "Weather & Surfaces", Float, wetness, 0.0f, 1.0f),
-        TMVS_FIELD("Rain", "Rain (2 = downpour)", "Weather & Surfaces", Float, rain, 0.0f, 2.0f),
-        TMVS_FIELD("Snow", "Snow (2 = blizzard)", "Weather & Surfaces", Float, snow, 0.0f, 2.0f),
-        TMVS_FIELD("SnowCover", "Snow on the ground", "Weather & Surfaces", Float, snowCover, 0.0f, 1.0f),
-        TMVS_FIELD("Puddles", "Puddles", "Weather & Surfaces", Float, puddles, 0.0f, 1.0f),
-        TMVS_FIELD("Lightning", "Lightning", "Weather & Surfaces", Float, lightning, 0.0f, 1.0f),
-        TMVS_FIELD("LensDrops", "Drops and flakes on the lens", "Weather & Surfaces", Bool, lensDrops, 0.0f, 1.0f),
-        TMVS_FIELD("WeatherShelter", "Dry under roofs and bridges", "Weather & Surfaces", Bool, weatherShelter, 0.0f, 1.0f),
-        TMVS_FIELD("WeatherSound", "Sound volume: rain and thunder", "Weather & Surfaces", Float, weatherSound, 0.0f, 2.0f),
-        TMVS_FIELD("WaterSurfaces", "Water (pools, sea)", "Weather & Surfaces", Float, waterSurfaces, 0.0f, 1.0f),
-        TMVS_FIELD("Reflections", "Track reflections (dry, >1 = mirror)", "Weather & Surfaces", Float, reflections, 0.0f, 2.0f),
-        TMVS_FIELD("ReflectionBlur", "Reflection blur", "Weather & Surfaces", Float, reflectionBlur, 0.0f, 1.0f),
-        TMVS_FIELD("GrassDetail", "Grass detail", "Weather & Surfaces", Float, grassDetail, 0.0f, 1.0f),
-        TMVS_FIELD("MowingStripes", "Mowing stripes", "Weather & Surfaces", Float, mowingStripes, 0.0f, 1.0f),
-        TMVS_FIELD("Wind", "Wind", "Weather & Surfaces", Float, wind, 0.0f, 1.0f),
-        TMVS_FIELD("Spray", "Spray behind the car (wet roads, snow)", "Weather & Surfaces", Float, spray, 0.0f, 1.0f),
+        TMVS_FIELD("Rain", "Rain", "Weather and surfaces", Float, rain, 0.0f, 2.0f),
+        TMVS_FIELD("Snow", "Snow", "Weather and surfaces", Float, snow, 0.0f, 2.0f),
+        TMVS_FIELD("Wetness", "Wet roads", "Weather and surfaces", Float, wetness, 0.0f, 1.0f),
+        TMVS_FIELD("Puddles", "Puddles", "Weather and surfaces", Float, puddles, 0.0f, 1.0f),
+        TMVS_FIELD("SnowCover", "Snow on the ground", "Weather and surfaces", Float, snowCover, 0.0f, 1.0f),
+        TMVS_FIELD("Lightning", "Lightning", "Weather and surfaces", Float, lightning, 0.0f, 1.0f),
+        TMVS_FIELD("Wind", "Wind", "Weather and surfaces", Float, wind, 0.0f, 1.0f),
+        TMVS_FIELD("LensDrops", "Lens drops", "Weather and surfaces", Bool, lensDrops, 0.0f, 1.0f),
+        TMVS_FIELD("WeatherShelter", "Dry under roofs", "Weather and surfaces", Bool, weatherShelter, 0.0f, 1.0f),
+        TMVS_FIELD("Spray", "Car spray", "Weather and surfaces", Float, spray, 0.0f, 1.0f),
+        TMVS_FIELD("WeatherSound", "Weather volume", "Weather and surfaces", Float, weatherSound, 0.0f, 2.0f),
+        TMVS_FIELD("Reflections", "Track reflections", "Weather and surfaces", Float, reflections, 0.0f, 2.0f),
+        TMVS_FIELD("ReflectionBlur", "Reflection blur", "Weather and surfaces", Float, reflectionBlur, 0.0f, 1.0f),
+        TMVS_FIELD("WaterSurfaces", "Water", "Weather and surfaces", Float, waterSurfaces, 0.0f, 1.0f),
+        TMVS_FIELD("GrassDetail", "Grass detail", "Weather and surfaces", Float, grassDetail, 0.0f, 1.0f),
+        TMVS_FIELD("MowingStripes", "Mowing stripes", "Weather and surfaces", Float, mowingStripes, 0.0f, 1.0f),
+
+        TMVS_FIELD("NeonTrail", "Neon trail", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
+        TMVS_FIELD("TrailColor", "Trail colour", "Neon trail", Color, trailColor, 0.0f, 1.0f),
+        TMVS_FIELD("TrailWidth", "Trail width (m)", "Neon trail", Float, trailWidth, 0.05f, 1.0f),
+        TMVS_FIELD("TrailTyres", "Tyre lines", "Neon trail", Bool, trailTyres, 0.0f, 1.0f),
+        TMVS_FIELD("TrailDuration", "Trail fade (s)", "Neon trail", Float, trailDuration, 0.0f, 120.0f),
+        TMVS_FIELD("TrailKeepRuns", "Earlier runs kept", "Neon trail", Int, trailKeepRuns, 0.0f, 5.0f),
 
         TMVS_FIELD("MotionBlur", "Motion blur", "Cinematic", Float, motionBlur, 0.0f, 1.5f),
         TMVS_FIELD("DepthOfField", "Depth of field", "Cinematic", Float, depthOfField, 0.0f, 1.0f),
-        TMVS_FIELD("CinematicOnlyInReplays", "Only in replays and video export", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
-        TMVS_FIELD("FocusDistance", "Focus distance (m, 0 = auto)", "Cinematic", Float, focusDistance, 0.0f, 200.0f),
+        TMVS_FIELD("FocusDistance", "Focus distance (m)", "Cinematic", Float, focusDistance, 0.0f, 200.0f),
+        TMVS_FIELD("DofAutofocus", "Focus on", "Cinematic", Int, dofAutofocus, 0.0f, 1.0f),
         TMVS_FIELD("BokehSize", "Max blur (px)", "Cinematic", Float, bokehSize, 2.0f, 24.0f),
+        TMVS_FIELD("CinematicOnlyInReplays", "Cinematic in replays only", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
+        TMVS_FIELD("VideoCodec", "Video format", "Cinematic", Int, videoCodec, 0.0f, 2.0f),
+        TMVS_FIELD("VideoBitrate", "Video bitrate (Mbit/s)", "Cinematic", Float, videoBitrate, 0.0f, 200.0f),
+        TMVS_FIELD("VideoExportBest", "Best export quality", "Cinematic", Bool, videoExportBest, 0.0f, 1.0f),
 
-        TMVS_FIELD("FXAA", "FXAA anti-aliasing", "Image", Bool, fxaa, 0.0f, 1.0f),
-        TMVS_FIELD("TAA", "Temporal anti-aliasing", "Image", Bool, taa, 0.0f, 1.0f),
-        TMVS_FIELD("TAAJitter", "TAA: sub-pixel jitter", "Image", Bool, taaJitter, 0.0f, 1.0f),
-        TMVS_FIELD("Sharpen", "Sharpening (CAS)", "Image", Float, sharpen, 0.0f, 1.0f),
-        TMVS_FIELD("Quality", "Effect quality", "Image", Int, quality, 0.0f, 2.0f),
-        TMVS_FIELD("AutoQuality", "Auto quality (adapts to your GPU)", "Image", Bool, autoQuality, 0.0f, 1.0f),
-        TMVS_FIELD("TargetFPS", "Auto quality: target FPS", "Image", Float, targetFps, 30.0f, 240.0f),
-        TMVS_FIELD("DisableGameMSAA", "Disable game MSAA (restart)", "Image", Bool, disableGameMSAA, 0.0f, 1.0f),
-        TMVS_FIELD("ReadableGameDepth", "Effects in replay/video export (restart)", "Image", Bool, readableGameDepth, 0.0f, 1.0f),
-        TMVS_FIELD("GameMaterials", "Read the game's materials (TMUF sea, debug view)", "Image", Bool, gameMaterials, 0.0f, 1.0f),
-        TMVS_FIELD("DisableGameFX", "Turn off the game's FX post-processing (next map)", "Image", Bool, disableGameFx, 0.0f, 1.0f),
-        TMVS_FIELD("GameNight", "Real night under night skies", "Image", Bool, gameNight, 0.0f, 1.0f),
-        TMVS_FIELD("GameSkyClouds", "Keep the game's clouds under night skies", "Image", Bool, gameSkyClouds, 0.0f, 1.0f),
+        TMVS_FIELD("TAA", "Temporal AA", "Image quality", Bool, taa, 0.0f, 1.0f),
+        TMVS_FIELD("TAAJitter", "TAA jitter", "Image quality", Bool, taaJitter, 0.0f, 1.0f),
+        TMVS_FIELD("FXAA", "Edge smoothing", "Image quality", Bool, fxaa, 0.0f, 1.0f),
+        TMVS_FIELD("SMAA", "SMAA instead of FXAA", "Image quality", Bool, smaa, 0.0f, 1.0f),
+        TMVS_FIELD("Sharpen", "Sharpening", "Image quality", Float, sharpen, 0.0f, 1.0f),
+        TMVS_FIELD("Quality", "Effect quality", "Image quality", Int, quality, 0.0f, 2.0f),
+        TMVS_FIELD("AutoQuality", "Auto quality", "Image quality", Bool, autoQuality, 0.0f, 1.0f),
+        TMVS_FIELD("TargetFPS", "Target FPS", "Image quality", Float, targetFps, 30.0f, 240.0f),
+        TMVS_FIELD("RenderScale", "Render scale (FSR)", "Image quality", Float, renderScale, 0.5f, 1.0f),
+        TMVS_FIELD("FsrSharpness", "FSR sharpening", "Image quality", Float, fsrSharpness, 0.0f, 1.0f),
 
-        TMVS_FIELD("NeonTrail", "Neon trail behind the car (0 = off)", "Neon trail", Float, neonTrail, 0.0f, 3.0f),
-        TMVS_FIELD("TrailColor", "Trail colour", "Neon trail", Color, trailColor, 0.0f, 1.0f),
-        TMVS_FIELD("TrailWidth", "Trail width (m)", "Neon trail", Float, trailWidth, 0.05f, 1.0f),
-        TMVS_FIELD("TrailTyres", "Two lines from the rear tyres", "Neon trail", Bool, trailTyres, 0.0f, 1.0f),
-        TMVS_FIELD("TrailDuration", "Fade after (s, 0 = whole run)", "Neon trail", Float, trailDuration, 0.0f, 120.0f),
+        TMVS_FIELD("GameNight", "Real night", "Game integration", Bool, gameNight, 0.0f, 1.0f),
+        TMVS_FIELD("EngineMoon", "Game moonlight", "Game integration", Int, engineMoon, 0.0f, 2.0f),
+        TMVS_FIELD("GameSkyClouds", "Game sunset clouds", "Game integration", Bool, gameSkyClouds, 0.0f, 1.0f),
+        TMVS_FIELD("GameHdr", "Game HDR", "Game integration", Bool, gameHdr, 0.0f, 1.0f),
+        TMVS_FIELD("EngineLights", "Game light sources", "Game integration", Bool, engineLights, 0.0f, 1.0f),
+        TMVS_FIELD("CleanHighlights", "Clean highlights", "Game integration", Bool, cleanHighlights, 0.0f, 1.0f),
+        TMVS_FIELD("CasterShadows", "Long mesh shadows", "Game integration", Bool, casterShadows, 0.0f, 1.0f),
+        TMVS_FIELD("CasterAlphaTest", "Fence shadows", "Game integration", Bool, casterAlphaTest, 0.0f, 1.0f),
+        TMVS_FIELD("CleanWater", "Clean water", "Game integration", Bool, cleanWater, 0.0f, 1.0f),
+        TMVS_FIELD("WaterFarReflections", "Far water reflections", "Game integration", Bool, waterFarReflections, 0.0f, 1.0f),
+        TMVS_FIELD("ReadableGameDepth", "Effects in replays", "Game integration", Bool, readableGameDepth, 0.0f, 1.0f),
+        TMVS_FIELD("ShadeMenuBars", "Replay menu shading", "Game integration", Bool, shadeMenuBars, 0.0f, 1.0f),
+        TMVS_FIELD("DisableGameFX", "Turn off game FX", "Game integration", Bool, disableGameFx, 0.0f, 1.0f),
+        TMVS_FIELD("DisableGameMSAA", "Turn off game MSAA", "Game integration", Bool, disableGameMSAA, 0.0f, 1.0f),
+        TMVS_FIELD("GameMaterials", "Game materials", "Game integration", Bool, gameMaterials, 0.0f, 1.0f),
+        TMVS_FIELD("GameGBuffer", "Game normals", "Game integration", Bool, gameGBuffer, 0.0f, 1.0f),
+        TMVS_FIELD("GameLight", "Night on game light", "Game integration", Bool, gameLight, 0.0f, 1.0f),
     };
     return table;
 }
@@ -173,15 +203,16 @@ Mood moodOfDayTime(float t) {
     // CMotionManagerWeathers::JumpToTimeRemapped maps the four quarters onto its day
     // animation: up to 0.25 the night, then sunrise, 0.5 - 0.75 the day, then sunset. The
     // first part of the day still has a low, warm sun (Rally at 0.515), and 0.75 itself is
-    // where the sunset starts (Stadium's sunset maps).
+    // where the sunset starts (Stadium's sunset maps). Stadium's day maps sit at 0.53 under a
+    // high, white sun (B13, the owner's screens of 2026-10-17): day, as the light colour said.
     if (t <= 0.25f) return Mood::Night;
-    if (t < 0.55f || t >= 0.72f) return Mood::Dusk;
+    if (t < 0.525f || t >= 0.72f) return Mood::Dusk;
     return Mood::Day;
 }
 
 Settings Config::lookForMood(Mood m) const {
     Settings look = settings;
-    if (m_mapLook || preset == kCustomPreset || !autoMood || m == Mood::Unknown) return look;
+    if (m_mapLook || preset == kCustomPreset || !autoMood || manualPick || m == Mood::Unknown) return look;
     const std::string& p = moodPreset[static_cast<int>(m)];
     if (!p.empty()) namedSettings(p, look);
     return look;
@@ -231,7 +262,11 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "GameSkyClouds");
+           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
+           !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "GameGBuffer") ||
+           !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
+           !strcmp(f.key, "FsrSharpness");
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {
@@ -247,15 +282,23 @@ void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, 
         } else if (f.kind == Field::Int) {
             *reinterpret_cast<int*>(base + f.offset) = _wtoi(value);
         } else if (f.kind == Field::Color) {
-            float* c = reinterpret_cast<float*>(base + f.offset);
-            swscanf(value, L"%f,%f,%f", &c[0], &c[1], &c[2]);
+            // A hand-edited file: a value that isn't a number keeps the one before.
+            float c[3] = {};
+            if (swscanf(value, L"%f,%f,%f", &c[0], &c[1], &c[2]) == 3 && std::isfinite(c[0]) && std::isfinite(c[1]) && std::isfinite(c[2])) {
+                memcpy(base + f.offset, c, sizeof(c));
+            }
         } else {
-            *reinterpret_cast<float*>(base + f.offset) = static_cast<float>(_wtof(value));
+            const float v = static_cast<float>(_wtof(value));
+            if (std::isfinite(v)) *reinterpret_cast<float*>(base + f.offset) = v;
         }
     }
+    // A file from before SMAA (FXAA, no SMAA) keeps its FXAA: SMAA is only the new default.
+    wchar_t value[16];
+    if (!onlyTrail && GetPrivateProfileStringW(section, L"FXAA", L"", value, 16, ini) && !GetPrivateProfileStringW(section, L"SMAA", L"", value, 16, ini))
+        settings.smaa = false;
 }
 
-void writeFields(const Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem) {
+void writeFields(const Settings& settings, IniFile& ini, const wchar_t* section, bool includeSystem) {
     const char* base = reinterpret_cast<const char*>(&settings);
     for (const Field& f : fields()) {
         if (!includeSystem && isSystemField(f)) continue;
@@ -271,7 +314,7 @@ void writeFields(const Settings& settings, const wchar_t* ini, const wchar_t* se
         } else {
             swprintf(value, 128, L"%.4f", *reinterpret_cast<const float*>(base + f.offset));
         }
-        WritePrivateProfileStringW(section, key, value, ini);
+        ini.set(section, key, value);
     }
 }
 
@@ -317,6 +360,7 @@ bool sameValue(const Field& f, const Settings& a, const Settings& b) {
 }
 
 float clampTo(const Field& f, float v) {
+    if (!std::isfinite(v)) return f.min; // "nan" and "inf" parse; they would pass both comparisons
     return v < f.min ? f.min : (v > f.max ? f.max : v);
 }
 
@@ -329,10 +373,15 @@ void parseValue(const Field& f, const std::string& value, Settings& s) {
         case Field::Color: {
             float c[3] = {};
             if (sscanf(value.c_str(), "%f,%f,%f", &c[0], &c[1], &c[2]) != 3) break;
+            if (!std::isfinite(c[0]) || !std::isfinite(c[1]) || !std::isfinite(c[2])) break;
             for (int i = 0; i < 3; i++) reinterpret_cast<float*>(p)[i] = c[i] < 0.0f ? 0.0f : (c[i] > 1.0f ? 1.0f : c[i]);
             break;
         }
-        default: *reinterpret_cast<float*>(p) = clampTo(f, static_cast<float>(atof(value.c_str()))); break;
+        default: {
+            const float v = static_cast<float>(atof(value.c_str()));
+            if (std::isfinite(v)) *reinterpret_cast<float*>(p) = clampTo(f, v);
+            break;
+        }
     }
 }
 
@@ -359,7 +408,8 @@ const char* const kTagKeys[] = {
     "Wetness", "Rain", "Snow", "SnowCover", "Puddles", "Lightning", "LensDrops", "WaterSurfaces", "Reflections",
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
-    "WeatherShelter", "HazeDistance",
+    "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus", "LampGlare", "LampHaze", "LampSkyHalos", "Floodlights",
+    "SMAA",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
@@ -513,6 +563,371 @@ bool lookFromComments(const std::string& comments, Settings& look, std::string& 
 
 } // namespace
 
+// --- Share codes: "TMVS1:<base64url>" --------------------------------------------------------
+// A look as one line of text for Discord and the like. The text inside is "V=1;Key=Value;..." with
+// every setting of a preset (the machine settings are not part of one) that differs from the
+// Settings defaults. The defaults, not a preset, are the base: presets are tuned per game and per
+// version, so a code based on one would look different on the other side. A change of a Settings
+// default must therefore bump the version (TMVS2) and keep reading TMVS1 against the old default,
+// or keep the old value in shareCodeBase (as Sharpen does): tools/keystest.cpp carries a golden
+// code that fails when that happens by accident.
+namespace {
+
+constexpr size_t kShareMaxBody = 12000;      // characters of base64 we read (a full code is ~3000)
+constexpr size_t kShareMaxText = 1u << 20;   // anything longer is not a share code, don't even scan it
+
+// The shortest text that reads back as exactly this float.
+std::string shortestFloat(float v) {
+    char text[40];
+    for (int digits = 1; digits <= 9; digits++) {
+        snprintf(text, sizeof(text), "%.*g", digits, static_cast<double>(v));
+        if (strtof(text, nullptr) == v) break;
+    }
+    return text;
+}
+
+bool sameExactly(const Field& f, const Settings& a, const Settings& b) {
+    const size_t size = f.kind == Field::Bool ? sizeof(bool) : (f.kind == Field::Color ? sizeof(float) * 3 : sizeof(float));
+    return memcmp(reinterpret_cast<const char*>(&a) + f.offset, reinterpret_cast<const char*>(&b) + f.offset, size) == 0;
+}
+
+bool finiteFloats(const Field& f, const Settings& s) {
+    if (f.kind == Field::Bool || f.kind == Field::Int) return true;
+    const float* p = reinterpret_cast<const float*>(reinterpret_cast<const char*>(&s) + f.offset);
+    for (int i = 0; i < (f.kind == Field::Color ? 3 : 1); i++) {
+        if (!std::isfinite(p[i])) return false;
+    }
+    return true;
+}
+
+// The whole of `text` as a finite number.
+bool wholeFloat(const std::string& text, float& out) {
+    if (text.empty() || text.size() > 24) return false;
+    char* end = nullptr;
+    const double v = strtod(text.c_str(), &end);
+    if (end != text.c_str() + text.size() || !std::isfinite(v) || fabs(v) > 1e9) return false;
+    out = static_cast<float>(v);
+    return true;
+}
+
+// A value from a share code into `s`: false = not a valid value for this setting (nothing is
+// written). Out of range is clamped (someone else's text), `clamped` says so.
+bool shareValue(const Field& f, const std::string& value, Settings& s, bool& clamped) {
+    char* p = reinterpret_cast<char*>(&s) + f.offset;
+    clamped = false;
+    switch (f.kind) {
+        case Field::Bool:
+            if (value != "0" && value != "1") return false;
+            *reinterpret_cast<bool*>(p) = value == "1";
+            return true;
+        case Field::Int: {
+            float v;
+            if (!wholeFloat(value, v) || v != floorf(v)) return false;
+            const float c = clampTo(f, v);
+            clamped = c != v;
+            *reinterpret_cast<int*>(p) = static_cast<int>(c);
+            return true;
+        }
+        case Field::Color: {
+            float c[3];
+            size_t from = 0;
+            for (int i = 0; i < 3; i++) {
+                const size_t comma = value.find(',', from);
+                if ((i < 2) != (comma != std::string::npos)) return false;
+                if (!wholeFloat(value.substr(from, comma == std::string::npos ? std::string::npos : comma - from), c[i])) return false;
+                from = comma + 1;
+            }
+            for (int i = 0; i < 3; i++) {
+                const float v = c[i] < f.min ? f.min : (c[i] > f.max ? f.max : c[i]);
+                clamped |= v != c[i];
+                reinterpret_cast<float*>(p)[i] = v;
+            }
+            return true;
+        }
+        default: {
+            float v;
+            if (!wholeFloat(value, v)) return false;
+            const float c = clampTo(f, v);
+            clamped = c != v;
+            *reinterpret_cast<float*>(p) = c;
+            return true;
+        }
+    }
+}
+
+// The base for the look's fields: what a share code does not mention.
+void resetLookFields(Settings& s) {
+    const Settings defaults = shareCodeBase();
+    for (const Field& f : fields()) {
+        if (isSystemField(f)) continue;
+        const size_t size = f.kind == Field::Bool ? sizeof(bool) : (f.kind == Field::Color ? sizeof(float) * 3 : sizeof(float));
+        memcpy(reinterpret_cast<char*>(&s) + f.offset, reinterpret_cast<const char*>(&defaults) + f.offset, size);
+    }
+}
+
+} // namespace
+
+Settings shareCodeBase() {
+    Settings s;
+    s.sharpen = 0.35f; // the default until 1.4
+    return s;
+}
+
+std::string shareCodeFor(const Settings& s) {
+    const Settings defaults = shareCodeBase();
+    std::string text = "V=1";
+    for (const Field& f : fields()) {
+        if (isSystemField(f) || sameExactly(f, s, defaults) || !finiteFloats(f, s)) continue;
+        const char* p = reinterpret_cast<const char*>(&s) + f.offset;
+        text += ';';
+        text += f.key;
+        text += '=';
+        switch (f.kind) {
+            case Field::Bool: text += *reinterpret_cast<const bool*>(p) ? "1" : "0"; break;
+            case Field::Int: text += std::to_string(*reinterpret_cast<const int*>(p)); break;
+            case Field::Color:
+                for (int i = 0; i < 3; i++) text += (i ? "," : "") + shortestFloat(reinterpret_cast<const float*>(p)[i]);
+                break;
+            default: text += shortestFloat(*reinterpret_cast<const float*>(p)); break;
+        }
+    }
+    return "TMVS1:" + encodeBase64(std::vector<unsigned char>(text.begin(), text.end()));
+}
+
+bool decodeShareCode(const std::string& text, Settings& look, ShareStats& stats, std::string& error) {
+    stats = ShareStats();
+    error.clear();
+    if (text.empty()) {
+        error = "The clipboard is empty.";
+        return false;
+    }
+    if (text.size() > kShareMaxText) {
+        error = "The clipboard text is far too long for a share code.";
+        return false;
+    }
+    // "TMVS<version>:" anywhere in the text (a chat message around the code is fine). A map's
+    // "[TMVS:" has no version and is another thing.
+    std::string lower = text;
+    for (char& ch : lower) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+    size_t body = std::string::npos;
+    int version = 0;
+    for (size_t at = lower.find("tmvs"); at != std::string::npos; at = lower.find("tmvs", at + 1)) {
+        size_t i = at + 4;
+        int v = 0;
+        int digits = 0;
+        for (; i < lower.size() && isdigit(static_cast<unsigned char>(lower[i])) && digits < 4; i++, digits++) v = v * 10 + (lower[i] - '0');
+        if (digits && i < lower.size() && lower[i] == ':') {
+            version = v;
+            body = i + 1;
+            break;
+        }
+    }
+    if (body == std::string::npos) {
+        error = "That is not a share code (it starts with TMVS1:).";
+        return false;
+    }
+    if (version != 1) {
+        error = "This code is from another version of the mod (TMVS" + std::to_string(version) + ", this one reads TMVS1).";
+        return false;
+    }
+    // The code: base64 letters, a chat may have broken it over lines; a space, quote or
+    // backtick ends it.
+    std::string code;
+    for (size_t i = body; i < text.size() && code.size() <= kShareMaxBody; i++) {
+        const char ch = text[i];
+        if (ch == '\r' || ch == '\n') continue;
+        if (!ch || !strchr(kBase64, ch)) break;
+        code += ch;
+    }
+    if (code.empty()) {
+        error = "The code is empty.";
+        return false;
+    }
+    if (code.size() > kShareMaxBody) {
+        error = "The code is too long to be a share code.";
+        return false;
+    }
+    std::vector<unsigned char> bytes;
+    if (!decodeBase64(code, bytes) || bytes.empty()) {
+        error = "The code is damaged (not valid Base64). Copy it again, all of it.";
+        return false;
+    }
+    std::string data;
+    for (unsigned char b : bytes) {
+        if (b < 0x20 || b > 0x7e) {
+            error = "The code is damaged (unreadable content). Copy it again, all of it.";
+            return false;
+        }
+        data += static_cast<char>(b);
+    }
+
+    Settings work = look;
+    resetLookFields(work);
+    const std::vector<Field>& table = fields();
+    std::vector<bool> seen(table.size(), false);
+    bool marker = false;
+    for (size_t i = 0; i <= data.size();) {
+        size_t end = data.find(';', i);
+        if (end == std::string::npos) end = data.size();
+        const std::string token = data.substr(i, end - i);
+        i = end + 1;
+        if (token.empty()) continue;
+        const size_t eq = token.find('=');
+        const std::string key = token.substr(0, eq == std::string::npos ? token.size() : eq);
+        const std::string value = eq == std::string::npos ? std::string() : token.substr(eq + 1);
+        if (eq == std::string::npos || key.empty()) {
+            stats.unknown++;
+            continue;
+        }
+        if (!_stricmp(key.c_str(), "V")) {
+            marker = true; // the format marker the encoder writes first
+            continue;
+        }
+        const Field* f = fieldByKey(key.c_str());
+        // Machine settings are never taken from a code, whoever wrote it.
+        if (!f || isSystemField(*f)) {
+            stats.unknown++;
+            continue;
+        }
+        bool clamped = false;
+        if (!shareValue(*f, value, work, clamped)) {
+            stats.invalid++;
+            continue;
+        }
+        const size_t index = static_cast<size_t>(f - table.data());
+        if (!seen[index]) {
+            seen[index] = true;
+            stats.applied++;
+        }
+        if (clamped) stats.clamped++;
+    }
+    if (!marker && stats.applied == 0) {
+        error = "No setting I know in that code (" + std::to_string(stats.unknown + stats.invalid) + " unreadable). Copy it again, all of it.";
+        return false;
+    }
+    look = work;
+    return true;
+}
+
+std::string shareStatusLine(const ShareStats& stats) {
+    std::string line = "Loaded " + std::to_string(stats.applied) + " settings";
+    if (stats.unknown) line += ", " + std::to_string(stats.unknown) + " unknown ignored";
+    if (stats.invalid) line += ", " + std::to_string(stats.invalid) + " unreadable ignored";
+    if (stats.clamped) line += ", " + std::to_string(stats.clamped) + " out of range";
+    return line;
+}
+
+bool copyTextToClipboard(const std::string& ascii) {
+    const std::wstring wide = widen(ascii);
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, (wide.size() + 1) * sizeof(wchar_t));
+    if (!mem) return false;
+    wchar_t* dst = static_cast<wchar_t*>(GlobalLock(mem));
+    if (!dst) {
+        GlobalFree(mem);
+        return false;
+    }
+    memcpy(dst, wide.c_str(), (wide.size() + 1) * sizeof(wchar_t));
+    GlobalUnlock(mem);
+    // Another program may hold the clipboard for a moment.
+    HWND owner = GetActiveWindow();
+    if (!owner) owner = GetForegroundWindow();
+    bool opened = false;
+    for (int tries = 0; tries < 10 && !opened; tries++) {
+        opened = OpenClipboard(owner) != 0;
+        if (!opened) Sleep(10);
+    }
+    if (!opened) {
+        GlobalFree(mem);
+        return false;
+    }
+    EmptyClipboard();
+    const bool ok = SetClipboardData(CF_UNICODETEXT, mem) != nullptr;
+    if (!ok) GlobalFree(mem); // the clipboard owns the memory only after a successful SetClipboardData
+    CloseClipboard();
+    return ok;
+}
+
+bool textFromClipboard(std::string& text, std::string& error) {
+    text.clear();
+    error.clear();
+    HWND owner = GetActiveWindow();
+    if (!owner) owner = GetForegroundWindow();
+    bool opened = false;
+    for (int tries = 0; tries < 10 && !opened; tries++) {
+        opened = OpenClipboard(owner) != 0;
+        if (!opened) Sleep(10);
+    }
+    if (!opened) {
+        error = "The clipboard is busy. Try again.";
+        return false;
+    }
+    bool ok = false;
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT)) {
+        error = "The clipboard holds no text.";
+    } else if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+        const size_t capacity = GlobalSize(data) / sizeof(wchar_t);
+        const wchar_t* src = static_cast<const wchar_t*>(GlobalLock(data));
+        if (src) {
+            if (capacity > kShareMaxText) {
+                error = "The clipboard text is far too long for a share code.";
+            } else {
+                size_t length = 0;
+                while (length < capacity && src[length]) length++;
+                text = narrow(std::wstring(src, length));
+                ok = true;
+            }
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    if (!ok && error.empty()) error = "The clipboard text can't be read.";
+    return ok;
+}
+
+std::string Config::shareCode() const {
+    return shareCodeFor(ownSettings());
+}
+
+bool Config::applyShareCode(const std::string& text, std::string& message) {
+    Settings look = settings; // brings your machine settings
+    ShareStats stats;
+    if (!decodeShareCode(text, look, stats, message)) return false;
+    // The built-in preset it is closest to is what "Unsaved changes to ..." and the reset arrows
+    // refer to (as with a map's code). An exact copy of one simply is that preset.
+    int best = 0;
+    size_t fewest = SIZE_MAX;
+    for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
+        Settings base = look;
+        applyPreset(base, static_cast<Preset>(i));
+        size_t differing = 0;
+        for (const Field& f : fields()) {
+            if (!isSystemField(f) && !sameExactly(f, base, look)) differing++;
+        }
+        if (differing < fewest) {
+            fewest = differing;
+            best = i;
+        }
+    }
+    const std::string base = presetName(static_cast<Preset>(best));
+    if (fewest == 0) {
+        selectPreset(base);
+    } else {
+        Settings baseline = look;
+        applyPreset(baseline, static_cast<Preset>(best));
+        look.enabled = settings.enabled;
+        look.debugView = settings.debugView;
+        settings = look;
+        m_baseline = baseline;
+        m_basePreset = base;
+        preset = kCustomPreset; // yours, unsaved: "Save as preset" keeps it, no built-in or saved preset is touched
+        m_mapLook = false;
+        markDirty();
+    }
+    message = shareStatusLine(stats);
+    TMVS_LOG("config: share code loaded (%s), closest preset %s", message.c_str(), base.c_str());
+    return true;
+}
+
 std::vector<std::string> Config::presetNames() const {
     std::vector<std::string> names;
     for (int i = 0; i < static_cast<int>(Preset::Custom); i++) names.push_back(presetName(static_cast<Preset>(i)));
@@ -558,6 +973,12 @@ bool Config::namedSettings(const std::string& name, Settings& out) const {
     return true;
 }
 
+unsigned long long Config::presetWritten(const std::string& name) const {
+    WIN32_FILE_ATTRIBUTE_DATA data = {};
+    if (!isUserPreset(name) || !GetFileAttributesExW(presetFile(name).c_str(), GetFileExInfoStandard, &data)) return 0;
+    return (static_cast<unsigned long long>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+}
+
 bool Config::applyNamed(const std::string& name) {
     Settings out = settings;
     if (!namedSettings(name, out)) return false;
@@ -572,8 +993,20 @@ bool Config::selectPreset(const std::string& name) {
     m_mapLook = false; // your choice: it is your look from now on
     preset = name;
     if (autoMood && rememberMoodPick && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
+    else if (autoMood) manualPick = true;
     markDirty();
     return true;
+}
+
+void Config::resumeMoodPresets() {
+    if (!manualPick) return;
+    manualPick = false;
+    markDirty();
+    TMVS_LOG("config: presets per map type again");
+    // This map's own preset now (real night follows it, see relightOnSwitch).
+    if (m_mapLook || preset == kCustomPreset || !autoMood || mood == Mood::Unknown) return;
+    const std::string& p = moodPreset[static_cast<int>(mood)];
+    if (!p.empty() && p != preset && applyNamed(p)) preset = p;
 }
 
 bool Config::saveUserPreset(const std::string& requested, const std::string& description) {
@@ -583,9 +1016,11 @@ bool Config::saveUserPreset(const std::string& requested, const std::string& des
     const std::wstring file = presetFile(name);
     // Saving over your preset keeps its line unless you wrote a new one.
     const std::string keep = description.empty() && isUserPreset(name) ? presetDescription(name) : description;
-    DeleteFileW(file.c_str());
-    writeFields(settings, file.c_str(), L"Preset", false);
-    if (!keep.empty()) WritePrivateProfileStringW(L"Info", L"Description", widen(keep).c_str(), file.c_str());
+    // A new file, written in one go (it replaces the old one).
+    IniFile ini;
+    writeFields(settings, ini, L"Preset", false);
+    if (!keep.empty()) ini.set(L"Info", L"Description", widen(keep).c_str());
+    if (!ini.save(file)) TMVS_LOG("config: preset file can't be written (error %lu)", ini.error());
     scanUserPresets();
     TMVS_LOG("config: saved preset \"%s\"", name.c_str());
     // A new preset gets its picture; saving changes keeps the one it has.
@@ -595,6 +1030,7 @@ bool Config::saveUserPreset(const std::string& requested, const std::string& des
     m_baseline = settings;
     m_basePreset = name;
     if (autoMood && rememberMoodPick && mood != Mood::Unknown) moodPreset[static_cast<int>(mood)] = name;
+    else if (autoMood) manualPick = true;
     markDirty();
     return true;
 }
@@ -654,6 +1090,10 @@ void Config::onMoodDetected(Mood m) {
     // The map's own look wins, and your own unsaved tweaks win over the mood presets: a map
     // change must not throw them away.
     if (m_mapLook || preset == kCustomPreset) return;
+    if (manualPick) {
+        TMVS_LOG("config: map mood %s: your pick %s stays", moodName(m), preset.c_str());
+        return;
+    }
     const std::string& p = moodPreset[static_cast<int>(m)];
     if (!autoMood || p.empty() || p == preset) return;
     if (applyNamed(p)) {
@@ -773,7 +1213,23 @@ void Config::markDirty() {
 }
 
 void Config::tick() {
-    if (m_dirty && GetTickCount() - m_dirtySince > 1500) save();
+    if (keys::takeChanged()) markDirty(); // a hotkey was rebound
+    if (m_dirty && GetTickCount() - m_dirtySince > 1500) {
+        // On the render thread, so the game stands still meanwhile. One read and one write of the
+        // file (IniFile): a few ms. Until 1.4.0 it was about 160 WritePrivateProfileString calls,
+        // each opening and rewriting the file: 125 ms, 1.3 s on a fresh file after a map load.
+        LARGE_INTEGER started, ended, frequency;
+        QueryPerformanceCounter(&started);
+        save();
+        QueryPerformanceCounter(&ended);
+        QueryPerformanceFrequency(&frequency);
+        const double took = 1000.0 * static_cast<double>(ended.QuadPart - started.QuadPart) / static_cast<double>(frequency.QuadPart);
+        static int s_lines = 0;
+        if (!m_dirty && s_lines < 50) {
+            s_lines++;
+            TMVS_LOG("config: settings.ini written in %.1f ms%s", took, took >= 50.0 ? " (the game waited)" : "");
+        }
+    }
 }
 
 void applyPreset(Settings& s, Preset preset) {
@@ -782,15 +1238,31 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepFx = s.disableGameFx;
     const bool keepMaterials = s.gameMaterials;
     const bool keepNight = s.gameNight;
+    const int keepMoon = s.engineMoon;
     const bool keepSkyClouds = s.gameSkyClouds;
+    const bool keepClean = s.cleanHighlights;
+    const bool keepCleanWater = s.cleanWater;
+    const bool keepWaterFar = s.waterFarReflections;
+    const bool keepGBuffer = s.gameGBuffer;
+    const bool keepGameLight = s.gameLight;
+    const bool keepMenuBars = s.shadeMenuBars;
+    const bool keepHdr = s.gameHdr;
+    const bool keepEngineLights = s.engineLights;
+    const bool keepCasters = s.casterShadows;
+    const bool keepCasterAlpha = s.casterAlphaTest;
     const bool keepEnabled = s.enabled;
     const bool keepAuto = s.autoQuality;
     const float keepTarget = s.targetFps;
     const float keepSound = s.weatherSound;
     const bool keepReplayOnly = s.cinematicOnlyInReplays;
+    const bool keepVideoBest = s.videoExportBest;
+    const int keepVideoCodec = s.videoCodec;
+    const float keepVideoBitrate = s.videoBitrate;
     const bool keepJitter = s.taaJitter;
+    const float keepScale = s.renderScale, keepFsrSharpness = s.fsrSharpness;
     const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
     const bool keepTrailTyres = s.trailTyres;
+    const int keepTrailRuns = s.trailKeepRuns;
     float keepTrailColor[3];
     memcpy(keepTrailColor, s.trailColor, sizeof(keepTrailColor));
     if (preset == Preset::Custom) return;
@@ -799,26 +1271,43 @@ void applyPreset(Settings& s, Preset preset) {
     s.trailWidth = keepTrailWidth;
     s.trailDuration = keepTrailDuration;
     s.trailTyres = keepTrailTyres;
+    s.trailKeepRuns = keepTrailRuns;
     memcpy(s.trailColor, keepTrailColor, sizeof(keepTrailColor));
     s.disableGameMSAA = keepMSAA;
     s.readableGameDepth = keepDepth;
     s.disableGameFx = keepFx;
     s.gameMaterials = keepMaterials;
     s.gameNight = keepNight;
+    s.engineMoon = keepMoon;
     s.gameSkyClouds = keepSkyClouds;
+    s.cleanHighlights = keepClean;
+    s.cleanWater = keepCleanWater;
+    s.waterFarReflections = keepWaterFar;
+    s.gameGBuffer = keepGBuffer;
+    s.gameLight = keepGameLight;
+    s.shadeMenuBars = keepMenuBars;
+    s.gameHdr = keepHdr;
+    s.engineLights = keepEngineLights;
+    s.casterShadows = keepCasters;
+    s.casterAlphaTest = keepCasterAlpha;
     s.enabled = keepEnabled;
     s.autoQuality = keepAuto;
     s.targetFps = keepTarget;
     s.weatherSound = keepSound;
     s.cinematicOnlyInReplays = keepReplayOnly;
+    s.videoExportBest = keepVideoBest;
+    s.videoCodec = keepVideoCodec;
+    s.videoBitrate = keepVideoBitrate;
     s.taaJitter = keepJitter;
+    s.renderScale = keepScale;
+    s.fsrSharpness = keepFsrSharpness;
     switch (preset) {
         case Preset::Vibrant:
             // The Settings defaults are the base of every preset; Vibrant's own tuning on top.
             s.godRays = 2.0f;
             s.godRayDecay = 0.9f;
             s.fogDensity = 0.05f;
-            s.neonLight = 0.15f;
+            s.neonLight = 0.45f;
             s.ambientTint = 0.0f;
             s.volumetricClouds = 0.5f;
             s.reflections = 0.65f;
@@ -847,7 +1336,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.fogDensity = 0.2f;
             s.fogSunScatter = 0.5f;
             s.godRays = 1.55f;
-            s.neonLight = 0.05f;
+            s.neonLight = 0.4f;
             s.highlightBoost = 2.5f;
             s.bloom = 0.05f;
             s.lensFlare = 0.0f;
@@ -875,9 +1364,9 @@ void applyPreset(Settings& s, Preset preset) {
             s.lensFlare = 0.4f;
             s.reflections = 0.5f;
             s.contrast = 1.1f;
-            s.saturation = 1.1f;
+            s.saturation = 1.0f;   // 1.1 and temperature 0.75 until the owner's test of 2026-10-17
             s.vibrance = 0.3f;
-            s.temperature = 0.75f;
+            s.temperature = 1.0f;
             s.shadowTint = 0.4f;
             s.vignette = 0.3f;
             break;
@@ -907,6 +1396,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Neon:
             s.skyMode = 2;
+            s.borderGlow = 3.0f;    // night presets: the borders' neon shines (owner's pick)
             s.starAmount = 3.0f;    // night presets: every star
             s.skyColor[0] = 0.35f; s.skyColor[1] = 0.5f; s.skyColor[2] = 1.0f;
             s.aoStrength = 1.3f;
@@ -916,7 +1406,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.godRays = 2.0f;
             s.exposure = 1.5f;
             s.bloomRadius = 0.65f;
-            s.globalIllumination = 2.0f;
+            s.globalIllumination = 1.0f; // 2 left grain around the car (owner, 2026-10-17)
             s.skyNight = 0.5f;
             s.skyBrightness = 1.0f;
             s.fogDensity = 0.6f;
@@ -933,13 +1423,15 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Horizon:
             s.skyMode = 3;      // black hole sky: the hole lights the stadium, Saturn next to it
+            s.borderGlow = 3.0f;
             s.reflections = 0.8f;
             s.planetType = 0;
             s.planetView = 1;
             // Saturn and the black hole, both in view from the start screen.
-            s.planetAzimuth = 150.0f;
+            s.planetAzimuth = 20.0f;    // 150 and sky rotation 263 until the owner's test of 2026-10-17
             s.planetElevation = 14.0f;
-            s.skyRotation = 263.0f;
+            s.skyRotation = 0.0f;
+            s.skyNight = 0.5f;          // a set darkening instead of automatic (-1)
             s.skyEffectSize = 3.0f;
             s.blackHoleAzimuth = 145.5f;
             s.blackHoleElevation = 12.8f;
@@ -967,6 +1459,7 @@ void applyPreset(Settings& s, Preset preset) {
             break;
         case Preset::Aurora:
             s.skyMode = 4;
+            s.borderGlow = 3.0f;
             s.skyRotation = 150.0f;
             s.reflections = 0.8f;
             s.starAmount = 3.0f;
@@ -1005,8 +1498,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.vibrance = 0.2f;
             s.temperature = 0.0f;
             s.shadowTint = 0.0f;
-            s.sharpen = 0.5f;
-            s.neonLight = 0.35f;
+            s.sharpen = 0.8f;
+            s.neonLight = 0.45f;
             break;
         case Preset::Performance:
             s.volumetricLight = 0.0f;
@@ -1019,9 +1512,10 @@ void applyPreset(Settings& s, Preset preset) {
             s.filmGrain = 0.0f;
             s.sharpen = 0.0f;
             s.longShadows = 0.0f;
-            s.neonLight = 0.35f;
+            s.neonLight = 0.45f;
             s.grassDetail = 0.0f;
             s.taa = false;
+            s.smaa = false; // FXAA: 0.15 - 0.25 ms cheaper at 1440p
             break;
         case Preset::RainyDay:
             s.volumetricLight = 0.0f;
@@ -1193,11 +1687,13 @@ void Config::load() {
     photoDof = 0.5f;
     if (GetPrivateProfileStringW(L"General", L"PhotoDof", L"", text, 128, ini)) photoDof = static_cast<float>(_wtof(text));
     photoDof = photoDof < 0.0f ? 0.0f : (photoDof > 1.0f ? 1.0f : photoDof);
+    splitPhotoLabels = GetPrivateProfileIntW(L"General", L"SplitPhotoLabels", 1, ini) != 0;
     lutFile = GetPrivateProfileStringW(L"General", L"Lut", L"", text, 128, ini) ? narrow(text) : std::string();
     lutAmount = 1.0f;
     if (GetPrivateProfileStringW(L"General", L"LutAmount", L"", text, 128, ini)) lutAmount = static_cast<float>(_wtof(text));
     lutAmount = lutAmount < 0.0f ? 0.0f : (lutAmount > 1.0f ? 1.0f : lutAmount);
     rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 0, ini) != 0;
+    manualPick = GetPrivateProfileIntW(L"General", L"ManualPick", 0, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
         if (GetPrivateProfileStringW(L"General", kMoodKeys[i], L"", text, 128, ini)) moodPreset[i] = presetFromText(text, moodPreset[i]);
@@ -1212,13 +1708,36 @@ void Config::load() {
     settings.disableGameFx = GetPrivateProfileIntW(L"Settings", L"DisableGameFX", 1, ini) != 0;
     settings.gameMaterials = GetPrivateProfileIntW(L"Settings", L"GameMaterials", 1, ini) != 0;
     settings.gameNight = GetPrivateProfileIntW(L"Settings", L"GameNight", 1, ini) != 0;
+    settings.engineMoon = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"EngineMoon", 1, ini));
+    if (settings.engineMoon < 0 || settings.engineMoon > 2) settings.engineMoon = 1;
     settings.gameSkyClouds = GetPrivateProfileIntW(L"Settings", L"GameSkyClouds", 0, ini) != 0;
+    settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
+    settings.cleanWater = GetPrivateProfileIntW(L"Settings", L"CleanWater", 1, ini) != 0;
+    settings.waterFarReflections = GetPrivateProfileIntW(L"Settings", L"WaterFarReflections", 1, ini) != 0;
+    settings.gameGBuffer = GetPrivateProfileIntW(L"Settings", L"GameGBuffer", 0, ini) != 0;
+    settings.gameLight = GetPrivateProfileIntW(L"Settings", L"GameLight", 0, ini) != 0;
+    settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;
+    settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 1, ini) != 0;
+    settings.engineLights = GetPrivateProfileIntW(L"Settings", L"EngineLights", 1, ini) != 0;
+    settings.casterShadows = GetPrivateProfileIntW(L"Settings", L"CasterShadows", 1, ini) != 0;
+    settings.casterAlphaTest = GetPrivateProfileIntW(L"Settings", L"CasterAlphaTest", 1, ini) != 0;
     settings.autoQuality = GetPrivateProfileIntW(L"Settings", L"AutoQuality", 1, ini) != 0;
     wchar_t target[32] = {};
     if (GetPrivateProfileStringW(L"Settings", L"TargetFPS", L"", target, 32, ini)) settings.targetFps = static_cast<float>(_wtof(target));
     if (GetPrivateProfileStringW(L"Settings", L"WeatherSound", L"", target, 32, ini)) settings.weatherSound = static_cast<float>(_wtof(target));
     settings.cinematicOnlyInReplays = GetPrivateProfileIntW(L"Settings", L"CinematicOnlyInReplays", 1, ini) != 0;
-    settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 0, ini) != 0;
+    settings.videoExportBest = GetPrivateProfileIntW(L"Settings", L"VideoExportBest", 1, ini) != 0;
+    settings.videoCodec = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoCodec", 1, ini));
+    if (settings.videoCodec < 0 || settings.videoCodec > 2) settings.videoCodec = 1;
+    if (GetPrivateProfileStringW(L"Settings", L"VideoBitrate", L"", target, 32, ini)) settings.videoBitrate = static_cast<float>(_wtof(target));
+    settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 1, ini) != 0;
+    if (GetPrivateProfileStringW(L"Settings", L"RenderScale", L"", target, 32, ini)) {
+        settings.renderScale = std::clamp(static_cast<float>(_wtof(target)), 0.5f, 1.0f);
+    }
+    if (GetPrivateProfileStringW(L"Settings", L"FsrSharpness", L"", target, 32, ini)) {
+        settings.fsrSharpness = std::clamp(static_cast<float>(_wtof(target)), 0.0f, 1.0f);
+    }
+    keys::load(ini);
     readFields(settings, ini, L"Settings", true, true);
     if (preset == kCustomPreset) {
         // Your changes, on top of the preset they started from.
@@ -1227,6 +1746,8 @@ void Config::load() {
         applyPreset(settings, Preset::Vibrant);
         m_baseline = settings;
         if (!namedSettings(m_basePreset, m_baseline)) m_basePreset = "Vibrant";
+        // A setting the file lacks (new since it was saved) comes from that preset, not from Vibrant.
+        settings = m_baseline;
         readFields(settings, ini, L"Settings", false);
     } else if (!applyNamed(preset)) {
         preset = "Vibrant";
@@ -1237,42 +1758,58 @@ void Config::load() {
 
 void Config::save() {
     if (m_path.empty()) m_path = log::dataDir() + L"\\settings.ini";
-    const wchar_t* ini = m_path.c_str();
+    // Read once, change in memory, write once: keys and sections the mod doesn't know, comments and
+    // the file's order stay as they are.
+    IniFile ini;
+    ini.load(m_path);
     // A map's look is never saved as yours.
     const Settings own = ownSettings();
-    WritePrivateProfileStringW(L"General", L"Preset", widen(m_mapLook ? m_ownPreset : preset).c_str(), ini);
-    WritePrivateProfileStringW(L"General", L"BasePreset", widen(m_mapLook ? m_ownBasePreset : m_basePreset).c_str(), ini);
-    WritePrivateProfileStringW(L"General", L"Enabled", settings.enabled ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"UseMapLooks", useMapLooks ? L"1" : L"0", ini);
+    ini.set(L"General", L"Preset", widen(m_mapLook ? m_ownPreset : preset).c_str());
+    ini.set(L"General", L"BasePreset", widen(m_mapLook ? m_ownBasePreset : m_basePreset).c_str());
+    ini.set(L"General", L"Enabled", settings.enabled ? L"1" : L"0");
+    ini.set(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0");
+    ini.set(L"General", L"UseMapLooks", useMapLooks ? L"1" : L"0");
     wchar_t page[16];
     swprintf(page, 16, L"%d", menuPage);
-    WritePrivateProfileStringW(L"General", L"MenuPage", page, ini);
-    WritePrivateProfileStringW(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"MenuFull", menuFull ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0", ini);
-    WritePrivateProfileStringW(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0", ini);
+    ini.set(L"General", L"MenuPage", page);
+    ini.set(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0");
+    ini.set(L"General", L"MenuFull", menuFull ? L"1" : L"0");
+    ini.set(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0");
+    ini.set(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0");
+    ini.set(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0");
     wchar_t photo[32];
     swprintf(photo, 32, L"%d", photoTiles);
-    WritePrivateProfileStringW(L"General", L"PhotoTiles", photo, ini);
+    ini.set(L"General", L"PhotoTiles", photo);
     swprintf(photo, 32, L"%.2f", photoDof);
-    WritePrivateProfileStringW(L"General", L"PhotoDof", photo, ini);
-    WritePrivateProfileStringW(L"General", L"Lut", widen(lutFile).c_str(), ini);
+    ini.set(L"General", L"PhotoDof", photo);
+    ini.set(L"General", L"SplitPhotoLabels", splitPhotoLabels ? L"1" : L"0");
+    ini.set(L"General", L"Lut", widen(lutFile).c_str());
     swprintf(photo, 32, L"%.2f", lutAmount);
-    WritePrivateProfileStringW(L"General", L"LutAmount", photo, ini);
-    WritePrivateProfileStringW(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0", ini);
+    ini.set(L"General", L"LutAmount", photo);
+    ini.set(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0");
+    ini.set(L"General", L"ManualPick", manualPick ? L"1" : L"0");
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);
-    WritePrivateProfileStringW(L"General", L"MenuSections", sections, ini);
+    ini.set(L"General", L"MenuSections", sections);
     for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
-        WritePrivateProfileStringW(L"General", kMoodKeys[i], moodPreset[i].empty() ? L"Keep" : widen(moodPreset[i]).c_str(), ini);
+        ini.set(L"General", kMoodKeys[i], moodPreset[i].empty() ? L"Keep" : widen(moodPreset[i]).c_str());
     }
     wchar_t value[16];
     swprintf(value, 16, L"%d", static_cast<int>(mood));
-    WritePrivateProfileStringW(L"General", L"LastMood", value, ini);
+    ini.set(L"General", L"LastMood", value);
     writeFields(own, ini, L"Settings", true);
-    m_dirty = false;
+    keys::save(ini);
+    if (ini.save(m_path)) {
+        m_dirty = false;
+        return;
+    }
+    // Locked (an editor, a virus scanner): stays dirty and tick() tries again in 1.5 s.
+    m_dirtySince = GetTickCount();
+    static bool s_said = false;
+    if (!s_said) {
+        s_said = true;
+        TMVS_LOG("config: settings.ini can't be written (error %lu), trying again", ini.error());
+    }
 }
 
 } // namespace tmshaders

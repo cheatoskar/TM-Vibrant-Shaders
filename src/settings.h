@@ -27,17 +27,38 @@ struct Settings {
     bool gameMaterials = true;     // lamps, cars, glass and grass from the game's own materials (not guessed from pixels)
     bool gameSkyClouds = false;    // night skies over sunset maps: the game's clouds and their mirror image in the sea stay (photos)
     bool gameNight = true;         // night skies over day maps: the game lights the map at midnight (map load), no baked sun
+    int engineMoon = 1;            // night maps under the black hole: the game's moon 0 as it is, 1 shines from the black hole (lightmap, specular, car), 2 off (ambient and lamps stay)
     bool disableGameFx = true;     // skip the game's bloom and colour filter (launcher "FX") while the mod shades
+    bool gameHdr = true;           // the game draws its 3D image into a float target: light above 1.0 keeps its texture (car body, floodlit white)
+    bool engineLights = true;      // with GameHdr: light sources as the game draws them (lamp materials, its additive glows), nothing guessed from the image
+    bool cleanHighlights = true;   // the game's clipped white maps to one smooth result (no frost on floodlit surfaces); off = as up to 1.4.0-preview
+    bool casterShadows = true;     // long shadows from a light-space map of the game's own static meshes (casters.cpp)
+    bool casterAlphaTest = true;   // CasterShadows also keeps alpha-tested meshes (fences, grids) and draws them with the game's alpha test: lattice shadows; off = they cast none
+    bool shadeMenuBars = true;     // replay menu: the rows under its bars show the shaded image (mirrored); off = black (never leftovers of earlier frames)
+    bool cleanWater = true;        // the game's water mirrors only what it can see, unblurred (no blotches of the ramps over it); off = as before
+    bool waterFarReflections = true; // with CleanWater: the water's reflection is traced to the screen's edge (stands, masts and gates across a pool), not 40-120 m; off = as up to 1.4.0-preview
+    bool gameGBuffer = false;      // the game's material shaders also write their normal (gbufpatch.cpp): AO, shadows, reflections and light on the real normal (needs GameHdr; patched from the start)
+    bool gameLight = false;        // ... and the light they lit each surface with (COLOR2): under a night sky the darkening and tint step back where the game's lamps light a surface, by that light, not by the image (needs GameHdr and EngineLights; patched from the start)
     // Neon light trail behind the car, kept for the whole run (0 = off).
     float neonTrail = 0.0f;
     float trailColor[3] = {0.1f, 0.65f, 1.0f};
     float trailWidth = 0.2f;       // m
     bool trailTyres = true;        // two lines from the rear tyres, else one from the middle
     float trailDuration = 0.0f;    // s until a piece fades out, 0 = the whole run
-    bool taaJitter = false;         // TAA samples a different sub-pixel spot every frame (sharper, smoother)
+    int trailKeepRuns = 0;         // earlier runs still drawn (dimmer) after a restart, 0 = only this one
+    bool taaJitter = true;          // TAA samples a different sub-pixel spot every frame (sharper, smoother)
     bool cinematicOnlyInReplays = true; // motion blur and DOF only in replays, intros and the video export
+    bool videoExportBest = true;   // the game's video export: full quality, effects on the video's clock, every supersample shaded
+    int videoCodec = 1;            // the export's file: 0 the game's AVI (its codec dialog), 1 MP4 H.264, 2 MP4 HEVC (Media Foundation)
+    float videoBitrate = 0.0f;     // MP4: Mbit/s, 0 = from the size and frame rate (4K 30 fps: 50 H.264, 30 HEVC)
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;
+    // The game's 3D image and every effect at this fraction of the screen's resolution, brought back
+    // up with AMD FSR 1 before the HUD (needs GameHdr). 1 = off: the full resolution, as before.
+    float renderScale = 1.0f;
+    // FSR 1's sharpening (RCAS) after the upscale: 1 = AMD's strongest, 0 = none. It replaces the
+    // look's Sharpen while the image is scaled (sharpened before the upscale, its halos grow).
+    float fsrSharpness = 0.8f;
 
     // Lighting (screen-space, reconstructed from depth)
     float aoStrength = 1.0f;
@@ -46,6 +67,7 @@ struct Settings {
     float shadowLength = 9.0f;      // metres
     float longShadows = 0.8f;       // world-space height map shadows (long, off-screen casters)
     float longShadowRange = 120.0f; // metres
+    int longShadowQuality = 1;      // 0: traced in 24 steps (as before 2026-10-16), 1: every map cell along the ray (light grid)
     float neonLight = 0.6f;         // coloured light sources light up their surroundings
     float sunLight = 0.6f;          // directional sun relighting (N.L)
     float ambientTint = 0.55f;      // sky-coloured fill in shadow
@@ -91,6 +113,11 @@ struct Settings {
     float bloom = 0.09f;
     float bloomRadius = 0.85f;
     float highlightBoost = 3.5f;   // LDR -> HDR expansion of light sources
+    float borderGlow = 1.0f;       // EngineLights: the neon strips' (road borders') glow, 1 = as the guess let them glow
+    float lampGlare = 0.7f;        // EngineLights: this part of the lamps' light leaves their core and spreads wide and soft around them (0 = off)
+    float lampHaze = 1.0f;         // EngineLights: the light the haze takes from the lamps glows in the air around them (1 = all of it, 0 = off)
+    bool lampSkyHalos = false;     // EngineLights at night: the lamps' halos also over the sky, not cut at the edge of what the lamp sits on
+    float floodlights = 1.0f;      // EngineLights: the strength of floodlights and lamps (the game's glows) and the light they spill, apart from the neon borders and HighlightBoost (1 = as before)
     float lensFlare = 0.25f;
     float chromaticAberration = 0.05f;
     float vignette = 0.25f;
@@ -134,12 +161,14 @@ struct Settings {
     float motionBlur = 0.0f;       // fraction of the frame-to-frame camera motion
     float depthOfField = 0.0f;
     float focusDistance = 0.0f;    // metres, 0 = auto focus
+    int dofAutofocus = 0;          // the auto focus sits on 0 the middle of the screen, 1 the player's car (where the engine draws it)
     float bokehSize = 12.0f;       // max blur radius in pixels at 1080p
 
     // Anti-aliasing & sharpening
     bool fxaa = true;
-    bool taa = false;              // temporal anti-aliasing / stabilisation
-    float sharpen = 0.35f;
+    bool smaa = true;              // with fxaa: SMAA 1x does the edge smoothing instead of FXAA
+    bool taa = true;               // temporal anti-aliasing / stabilisation (smooths the long shadows' steps; jitter stays off)
+    float sharpen = 0.8f;
 };
 
 } // namespace tmshaders

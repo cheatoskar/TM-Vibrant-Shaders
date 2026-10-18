@@ -6,6 +6,7 @@
 // itself with the free camera (ManiaPlanet's camera isn't known to the mod).
 #include <d3d11.h>
 #include <windows.h>
+#include <string>
 
 namespace tmshaders {
 struct Settings;
@@ -29,6 +30,10 @@ void request();
 // The look of this frame: full quality, depth of field on the focus point, no motion blur.
 void adjust(tmshaders::Settings& s);
 
+// The shaders off (F5) in photo mode: only the camera's effects (depth of field, sharpening) on
+// the game's own image; every other effect and the grade off, the engine's tone curve. After adjust.
+void vanillaLook(tmshaders::Settings& s);
+
 // Compare split (Shift+F6, as in TMNF): one side of a line shows the game's own image. Only in
 // photo mode (switching it on turns photo mode on). Ctrl+Shift+wheel moves the line.
 bool& splitOn();
@@ -38,6 +43,12 @@ void toggleSplit();
 bool splitShown();
 // For the look: the line's position (0 = no split), negative = the game's image on the right.
 float splitForLook();
+// What the other side shows: "" the game's image, else a preset's look (drawn by a second
+// Renderer, hooks.cpp). Your look stays on the mod's side.
+std::string& splitPreset();
+// The name of what the left or right side shows (your preset, "Game" or the other preset), for
+// the labels at the line and in photos (SplitPhotoLabels).
+std::string splitName(bool right);
 
 // The focus point (uv), -1 = none.
 void focusPoint(float out[2]);

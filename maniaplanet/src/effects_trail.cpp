@@ -22,6 +22,8 @@ struct TrailConstants {
     float trail[4];  // points, next index (unwrapped), now (s), fade after (s)
     float trail2[4]; // sideways offset (m), half width (m), ring size, 0
     float colour[4]; // rgb * strength
+    float runs[4];   // TrailKeepRuns: the first stamp of this run and of the 3 before it (-1e30 = none)
+    float runs2[4];  // the first stamp 4 runs back, the last run's brightness, less per run further back, 0
 };
 
 } // namespace
@@ -31,7 +33,7 @@ bool TrailStage::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Trail, sizeof(g_PS_Trail), nullptr, &m_ps));
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = kPoints;
-    td.Height = 1;
+    td.Height = 2; // the points, the car's up at each
     td.MipLevels = 1;
     td.ArraySize = 1;
     td.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -56,7 +58,8 @@ bool TrailStage::init(ID3D11Device* device) {
     rt.BlendOpAlpha = D3D11_BLEND_OP_ADD;
     rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
     ok &= SUCCEEDED(device->CreateBlendState(&bd, &m_add));
-    m_points.assign(kPoints * 4, 0.0f);
+    m_points.assign(kPoints * 8, 0.0f);
+    m_dirty = -2;
     m_ready = ok;
     if (!ok) TMVS_LOG("trail: creating shaders or buffers failed");
     return ok;
@@ -73,7 +76,7 @@ void TrailStage::release() {
 }
 
 bool TrailStage::supports(const char* key) {
-    static const char* const kKeys[] = {"NeonTrail", "TrailColor", "TrailWidth", "TrailTyres", "TrailDuration"};
+    static const char* const kKeys[] = {"NeonTrail", "TrailColor", "TrailWidth", "TrailTyres", "TrailDuration", "TrailKeepRuns"};
     for (const char* k : kKeys)
         if (!strcmp(k, key)) return true;
     return false;
@@ -85,15 +88,126 @@ void TrailStage::clear() {
     m_keptValid = false;
     m_startValid = false;
     m_break = true;
+    m_written = 0;
+    m_runs = 0;
+    for (int k = 0; k <= kRunsMax; k++) {
+        m_runStart[k] = 0.0f;
+        m_runFirst[k] = 0;
+    }
+    if (m_points.size() < kPoints * 8) m_points.assign(kPoints * 8, 0.0f);
     std::fill(m_points.begin(), m_points.end(), 0.0f);
+    m_dirty = -2;
+}
+
+void TrailStage::newRun(int keepRuns) {
+    if (keepRuns <= 0 || m_written == 0) {
+        clear(); // the trail starts over
+        return;
+    }
+    // The points stay; this run begins with a new line and its own time stamps. A run without a
+    // point (two quick restarts) takes no slot: it would push the real previous run out.
+    if (m_written != m_runFirst[0]) {
+        for (int k = kRunsMax; k > 0; k--) {
+            m_runStart[k] = m_runStart[k - 1];
+            m_runFirst[k] = m_runFirst[k - 1];
+        }
+        m_runs = std::min(m_runs + 1, kRunsMax);
+    }
+    // After the last point's stamp (m_time + 1) with a margin: the shader counts a point as older
+    // when its stamp + 1e-3 <= this. The clock moves on by 5 ms so that this run's first point,
+    // whatever the frame rate, is newer by more than the margin.
+    m_runStart[0] = m_time + 1.0f + 2e-3f;
+    m_runFirst[0] = m_written;
+    m_time += 5e-3f;
+    m_break = true;
+    m_keptValid = false;
+    m_startValid = false;
+    m_liveFrames = 0;
+    TMVS_LOG("trail: the run starts again: %d earlier run(s) kept", m_runs);
+}
+
+// Records the car: every frame into the next slot (the live end, so it stays on the car), kept
+// 60 times a second while it moves, or every metre. A jump (a respawn) starts a new line; a frame
+// without the car doesn't (it left holes). True: the live end is drawn (slot m_head).
+bool TrailStage::record(float dt, const float* car, const float* up) {
+    if (!car) {
+        // A frame without the car (its constants not found this time): the live end stays where
+        // it was last seen for a few frames. (Without it the line's end fell back to the last kept
+        // point and jumped forward again: the fade-in behind the car stuttered.)
+        m_liveFrames = m_liveFrames > 0 ? m_liveFrames - 1 : 0;
+        return m_liveFrames > 0;
+    }
+    m_liveFrames = 0;
+    if (dt <= 0.0f) return false;
+    if (!m_startValid) {
+        memcpy(m_start, car, sizeof(m_start));
+        m_startValid = true;
+    }
+    float moved = 0.0f;
+    if (m_keptValid) {
+        const float dx = car[0] - m_kept[0], dy = car[1] - m_kept[1], dz = car[2] - m_kept[2];
+        moved = sqrtf(dx * dx + dy * dy + dz * dz);
+        // A respawn jumps more than 25 m. A frame hitch while driving fast covers that too (0.25 s
+        // at 250 m/s: 62 m) and is no respawn: the threshold grows with the frame's time (350 m/s
+        // is faster than any car drives), as TMNF's missed-restart rule.
+        if (moved > std::max(25.0f, dt * 350.0f)) m_break = true;
+    }
+    const float stamp = m_time + 1.0f; // never 0 (= no car)
+    float* p = &m_points[m_head * 4];
+    memcpy(p, car, sizeof(float) * 3);
+    p[3] = m_break ? -stamp : stamp;
+    // The car's up at the point: the line lies across it on banked curves, walls and loops.
+    float* u = &m_points[(kPoints + m_head) * 4];
+    u[0] = up ? up[0] : 0.0f;
+    u[1] = up ? up[1] : 1.0f;
+    u[2] = up ? up[2] : 0.0f;
+    u[3] = 1.0f;
+    m_dirty = m_dirty == -1 || m_dirty == static_cast<int>(m_head) ? static_cast<int>(m_head) : -2;
+    // Kept: 60 a second while it moves, and every metre. Less than 30 cm from the last point
+    // (standing, shaking after a crash) is no line: those points pointed every way and fanned the
+    // tyre lines out around the car.
+    if ((m_clock >= 1.0f / 60.0f && moved >= kMinStep) || moved >= 1.0f || !m_keptValid) {
+        m_clock = moved >= 1.0f ? 0.0f : fmodf(m_clock, 1.0f / 60.0f);
+        memcpy(m_kept, car, sizeof(m_kept));
+        m_keptValid = true;
+        m_break = false;
+        m_head = (m_head + 1) % kPoints;
+        if (m_count < kPoints) m_count++;
+        m_written++;
+        return false; // just kept: it's the newest point now
+    }
+    // The live end follows the car from 1 cm on. (It waited for 30 cm, like a kept point: above
+    // 60 frames a second the line's end fell 20-30 cm behind the car every second or third frame
+    // and caught up again, and the fade-in behind the car, measured from that end, stuttered. The
+    // live piece itself lies inside the fade-in, so it can't fan out.)
+    if (moved < 0.01f) return false;
+    m_liveFrames = 3;
+    return true;
 }
 
 void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& frame, const tmshaders::Settings& s) {
     if (!m_ready) return;
+    if (m_from) {
+        // The compare split's preset side: your trail, the other stage's points as of its last
+        // draw (its own ring starts empty when the split is shown, after the run was driven). The
+        // trail is a machine setting, the same on both sides.
+        const TrailStage& a = *m_from;
+        if (!a.m_ready || !a.m_pointsSrv || a.m_drawnPoints < 2 || s.neonTrail <= 0.0f) return;
+        drawPoints(ctx, fx, s, a, a.m_drawnPoints, a.m_drawnNext);
+        return;
+    }
+    m_drawnPoints = 0;
     const float dt = m_lastTime >= 0.0 ? static_cast<float>(std::clamp(frame.time - m_lastTime, 0.0, 0.25)) : 0.0f;
     m_lastTime = frame.time;
     const EngineCar* car = frame.car;
     const bool carSeen = car && car->valid;
+    // The car's origin lies on the road (capture 030: 2 mm under it, 2 cm under it to 3 cm over it
+    // as the car rides), and the road hides the line from 4.2 cm under it (the shader's depth test,
+    // seen from the chase camera): a car pressed into its springs took the line with it. 10 cm
+    // over the origin along the car's up it stays clear of the road.
+    float position[3] = {};
+    if (carSeen)
+        for (int i = 0; i < 3; i++) position[i] = car->position[i] + car->up[i] * kLift;
     // Another map (or the editor): start over. Without the car (a free camera far away, a menu on
     // top) the trail stays as it is.
     if (maplook::mapSerial() != m_mapSerial) {
@@ -101,11 +215,22 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         clear();
     }
     // The run starts again: the car jumps back to where the trail began (a respawn at a checkpoint
-    // only breaks the line).
+    // only breaks the line). The earlier runs stay as TrailKeepRuns says, else it starts over.
+    const int keepRuns = std::clamp(s.trailKeepRuns, 0, kRunsMax);
     if (carSeen && m_keptValid && m_startValid) {
-        const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
-        const float sx = car->position[0] - m_start[0], sy = car->position[1] - m_start[1], sz = car->position[2] - m_start[2];
-        if (dx * dx + dy * dy + dz * dz > 25.0f * 25.0f && sx * sx + sy * sy + sz * sz < 12.0f * 12.0f) clear();
+        const float dx = position[0] - m_kept[0], dy = position[1] - m_kept[1], dz = position[2] - m_kept[2];
+        const float sx = position[0] - m_start[0], sy = position[1] - m_start[1], sz = position[2] - m_start[2];
+        if (dx * dx + dy * dy + dz * dz > 25.0f * 25.0f && sx * sx + sy * sy + sz * sz < 12.0f * 12.0f) newRun(keepRuns);
+    }
+    // Fewer runs wanted (the setting lowered): the older ones go.
+    if (m_runs > keepRuns) m_runs = keepRuns;
+    m_count = std::min(m_count, m_written - m_runFirst[m_runs]);
+    // Another car taken up (the camera went to another, or the one followed was a ghost): a new
+    // line, none from the old car's place to the new one's.
+    if (carSeen && car->track != m_track) {
+        m_track = car->track;
+        m_break = true;
+        m_liveFrames = 0;
     }
     if (s.neonTrail <= 0.0f) {
         m_break = true;
@@ -114,51 +239,41 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     m_time += dt;
     m_clock += dt;
 
-    // Record the car: every frame into the next slot (the live end, so it stays on the car), kept
-    // 60 times a second while it moves, or every metre. A jump (a respawn) starts a new line; a
-    // frame without the car doesn't (it left holes).
-    bool live = false;
-    if (carSeen && dt > 0.0f) {
-        if (!m_startValid) {
-            memcpy(m_start, car->position, sizeof(m_start));
-            m_startValid = true;
-        }
-        if (m_keptValid) {
-            const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
-            const float jump = sqrtf(dx * dx + dy * dy + dz * dz);
-            if (jump > 25.0f) m_break = true;
-        }
-        const float stamp = m_time + 1.0f; // never 0 (= no car)
-        float* p = &m_points[m_head * 4];
-        memcpy(p, car->position, sizeof(float) * 3);
-        p[3] = m_break ? -stamp : stamp;
-        float moved = 0.0f;
-        if (m_keptValid) {
-            const float dx = car->position[0] - m_kept[0], dy = car->position[1] - m_kept[1], dz = car->position[2] - m_kept[2];
-            moved = sqrtf(dx * dx + dy * dy + dz * dz);
-        }
-        // Less than 30 cm from the last point (standing, shaking after a crash) is no line: those
-        // points pointed every way and fanned the tyre lines out around the car.
-        live = moved >= kMinStep || !m_keptValid;
-        if ((m_clock >= 1.0f / 60.0f && moved >= kMinStep) || moved >= 1.0f || !m_keptValid) {
-            m_clock = moved >= 1.0f ? 0.0f : fmodf(m_clock, 1.0f / 60.0f);
-            memcpy(m_kept, car->position, sizeof(m_kept));
-            m_keptValid = true;
-            m_break = false;
-            m_head = (m_head + 1) % kPoints;
-            if (m_count < kPoints) m_count++;
-            live = false;
-        }
-    }
+    const bool live = record(dt, carSeen ? position : nullptr, carSeen ? car->up : nullptr);
     const UINT points = live ? std::min(m_count + 1, kPoints) : m_count;
     const UINT next = live ? (m_head + 1) % kPoints : m_head;
     if (points < 2) return;
+    m_drawnPoints = points;
+    m_drawnNext = next;
 
-    ctx->UpdateSubresource(m_pointsTex, 0, nullptr, m_points.data(), kPoints * 16, 0);
+    // Only the slot written this frame (the whole ring was 256 KB a frame), all after a clear.
+    if (m_dirty == -2) {
+        ctx->UpdateSubresource(m_pointsTex, 0, nullptr, m_points.data(), kPoints * 16, 0);
+    } else if (m_dirty >= 0) {
+        const UINT slot = static_cast<UINT>(m_dirty);
+        for (UINT row = 0; row < 2; row++) {
+            const D3D11_BOX box = {slot, row, 0, slot + 1, row + 1, 1};
+            ctx->UpdateSubresource(m_pointsTex, 0, &box, &m_points[(row * kPoints + slot) * 4], 16, 0);
+        }
+    }
+    m_dirty = -1;
+    drawPoints(ctx, fx, s, *this, points, next);
+}
+
+void TrailStage::drawPoints(ID3D11DeviceContext* ctx, Effects& fx, const tmshaders::Settings& s, const TrailStage& from, UINT points,
+                            UINT next) {
+    ID3D11ShaderResourceView* pointsSrv = from.m_pointsSrv;
     TrailConstants c = {};
     c.trail[0] = static_cast<float>(points);
     c.trail[1] = static_cast<float>(next + kPoints);
-    c.trail[2] = m_time + 1.0f;
+    c.trail[2] = from.m_time + 1.0f;
+    // Earlier runs: where each began (a point stamped before it belongs to an older run; -1e30 =
+    // none kept) and their brightness, 0.6 for the last run down to 0.6 / n for the n-th.
+    float runs[8] = {-1e30f, -1e30f, -1e30f, -1e30f, -1e30f, 0.6f, 0.0f, 0.0f};
+    for (int k = 0; k < from.m_runs && k < kRunsMax; k++) runs[k] = from.m_runStart[k];
+    if (from.m_runs > 0) runs[6] = 0.6f / static_cast<float>(from.m_runs);
+    memcpy(c.runs, runs, sizeof(c.runs));
+    memcpy(c.runs2, runs + 4, sizeof(c.runs2));
     c.trail[3] = s.trailDuration;
     c.trail2[1] = s.trailWidth * 0.5f;
     c.trail2[2] = static_cast<float>(kPoints);
@@ -174,7 +289,7 @@ void TrailStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ctx->VSSetShader(m_vs, nullptr, 0);
     ctx->PSSetShader(m_ps, nullptr, 0);
-    ctx->VSSetShaderResources(0, 1, &m_pointsSrv);
+    ctx->VSSetShaderResources(0, 1, &pointsSrv);
     // Two lines from the rear tyres, or one from the middle of the car.
     const float offsets[2] = {s.trailTyres ? -0.75f : 0.0f, 0.75f};
     for (int line = 0; line < (s.trailTyres ? 2 : 1); line++) {

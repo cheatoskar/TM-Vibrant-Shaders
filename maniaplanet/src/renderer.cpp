@@ -10,6 +10,7 @@
 #include "shaders/PS_ToneMap.h"
 #include "shaders/VS_Full.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace tmvs_mp {
@@ -188,6 +189,8 @@ bool Renderer::init(ID3D11Device* device) {
     rd.CullMode = D3D11_CULL_NONE;
     rd.DepthClipEnable = TRUE;
     ok &= SUCCEEDED(device->CreateRasterizerState(&rd, &m_rs));
+    rd.ScissorEnable = TRUE;
+    ok &= SUCCEEDED(device->CreateRasterizerState(&rd, &m_rsScissor));
     D3D11_DEPTH_STENCIL_DESC dd = {};
     dd.DepthEnable = FALSE;
     dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
@@ -244,6 +247,7 @@ void Renderer::release() {
     safeRelease(m_linear);
     safeRelease(m_point);
     safeRelease(m_rs);
+    safeRelease(m_rsScissor);
     safeRelease(m_dss);
     safeRelease(m_blend);
     m_device = nullptr;
@@ -459,6 +463,27 @@ bool Renderer::ensureBloom(UINT width, UINT height) {
     return true;
 }
 
+Look splitSide(const Look& base, float at, bool left) {
+    Look l = base;
+    at = at < 0.01f ? 0.01f : (at > 0.99f ? 0.99f : at);
+    l.split = 0.0f; // no game's image: the other look draws the other side
+    l.line = at;
+    l.from = left ? 0.0f : at;
+    l.to = left ? at : 1.0f;
+    return l;
+}
+
+void Renderer::clipToSide(ID3D11DeviceContext* ctx, const Look& look, UINT width, UINT height) {
+    if (look.from <= 0.0f && look.to >= 1.0f) return;
+    const auto at = [width](float u) {
+        const float c = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+        return static_cast<LONG>(lroundf(c * static_cast<float>(width)));
+    };
+    const D3D11_RECT r = {at(look.from), 0, at(look.to), static_cast<LONG>(height)};
+    ctx->RSSetState(m_rsScissor);
+    ctx->RSSetScissorRects(1, &r);
+}
+
 void Renderer::pass(ID3D11DeviceContext* ctx, ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, UINT width, UINT height,
                     ID3D11ShaderResourceView* const* srvs, UINT srvCount, float texelX, float texelY, float z, float w) {
     ID3D11ShaderResourceView* none[7] = {};
@@ -505,6 +530,7 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
         frame.car = engine.car;
         frame.time = engine.time;
         frame.photo = engine.photo;
+        frame.driving = !engine.video;
         frame.focus[0] = engine.focus[0];
         frame.focus[1] = engine.focus[1];
         if (m_effects.scene(ctx, frame, s)) {
@@ -546,6 +572,7 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
         profiler.mark(ctx, kBloomUp);
     }
     ID3D11ShaderResourceView* srvs[4] = {hdr, exposure, bloomResult, game};
+    clipToSide(ctx, look, w, h);
     pass(ctx, m_toneMap, target, w, h, srvs, 4, 1.0f / hw, 1.0f / hh);
     profiler.mark(ctx, kFinal);
     profiler.end(ctx);
@@ -602,7 +629,7 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, c
     c.p3[1] = 1.0f / h;
     c.p3[2] = isSrgb(rd.Format) ? 1.0f : 0.0f;
     c.p3[3] = static_cast<float>(static_cast<int>(options.view));
-    c.p4[0] = look.split;
+    c.p4[0] = look.split != 0.0f ? look.split : look.line; // the line (mp.hlsl draws it at |p4.x|)
     c.p4[1] = views[kTexDepth] ? 1.0f : 0.0f;
     c.p4[2] = hdrDone ? 1.0f : 0.0f;
     if (engine.camera) {
@@ -616,6 +643,7 @@ bool Renderer::apply(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target, c
     ctx->UpdateSubresource(m_gradeCb, 0, nullptr, &c, 0, 0);
     ID3D11ShaderResourceView* srvs[7] = {m_copySrv, nullptr, views[kTexDepth], nullptr, views[kTexNormal], views[kTexMotion],
                                          views[kTexDiffuse]};
+    clipToSide(ctx, look, w, h);
     pass(ctx, m_grade, target, w, h, srvs, 7, 1.0f / w, 1.0f / h);
 
     ID3D11ShaderResourceView* none[8] = {};
