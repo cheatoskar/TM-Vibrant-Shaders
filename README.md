@@ -26,7 +26,7 @@ A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (Trac
 
 ## Install
 
-**Full installation guide: [docs/install.md](docs/install.md)** (Deutsch: [docs/INSTALL_DE.md](docs/INSTALL_DE.md)): ModLoader, setup, by hand, updating, uninstalling.
+**Full installation guide: [docs/install.md](docs/install.md)**: ModLoader, setup, by hand, updating, uninstalling.
 
 ### With the ModLoader: installs and updates itself
 
