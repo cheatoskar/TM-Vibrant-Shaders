@@ -768,14 +768,15 @@ LookInfo describeLook(const Settings& s) {
 }
 
 // The built-in presets: a line about each, and its GPU load as measured with the previewer
-// (--bench, Stadium start gate, 1080p: light < 7 ms, medium < 9 ms, heavy above).
+// (--bench, two race captures at 2560x1440 on a GTX 1080 Ti, 1.4.1: light < 5 ms, medium < 6.3 ms,
+// heavy above; docs/performance.md).
 struct BuiltInInfo {
     const char* name;
     const char* blurb;
     int cost;
 };
 const BuiltInInfo kBuiltIn[] = {
-    {"Vibrant", "The default. Warm sun, rich colours, glowing borders, light shafts.", 3},
+    {"Vibrant", "The default. Warm sun, rich colours, glowing borders, light shafts.", 2},
     {"Realistic", "The game's own colours and sky; only the light is new.", 2},
     {"Golden Hour", "Clear sky, low warm sun, long light shafts.", 3},
     {"Dreamy", "Soft pastel bloom, pink and teal.", 2},
@@ -784,7 +785,7 @@ const BuiltInInfo kBuiltIn[] = {
     {"Aurora", "Northern lights over the track, green and teal.", 3},
     {"Competition", "Clarity first: shadows and depth, no haze or lens effects.", 1},
     {"Performance", "The Vibrant look for weaker GPUs: fewer samples, no shafts.", 1},
-    {"Rainy", "Overcast, wet track, puddles and rain.", 2},
+    {"Rainy", "Overcast, wet track, puddles and rain.", 3},
     {"Replay Cinema", "Film look with motion blur and depth of field, for replays.", 3},
     {"Storm", "Low clouds, pouring rain, deep puddles, lightning and thunder.", 3},
     {"Snowstorm", "A blizzard: driving snow and thick haze close around you.", 2},

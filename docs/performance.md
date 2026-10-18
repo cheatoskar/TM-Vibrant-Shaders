@@ -2,66 +2,90 @@
 
 [Back to the README](../README.md)
 
+The mod lights every pixel again, so it costs real GPU time. TrackMania itself is light: a card that runs the bare game
+at 240 FPS lands at roughly a third of that with the shaders. All numbers here are for TrackMania Nations/United 1.4.1.
+
+## Measured: GTX 1080 Ti at 2560×1440
+
+Ryzen 5 3600, GTX 1080 Ti, the game's settings at maximum, in a race on Stadium:
+
+| | FPS | ms a frame |
+|---|---|---|
+| The game alone | ~240 | ~4.2 |
+| With the shaders (Vibrant and similar) | 70 – 90 | 11 – 14 |
+| With *Render scale (FSR)* 0.85 | ~85 | ~12 |
+
+Where the frame goes, from the `perf` line in `tmvs.log`: the mod's passes ~6 ms, the game drawing its 3D scene ~2.5 – 3 ms,
+the rest (the game's shadow maps, the HUD, waiting for the CPU) ~3.3 ms.
+
+## Presets
+
+GPU time of the mod's passes per preset, GTX 1080 Ti at 2560×1440 (previewer, two of the owner's race captures, 200 frames,
+best of two runs). In the game add about 6 ms for the game itself and the copies around the passes:
+
+| Preset | Passes | FPS in a race (about) |
+|---|---|---|
+| Performance | 3.3 ms | ~105 |
+| Competition | 4.8 ms | ~90 |
+| Realistic, Dreamy, Neon | 5.5 – 5.6 ms | ~85 |
+| Vibrant, Snowstorm | 5.7 – 6.2 ms | ~80 |
+| Golden Hour, Rainy, Aurora, Storm | 6.3 – 6.9 ms | ~75 – 80 |
+| Replay Cinema (replays) | 7.0 – 7.2 ms | ~75 |
+| Horizon | 6.4 – 8.4 ms (more with the black hole on screen) | ~70 – 80 |
+
+The menu's three dots on each preset card follow this: one dot under 5 ms, two under 6.3 ms, three above.
+
+## Other graphics cards
+
+Not measured, worked out from the 1080 Ti: the mod's time grows with the pixel count (1080p is 56 % of 1440p) and with
+how much slower the card is. Expect ±20 %; the CPU, the map and the preset move it.
+
+| GPU | 1080p, Vibrant | 1440p, Vibrant | 1080p, Performance |
+|---|---|---|---|
+| Intel Iris Xe (laptop) | ~25 | | ~35 |
+| GTX 1050, Radeon 780M, Intel Arc 140V | 40 – 55 | | 55 – 70 |
+| GTX 1060 6 GB, RX 580 | ~70 | ~45 | ~90 |
+| RTX 3060 | ~105 | ~75 | ~130 |
+| GTX 1080 Ti | ~120 | **70 – 90 (measured)** | ~145 |
+| RTX 4070 | ~145 | ~110 | ~170 |
+
+At 4K expect about 2.2 times the mod's time of 1440p. *Render scale (FSR)* at 0.67 roughly halves it (see below).
+
 ## Hardware
 
 | | GPUs | Settings |
 |---|---|---|
-| Minimum | Shader Model 3.0: GTX 750, HD 7750, Intel UHD 620 | *Performance* preset, *Effect quality: Low* |
-| Recommended | GTX 1060, RX 580, Radeon 780M, Intel Arc 140V | Any preset at 1080p |
-| Everything on, 1440p and up | RTX 3060, GTX 1080 Ti and faster | |
+| Minimum | GTX 1050, Radeon 780M, Intel Arc 140V | 1080p, *Performance* preset, *Render scale (FSR)* 0.67 |
+| 60 FPS and more at 1080p | GTX 1060, RX 580 | Any preset |
+| 1440p | GTX 1080 Ti, RTX 3060 (70 – 90 FPS) | Any preset |
+| 120 FPS and more at 1440p | RTX 4070 Ti and faster | Any preset |
 
-## What it costs
-
-Time the shaders add per frame at 1920×1080, looking into the sun (the worst case):
-
-| GPU | Game without shaders | Performance | Vibrant | Replay Cinema |
-|---|---|---|---|---|
-| Intel Iris Xe (laptop) | ~90 FPS | 10.0 ms, ~45 FPS | 17.0 ms, ~35 FPS | 23.5 ms, ~30 FPS |
-| GTX 1050 | ~200 FPS | 8.4 ms, ~75 FPS | 14.3 ms, ~50 FPS | 19.7 ms, ~40 FPS |
-| Radeon 780M (laptop) | ~160 FPS | 5.2 ms, ~85 FPS | 8.9 ms, ~65 FPS | 12.3 ms, ~55 FPS |
-| **Intel Arc 140V (measured)** | ~115 FPS | 3.7 ms, ~80 FPS | 6.3 ms, ~65 FPS | 8.7 ms, ~55 FPS |
-| GTX 1060 6 GB / RX 580 | ~300 FPS | 3.6 ms, ~145 FPS | 6.1 ms, ~105 FPS | 8.4 ms, ~85 FPS |
-| RTX 3060 | ~400 FPS | 1.8 ms, ~235 FPS | 3.0 ms, ~180 FPS | 4.1 ms, ~150 FPS |
-| GTX 1080 Ti | ~400 FPS | 1.6 ms, ~245 FPS | 2.6 ms, ~195 FPS | 3.7 ms, ~160 FPS |
-| RTX 4070 | ~450 FPS | 0.9 ms, ~320 FPS | 1.5 ms, ~270 FPS | 2.1 ms, ~230 FPS |
-
-Only the Arc 140V row is measured. The others are estimates: the measured shader time scaled by each card's relative speed, on top of a typical frame rate for the bare game. CPU, drivers and the map change the numbers. At 1440p expect about 1.8× the shader time, at 4K about 4×.
-
-Most presets cost about as much as Vibrant. Storm costs about 20% more, Golden Hour and Horizon (custom skies) about 40% more, Aurora roughly twice as much.
+Any GPU with Shader Model 3.0 runs the mod; below the minimum it starts, but the frame rate is low.
 
 ## Where the time goes
 
-Approximate cost of single settings on the Arc 140V:
+The passes of Vibrant at 2560×1440 on the GTX 1080 Ti (6.1 ms in all):
 
-| Setting | Cost |
-|---|---|
-| Volumetric clouds | 1.5 ms |
-| Light shafts (sun on screen) | 1.1 ms |
-| Long-range shadows | 0.8 ms |
-| Temporal anti-aliasing | 0.7 ms |
-| Reflections (wet or dry track) | 0.5 – 1 ms |
-| Rain (particles and wet surfaces) | 0.5 – 1 ms |
-| Volumetric light | 0.3 ms |
-| Bounce light | 0.25 ms |
-| Depth of field (replays only by default) | 2 ms |
-| Effect quality High → Low | saves about 1 ms |
-
-Your own numbers are in the menu: the **Performance** page shows the time of every effect on your GPU, measured live, and how many FPS you would gain by switching it off.
-
-## Measured: GTX 1080 Ti at 2560×1440
-
-Ryzen 5 3600, GTX 1080 Ti, the game's settings at maximum: the game alone runs at ~240 FPS, with the
-shaders at 75–80 FPS. The mod is GPU-bound there: its passes take ~6–7 ms, the game's own frame ~4 ms.
-
-GPU time of the mod's passes (previewer, 200 frames, same captures and settings, median of 3 runs):
-
-| Build | Golden Hour (day) | Horizon (night) |
+| Effect | Cost | Note |
 |---|---|---|
-| 1.4.0 checkpoint of Oct 16 (4a99b42) | 5.96 ms | 6.22 ms |
-| Now, *Game normals* (GameGBuffer) off | 6.29 ms | 6.37 ms |
-| Now, GameGBuffer on | 7.21 ms | 6.71 ms |
+| Lighting (sun, shadows, neon light, the look) | 1.3 ms | 2.1 ms with rain and wet roads (Storm) |
+| Ambient occlusion and contact shadows | 0.9 ms | fewer samples with *Effect quality* Low |
+| Neon glow and the light it throws on walls | 0.9 ms | |
+| Reflections | 0.5 ms | 0.7 ms on a wet track |
+| Bounce light | 0.45 ms | |
+| Colour grade, bloom, tone curve | 0.4 ms | |
+| Edge smoothing (SMAA) and TAA | 0.5 ms | |
+| Clouds | 0.3 ms | volumetric clouds more |
+| Volumetric light | 0.25 ms | |
+| Light shafts | up to 0.5 ms | only with the sun on screen |
+| Depth of field | ~2 ms | replays and photo mode by default |
 
-What single settings cost there (Golden Hour):
+Your own numbers are in the menu: the **Performance** page shows the time of every effect on your GPU, measured live, and
+how many FPS you would gain by switching it off.
+
+## Single settings
+
+What single settings add on the GTX 1080 Ti at 1440p (Golden Hour):
 
 | Setting | GPU | Note |
 |---|---|---|
@@ -72,10 +96,6 @@ What single settings cost there (Golden Hour):
 | CleanWater | ≤ 0.1 ms | |
 | CasterShadows | ~0 ms to sample | drawing the maps: in game only, see the log line below |
 | CasterAlphaTest | ~0 ms to sample | drawing fences and grids into the maps: ~1 µs of GPU and ~0.3 µs of CPU more per mesh than a solid one (`tmvs_castertest --rebuild`) |
-
-The most expensive passes: the lighting (1.4 ms), reflections (0.5–1.4 ms), the custom sky of Golden Hour
-or Horizon (0.8–1.0 ms), the final grade (0.4 ms), light shafts (0.5 ms), AO and shadows (0.3–0.6 ms), TAA
-(0.3 ms).
 
 CPU: CasterShadows looked at every draw of the main camera every frame, 1–11 ms of the game's render thread
 (10.7 ms on a big Stadium map with 8000 draws a frame). Since 1.4.0 it checks at most ~700 draws a frame and
@@ -99,9 +119,9 @@ passes included: 0.24 ms to upscale, 0.08 ms to sharpen):
 
 The game's own drawing gets cheaper too, but less than in proportion: its pixels shrink with the scale (0.67: 45 % of
 them), its draw calls, vertices and shadow maps don't, nor (Stadium by day) the full-size depth pass for its shadow mask.
-Not measured yet; at 0.67 expect its ~4 ms (the perf line's
-*game 3D*) to drop to about 2 – 3 ms. On the GTX 1080 Ti at 1440p that would take the frame from ~12.8 ms (~78 FPS) to
-roughly 8 – 9 ms at 0.77 and 7 – 8 ms at 0.67, until the CPU becomes the limit.
+In a race on the GTX 1080 Ti at 1440p, 0.85 gave ~84 FPS
+against ~81 at full size: the GPU saves about 1 ms, but the game's own drawing calls (~3.4 ms of CPU) set a floor, so the
+frame rate rises less than the GPU time falls. Lower scales help more where the graphics card is clearly the limit.
 
 What it costs in the picture: fine detail, text on signs and thin lines get softer (0.77 little, 0.5 clearly); small
 lights far away can lose some of their glow. *FSR sharpening* (`FsrSharpness`) sets how much is sharpened back.
@@ -125,13 +145,14 @@ Every 2000 frames in a race `tmvs.log` gets a line like
 
 ## Auto quality
 
-On by default. It watches the frame rate and, when it stays below the target FPS, steps down in three levels:
+On by default. When the frame rate stays below the target FPS, it measures what each effect costs on your GPU and turns
+off just enough of them, the ones that cost the most for the least look first (volumetric light, bounce light, samples,
+reflections, clouds, TAA, edge smoothing, depth of field, lens flare, sharpening). The light shafts, the neon light and the
+long shadows always stay. An effect stays off at least 20 s and comes back once there is room for it again.
 
-1. Fewer samples (AO, shadows, clouds, long shadows); track reflections no higher than 1.
-2. Long shadows, grass detail, reflections, volumetric light and bounce light off.
-3. TAA, neon light, light shafts, volumetric clouds, depth of field, motion blur, lens flare and sharpening off.
-
-When there's room again it steps back up. It never changes your settings or presets: it works on a copy. It also stays out of the way when the effects aren't the bottleneck (CPU limit, vsync). The current level is shown at the top of the menu.
+It never changes your settings or presets, it decides nothing in the first 20 s after a map start, a loading screen,
+alt-tab or photo mode, and it stays out of the way when the effects aren't the limit (CPU, vsync). The menu shows which
+effects are off right now. Details: [settings.md](settings.md) (*Auto quality*).
 
 ## Getting FPS back
 
@@ -141,5 +162,5 @@ When there's room again it steps back up. It never changes your settings or pres
 - Switch off volumetric clouds and light shafts first, then long-range shadows and TAA.
 - In the game's own options: antialiasing off (the mod does it anyway), FX post-processing off.
 - Keep the **target FPS** of auto quality at a rate your PC reaches with the shaders (e.g. 75 on a GTX 1080 Ti
-  at 1440p). A target it never reaches (240) keeps it switching effects off and on every few seconds.
+  at 1440p). A target it can't reach even with everything off (240) does nothing: auto quality only acts where it can get there.
 - *Game normals* (GameGBuffer) costs ~1 ms and more in the game itself: leave it off unless you want its look.
