@@ -16,7 +16,7 @@
 
 A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
-**[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
+**[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Share a look](#your-own-presets-and-sharing-them) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
 
 **New in 1.4.1: TrackMania 2 (ManiaPlanet 4).** The same mod for ManiaPlanet's Direct3D 11 renderer: download `TM-Vibrant-Shaders.zip` from the [release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases) (one zip for both games), close the game, run `TM-Vibrant-Shaders-Setup.exe`. `F8` menu, `F5` on/off. Details in [maniaplanet/README.md](maniaplanet/README.md).
 
@@ -98,7 +98,19 @@ By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `M
 | **Competition** | Clarity first: AO and contact shadows, no haze or lens effects. |
 | **Performance** | Vibrant with the expensive parts off. |
 
-By default the mod picks **Vibrant** on day maps, **Golden Hour** on sunset maps and **Horizon** on night maps. Change it on the *Maps* page of the menu, or right-click a preset. Every sky works with every preset. Change any value and the preset becomes *Custom*; save it under your own name with the *+* card under *Your presets* (the game behind the menu becomes its picture).
+By default the mod picks **Vibrant** on day maps, **Golden Hour** on sunset maps and **Horizon** on night maps. Change it on the *Maps* page of the menu, or right-click a preset. Every sky works with every preset.
+
+### Your own presets and sharing them
+
+**Make one:** start from the preset closest to what you want and change it in *Customize* or *Studio* (it shows as *Custom* now). Then click the **+** card under *Your presets* and give it a name. The game behind the menu becomes its picture. Right-click your card to edit the description, update the picture or delete it.
+
+**Share it:**
+
+- **As text:** on the *Shaders* page, **Copy share code** puts the look on the clipboard as one line starting with `TMVS1:`. Post it in Discord or wherever. The other person copies the message and presses **Paste share code**; the look is then active as *Custom*, and the **+** card saves it. The code works between Nations/United and TrackMania 2.
+- **As files:** a preset is `<Name>.ini` plus `<Name>.jpg` in `Documents\TrackMania\TMVS\presets\` (**Open the presets folder** in the menu takes you there). Send both files; dropped into the same folder, they show up in the list straight away.
+- **In a map:** the look travels with the map, see [Author's Shader](#authors-shader).
+
+Settings that belong to your PC (render scale, auto quality, TAA jitter, video export, hotkeys) are never part of a shared look; everyone keeps their own. More in [docs/settings.md](docs/settings.md#share-a-preset-as-text).
 
 ---
 
