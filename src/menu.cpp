@@ -255,6 +255,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it
     if (is("TargetFPS")) return s.autoQuality;
     if (is("FsrSharpness")) return s.renderScale < 0.99f;
+    if (is("Sharpen")) return s.renderScale >= 0.99f; // FSR sharpening takes its place while scaled
     if (is("TAAJitter")) return s.taa;
     if (is("SMAA")) return s.fxaa;
     if (!strncmp(f.key, "Trail", 5)) return s.neonTrail > 0.0f;
@@ -397,7 +398,7 @@ const char* tooltipFor(const char* key) {
         {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, wherever the replay camera puts it; the middle again while the car is off screen. A click in the photo mode still wins."},
         {"TAA", "Smooths edges by blending frames. Costs a little sharpness."},
         {"TAAJitter", "Shifts the image by sub-pixels each frame for finer edges."},
-        {"Sharpen", "Contrast-adaptive sharpening (CAS)."},
+        {"Sharpen", "Contrast-adaptive sharpening (CAS). With Render scale (FSR) below 1.00, FSR sharpening takes its place."},
         {"AutoQuality", "Below the target FPS it switches off the effects that cost most for least look, and back on when there is room. The light shafts, the neon light and the long shadows always stay. Your settings stay as they are."},
         {"TargetFPS", "The frame rate auto quality aims for."},
         {"RenderScale", "Draws the game's 3D image and every effect at this fraction of your screen's resolution and scales it back up with AMD FSR 1 before the HUD, which stays sharp. 1.00 is off. 0.77 costs a little sharpness, 0.67 more, for clearly more FPS when the graphics card is the limit. Photo mode, captures and the video export always use the full resolution. Needs Game HDR."},
@@ -1472,6 +1473,8 @@ bool drawStudio(Config& config, Settings& s) {
                                       if (!relevant && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                                           ImGui::SetTooltip("%s", !strcmp(g.key, "FsrSharpness")
                                                                       ? "FSR runs only with Render scale (FSR) below 1.00: set that first"
+                                                                  : !strcmp(g.key, "Sharpen")
+                                                                      ? "Render scale (FSR) is below 1.00: FSR sharpening sharpens instead"
                                                                       : "No effect with the current settings");
                                       }
                                   }

@@ -36,6 +36,7 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - *Picked preset applies to all maps of this type* is off: a preset you pick holds on every map until you choose presets per map type again on the *Maps* page.
 
 **Fixed**
+- *Sharpening* is greyed out while *Render scale (FSR)* is below 1.00: FSR's own sharpening (*FSR sharpening*) takes its place then, so the slider did nothing.
 - *Real night* (and every look with *Game HDR*): the replay after a race is lit like the race. Its 3D view sits between the replay menu's bars, and the mod shaded that part of the screen from the game's 8-bit image instead of its light: A01's replay came out golden, the race at night. The MediaTracker editor's view gets the same.
 - Neon border glow (*Game light sources*, *Neon strip glow*): which pixels glow is now decided by the game's material (the road borders' and curbs' textures), not by their colour. Blue floors outside the stadium, lane paint and the blue letters of the start banner no longer glow from far away or at some angles, and the dark bars and spots on wide blue curbs are gone; the strips glow as before. Where the mod can't read the materials, each pixel's colour decides as before.
 - Neon border glow on wide blue curbs: the stretch just in front of the car glowed in patches with darker spots between them. The game's own sheen makes the curb paler there, and the worn spots in its texture fell out of the glow. The curb now glows evenly up to the car; thin strips are unchanged.
