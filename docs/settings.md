@@ -60,7 +60,7 @@ For a chat (Discord and the like) instead of two files: on the *Shaders* page, u
 - The code holds every setting of the look that differs from the defaults, not the settings of the installation (the same ones a preset leaves out, see above). It reads the same in TrackMania Nations/United and in TrackMania 2: the preset it was made from can differ between the games, the look that arrives does not.
 - **Paste share code** reads the clipboard (a chat message with the code in it works, so does a code broken over lines) and makes the look yours, unsaved: the preset becomes *Custom* on top of the built-in preset it is closest to, and *Save as preset* keeps it. Nothing saved is replaced, built-in presets never. A code that is exactly a built-in preset selects that preset.
 - The line under the buttons says what happened: `Loaded 37 settings, 2 unknown ignored`. Unknown keys (a newer version's, or ones this game doesn't have) and unreadable values are ignored and counted, values outside a setting's range are moved into it (*out of range*), and a code that is no code (empty clipboard, no text, damaged, a newer code version) says so and changes nothing.
-- A code is built against the Settings defaults of its version (`TMVS1`). If a default ever changes, the version goes up and old codes keep reading as before.
+- A code is built against the Settings defaults of its version (`TMVS1`). When a default changes, old codes keep reading as before: the code keeps the old value as its base (*Sharpening* 0.35, the default before 1.4.1) or the version goes up.
 
 ## Author's Shader
 
