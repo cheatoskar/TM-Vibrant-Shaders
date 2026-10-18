@@ -48,7 +48,7 @@ Liegt das Spiel unter *Programme*, fragt Windows nach Admin-Rechten. Warnt Windo
 - **Mit ModLoader:** Den Ordner `TM Vibrant Shaders` aus der ZIP nach `%LOCALAPPDATA%\TMLoader\database\TmForever\products\` kopieren (in die Adresszeile des Explorers einfügen) und die Mod im ModLoader anhaken.
 - **Ohne ModLoader:** `TM Vibrant Shaders\<Version>\TMVibrantShaders.dll` neben die `TmForever.exe` kopieren und in **`d3d9.dll`** umbenennen.
 
-Nur einen der beiden Wege nutzen. Eine andere `d3d9.dll` (zum Beispiel ReShade) kann nicht gleichzeitig im selben Spielordner liegen.
+Nur einen der beiden Wege nutzen. Eine andere `d3d9.dll` (zum Beispiel ReShade) kann nicht gleichzeitig im selben Spielordner liegen. Mit anderen ModLoader-Mods läuft der Mod zusammen, auch mit dem Tacho-Mod CenterSpeed: Dann öffnet `F5` das Menü, weil CenterSpeed `F8` belegt.
 
 ## TrackMania 2 (ManiaPlanet 4)
 
@@ -68,7 +68,7 @@ Dieselbe ZIP enthält eine `d3d11.dll` für ManiaPlanets Direct3D-11-Renderer (n
 
 | Taste | Funktion |
 |---|---|
-| `F8` | Menü öffnen oder schließen |
+| `F8` | Menü öffnen oder schließen (`F5`, wenn CenterSpeed geladen ist) |
 | `F7` | Shader an/aus (Vorher/Nachher); in TrackMania 2 `F5`, dort ist `F7` die Freundesliste |
 | `F12` | Screenshot und Frame-Capture speichern (für Fehlerberichte) |
 | `F6` | Fotomodus an/aus (geht mit der freien Kamera, Cam 7, von selbst an): kein HUD, volle Qualität. Darin speichert `F12` ein Foto ohne HUD (`photo_NNN.png`), `Shift+F12` ein größeres aus Kacheln (Replay vorher pausieren), Mittelklick setzt den Fokus, `Strg`+Mausrad die Unschärfe, `Shift`+Mausrad zoomt (bis 8x), `Shift+F6` teilt das Bild zum Vergleich: Spiel ohne und mit Mod (Linie mit `Strg`+`Shift`+Mausrad verschieben) |
@@ -76,7 +76,7 @@ Dieselbe ZIP enthält eine `d3d11.dll` für ManiaPlanets Direct3D-11-Renderer (n
 - **Shaders:** Alle Presets als Karten mit Bild und GPU-Last. Mit der Maus kurz auf einer Karte bleiben zeigt den Look direkt im Spiel, Klick übernimmt ihn. **Customize:** Himmel, Look und Wetter, dazu Farblooks aus `.cube`-LUT-Dateien (Ordner `Dokumente\TrackMania\TMVS\luts`). **Studio:** jede Einstellung. **Maps:** Preset pro Map-Stimmung, Author's Shader. **Performance:** Auto Quality und was jeder Effekt kostet.
 - **Presets:** Vibrant, Realistic, Golden Hour, Dreamy, Neon, Horizon, Aurora, Rainy, Storm, Snowstorm, Replay Cinema, Competition, Performance.
 - **Preset pro Map-Stimmung:** Standardmäßig Vibrant auf Tag-Maps, Golden Hour bei Sonnenuntergang, Horizon nachts. Auf der Seite *Maps* änderbar, oder per Rechtsklick auf ein Preset.
-- **Eigene Presets:** Werte ändern, dann die *+*-Karte unter *Your presets*: Name und, wenn du willst, eine Zeile Beschreibung eingeben. Das Spiel hinter dem Menü wird das Vorschaubild. Rechtsklick auf die Karte: Beschreibung ändern, neues Bild, löschen. Ein Preset sind zwei Dateien in `Dokumente\TrackMania\TMVS\presets\`: `<Name>.ini` und `<Name>.jpg`. Zum Weitergeben beide Dateien schicken; *Open the presets folder* öffnet den Ordner. Neue Dateien dort erscheinen ohne Neustart. Presets sind Textdateien in `Dokumente\TrackMania\TMVS\presets\` und lassen sich weitergeben.
+- **Eigene Presets:** Werte ändern, dann die *+*-Karte unter *Your presets*: Name und, wenn du willst, eine Zeile Beschreibung eingeben. Das Spiel hinter dem Menü wird das Vorschaubild. Rechtsklick auf die Karte: Beschreibung ändern, neues Bild, löschen. Ein Preset sind zwei Dateien in `Dokumente\TrackMania\TMVS\presets\`: `<Name>.ini` und `<Name>.jpg`. Zum Weitergeben beide Dateien schicken; *Open the presets folder* öffnet den Ordner. Neue Dateien dort erscheinen ohne Neustart. Einen Look kannst du auch als eine Zeile Text teilen: *Copy share code* auf der Seite *Shaders*, beim anderen *Paste share code*.
 - **Alles wird automatisch gespeichert**, in `Dokumente\TrackMania\TMVS\`.
 
 ## Empfohlene Spieleinstellungen
@@ -87,7 +87,7 @@ Im TrackMania-Launcher unter *Erweitert*: **Kantenglättung aus** (der Mod schal
 
 | Problem | Lösung |
 |---|---|
-| Kein Menü mit `F8` | Mod nicht geladen: im ModLoader angehakt? Liegt die `d3d9.dll` im Ordner des Spiels, das du startest? |
+| Kein Menü mit `F8` | Mit CenterSpeed öffnet `F5` das Menü. Sonst ist der Mod nicht geladen: im ModLoader angehakt? Liegt die `d3d9.dll` im Ordner des Spiels, das du startest? |
 | Menü da, aber keine Effekte | *Enabled* anhaken (`F7`). Steht im Menü eine rote Meldung, in `Dokumente\TrackMania\TMVS\tmvs.log` nach Zeilen mit `depth:` schauen. |
 | Effekte liegen über dem HUD | Unbekannte Spielversion. Unterstützt sind TMNF und TMUF 2.11.26. |
 | Kein Regen- oder Donner-Sound | Nur bei Regen oder Blitzen, im Rennen und wenn das Spiel im Vordergrund ist. Lautstärke im Menü (*Rain & thunder sound*, bis 2) und im Windows-Lautstärkemixer (*TmForever*). Die Sound- und Musikregler im Spiel wirken nicht darauf. |

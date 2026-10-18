@@ -16,7 +16,7 @@ There are two ways to load the mod. Use one of them, not both.
 |---|---|---|
 | How it loads | The ModLoader injects the mod when it starts the game | Windows loads `d3d9.dll` from the game folder; the mod passes every Direct3D call on to the real one |
 | Switch it off | Untick it in the ModLoader profile | `F7` in game, or uninstall |
-| Other mods | Combines with other ModLoader mods | Can't share the folder with another `d3d9.dll` (ReShade and similar) |
+| Other mods | Combines with other ModLoader mods, CenterSpeed included (the menu moves to `F5` then) | Can't share the folder with another `d3d9.dll` (ReShade and similar) |
 | Start the game | Through the ModLoader | As usual, launcher or desktop shortcut |
 | Good for | People who already use the ModLoader | Everyone else |
 

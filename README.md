@@ -70,11 +70,11 @@ By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `M
 | **Weather** | Rain as particles that streak with the camera, splashes, ripples, streams down walls, drops on the lens. Wet roads and puddles with reflections. Thunderstorms with lightning bolts and flashes. Spray behind the car. |
 | **Snow** | Falling snow up to a blizzard, flakes on the lens, snow on the ground in piles and drifts or as a closed blanket, sparkling in the sun. Your car keeps its paint and throws up powder snow. A wind sound for the storm. |
 | **Sound** | Rain and thunder from real recordings, wind in a snow storm: a rain loop that follows the rain amount and ten different thunders, from close cracks to far rumbles. Each strike sounds a little different and comes from the side of the flash. |
-| **Water** | Pools, rivers and the TMUF seas get waves, refraction and reflections. The mod takes the water height from the game, so nothing else turns into water. |
+| **Water** | Pools, rivers and the TMUF seas get waves, refraction and reflections, with the stands and ramps around a pool mirrored in it. The mod knows water by the game's own water surface, so dirt, grass or roads at the same height stay what they are. |
 | **Sky** | Volumetric clouds. Clear sky, starry night with shooting stars, aurora, a black hole that bends light and lights the scene, and the Ring World: Saturn, Jupiter, an ice giant or an exotic planet, seen from far away, next to the rings or right above them. Night skies work on day maps. |
-| **Camera** | HDR bloom, auto exposure, filmic tone curve, colour looks from `.cube` LUT files. SMAA or FXAA, temporal anti-aliasing, AMD CAS sharpening. Motion blur and depth of field that switch on by themselves in replays and the video export. |
+| **Camera** | HDR bloom, auto exposure, filmic tone curve, colour looks from `.cube` LUT files. SMAA or FXAA, temporal anti-aliasing, AMD CAS sharpening, a render scale with AMD FSR 1 upscaling. Motion blur and depth of field that switch on by themselves in replays and the video export. |
 | **Extras** | A neon light trail behind your car for the whole run. Track reflections up to a mirror finish. Grass detail and mowing stripes. |
-| **Comfort** | `F8` menu with a gallery of every preset: a picture of each, its GPU load, and a live preview in the game while you point at it. *Customize* for the main settings, *Studio* for every setting in panels side by side, with a search box and a reset arrow for every changed setting. The menu tells you when a new version is out (one request to GitHub per game start, can be switched off). Auto quality holds your frame rate. A live per-effect cost panel. A preset per map mood (day, sunset, night). Your own presets as shareable text files. Map authors can ship a look inside their map ([Author's Shader](#authors-shader)). |
+| **Comfort** | `F8` menu with a gallery of every preset: a picture of each, its GPU load, and a live preview in the game while you point at it. *Customize* for the main settings, *Studio* for every setting in panels side by side, with a search box and a reset arrow for every changed setting. The menu tells you when a new version is out (one request to GitHub per game start, can be switched off). Auto quality holds your frame rate. A live per-effect cost panel. A preset per map mood (day, sunset, night). Your own presets as files, or any look as one line of text to paste into a chat (*Copy share code*). Map authors can ship a look inside their map ([Author's Shader](#authors-shader)). |
 
 ![Day: original and Golden Hour](docs/images/compare-day.jpg)
 
@@ -133,7 +133,7 @@ Default keys; every one can be changed in the menu (*Settings* → *Hotkeys*, [d
 
 | Key | Action |
 |---|---|
-| `F8` | Open or close the menu |
+| `F8` | Open or close the menu (`F5` when CenterSpeed is loaded) |
 | `F7` | Shaders on or off, for a before/after look |
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
 | `Ctrl+F9` | Reload the shaders (development). Not `F9`: that opens the menu of the 100% TMX mod. Hotkeys only react while the game window is in front |
@@ -152,7 +152,7 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 - **Comfortable at 1080p:** GTX 1060, RX 580, Radeon 780M, Intel Arc 140V.
 - **Everything on at 1440p:** RTX 3060, GTX 1080 Ti and faster.
 
-**Auto quality** is on by default. It turns the effect quality down when your frame rate drops below the target and back up when there is room, without touching your settings. The *Performance* section in the menu shows what each effect costs on your GPU, live. Measured numbers and the most expensive settings: **[docs/performance.md](docs/performance.md)**.
+**Auto quality** is on by default. When your frame rate drops below the target it turns off the effects that cost the most on your GPU, only as many as it has to, and brings them back when there is room. Your settings stay as they are. On a weak GPU, *Render scale (FSR)* at 0.77 or 0.67 is another way to more FPS. The *Performance* section in the menu shows what each effect costs on your GPU, live. Measured numbers and the most expensive settings: **[docs/performance.md](docs/performance.md)**.
 
 ---
 
@@ -165,6 +165,7 @@ Settings, presets and the log live in `Documents\TrackMania\TMVS\`. Everything i
 | TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) |
 | TrackMania Nations ESWC, Trackmania (2020) | No |
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
+| CenterSpeed (speedometer) | Yes. With both loaded, this mod's menu opens with `F5` (CenterSpeed uses `F8`) |
 | Other `d3d9.dll` mods (ReShade and similar) | Not as `d3d9.dll` in the same game folder. Together with the ModLoader install: untested |
 | Windows | 10 and 11 |
 
