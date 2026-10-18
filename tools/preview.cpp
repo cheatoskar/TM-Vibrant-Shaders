@@ -623,8 +623,16 @@ int main(int argc, char** argv) {
                     uint8_t kind[2] = {};
                     uint32_t draws = 0;
                     uint16_t length = 0;
-                    ok = fread(kind, sizeof(kind), 1, f) == 1 && fread(&draws, sizeof(draws), 1, f) == 1 && fread(&length, sizeof(length), 1, f) == 1 &&
-                         fseek(f, length, SEEK_CUR) == 0;
+                    std::string name;
+                    ok = fread(kind, sizeof(kind), 1, f) == 1 && fread(&draws, sizeof(draws), 1, f) == 1 && fread(&length, sizeof(length), 1, f) == 1;
+                    if (ok) {
+                        name.resize(length);
+                        ok = length == 0 || fread(&name[0], 1, length, f) == length;
+                    }
+                    // Captures from before the dirt class: the Soil shaders are dirt (as
+                    // engine::classify).
+                    const size_t slash = name.substr(0, name.find(" | ")).find_last_of("\\/");
+                    if (kind[0] == 0 && slash != std::string::npos && name.compare(slash + 1, 4, "Soil") == 0) kind[0] = Pipeline::kDirtClass;
                     classes[i + 1] = kind[0];
                     texturesRead = texturesRead || (kind[1] & 4) != 0;
                 }
@@ -638,7 +646,7 @@ int main(int argc, char** argv) {
                     for (size_t i = 0; i < ids.size(); i++) {
                         const int k = classes[ids[i]];
                         const uint32_t notNeon = c->neonMaterials && k != Pipeline::kNeonClass ? Pipeline::kNotNeonG : 0u;
-                        const uint32_t r = k == 1 ? 255u : 0u, g = k == 2 ? 255u : (k == 3 ? 128u : (k == 4 ? 64u : notNeon)), b = k == 5 ? 255u : 0u;
+                        const uint32_t r = k == 1 ? 255u : 0u, g = Pipeline::classG(k, notNeon), b = k == 5 ? 255u : 0u;
                         texels[i] = (r << 16) | (g << 8) | b;
                     }
                     c->materials = upload(device, c->cap.width, c->cap.height, D3DFMT_A8R8G8B8, texels);

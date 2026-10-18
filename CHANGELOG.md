@@ -49,6 +49,8 @@ The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and 
 - *Game HDR*: no huge white blobs over the sky on some day maps (B13) after a while on the map.
 - Water: a clear mirror instead of blotches of the ramps over it, the sky you picked in the reflection, the United Island sea gets waves; roads at Rally's sea level and Stadium dirt at water height are no longer water.
 - Water: the stands, floodlight masts, gates and ramps across a pool are mirrored in it (*Far water reflections*). The reflection used to end 40 to 120 m out and showed the plain sky where they stood.
+- Stadium dirt (dirt roads, dirt platforms) is never water any more: on maps without water, ruts and dirt blocks at the water blocks' height got the water shader (blue ripples and a mirror). With the game's materials (*Game materials*) water now only comes from the game's water surface itself.
+- Smooth dirt no longer mirrors the walls like wet glass when it lies in shadow: the dry track's reflection (*Reflections*) now knows dirt by the game's material instead of by its brown colour, which shade turned grey.
 - Water with *TAA* and *TAA jitter*: the water and what it mirrors no longer tremble. Its reflection's sample pattern changed every frame, and on water TAA kept half of each new frame: the edges of the mirror images and the pool's far rim lit and went out from frame to frame. The pattern now stays put on the water, and with the camera (nearly) still TAA keeps more of the history there; driving, it is as before.
 - Long shadows: no bright boxes around the car under a low light, smooth edges, no grain without TAA.
 - TAA no longer leaves see-through copies behind the car; the car's bounce light no longer trails behind it.

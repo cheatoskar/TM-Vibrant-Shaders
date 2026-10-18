@@ -856,6 +856,8 @@ bool nodFilePath(const void* nod, wchar_t* out, size_t size);
 //   Vehicles\...Glass               car windows
 //   Vehicles\...                    the cars
 //   Grass ...                        grass
+//   Soil ...                         the terrain's dirt (Stadium: SoilGen21, SoilFix, SoilFixToGen21:
+//                                    the dirt ground, platforms and dirt roads)
 //   ...Sea... / ...Water...          the sea and other engine water (not in the menus)
 Material classify(const wchar_t* path) {
     const wchar_t* file = wcsrchr(path, L'\\');
@@ -868,6 +870,7 @@ Material classify(const wchar_t* path) {
         return wcsstr(file, L"Glass") ? Material::Glass : Material::Car;
     }
     if (!_wcsnicmp(file, L"Grass", 5)) return Material::Grass;
+    if (!_wcsnicmp(file, L"Soil", 4)) return Material::Dirt;
     const wchar_t* sea = wcsstr(file, L"Sea");
     if ((sea && sea[3] != L't') || wcsstr(file, L"Water")) return Material::Water; // not "Seat..."
     return Material::Other;
