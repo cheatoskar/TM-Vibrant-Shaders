@@ -72,14 +72,6 @@ jobs:
       - name: Package
         run: cmake --build build --config Release --target release_zip
 
-      # dist/TMVS-modloader.zip: what the ModLoader downloads from the update server (the DLL
-      # alone; the ModLoader unpacks it into products/TM Vibrant Shaders/<version>/).
-      - name: ModLoader zip
-        shell: bash
-        run: |
-          python tools/modloader_server.py zip --dll dist/TMVibrantShaders.dll --out dist/TMVS-modloader.zip
-          cmake -DDIR=dist -P packaging/sha256sums.cmake
-
       # Release notes: RELEASE_NOTES.md, then a SHA-256 table (where people actually look).
       - name: Release notes
         shell: pwsh
@@ -92,8 +84,7 @@ jobs:
             $h, $f = $line -split "  ", 2
             $body += "| ``$f`` | ``$h`` |"
           }
-          $body += @("", "Check a download in PowerShell: ``Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256``", "")
-          $body += @("``TMVS-modloader.zip`` is what the ModLoader's update server hands out (the DLL alone). To install by hand, take ``TM-Vibrant-Shaders.zip``.", "</details>")
+          $body += @("", "Check a download in PowerShell: ``Get-FileHash .\TM-Vibrant-Shaders.zip -Algorithm SHA256``", "</details>")
           $body | Set-Content -Encoding utf8 dist/release-notes.md
           Get-Content dist/SHA256SUMS.txt
 
@@ -111,7 +102,6 @@ jobs:
           files: |
             dist/TM-Vibrant-Shaders.zip
             dist/TMVibrantShaders.dll
-            dist/TMVS-modloader.zip
             dist/SHA256SUMS.txt
           body_path: dist/release-notes.md
           fail_on_unmatched_files: true
@@ -119,8 +109,10 @@ jobs:
 
   # The ModLoader update server: modloader/index.json (stable releases) and
   # modloader/beta/index.json (with pre-releases) on GitHub Pages, served from the gh-pages
-  # branch. Rebuilt after every tag's release from all releases that carry TMVS-modloader.zip,
-  # so the index lists every version. Run the workflow by hand to rebuild it without a release.
+  # branch. Rebuilt after every tag's release from every release's TMVibrantShaders.dll (from
+  # 1.4.0-rc.2 on): the zip the ModLoader downloads (the DLL alone) is made here and served next
+  # to the index, so the releases carry no zip people take by mistake. Run the workflow by hand
+  # to rebuild it without a release.
   # One-time setup: Settings -> Pages -> Deploy from a branch -> gh-pages, / (root).
   modloader-server:
     needs: windows
@@ -135,20 +127,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Releases from before the server get their TMVS-modloader.zip made from their own
-      # TMVibrantShaders.dll (the ModLoader zip holds nothing else). Only missing ones; once.
-      # Off unless the repository variable MODLOADER_BACKFILL is 1: it changes published releases.
-      - name: Backfill older releases
-        if: ${{ vars.MODLOADER_BACKFILL == '1' }}
-        run: |
-          for tag in $(python3 tools/modloader_server.py missing); do
-            rm -rf backfill && mkdir backfill
-            gh release download "$tag" -R "$GITHUB_REPOSITORY" -p TMVibrantShaders.dll -D backfill
-            python3 tools/modloader_server.py zip --dll backfill/TMVibrantShaders.dll --out backfill/TMVS-modloader.zip
-            gh release upload "$tag" -R "$GITHUB_REPOSITORY" backfill/TMVS-modloader.zip
-          done
-
-      # Hashes come from downloading each zip through its release link, as the ModLoader will.
+      # Each version's DLL comes from its release (checked against the digest GitHub lists); its
+      # zip goes to site/modloader/files/<version>/ and is hashed there.
       - name: Index
         run: |
           python3 tools/modloader_server.py index --out-dir site/modloader
