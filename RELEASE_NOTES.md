@@ -38,13 +38,13 @@ The mod now runs in ManiaPlanet 4 (Stadium, Canyon, Valley, Lagoon) on its Direc
 
 **Image quality.** SMAA instead of FXAA, TAA with jitter on by default, sharpening at 0.8. *Render scale (FSR)* draws the game and the effects at a lower resolution and scales them up with AMD FSR 1 before the HUD; at 0.67 the effects cost about half.
 
-**Video.** The replay editor's *Shoot video* writes MP4 (H.264 or HEVC, AAC sound) through the graphics card, with every effect at full quality.
+**Video export without the old codec list.** *Shoot video* in the replay editor used to write an AVI and made you pick a codec from Windows' old list. It now writes an MP4 (H.264 or HEVC, sound as AAC) into `Documents\TrackMania\Video`, encoded by the graphics card, with every effect at full quality. Nothing to install. The old AVI is still there if you want it: *Video format* → *Game's AVI*.
 
 **Auto quality** measures what each effect costs on your GPU and turns off only as many as it has to. The long shadows, the light shafts and the neon light always stay.
 
 **Also new:** the neon trail follows the car's real position (no flicker or gaps, also through loops), rain and snow stay out from under roofs, the snowstorm has recorded wind, and colour looks can be loaded from `.cube` files.
 
-**Works with CenterSpeed.** The speedometer mod and this one now run together. With both loaded, this mod's menu moves to `F5`, because CenterSpeed uses `F8`.
+**Works with CenterSpeed.** The speedometer mod and this one now run side by side. CenterSpeed opens its own menu with `F8` too, so while it is loaded this mod's menu moves to `F5` by itself, and back to `F8` once CenterSpeed is gone. This only happens for CenterSpeed: if another mod uses `F8`, pick a different key under *Settings* → *Hotkeys*.
 
 A lot got fixed on the way: the water's reflections and the water under TAA, replays lit like the race, dirt that mirrored or turned into water, the bars of the replay menu, hangs after alt-tab and stalls while saving the settings. Everything is in the changelog.
 
