@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.2 (in testing)
+
+A new video export for *Shoot video* in the replay editor (TrackMania Nations/United).
+
+**New**
+- **The mod renders the video's frames itself** (*Mod renders the frames*, on). Every supersample and every motion blur sub-frame of *Shoot video*'s high quality is lit and summed in float; bloom, exposure and the grade then run once on the average, and the frame goes to the encoder in 10 bits or with a fine dither from the float image. Bright lights streak like on a real camera instead of a grey smear, skies and fog don't band, and the effects cost once a frame instead of once a sample. Each frame is handed over when the game writes one, so the video keeps the game's frame count and its sound stays in sync. With the effects off the game's own image goes in, as before.
+- **Constant quality** (*Video quality*, 80) instead of a bitrate worked out from the size: calm shots get small, fast ones get the bits they need. *Video bitrate* still sets a fixed average.
+- **10-bit HEVC and AV1** (*10-bit video*), **AV1** as a format (graphics cards with an AV1 encoder; else it falls back to HEVC, then H.264).
+- **ffmpeg as encoder** (*Video encoder* → *ffmpeg*): x264, x265 or SVT-AV1 through your own `ffmpeg.exe` (the mod brings none), the most quality per megabyte; *ffmpeg speed* picks the preset. Without ffmpeg the graphics card encodes.
+- **Shutter** for the game's motion blur (*Shutter*, 360): 180 gives the film look and skips the mod's work on the other half of the sub-frames.
+- **Lens depth of field** (*Lens depth of field*): with 16 or more samples per frame the camera moves over a lens between them and the sum blurs like a real lens: true bokeh, no halos at edges.
+- **Film grain in the video** (0.5 of the look's grain: grain costs the encoder much of its bits) and **video aspect** 2:1 or 2.39:1 (cropped, the file holds only the picture).
+- The encoder runs on its own thread: the game no longer waits for it, nor for the colour conversion, which the graphics card does now.
+
+**Good to know**
+- The game records the export's sound from Windows' default recording device while it plays the clip once more in real time, as it always did; with a microphone as default device the video gets the room's sound. Set the default recording device to *Stereo Mix* (or your speakers' loopback) for the game's own sound.
+- The game's clock for the motion blur sub-frames runs in whole milliseconds: at 60 fps more than 4 × 4 samples share moments (still better edges and lens blur, no finer motion blur); at 30 fps 5 × 5.
+
 ## 1.4.1 (2026-10-18)
 
 The first release for TrackMania 2 (ManiaPlanet 4) as well, with a new menu and the game's own light. It follows 1.4.0-preview (2026-10-12) and its release candidates (there is no plain 1.4.0); this list covers everything since 1.3.0.
