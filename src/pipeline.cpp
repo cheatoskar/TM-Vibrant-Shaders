@@ -28,6 +28,7 @@ const char* const kEntryPoints[] = {
     "PS_SpillSource", "PS_SpillSourceEngine", "PS_SpillDownSource",
     "PS_SmaaEdges", "PS_SmaaWeights", "PS_SmaaBlend",
     "PS_SpillSourceNeon", "PS_NeonGlow", "PS_NeonAdd", "PS_NeonTemporal",
+    "PS_Accumulate", "PS_AccumResolve", "PS_ExportLuma", "PS_ExportChroma",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -342,6 +343,10 @@ void Pipeline::destroyTargets(bool keepWorld) {
     m_dof2.destroy();
     m_hdr2.destroy();
     for (auto& t : m_taa) t.destroy();
+    for (auto& t : m_accum) t.destroy();
+    m_accumWeight = 0.0f;
+    m_ldrFloat.destroy();
+    m_ldr2Float.destroy();
     m_scaled.destroy();
     m_fsr.destroy();
     m_smaaEdges.destroy();
@@ -360,6 +365,8 @@ void Pipeline::destroyTargets(bool keepWorld) {
     gfx::release(m_waterDone);
     m_waterPending = -1;
     for (auto& t : m_focus) t.destroy();
+    gfx::release(m_focusRead);
+    m_postTimeValid = false;
     m_heightFrame.destroy();
     for (auto& t : m_heightMap) t.destroy();
     for (auto& t : m_ceilingMap) t.destroy();
@@ -2914,29 +2921,96 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     if (s.neonTrail > 0.0f && ensureTrail(device)) drawTrail(device, in, s, temporal ? dt : 0.0f);
     else m_trailReset = true;
 
+    // 4c. The video export's own frames: this sample's lit scene goes into the frame's float sum.
+    // Every sample but the frame's last ends here; the last grades the average from here on, as
+    // one frame.
+    const bool finishing = in.accumulate == 2;
+    if (in.accumulate != 0) {
+        const bool first = in.accumulateFirst || m_accumWeight <= 0.0f;
+        // fp32 for the sum; fp16 only if that can't be made (fine for the few samples of a plain
+        // supersampled frame, its last bits go with a hundred).
+        D3DFORMAT sumFormat = D3DFMT_A32B32G32R32F;
+        bool sum = m_accum[0].create(device, in.width, in.height, sumFormat) && m_accum[1].create(device, in.width, in.height, sumFormat);
+        if (!sum) {
+            sumFormat = D3DFMT_A16B16G16R16F;
+            sum = m_accum[0].create(device, in.width, in.height, sumFormat) && m_accum[1].create(device, in.width, in.height, sumFormat);
+            static bool s_logged = false;
+            if (!s_logged) {
+                s_logged = true;
+                TMVS_LOG("pipeline: video frames summed in fp16 (no fp32 target%s)", sum ? "" : ", nor fp16: each sample alone");
+            }
+        }
+        if (sum) {
+            const int next = m_accumIndex ^ 1;
+            bind(device, 0, first ? nullptr : m_accum[m_accumIndex].texture, false);
+            bind(device, 1, m_hdr.texture, false);
+            passConstants(device, 1.0f, first ? 1.0f : 0.0f);
+            runPass(device, kAccumulate, m_accum[next]);
+            device->SetTexture(1, nullptr);
+            m_accumIndex = next;
+            m_accumWeight = (first ? 0.0f : m_accumWeight) + 1.0f;
+        } else {
+            m_accumWeight = 0.0f;
+        }
+        if (!finishing) {
+            profileEnd();
+            finishRender(device, in, softwareVP);
+            return true;
+        }
+        if (m_accumWeight > 0.0f) {
+            bind(device, 0, m_accum[m_accumIndex].texture, false);
+            passConstants(device, 1.0f / m_accumWeight, 0.0f);
+            runPass(device, kAccumResolve, m_hdr);
+            m_accumWeight = 0.0f;
+        }
+    }
+    // The grade's clock: in the export from one finished frame to the next (the time of one sample
+    // would slow the exposure and the focus down by the number of samples). The last sample of a
+    // supersampled frame is a repeat, yet its frame is new.
+    const bool postTemporal = finishing || temporal;
+    float postDt = dt;
+    if (finishing) {
+        postDt = m_postTimeValid ? fmaxf(in.time - m_postLastTime, 0.0f) : 0.0f;
+        m_postLastTime = in.time;
+        m_postTimeValid = true;
+    }
+
     // 5. Depth of field and motion blur (cinematic, HDR).
     gfx::Target* hdr = &m_hdr;
     IDirect3DTexture9* dofFocus = nullptr; // the focus distance the blur used (final pass)
     const bool motionBlur = s.motionBlur > 0.0f && m_temporalValid;
     const bool dof = s.depthOfField > 0.0f;
-    if ((motionBlur || dof) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
+    // Accumulation depth of field: the samples are the blur; only the focus is measured.
+    if (dof && in.lensDof && !motionBlur && (postTemporal && !in.freeze)) {
+        const int focus = m_focusIndex ^ 1;
+        bind(device, 0, m_nd.texture, false);
+        bind(device, 1, m_focus[m_focusIndex].texture, false);
+        passConstants(device, 1.0f - expf(-postDt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+        focusOnCarConstants(device, in, s);
+        runPass(device, kFocus, m_focus[focus]);
+        m_focusIndex = focus;
+    }
+    if ((motionBlur || (dof && !in.lensDof)) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
         // Photo mode: the blur at full resolution (half resolution showed as coarse, blocky
         // edges once the image stands still and gets looked at). The video export too: it has
         // the time, and its frames get looked at one by one.
         const bool best = in.photo || in.video;
         gfx::Target* dofTarget = &m_dof;
-        if (dof && best && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
+        if (dof && best && !in.lensDof && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
         if (dof) {
             int focus = m_focusIndex;
-            if (temporal && !in.freeze) {
+            if (postTemporal && !in.freeze) {
                 focus ^= 1;
                 bind(device, 0, m_nd.texture, false);
                 bind(device, 1, m_focus[m_focusIndex].texture, false);
-                passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+                passConstants(device, 1.0f - expf(-postDt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
                 focusOnCarConstants(device, in, s);
                 runPass(device, kFocus, m_focus[focus]);
                 m_focusIndex = focus;
             }
+        }
+        if (dof && !in.lensDof) {
+            const int focus = m_focusIndex;
             bind(device, 0, m_hdr.texture, true);
             bind(device, 1, dofTarget == &m_dofFull ? m_nd.texture : m_ndHalf.texture, false);
             bind(device, 2, m_focus[focus].texture, false);
@@ -2955,6 +3029,9 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
                 dofTarget = &second;
             }
         }
+        // Accumulation depth of field with motion blur: the composite takes no blur (u_Cine.y 0).
+        const float cine[4] = {s.motionBlur, in.lensDof ? 0.0f : s.depthOfField, s.focusDistance, s.bokehSize};
+        device->SetPixelShaderConstantF(24, cine, 1);
         bind(device, 0, m_hdr.texture, true);
         bind(device, 1, dofTarget->texture, true);
         bind(device, 2, m_nd.texture, false);
@@ -3071,14 +3148,14 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
 
     // 8. Exposure (extra cameras reuse the adapted value).
-    if (temporal && !in.freeze) {
+    if (postTemporal && !in.freeze) {
         bind(device, 0, m_bloomDown[3].texture, true);
         runPass(device, kLuminance, m_luminance);
         const int previous = m_adaptIndex;
         m_adaptIndex ^= 1;
         bind(device, 0, m_luminance.texture, false);
         bind(device, 1, m_adapted[previous].texture, false);
-        passConstants(device, 1.0f - expf(-dt * 1.6f), m_historyValid ? 0.0f : 1.0f);
+        passConstants(device, 1.0f - expf(-postDt * 1.6f), m_historyValid ? 0.0f : 1.0f);
         runPass(device, kAdapt, m_adapted[m_adaptIndex]);
         m_historyValid = true;
     }
@@ -3089,7 +3166,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool drops = (lensDrops > 0.0f || lensSnow > 0.0f) && post;
     // Roof over the camera, eased like the sky average: the lens dries off under a bridge.
     const bool shelter = drops && heightMap && m_heightValid && s.weatherShelter;
-    if (shelter && (temporal || !m_shelterValid)) {
+    if (shelter && (postTemporal || !m_shelterValid)) {
         const int previous = m_shelterIndex;
         m_shelterIndex ^= 1;
         bind(device, 0, m_heightMap[m_heightIndex].texture, false);
@@ -3099,7 +3176,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         const float rainVelocity[4] = {2.5f + s.wind * 5.0f, -9.0f, 1.0f + s.wind * 2.0f, 0.0f};
         const float snowVelocity[4] = {(1.0f + s.wind * 7.0f) * fminf(s.snow, 1.5f), -1.1f, (0.5f + s.wind * 3.0f) * fminf(s.snow, 1.5f), 0.0f};
         device->SetPixelShaderConstantF(33, s.rain > 0.0f ? rainVelocity : snowVelocity, 1);
-        passConstants(device, 1.0f - expf(-dt / 0.8f), (m_shelterValid && m_temporalValid) ? 0.0f : 1.0f);
+        passConstants(device, 1.0f - expf(-postDt / 0.8f), (m_shelterValid && m_temporalValid) ? 0.0f : 1.0f);
         runPass(device, kShelter, m_shelter[m_shelterIndex]);
         m_shelterValid = true;
     } else if (!shelter) {
@@ -3139,24 +3216,32 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     device->SetPixelShaderConstantF(44, finalMaterials, 1);
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
-    passConstants(device, 1.0f / norm, 0.0f, s.nightSurfaces);
+    passConstants(device, 1.0f / norm, in.floatOutput ? 1.0f : 0.0f, s.nightSurfaces);
     // c33 (final pass): the lamp glare's and the lamp haze's strength (0: off, s10 not read).
     device->SetPixelShaderConstantF(33, lampScale, 1);
     if (lampReady) bind(device, 10, m_lampUp[0].texture, true);
     // Disabled post passes are skipped entirely, not just passed through. SMAA takes FXAA's
     // place (FXAA if its textures can't be made).
-    const bool smaa = s.fxaa && s.smaa && post && ensureSmaa(device, in.width, in.height);
+    const bool smaa = s.fxaa && s.smaa && post && !in.floatOutput && ensureSmaa(device, in.width, in.height);
     const bool fxaa = s.fxaa && post && !smaa;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
                      m_taa[1].create(device, in.width, in.height, D3DFMT_A16B16G16R16F);
     const bool sharpen = s.sharpen > 0.001f && post && !upscale;
     // Chain: Final -> [FXAA | SMAA] -> [TAA] -> [Sharpen | Copy] -> output (RenderScale: -> EASU -> RCAS).
+    // The export's frame stays float all the way (its 10 bits, its own dither at the end).
+    gfx::Target* ldr = &m_ldr;
+    gfx::Target* ldr2 = &m_ldr2;
+    if (in.floatOutput && m_ldrFloat.create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
+        m_ldr2Float.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
+        ldr = &m_ldrFloat;
+        ldr2 = &m_ldr2Float;
+    }
     IDirect3DTexture9* current = nullptr;
     if (!fxaa && !smaa && !taa && !sharpen && !drops) {
         runPass(device, kFinal, output, in.width, in.height);
     } else {
-        runPass(device, kFinal, m_ldr);
-        current = m_ldr.texture;
+        runPass(device, kFinal, *ldr);
+        current = ldr->texture;
     }
     if (lampReady) device->SetTexture(10, nullptr); // the next frame draws into it
     if (fxaa) {
@@ -3166,8 +3251,8 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             runPass(device, kFXAA, output, in.width, in.height);
             current = nullptr;
         } else {
-            runPass(device, kFXAA, m_ldr2);
-            current = m_ldr2.texture;
+            runPass(device, kFXAA, *ldr2);
+            current = ldr2->texture;
         }
     }
     if (smaa) {
@@ -3226,12 +3311,16 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Rain particles go on top of the finished image: TAA would erase thin, fast drops as
     // flicker, and keeping them out of its history avoids trails.
     if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && post && ensureRain(device))
-        drawRain(device, in, s, dt, heightMap && m_heightValid, output);
+        drawRain(device, in, s, postDt, heightMap && m_heightValid, output);
     if (upscale) upscaleOutput(device, in, s, screen);
     profileEnd();
+    finishRender(device, in, softwareVP);
+    return true;
+}
 
+void Pipeline::finishRender(IDirect3DDevice9* device, const Inputs& in, BOOL softwareVP) {
     if (in.repeat) swapRepeatCamera();
-    if (temporal) {
+    if (in.temporal) {
         keepRepeatCamera();
         memcpy(m_prevView, in.view, sizeof(m_prevView));
         memcpy(m_prevProjection, in.projection, sizeof(m_prevProjection));
@@ -3240,7 +3329,6 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
     for (int i = 12; i < 16; i++) device->SetTexture(i, nullptr); // the LUT, the materials: nothing of ours stays bound (Reset)
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
-    return true;
 }
 
 // Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back once
@@ -3288,6 +3376,49 @@ void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
             m_waterDrawn = m_frame;
         }
     }
+}
+
+bool Pipeline::tenBitPlanesSupported(IDirect3DDevice9* device) {
+    IDirect3D9* d3d = nullptr;
+    D3DDEVICE_CREATION_PARAMETERS params{};
+    D3DDISPLAYMODE mode{};
+    if (FAILED(device->GetDirect3D(&d3d)) || !d3d) return false;
+    const bool ok = SUCCEEDED(device->GetCreationParameters(&params)) && SUCCEEDED(device->GetDisplayMode(0, &mode)) &&
+                    SUCCEEDED(d3d->CheckDeviceFormat(params.AdapterOrdinal, params.DeviceType, mode.Format, D3DUSAGE_RENDERTARGET, D3DRTYPE_TEXTURE,
+                                                     D3DFMT_A16B16G16R16));
+    d3d->Release();
+    return ok;
+}
+
+bool Pipeline::exportPlanes(IDirect3DDevice9* device, IDirect3DTexture9* frame, UINT videoW, UINT videoH, const float crop[4], bool tenBit, float dither,
+                            gfx::Target& luma, gfx::Target& chroma) {
+    if (!m_ready || !frame || videoW < 8 || videoH < 2 || (videoW & 3) || (videoH & 1)) return false;
+    const D3DFORMAT format = tenBit ? D3DFMT_A16B16G16R16 : D3DFMT_A8R8G8B8;
+    if (!luma.create(device, videoW / 4, videoH, format) || !chroma.create(device, videoW / 4, videoH / 2, format)) return false;
+    const BOOL softwareVP = setPassStates(device);
+    bind(device, 0, frame, true);
+    const float sizes[4] = {1.0f / videoW, 1.0f / videoH, crop[0], crop[1]};
+    const float modes[4] = {crop[2], crop[3], tenBit ? 1.0f : 0.0f, dither};
+    device->SetPixelShaderConstantF(32, sizes, 1);
+    device->SetPixelShaderConstantF(33, modes, 1);
+    runPass(device, kExportLuma, luma);
+    runPass(device, kExportChroma, chroma);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
+}
+
+float Pipeline::focusDistance(IDirect3DDevice9* device) {
+    const gfx::Target& focus = m_focus[m_focusIndex];
+    if (!focus.valid()) return 0.0f;
+    if (!m_focusRead && FAILED(device->CreateOffscreenPlainSurface(1, 1, D3DFMT_R32F, D3DPOOL_SYSTEMMEM, &m_focusRead, nullptr))) return 0.0f;
+    float distance = 0.0f;
+    D3DLOCKED_RECT locked{};
+    if (SUCCEEDED(device->GetRenderTargetData(focus.surface, m_focusRead)) && SUCCEEDED(m_focusRead->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+        distance = *static_cast<const float*>(locked.pBits);
+        m_focusRead->UnlockRect();
+    }
+    return distance > 0.0f && distance < 1e6f ? distance : 0.0f;
 }
 
 bool Pipeline::readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out) {

@@ -91,6 +91,18 @@ public:
         // the same target): looks like that frame, reads its history (motion blur, focus,
         // exposure) but advances none of it. temporal is false.
         bool repeat = false;
+        // The video export's own frames (the plugin hands its encoder what the pipeline made, not
+        // the game's 8-bit average of its samples): 0 off; 1 this sample's lit HDR scene is added
+        // to the frame's float sum and nothing is written; 2 added too, then the average is graded
+        // into `output` once (bloom, exposure and the grade see the frame, not one sample).
+        int accumulate = 0;
+        bool accumulateFirst = false; // the frame's first sample: the sum starts over
+        // `output` is a float target (the export's frame): no 8-bit dither in the final pass, and
+        // FXAA instead of SMAA (which reads and writes 8-bit sRGB).
+        bool floatOutput = false;
+        // Accumulation depth of field (the plugin moves the camera's eye over the lens between the
+        // samples): the screen-space blur stays off, the focus distance is still measured.
+        bool lensDof = false;
         // Focus on this point of the screen (uv), -1 = the usual spot (the car, the road ahead).
         float focusPoint[2] = {-1.0f, -1.0f};
         // Hi-res photo tiles: exposure, focus and the haze colour keep their values (each tile
@@ -215,6 +227,19 @@ public:
     // (not ready, no targets).
     bool render(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, IDirect3DSurface9* output);
 
+    // Video export: the finished frame `frame` (sRGB values in a float target) into the encoder's
+    // planes (PS_ExportLuma, PS_ExportChroma): `luma` videoW / 4 x videoH and `chroma` videoW / 4 x
+    // videoH / 2, A16B16G16R16 holding P010 codes when tenBit, else A8R8G8B8 holding NV12 bytes,
+    // so a plain read of the two gives the encoder's buffer row by row. crop (uv: x, y, w, h): the
+    // part of the frame the video shows. dither: the 8-bit dither in steps (0 none, 1 one step).
+    bool exportPlanes(IDirect3DDevice9* device, IDirect3DTexture9* frame, UINT videoW, UINT videoH, const float crop[4], bool tenBit, float dither,
+                      gfx::Target& luma, gfx::Target& chroma);
+    // The 16-bit unorm render target P010 needs (else 10 bits aren't offered).
+    static bool tenBitPlanesSupported(IDirect3DDevice9* device);
+    // The focus distance (metres) the auto focus measured last, 0 = none yet. A GPU read: it waits
+    // for the frame (the export only, once a video frame).
+    float focusDistance(IDirect3DDevice9* device);
+
     // Capture helpers.
     bool readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out);
     bool readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std::vector<float>& out);
@@ -269,6 +294,8 @@ public:
         m_heightValid = false;
         m_skyValid = false;
         m_shelterValid = false;
+        m_postTimeValid = false;
+        m_accumWeight = 0.0f;
     }
 
     // The HLSL the pipeline compiles while it runs (vertex shaders of the height map, trail and
@@ -364,6 +391,10 @@ private:
         kNeonGlow,
         kNeonAdd,
         kNeonTemporal,
+        kAccumulate,
+        kAccumResolve,
+        kExportLuma,
+        kExportChroma,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
@@ -397,6 +428,8 @@ private:
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
     void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool splashes,
                   IDirect3DSurface9* target);
+    // The end of every render(): the camera kept for the next frame, nothing of ours left bound.
+    void finishRender(IDirect3DDevice9* device, const Inputs& in, BOOL softwareVP);
     bool detectCameraCut(const Inputs& inputs) const;
     void keepRepeatCamera();
     void swapRepeatCamera();
@@ -499,6 +532,19 @@ private:
     gfx::Target m_dofFull2;     // full: its second, smoothing pass
     gfx::Target m_dof2;         // half: the smoothing pass of the normal blur
     gfx::Target m_hdr2;         // full: HDR after DOF / motion blur
+    // The video export's own frames (Inputs::accumulate): the float sum of the frame's samples
+    // (ping-pong, A32B32G32R32F: a hundred samples of fp16 would lose their last bits), and the
+    // final chain's targets in float (Inputs::floatOutput). Made when first used.
+    gfx::Target m_accum[2];
+    int m_accumIndex = 0;
+    float m_accumWeight = 0.0f;
+    gfx::Target m_ldrFloat;
+    gfx::Target m_ldr2Float;
+    IDirect3DSurface9* m_focusRead = nullptr; // system memory copy of the 1x1 focus (focusDistance)
+    // The grade's own clock in the export (exposure, focus): the time between two finished frames,
+    // not between two samples.
+    float m_postLastTime = 0.0f;
+    bool m_postTimeValid = false;
     gfx::Target m_taa[2];       // full: TAA history ping-pong (rgb, view z)
     gfx::Target m_scaled;       // RenderScale: the finished image at the scene's (small) size
     gfx::Target m_fsr;          // RenderScale: EASU's image at the output's size, before RCAS

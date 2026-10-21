@@ -218,7 +218,7 @@ const Field* findField(const char* key) {
 bool isMachineSetting(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "AutoQuality") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "DisableGameMSAA") ||
            !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
+           !strncmp(f.key, "Video", 5) || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
@@ -253,6 +253,13 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("WaterFarReflections")) return s.cleanWater && s.waterSurfaces > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it
+    // The video export: what the chosen format and encoder use (the game's AVI: none of it).
+    const bool mp4 = s.videoCodec >= 1;
+    if (is("VideoQuality")) return mp4 && s.videoBitrate <= 0.0f;
+    if (is("Video10Bit")) return s.videoCodec >= 2;
+    if (is("VideoEncoder") || is("VideoBitrate") || is("VideoAspect") || is("VideoOwnFrames")) return mp4;
+    if (is("VideoFfmpegPreset")) return mp4 && s.videoEncoder == 1;
+    if (is("VideoShutter") || is("VideoLensDof") || is("VideoGrain")) return mp4 && s.videoOwnFrames;
     if (is("TargetFPS")) return s.autoQuality;
     if (is("FsrSharpness")) return s.renderScale < 0.99f;
     if (is("Sharpen")) return s.renderScale >= 0.99f; // FSR sharpening takes its place while scaled
@@ -392,8 +399,18 @@ const char* tooltipFor(const char* key) {
         {"Spray", "Spray behind the car on wet roads and snow."},
         {"CinematicOnlyInReplays", "Motion blur and depth of field only in replays and video export."},
         {"VideoExportBest", "Renders each video frame with full quality and the effects on the video's own clock."},
-        {"VideoCodec", "What the replay editor's Shoot video writes. MP4 is encoded by the graphics card and skips the game's codec dialog; the file lands where the .avi would."},
-        {"VideoBitrate", "Mbit/s. 0 picks one: 50 for 4K 30 fps H.264, 30 for HEVC."},
+        {"VideoCodec", "What the replay editor's Shoot video writes. MP4 skips the game's codec dialog and lands where the .avi would. H.264 plays and edits everywhere; HEVC and AV1 give the same picture in a smaller file but are heavier to edit. Without an encoder for the choice it falls back to H.264."},
+        {"VideoQuality", "Constant quality: calm shots get small, fast ones get the bits they need. 80 is clean on YouTube, 90 and up for editing and archive. Ignored when a bitrate is set."},
+        {"Video10Bit", "HEVC and AV1 in 10 bits: no bands in skies, fog and glows. H.264 stays 8 bits (graphics cards have no 10-bit H.264) and gets a fine dither instead."},
+        {"VideoBitrate", "Mbit/s. 0 uses the constant quality instead (recommended)."},
+        {"VideoEncoder", "Graphics card: fast, nothing to install. ffmpeg: a software encoder (x264, x265, SVT-AV1) with the best quality per megabyte; needs ffmpeg.exe in your TMVS folder or on PATH. The export's rendering is the slow part anyway."},
+        {"VideoFfmpegPreset", "ffmpeg's speed: Best packs the most quality into each megabyte and takes the longest."},
+        {"VideoOwnFrames", "The mod renders each video frame itself: every supersample and motion-blur sub-frame is lit and summed in float, then graded once. Bright lights streak like on a real camera, no banding, and bloom and the grade run once a frame. Off: the game's own 8-bit average, as before."},
+        {"VideoShutter", "With the game's motion blur: how much of each frame its sub-frames cover. 360 blurs the whole frame (smoothest), 180 is the film look (crisper; the other sub-frames are skipped, faster)."},
+        {"VideoLensDof", "Depth of field from the samples themselves: the camera moves over a lens between them, like a real one (true bokeh, no halos at edges). Needs 16 or more samples per frame (high quality 4x4 and up in Shoot video); with fewer, the usual blur."},
+        {"VideoGrain", "How much of the look's film grain goes into the video. Grain is noise to the encoder and eats its bits: 0.5 keeps the feel at half the cost."},
+        {"VideoAspect", "Crops the video to a wider picture. The file holds only the picture (no black bars to encode); players add the bars."},
+
         {"FocusDistance", "Metres to the sharp point. 0 focuses automatically."},
         {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, wherever the replay camera puts it; the middle again while the car is off screen. A click in the photo mode still wins."},
         {"TAA", "Smooths edges by blending frames. Costs a little sharpness."},
@@ -537,8 +554,17 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
                 static const char* kCurves[] = {"The game's", "TMVS (keeps hue)", "ACES (film)"};
                 changed |= ImGui::Combo(label, value, kCurves, IM_ARRAYSIZE(kCurves));
             } else if (!strcmp(f.key, "VideoCodec")) {
-                static const char* kCodecs[] = {"Game's AVI", "MP4 (H.264)", "MP4 (HEVC)"};
+                static const char* kCodecs[] = {"Game's AVI", "MP4 (H.264)", "MP4 (HEVC)", "MP4 (AV1)"};
                 changed |= ImGui::Combo(label, value, kCodecs, IM_ARRAYSIZE(kCodecs));
+            } else if (!strcmp(f.key, "VideoEncoder")) {
+                static const char* kEncoders[] = {"Graphics card", "ffmpeg (software)"};
+                changed |= ImGui::Combo(label, value, kEncoders, IM_ARRAYSIZE(kEncoders));
+            } else if (!strcmp(f.key, "VideoFfmpegPreset")) {
+                static const char* kSpeeds[] = {"Fast", "Balanced", "Best (slow)"};
+                changed |= ImGui::Combo(label, value, kSpeeds, IM_ARRAYSIZE(kSpeeds));
+            } else if (!strcmp(f.key, "VideoAspect")) {
+                static const char* kAspects[] = {"As shot", "2:1", "2.39:1 (cinema)"};
+                changed |= ImGui::Combo(label, value, kAspects, IM_ARRAYSIZE(kAspects));
             } else if (!strcmp(f.key, "DofAutofocus")) {
                 static const char* kFocusModes[] = {"Middle", "Car"};
                 changed |= ImGui::Combo(label, value, kFocusModes, IM_ARRAYSIZE(kFocusModes));
@@ -1676,7 +1702,10 @@ bool drawSettings(Config& config, Settings& s) {
                       }});
     // Its own panel: in the long Game panel I didn't find it. Left out where the game
     // can't export (TrackMania 2 showed its title over nothing).
-    panels.push_back(settingsPanel("Video export", s, {{"VideoCodec", nullptr}, {"VideoBitrate", nullptr}, {"VideoExportBest", nullptr}}));
+    panels.push_back(settingsPanel("Video export", s,
+                                   {{"VideoCodec", nullptr}, {"VideoQuality", nullptr}, {"Video10Bit", nullptr}, {"VideoEncoder", nullptr},
+                                    {"VideoFfmpegPreset", nullptr}, {"VideoBitrate", nullptr}, {"VideoExportBest", nullptr}, {"VideoOwnFrames", nullptr},
+                                    {"VideoShutter", nullptr}, {"VideoLensDof", nullptr}, {"VideoGrain", nullptr}, {"VideoAspect", nullptr}}));
     if (panels.back().rows <= 0.0f) panels.pop_back();
     panels.push_back(settingsPanel("Effects", s, {{"CinematicOnlyInReplays", nullptr}, {"WeatherSound", nullptr}, {"TAA", nullptr}, {"TAAJitter", nullptr}}));
     // How the mod works with the game itself, as in Studio's group of the same name (same order).

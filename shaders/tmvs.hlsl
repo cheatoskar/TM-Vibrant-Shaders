@@ -3675,7 +3675,8 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Film grain + dithering (also hides banding of the 8-bit output).
     float grain = hash12(vpos + frac(u_Proj2.z) * 1000.0) - 0.5;
     float grainAmount = u_Post.x * smoothstep(0.0, 0.45, luma(srgb)) * (1.2 - luma(srgb));
-    srgb += grain * (grainAmount + 1.0 / 255.0);
+    // u_Pass0.y 1: the video export's float frame (its own dither comes with its 8 or 10 bits).
+    srgb += grain * (grainAmount + (1.0 - u_Pass0.y) / 255.0);
     srgb = saturate(srgb);
     // Debug view 8: the game's materials over the image (lamps yellow, cars red, glass cyan,
     // grass green, water blue, light added on top magenta).
@@ -4274,4 +4275,72 @@ float4 PS_RainSplash(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float hit = exp(-q.y * 14.0 - q.x * q.x * 5.0) * saturate(1.0 - p * 2.5);
     float a = (wall * 0.7 + drops * 0.8 + hit) * (1.0 - p) * u_Pass0.x;
     return float4(rainLight(uv) * a * 0.7, 0);
+}
+
+// ---------------------------------------------------------------------------------
+// Video export (the mod's own frames). Every sample of a video frame (the game's supersamples
+// and the sub-frames of its motion blur) is lit as usual and its HDR image added into a float
+// sum; the frame's last sample grades the average once. Averaging before the tone curve is
+// what a camera does: a lamp streaking past stays a bright streak instead of a grey smear, and
+// bloom, exposure and the grade run once a frame instead of once a sample.
+// ---------------------------------------------------------------------------------
+// s0 = the sum so far (A32B32G32R32F), s1 = this sample (the lit HDR scene); u_Pass0.x its
+// weight, u_Pass0.y 1: the first sample of the frame (the sum starts over). Point sampled.
+float4 PS_Accumulate(float2 uv : TEXCOORD0) : COLOR0 {
+    // A NaN or an endless value from one sample would spoil the whole frame (max() drops NaN).
+    float4 s = min(max(tex2Dlod(s1, float4(uv, 0, 0)), 0.0), 60000.0) * u_Pass0.x;
+    return u_Pass0.y > 0.5 ? s : tex2Dlod(s0, float4(uv, 0, 0)) + s;
+}
+
+// The sum (s0) back into the HDR image the grade reads: times u_Pass0.x (1 / the weights).
+float4 PS_AccumResolve(float2 uv : TEXCOORD0) : COLOR0 {
+    return tex2Dlod(s0, float4(uv, 0, 0)) * u_Pass0.x;
+}
+
+// The finished frame (s0: sRGB values in a float target, bilinear) into the encoder's planes,
+// BT.709 studio range: Y (4 pixels per output pixel) and interleaved Cb Cr (2 pairs per output
+// pixel, each the average of its 2 x 2 pixels). u_Pass0.xy = 1 / the video's size, zw = where
+// the video's top left corner lies in s0 (uv), u_Pass1.xy = how much of s0 the video covers
+// (uv; letterbox crops), u_Pass1.z 1: 16-bit unorm target holding P010 codes (value << 6), 0:
+// 8-bit A8R8G8B8 holding NV12 bytes, u_Pass1.w the dither (8-bit only).
+float3 exportRgb(float2 pixel) {
+    float2 uv = u_Pass0.zw + pixel * u_Pass0.xy * u_Pass1.xy;
+    return saturate(tex2Dlod(s0, float4(uv, 0, 0)).rgb);
+}
+
+// A value (0..1 luma, -0.5..0.5 chroma) as the code the encoder takes. 8 bits: with triangular
+// noise of one step, the same in every frame (noise that changes every frame costs the encoder
+// bits for nothing; a fixed pattern it predicts), which turns the steps of a dark sky into
+// grain instead of bands. 10 bits: rounded, the steps are four times finer.
+float exportCode(float v, float range, float offset, float2 p) {
+    if (u_Pass1.z > 0.5) return clamp(floor((v * range + offset) * 4.0 + 0.5), 0.0, 1023.0) * (64.0 / 65535.0);
+    float dither = (hash12(p) + hash12(p + float2(71.3, 19.7)) - 1.0) * u_Pass1.w;
+    return clamp(floor(v * range + offset + dither + 0.5), 0.0, 255.0) / 255.0;
+}
+
+static const float3 kLuma709 = float3(0.2126, 0.7152, 0.0722);
+
+float4 PS_ExportLuma(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 cell = floor(vpos);
+    float4 y;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 p = float2(cell.x * 4.0 + k + 0.5, cell.y + 0.5);
+        y[k] = exportCode(dot(exportRgb(p), kLuma709), 219.0, 16.0, p);
+    }
+    // A8R8G8B8 lies in memory as B G R A, A16B16G16R16 as R G B A.
+    return u_Pass1.z > 0.5 ? y : y.zyxw;
+}
+
+float4 PS_ExportChroma(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 cell = floor(vpos);
+    float4 c;
+    [unroll] for (int k = 0; k < 2; k++) {
+        // The middle of the chroma sample's 2 x 2 pixels: the bilinear tap there is their average.
+        float2 p = float2(cell.x * 4.0 + k * 2.0 + 1.0, cell.y * 2.0 + 1.0);
+        float3 rgb = exportRgb(p);
+        float l = dot(rgb, kLuma709);
+        c[k * 2] = exportCode((rgb.b - l) / 1.8556, 224.0, 128.0, p);
+        c[k * 2 + 1] = exportCode((rgb.r - l) / 1.5748, 224.0, 128.0, p + float2(37.0, 11.0));
+    }
+    return u_Pass1.z > 0.5 ? c : c.zyxw;
 }

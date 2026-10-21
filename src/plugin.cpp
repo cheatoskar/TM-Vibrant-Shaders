@@ -21,6 +21,7 @@
 #include "thumbnails.h"
 #include "tracer.h"
 #include "videofile.h"
+#include "videoencoder.h"
 #include "tm_shaders_version.h"
 #include <d3d9.h>
 #include <algorithm>
@@ -232,6 +233,203 @@ struct ExportStats {
     UINT targetWidth = 0, targetHeight = 0;
 } g_exportStats;
 bool g_frameStepped = false; // the frame being rendered is on the video's clock
+
+// The video export's own frames (VideoOwnFrames, src/videofile.h). Every sample of a video frame
+// (the game's supersamples inside one engine frame, or the sub-frames of its motion blur, one per
+// engine frame) is lit by the pipeline and added to a float sum; the frame's last sample grades
+// the average into `frame` and converts it into the encoder's planes on the GPU. The game's next
+// write of a video frame hands those planes to the encoder (ownDeliver), so the video has exactly
+// the game's frames and stays in sync with its sound. The game's own target only gets the last
+// finished frame, as the preview on screen.
+struct OwnExport {
+    int framesSinceWrite = 0;  // sub-frame mode: frames on the video's clock since the game's last write
+    int subIndex = 0;          // this frame's sub-frame within its video frame
+    int lensSamples = 0;       // samples over the lens this video frame (accumulation depth of field), 0 = none
+    float lensFocus = 0.0f;    // the auto focus's distance (m), read back with each frame handed over
+    bool lensSet = false;      // the engine has a lens offset set
+    unsigned videoFrame = 0;   // frames finished (turns the lens pattern between frames)
+    bool fresh = false;        // a finished frame waits in the planes for the game's write
+    bool haveFrame = false;    // a frame was finished in this export
+    bool tenBit = false;       // the planes hold P010
+    int tenBitOk = -1;         // 16-bit unorm targets (P010 planes): -1 not asked yet
+    gfx::Target frame;         // the finished frame (float, the shaded size)
+    gfx::Target luma, chroma;  // its planes
+    IDirect3DSurface9* lumaRead = nullptr; // their system memory copies
+    IDirect3DSurface9* chromaRead = nullptr;
+    // For the log: frames finished, handed over (fresh), handed over again (no new one since the
+    // game's last write), finished and replaced before a write, sub-frames past the shutter,
+    // samples summed; the time the reads took and the time between two finished frames.
+    unsigned finished = 0, delivered = 0, repeated = 0, dropped = 0, skipped = 0, samples = 0, lensFrames = 0;
+    double readMs = 0.0, betweenMs = 0.0;
+    LARGE_INTEGER lastFinish{};
+} g_own;
+
+void releaseOwnExport() {
+    g_own.frame.destroy();
+    g_own.luma.destroy();
+    g_own.chroma.destroy();
+    gfx::release(g_own.lumaRead);
+    gfx::release(g_own.chromaRead);
+    g_own.fresh = false;
+    g_own.haveFrame = false;
+}
+
+// What this sample of the export does for the mod's own frame (Pipeline::Inputs::accumulate).
+struct OwnSample {
+    int accumulate = 0;  // 0 not the mod's frame, 1 summed, 2 summed and the frame finished
+    bool first = false;  // the video frame's first sample
+    bool skip = false;   // a sub-frame past the shutter: nothing to do
+    int index = 0;       // which sample of the frame
+    int count = 1;       // samples summed per frame
+};
+OwnSample ownSample(int sampleIndex, bool part) {
+    OwnSample o;
+    const Settings& s = Config::get().settings;
+    videofile::OwnFormat format;
+    if (!g_exporting || !g_frameStepped || part || !s.enabled || !s.videoOwnFrames || !videofile::ownFormat(format)) return o;
+    if (g_export.samplesPerFrame > 1) {
+        // The supersamples, all in this engine frame.
+        o.count = g_export.samplesPerFrame;
+        o.index = std::min(sampleIndex, o.count - 1);
+        o.first = sampleIndex == 0;
+        o.accumulate = sampleIndex >= o.count - 1 ? 2 : 1;
+    } else if (g_export.subFrames && g_export.samplesPerVideoFrame > 1) {
+        // The motion blur's sub-frames, one per engine frame; the shutter keeps the first part of
+        // the frame's time (180 degrees: half of them) and the rest is skipped.
+        const int n = g_export.samplesPerVideoFrame;
+        const int shutter = std::clamp(static_cast<int>(lroundf(n * s.videoShutter / 360.0f)), 1, n);
+        o.index = g_own.subIndex % n;
+        o.count = shutter;
+        if (o.index >= shutter) {
+            o.skip = true;
+            return o;
+        }
+        o.first = o.index == 0;
+        o.accumulate = o.index == shutter - 1 ? 2 : 1;
+    } else {
+        o.first = true;
+        o.accumulate = 2;
+    }
+    return o;
+}
+
+// The finished frame (or the last one) onto the game's target: the preview on screen.
+void showOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT width, UINT height) {
+    if (!g_own.haveFrame || !g_own.frame.valid() || g_own.frame.width != width || g_own.frame.height != height) return;
+    const RECT all = {0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    g_pipeline.resolveScene(device, g_own.frame.texture, target, all);
+}
+
+// The frame's last sample is shaded into g_own.frame: preview, then the encoder's planes.
+void finishOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT width, UINT height) {
+    videofile::OwnFormat format;
+    if (!videofile::ownFormat(format)) return;
+    if (g_own.tenBitOk < 0) g_own.tenBitOk = Pipeline::tenBitPlanesSupported(device) ? 1 : 0;
+    // P010 wanted but no 16-bit target: NV12 planes, the encoder takes those too.
+    const bool tenBit = format.tenBit && g_own.tenBitOk == 1;
+    if (!g_pipeline.exportPlanes(device, g_own.frame.texture, static_cast<UINT>(format.width), static_cast<UINT>(format.height), format.crop, tenBit,
+                                 1.0f, g_own.luma, g_own.chroma)) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            TMVS_LOG("video export: the frame's planes could not be made (%dx%d): the game's image goes in", format.width, format.height);
+        }
+        return;
+    }
+    if (g_own.fresh) g_own.dropped++;
+    g_own.fresh = true;
+    g_own.tenBit = tenBit;
+    g_own.finished++;
+    g_own.videoFrame++;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (g_own.haveFrame) g_own.betweenMs += static_cast<double>(now.QuadPart - g_own.lastFinish.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+    g_own.lastFinish = now;
+    g_own.haveFrame = true;
+    showOwnFrame(device, target, width, height);
+}
+
+// videofile: the game writes a video frame; the planes finished last go into the encoder.
+bool ownDeliver(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    IDirect3DDevice9* device = g_device;
+    if (!device || !g_own.haveFrame || !g_own.luma.valid() || !g_own.chroma.valid()) return false;
+    if (static_cast<int>(g_own.luma.width) * 4 != format.width || static_cast<int>(g_own.luma.height) != format.height) return false;
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    const auto readable = [device](const gfx::Target& t, IDirect3DSurface9*& read) {
+        D3DSURFACE_DESC desc{};
+        if (read) read->GetDesc(&desc);
+        if (read && (desc.Width != t.width || desc.Height != t.height || desc.Format != t.format)) gfx::release(read);
+        if (!read && FAILED(device->CreateOffscreenPlainSurface(t.width, t.height, t.format, D3DPOOL_SYSTEMMEM, &read, nullptr))) read = nullptr;
+        return read && SUCCEEDED(device->GetRenderTargetData(t.surface, read));
+    };
+    if (!readable(g_own.luma, g_own.lumaRead) || !readable(g_own.chroma, g_own.chromaRead)) return false;
+    D3DLOCKED_RECT y{}, uv{};
+    if (FAILED(g_own.lumaRead->LockRect(&y, nullptr, D3DLOCK_READONLY))) return false;
+    if (FAILED(g_own.chromaRead->LockRect(&uv, nullptr, D3DLOCK_READONLY))) {
+        g_own.lumaRead->UnlockRect();
+        return false;
+    }
+    const size_t row = static_cast<size_t>(format.width) * (g_own.tenBit ? 2 : 1);
+    uint8_t* out = encoder.acquire(g_own.tenBit ? venc::Pixels::P010 : venc::Pixels::NV12);
+    if (out) {
+        for (int r = 0; r < format.height; r++) memcpy(out + row * r, static_cast<const uint8_t*>(y.pBits) + static_cast<size_t>(y.Pitch) * r, row);
+        uint8_t* chromaOut = out + row * format.height;
+        for (int r = 0; r < format.height / 2; r++)
+            memcpy(chromaOut + row * r, static_cast<const uint8_t*>(uv.pBits) + static_cast<size_t>(uv.Pitch) * r, row);
+    }
+    g_own.chromaRead->UnlockRect();
+    g_own.lumaRead->UnlockRect();
+    if (!out) return false;
+    encoder.submit();
+    (g_own.fresh ? g_own.delivered : g_own.repeated)++;
+    g_own.fresh = false;
+    // The auto focus for the next frame's lens (its 1x1 target; the GPU is past it already).
+    g_own.lensFocus = g_pipeline.focusDistance(device);
+    QueryPerformanceCounter(&end);
+    g_own.readMs += static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+    return true;
+}
+
+// videofile: the game wrote a video frame; the next sub-frame starts the next one.
+void ownWritten() {
+    g_own.framesSinceWrite = 0;
+}
+
+// Accumulation depth of field: each sample of a video frame sees the scene from another point of
+// the lens (a disc in the camera's plane), sheared so the focus plane stays put: what is out of
+// focus lands somewhere else in each sample and the sum blurs it, with the lens's own bokeh and no
+// halos at edges. With few samples the copies would stay apart: 16 at least, else the usual blur.
+// Called as each main camera begins (its projection is made after that).
+void updateLens(const OwnSample& sample) {
+    const Settings& s = Config::get().settings;
+    if (sample.first) {
+        const float focus = s.focusDistance > 0.0f ? s.focusDistance : g_own.lensFocus;
+        const bool lens = sample.accumulate != 0 && s.videoLensDof && s.depthOfField > 0.0f && sample.count >= 16 && focus > 0.1f;
+        g_own.lensSamples = lens ? sample.count : 0;
+        if (lens) g_own.lensFrames++;
+    }
+    const float p11 = g_scene.haveEngine ? g_scene.engineProjection[5] : 0.0f;
+    if (sample.accumulate == 0 || sample.skip || g_own.lensSamples <= 0 || p11 <= 0.0f) {
+        if (g_own.lensSet) engine::setLensOffset(0.0f, 0.0f, 0.0f);
+        g_own.lensSet = false;
+        if (sample.accumulate == 0) g_own.lensSamples = 0;
+        return;
+    }
+    const float focus = s.focusDistance > 0.0f ? s.focusDistance : g_own.lensFocus;
+    // The lens's radius: a point at infinity blurs as far as the usual depth of field takes it
+    // (circleOfConfusion in the shader: BokehSize px at 1080p, times DepthOfField x 2.5 up to 1).
+    // Its image moves P11 a / F in NDC (half the screen's height per unit).
+    const float blurPx = std::min(s.depthOfField * 2.5f, 1.0f) * s.bokehSize;
+    const float radius = blurPx / 1080.0f * 2.0f * focus / p11;
+    // A Vogel spiral: even over the disc for any count, turned between frames.
+    const int n = g_own.lensSamples;
+    const int i = std::clamp(sample.index, 0, n - 1);
+    const float r = radius * sqrtf((i + 0.5f) / n);
+    const float angle = i * 2.39996323f + static_cast<float>(g_own.videoFrame) * 0.618034f * 6.2831853f;
+    engine::setLensOffset(r * cosf(angle), r * sinf(angle), focus);
+    g_own.lensSet = true;
+}
 
 // The time the effects see (s).
 float effectTime() {
@@ -2329,12 +2527,35 @@ void processScene(IDirect3DDevice9* device) {
             effective.depthOfField = 0.0f;
         }
         photo::adjust(effective);
+        // The video export's own frames: this sample into the float sum, the last one finishes the
+        // frame into g_own.frame (see OwnExport).
+        OwnSample own = ownSample(g_scene.processedCount - 1, part || scaledPath);
+        if (own.accumulate == 2 && !g_own.frame.create(device, width, height, D3DFMT_A16B16G16R16F)) own = OwnSample();
+        if (own.accumulate) {
+            inputs.accumulate = own.accumulate;
+            inputs.accumulateFirst = own.first;
+            inputs.floatOutput = own.accumulate == 2;
+            inputs.lensDof = g_own.lensSamples > 0;
+            effective.filmGrain *= settings.videoGrain;
+            // The sub-frames are the motion blur: the screen-space one would blur it twice.
+            if (g_export.subFrames) effective.motionBlur = 0.0f;
+            g_own.samples++;
+        }
         LARGE_INTEGER renderStart, renderEnd;
         QueryPerformanceCounter(&renderStart);
         // RenderScale: switching between the scaled and the full size (photo mode, captures) keeps
         // the height map, the neon trail and the exposure.
         g_pipeline.keepWorldOnResize(settings.renderScale < 0.99f);
-        if (g_pipeline.render(device, inputs, effective, shaded) && scaledPath) g_rs.pending = false;
+        if (own.skip) {
+            g_own.skipped++;
+            showOwnFrame(device, shaded, width, height);
+        } else if (own.accumulate == 2) {
+            if (g_pipeline.render(device, inputs, effective, g_own.frame.surface)) finishOwnFrame(device, shaded, width, height);
+        } else if (g_pipeline.render(device, inputs, effective, shaded) && scaledPath) {
+            g_rs.pending = false;
+        }
+        // A sample only summed wrote nothing: the screen keeps showing the last finished frame.
+        if (own.accumulate == 1) showOwnFrame(device, shaded, width, height);
         LARGE_INTEGER captureStart, captureEnd;
         QueryPerformanceCounter(&captureStart);
         if (capture) writeCapture(device, inputs, idFrame);
@@ -2392,6 +2613,13 @@ void updateVideoExport() {
     // are logged when the stepping starts (and again if they change).
     if (on && !g_exporting) {
         stats = ExportStats();
+        g_own.framesSinceWrite = g_own.subIndex = 0;
+        g_own.fresh = g_own.haveFrame = false;
+        g_own.tenBitOk = -1;
+        g_own.lensFocus = 0.0f;
+        g_own.videoFrame = 0;
+        g_own.finished = g_own.delivered = g_own.repeated = g_own.dropped = g_own.skipped = g_own.samples = g_own.lensFrames = 0;
+        g_own.readMs = g_own.betweenMs = 0.0;
         TMVS_LOG("video export: started (its dialog; the settings follow when it shoots)");
     }
     const bool shooting = on && v.step > 0.0;
@@ -2426,6 +2654,18 @@ void updateVideoExport() {
                  "target; the last shaded target %ux%u format %d",
                  stats.engineMatrices, stats.noneSet, stats.floatCopies, stats.targetWidth, stats.targetHeight,
                  static_cast<int>(stats.targetFormat));
+        if (g_own.finished > 0) {
+            TMVS_LOG("video export: the mod's own frames: %u finished from %u samples (%u sub-frames past the shutter skipped), %u handed over, "
+                     "%u handed over again, %u replaced before the game wrote them; %u with lens depth of field; %s planes; %.1f s a frame, "
+                     "reading back %.1f ms a frame",
+                     g_own.finished, g_own.samples, g_own.skipped, g_own.delivered, g_own.repeated, g_own.dropped, g_own.lensFrames,
+                     g_own.tenBit ? "P010" : "NV12", g_own.finished > 1 ? g_own.betweenMs / 1000.0 / (g_own.finished - 1) : 0.0,
+                     g_own.delivered + g_own.repeated > 0 ? g_own.readMs / (g_own.delivered + g_own.repeated) : 0.0);
+        }
+        if (g_own.lensSet) engine::setLensOffset(0.0f, 0.0f, 0.0f);
+        g_own.lensSet = false;
+        g_own.lensSamples = 0;
+        releaseOwnExport(); // a 4K frame and its planes: some 100 MB of video memory
     }
     g_exporting = on;
     if (on) {
@@ -2437,6 +2677,7 @@ void updateVideoExport() {
     if (on && v.step > 0.0) {
         g_videoClock = g_videoClock < 0.0 ? static_cast<double>(effectTime()) : g_videoClock + v.step;
         stats.stepped++;
+        g_own.subIndex = g_own.framesSinceWrite++;
         // dev.ini TraceVideoFrame=n: a trace of one frame of the video (written at its Present).
         if (g_dev.traceVideoFrame > 0 && stats.stepped == static_cast<unsigned>(g_dev.traceVideoFrame)) {
             TMVS_LOG("video export: tracing frame %u of the video", stats.stepped);
@@ -2526,6 +2767,8 @@ void onCameraBegin(void* camera) {
                              g_scene.engineProjection[14] != 0.0f;
         g_scene.mainRenders++;
         engine::setMainCamera(camera);
+        // Accumulation depth of field: this sample's place on the lens, before its projection is made.
+        updateLens(ownSample(g_scene.mainRenders - 1, false));
         // Material masks: nothing left from the last frame where nothing is drawn (the sky).
         if (materialsWanted()) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
         g_idFrame = g_captureRequested && materialsWanted();
@@ -2802,6 +3045,7 @@ void onPreReset() {
     perflog::release();
     g_pipeline.setProfiling(true, false); // perflog's bracket is gone until the next Present
     g_pipeline.releaseForReset(); // the shaders stay (they live through the reset)
+    releaseOwnExport();
     releaseSideB();
     g_sceneCopy.destroy();
     g_partDepth.destroy();
@@ -3255,6 +3499,10 @@ void bootOnce() {
     engine::install(engineCallbacks);
     engine::setNightAtLoad(nightAtLoad);
     videofile::install();
+    videofile::FrameSource frames;
+    frames.deliver = ownDeliver;
+    frames.written = ownWritten;
+    videofile::setFrameSource(frames);
     engine::setMoonAtLoad(moonAtLoad);
 
     hook::DeviceCallbacks deviceCallbacks;

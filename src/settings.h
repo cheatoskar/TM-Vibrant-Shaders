@@ -49,8 +49,17 @@ struct Settings {
     bool taaJitter = true;          // TAA samples a different sub-pixel spot every frame (sharper, smoother)
     bool cinematicOnlyInReplays = true; // motion blur and DOF only in replays, intros and the video export
     bool videoExportBest = true;   // the game's video export: full quality, effects on the video's clock, every supersample shaded
-    int videoCodec = 1;            // the export's file: 0 the game's AVI (its codec dialog), 1 MP4 H.264, 2 MP4 HEVC (Media Foundation)
-    float videoBitrate = 0.0f;     // MP4: Mbit/s, 0 = from the size and frame rate (4K 30 fps: 50 H.264, 30 HEVC)
+    int videoCodec = 1;            // the export's file: 0 the game's AVI (its codec dialog), 1 MP4 H.264, 2 MP4 HEVC, 3 MP4 AV1
+    float videoBitrate = 0.0f;     // MP4: Mbit/s, 0 = constant quality (VideoQuality) instead of a bitrate
+    int videoQuality = 80;         // MP4: 0..100, the encoder's constant quality (80 clean for YouTube, 90+ for editing)
+    bool video10Bit = false;       // HEVC and AV1 in 10 bits (no banding in skies and fog); H.264 stays 8 bits with dither
+    int videoEncoder = 0;          // 0 the graphics card's encoder (Media Foundation), 1 a software encoder through your own ffmpeg.exe
+    int videoFfmpegPreset = 1;     // ffmpeg: 0 fast, 1 balanced, 2 best (slowest)
+    bool videoOwnFrames = true;    // the mod renders the video's frames: every sample summed in float, graded once a frame
+    float videoShutter = 360.0f;   // the game's motion blur: degrees of the frame its sub-frames cover (180 = film)
+    bool videoLensDof = true;      // depth of field from the samples themselves (the camera moves over the lens), with enough of them
+    float videoGrain = 0.5f;       // the look's film grain in the video (grain costs the encoder much of its bits)
+    int videoAspect = 0;           // 0 as shot, 1 2:1, 2 2.39:1 (cropped: the file holds only the picture)
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;
     // The game's 3D image and every effect at this fraction of the screen's resolution, brought back

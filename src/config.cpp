@@ -124,9 +124,18 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("DofAutofocus", "Focus on", "Cinematic", Int, dofAutofocus, 0.0f, 1.0f),
         TMVS_FIELD("BokehSize", "Max blur (px)", "Cinematic", Float, bokehSize, 2.0f, 24.0f),
         TMVS_FIELD("CinematicOnlyInReplays", "Cinematic in replays only", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
-        TMVS_FIELD("VideoCodec", "Video format", "Cinematic", Int, videoCodec, 0.0f, 2.0f),
+        TMVS_FIELD("VideoCodec", "Video format", "Cinematic", Int, videoCodec, 0.0f, 3.0f),
+        TMVS_FIELD("VideoQuality", "Video quality", "Cinematic", Int, videoQuality, 0.0f, 100.0f),
+        TMVS_FIELD("Video10Bit", "10-bit video", "Cinematic", Bool, video10Bit, 0.0f, 1.0f),
         TMVS_FIELD("VideoBitrate", "Video bitrate (Mbit/s)", "Cinematic", Float, videoBitrate, 0.0f, 200.0f),
+        TMVS_FIELD("VideoEncoder", "Video encoder", "Cinematic", Int, videoEncoder, 0.0f, 1.0f),
+        TMVS_FIELD("VideoFfmpegPreset", "ffmpeg speed", "Cinematic", Int, videoFfmpegPreset, 0.0f, 2.0f),
         TMVS_FIELD("VideoExportBest", "Best export quality", "Cinematic", Bool, videoExportBest, 0.0f, 1.0f),
+        TMVS_FIELD("VideoOwnFrames", "Mod renders the frames", "Cinematic", Bool, videoOwnFrames, 0.0f, 1.0f),
+        TMVS_FIELD("VideoShutter", "Shutter (degrees)", "Cinematic", Float, videoShutter, 45.0f, 360.0f),
+        TMVS_FIELD("VideoLensDof", "Lens depth of field", "Cinematic", Bool, videoLensDof, 0.0f, 1.0f),
+        TMVS_FIELD("VideoGrain", "Film grain in the video", "Cinematic", Float, videoGrain, 0.0f, 1.0f),
+        TMVS_FIELD("VideoAspect", "Video aspect", "Cinematic", Int, videoAspect, 0.0f, 2.0f),
 
         TMVS_FIELD("TAA", "Temporal AA", "Image quality", Bool, taa, 0.0f, 1.0f),
         TMVS_FIELD("TAAJitter", "TAA jitter", "Image quality", Bool, taaJitter, 0.0f, 1.0f),
@@ -262,7 +271,7 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
+           !strncmp(f.key, "Video", 5) || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
@@ -1255,9 +1264,7 @@ void applyPreset(Settings& s, Preset preset) {
     const float keepTarget = s.targetFps;
     const float keepSound = s.weatherSound;
     const bool keepReplayOnly = s.cinematicOnlyInReplays;
-    const bool keepVideoBest = s.videoExportBest;
-    const int keepVideoCodec = s.videoCodec;
-    const float keepVideoBitrate = s.videoBitrate;
+    const Settings keepVideo = s; // the video export's settings (Video*): all of them belong to the installation
     const bool keepJitter = s.taaJitter;
     const float keepScale = s.renderScale, keepFsrSharpness = s.fsrSharpness;
     const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
@@ -1295,9 +1302,18 @@ void applyPreset(Settings& s, Preset preset) {
     s.targetFps = keepTarget;
     s.weatherSound = keepSound;
     s.cinematicOnlyInReplays = keepReplayOnly;
-    s.videoExportBest = keepVideoBest;
-    s.videoCodec = keepVideoCodec;
-    s.videoBitrate = keepVideoBitrate;
+    s.videoExportBest = keepVideo.videoExportBest;
+    s.videoCodec = keepVideo.videoCodec;
+    s.videoBitrate = keepVideo.videoBitrate;
+    s.videoQuality = keepVideo.videoQuality;
+    s.video10Bit = keepVideo.video10Bit;
+    s.videoEncoder = keepVideo.videoEncoder;
+    s.videoFfmpegPreset = keepVideo.videoFfmpegPreset;
+    s.videoOwnFrames = keepVideo.videoOwnFrames;
+    s.videoShutter = keepVideo.videoShutter;
+    s.videoLensDof = keepVideo.videoLensDof;
+    s.videoGrain = keepVideo.videoGrain;
+    s.videoAspect = keepVideo.videoAspect;
     s.taaJitter = keepJitter;
     s.renderScale = keepScale;
     s.fsrSharpness = keepFsrSharpness;
@@ -1728,8 +1744,21 @@ void Config::load() {
     settings.cinematicOnlyInReplays = GetPrivateProfileIntW(L"Settings", L"CinematicOnlyInReplays", 1, ini) != 0;
     settings.videoExportBest = GetPrivateProfileIntW(L"Settings", L"VideoExportBest", 1, ini) != 0;
     settings.videoCodec = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoCodec", 1, ini));
-    if (settings.videoCodec < 0 || settings.videoCodec > 2) settings.videoCodec = 1;
+    if (settings.videoCodec < 0 || settings.videoCodec > 3) settings.videoCodec = 1;
     if (GetPrivateProfileStringW(L"Settings", L"VideoBitrate", L"", target, 32, ini)) settings.videoBitrate = static_cast<float>(_wtof(target));
+    settings.videoQuality = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoQuality", 80, ini)), 0, 100);
+    settings.video10Bit = GetPrivateProfileIntW(L"Settings", L"Video10Bit", 0, ini) != 0;
+    settings.videoEncoder = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoEncoder", 0, ini)), 0, 1);
+    settings.videoFfmpegPreset = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoFfmpegPreset", 1, ini)), 0, 2);
+    settings.videoOwnFrames = GetPrivateProfileIntW(L"Settings", L"VideoOwnFrames", 1, ini) != 0;
+    if (GetPrivateProfileStringW(L"Settings", L"VideoShutter", L"", target, 32, ini)) {
+        settings.videoShutter = std::clamp(static_cast<float>(_wtof(target)), 45.0f, 360.0f);
+    }
+    settings.videoLensDof = GetPrivateProfileIntW(L"Settings", L"VideoLensDof", 1, ini) != 0;
+    if (GetPrivateProfileStringW(L"Settings", L"VideoGrain", L"", target, 32, ini)) {
+        settings.videoGrain = std::clamp(static_cast<float>(_wtof(target)), 0.0f, 1.0f);
+    }
+    settings.videoAspect = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoAspect", 0, ini)), 0, 2);
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 1, ini) != 0;
     if (GetPrivateProfileStringW(L"Settings", L"RenderScale", L"", target, 32, ini)) {
         settings.renderScale = std::clamp(static_cast<float>(_wtof(target)), 0.5f, 1.0f);

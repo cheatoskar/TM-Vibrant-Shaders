@@ -2,7 +2,8 @@
 #include "config.h"
 #include "engine.h"
 #include "log.h"
-#include "mp4writer.h"
+#include "videoencoder.h"
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,20 +16,35 @@ namespace {
 struct Export {
     void* file = nullptr;
     std::wstring avi;               // the game's .avi
-    std::unique_ptr<mp4::Writer> mp4;
-    bool video = false;             // the MP4 takes the frames
-    bool refused = false;           // the game's AVI is written (VideoCodec 0, or Media Foundation failed)
-    int width = 0, height = 0, bpp = 3;
+    std::unique_ptr<venc::Encoder> encoder;
+    bool video = false;             // the encoder takes the frames
+    bool refused = false;           // the game's AVI is written (VideoCodec 0, or the encoder failed)
+    int width = 0, height = 0, bpp = 3; // the game's frames
+    double fps = 0.0;
+    OwnFormat own;                  // what the encoder takes (its size: the crop of the game's)
+    bool ownFrames = false;         // VideoOwnFrames: the plugin's frames are wanted
     WAVEFORMATEX sound{};
     bool hasSound = false;
+    std::vector<char> early;        // sound that came before the encoder (it opens with the video)
+    // The frames that went in: the plugin's, the game's (no frame of the plugin yet), and the
+    // plugin's that came between two of the game's writes (the last of them went in).
+    int fromPlugin = 0, fromGame = 0;
 };
 std::vector<Export> g_exports;
+FrameSource g_source;
 
 Export* find(void* file) {
     for (Export& e : g_exports) {
         if (e.file == file) return &e;
     }
     return nullptr;
+}
+
+Export& findOrAdd(void* file) {
+    if (Export* e = find(file)) return *e;
+    g_exports.emplace_back();
+    g_exports.back().file = file;
+    return g_exports.back();
 }
 
 std::string narrow(const std::wstring& text) {
@@ -59,101 +75,153 @@ std::wstring mp4Path(const std::wstring& avi) {
     return dir + name;
 }
 
+bool mp4Codec(const Settings& s) {
+    return s.videoCodec >= 1 && s.videoCodec <= 3;
+}
+
+// VideoAspect: the picture's height for the game's width (multiples of 8, never taller than the
+// game's frame), the rest cropped evenly off the top and bottom.
+int croppedHeight(int width, int height, int aspect) {
+    if (aspect <= 0) return height;
+    const double ratio = aspect == 1 ? 2.0 : 2.39;
+    const int h = static_cast<int>(width / ratio / 8.0 + 0.5) * 8;
+    return h >= 16 && h < height ? h : height;
+}
+
 void opened(void* file, const wchar_t* path, bool ok) {
-    Export* e = find(file);
-    if (!e) {
-        g_exports.emplace_back();
-        e = &g_exports.back();
-        e->file = file;
+    Export& e = findOrAdd(file);
+    e.avi = path;
+    TMVS_LOG("video file: the game opens %s%s", narrow(e.avi).c_str(), ok ? "" : " (failed)");
+}
+
+// The encoder for this export, opened at the first of the video and the sound (the sound may
+// come first: the encoder then takes it from the start).
+bool startEncoder(Export& e) {
+    if (e.encoder) return true;
+    const Settings& s = Config::get().settings;
+    e.encoder = std::make_unique<venc::Encoder>();
+    venc::Options o;
+    o.backend = s.videoEncoder == 1 ? venc::Backend::Ffmpeg : venc::Backend::MediaFoundation;
+    o.codec = static_cast<venc::Codec>(std::clamp(s.videoCodec, 1, 3));
+    o.tenBit = s.video10Bit && s.videoCodec >= 2;
+    o.width = e.own.width;
+    o.height = e.own.height;
+    o.fps = e.fps;
+    o.quality = std::clamp(s.videoQuality, 0, 100);
+    o.bitrate = s.videoBitrate > 0.0f ? s.videoBitrate * 1e6 : 0.0;
+    o.ffmpegPreset = std::clamp(s.videoFfmpegPreset, 0, 2);
+    std::string error;
+    TMVS_LOG("video file: encoders: %s", venc::describeEncoders().c_str());
+    if (!e.encoder->open(mp4Path(e.avi), o, error)) {
+        TMVS_LOG("video file: no MP4 (%s): the game's AVI instead, with its codec dialog", error.c_str());
+        e.encoder->discard();
+        e.encoder.reset();
+        return false;
     }
-    e->avi = path;
-    TMVS_LOG("video file: the game opens %s%s", narrow(e->avi).c_str(), ok ? "" : " (failed)");
+    if (e.hasSound) e.encoder->openAudio(e.sound);
+    if (!e.early.empty()) {
+        e.encoder->writeAudio(e.early.data(), e.early.size());
+        e.early.clear();
+        e.early.shrink_to_fit();
+    }
+    e.own.tenBit = e.encoder->wants() == venc::Pixels::P010;
+    return true;
 }
 
 bool videoOpen(void* file, int width, int height, float fps, int bytesPerPixel) {
-    Export* e = find(file);
-    if (!e) {
-        g_exports.emplace_back();
-        e = &g_exports.back();
-        e->file = file;
-    }
+    Export& e = findOrAdd(file);
     const Settings& s = Config::get().settings;
-    if (s.videoCodec != 1 && s.videoCodec != 2) {
+    if (!mp4Codec(s)) {
         TMVS_LOG("video file: the game's AVI (VideoCodec 0), %dx%d at %.3f fps", width, height, fps);
-        e->refused = true;
-        if (e->mp4) e->mp4->discard();
-        e->mp4.reset();
+        e.refused = true;
+        if (e.encoder) e.encoder->discard();
+        e.encoder.reset();
         return false;
     }
-    if (!e->mp4) e->mp4 = std::make_unique<mp4::Writer>();
-    e->mp4->setPath(mp4Path(e->avi));
-    if (e->hasSound) e->mp4->openAudio(e->sound);
-    std::string error;
-    TMVS_LOG("video file: encoders: %s", mp4::describeEncoders().c_str());
-    if (!e->mp4->openVideo(width, height, fps, s.videoCodec == 2 ? mp4::Codec::HEVC : mp4::Codec::H264, s.videoBitrate * 1e6, error)) {
-        TMVS_LOG("video file: no MP4 (%s): the game's AVI instead, with its codec dialog", error.c_str());
-        e->mp4->discard();
-        e->mp4.reset();
-        e->refused = true;
+    e.width = width;
+    e.height = height;
+    e.bpp = bytesPerPixel;
+    e.fps = fps;
+    e.own = OwnFormat();
+    e.own.width = width;
+    e.own.height = croppedHeight(width, height, s.videoAspect);
+    e.own.crop[1] = static_cast<float>(height - e.own.height) * 0.5f / height;
+    e.own.crop[3] = static_cast<float>(e.own.height) / height;
+    e.ownFrames = s.videoOwnFrames && g_source.deliver;
+    if (!startEncoder(e)) {
+        e.refused = true;
         return false;
     }
-    e->video = true;
-    e->width = width;
-    e->height = height;
-    e->bpp = bytesPerPixel;
-    TMVS_LOG("video file: MP4 %s -> %s", e->mp4->encoderName().c_str(), narrow(e->mp4->path()).c_str());
+    e.video = true;
+    TMVS_LOG("video file: MP4 %s -> %s; frames %s%s", e.encoder->description().c_str(), narrow(e.encoder->path()).c_str(),
+             e.ownFrames ? "rendered by the mod (the game's until its first)" : "the game's",
+             e.own.height != height ? (", cropped to " + std::to_string(e.own.width) + "x" + std::to_string(e.own.height)).c_str() : "");
     return true;
 }
 
 bool videoFrame(void* file, const void* pixels) {
     Export* e = find(file);
-    if (!e || !e->video || !e->mp4) return false;
-    e->mp4->writeFrame(static_cast<const uint8_t*>(pixels), e->width * e->bpp, e->bpp, true);
+    if (!e || !e->video || !e->encoder) return false;
+    bool done = false;
+    if (e->ownFrames && g_source.deliver && g_source.deliver(*e->encoder, e->own)) {
+        e->fromPlugin++;
+        done = true;
+    }
+    if (!done) {
+        // The game's frame (bottom-up rows): the crop is the middle rows, which lie together.
+        const size_t stride = static_cast<size_t>(e->width) * e->bpp;
+        const int skip = (e->height - e->own.height) / 2;
+        e->encoder->pushBgr(static_cast<const uint8_t*>(pixels) + stride * skip, e->bpp);
+        e->fromGame++;
+    }
+    if (g_source.written) g_source.written();
     return true; // also when it failed: the game has no stream to write it to (the log says it)
 }
 
 void audioOpen(void* file, const void* format) {
-    Export* e = find(file);
-    if (!e) {
-        g_exports.emplace_back();
-        e = &g_exports.back();
-        e->file = file;
-    }
-    memcpy(&e->sound, format, 16); // SWaveFormat: WAVEFORMATEX without cbSize
-    e->sound.cbSize = 0;
-    e->hasSound = true;
-    TMVS_LOG("video file: sound %u Hz, %u bits, %u channels (format %u)", e->sound.nSamplesPerSec, e->sound.wBitsPerSample, e->sound.nChannels,
-             e->sound.wFormatTag);
-    if (e->mp4) e->mp4->openAudio(e->sound);
+    Export& e = findOrAdd(file);
+    memcpy(&e.sound, format, 16); // SWaveFormat: WAVEFORMATEX without cbSize
+    e.sound.cbSize = 0;
+    e.hasSound = true;
+    TMVS_LOG("video file: sound %u Hz, %u bits, %u channels (format %u)", e.sound.nSamplesPerSec, e.sound.wBitsPerSample, e.sound.nChannels,
+             e.sound.wFormatTag);
+    if (e.encoder) e.encoder->openAudio(e.sound);
 }
 
 void audioData(void* file, const void* data, unsigned long blocks) {
     Export* e = find(file);
     if (!e || e->refused || !e->hasSound || !e->sound.nBlockAlign) return;
-    // The sound may come before the video: keep it (the writer exists from the first piece).
-    if (!e->mp4) {
+    // The sound may come before the video: kept by an encoder that opens with the video (its
+    // size is only known then), meanwhile in memory.
+    if (!e->encoder) {
         const Settings& s = Config::get().settings;
-        if (s.videoCodec != 1 && s.videoCodec != 2) return;
-        e->mp4 = std::make_unique<mp4::Writer>();
-        e->mp4->setPath(mp4Path(e->avi));
-        e->mp4->openAudio(e->sound);
+        if (!mp4Codec(s)) return;
+        e->early.insert(e->early.end(), static_cast<const char*>(data), static_cast<const char*>(data) + static_cast<size_t>(blocks) * e->sound.nBlockAlign);
+        return;
     }
-    e->mp4->writeAudio(data, static_cast<size_t>(blocks) * e->sound.nBlockAlign);
+    if (!e->early.empty()) {
+        e->encoder->writeAudio(e->early.data(), e->early.size());
+        e->early.clear();
+        e->early.shrink_to_fit();
+    }
+    e->encoder->writeAudio(data, static_cast<size_t>(blocks) * e->sound.nBlockAlign);
 }
 
 void closed(void* file) {
     for (size_t i = 0; i < g_exports.size(); i++) {
         Export& e = g_exports[i];
         if (e.file != file) continue;
-        if (e.mp4 && e.video) {
+        if (e.encoder && e.video) {
+            if (!e.early.empty()) e.encoder->writeAudio(e.early.data(), e.early.size());
             std::string report;
-            const bool complete = e.mp4->close(report);
-            TMVS_LOG("video file: MP4 written: %s, %s", narrow(e.mp4->path()).c_str(), report.c_str());
+            const bool complete = e.encoder->close(report);
+            TMVS_LOG("video file: MP4 written: %s, %s; frames from the mod %d, from the game %d", narrow(e.encoder->path()).c_str(), report.c_str(),
+                     e.fromPlugin, e.fromGame);
             // The game's .avi has no video (its stream was never opened): gone once the MP4
             // holds everything. Kept when the MP4 lacks the sound (the .avi has it too).
             if (complete && !e.avi.empty() && DeleteFileW(e.avi.c_str())) TMVS_LOG("video file: the game's .avi (no video in it) deleted");
-        } else if (e.mp4) {
-            e.mp4->discard();
+        } else if (e.encoder) {
+            e.encoder->discard();
         }
         g_exports.erase(g_exports.begin() + static_cast<ptrdiff_t>(i));
         return;
@@ -161,6 +229,20 @@ void closed(void* file) {
 }
 
 } // namespace
+
+bool ownFormat(OwnFormat& out) {
+    for (const Export& e : g_exports) {
+        if (e.video && e.encoder && e.ownFrames) {
+            out = e.own;
+            return true;
+        }
+    }
+    return false;
+}
+
+void setFrameSource(const FrameSource& source) {
+    g_source = source;
+}
 
 void install() {
     if (!engine::videoFileHooked()) return;
