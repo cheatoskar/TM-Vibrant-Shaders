@@ -61,6 +61,26 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 // The camera (CHmsCamera) the plugin shades: zoom and tiles apply to its projection only.
 void setMainCamera(const void* camera);
 
+// Accumulation depth of field: moves the main camera's eye by (x, y) metres in view space and shears
+// the projection so the plane at focusDistance metres (view-space z, the depth the shaders use)
+// stays put. Applied to every main camera projection until cleared (0, 0), after zoom, tiles and
+// jitter. The engine computes a camera's projection BEFORE its RenderCameraBegin (both for the
+// screen and for the export's samples rendered into textures), so a change made in the
+// cameraBegin callback only reaches the next render: set it in frameBegin, or use the table below.
+// cameraMatrices() and the SetTransform the plugin sees carry the offset matrix.
+void setLensOffset(float x, float y, float focusDistance);
+// The same with a table of offsets (count pairs x, y; at most 128): while the game supersamples
+// the main camera (the video export's "high quality", sub-frames of its motion blur included)
+// the render of its sample k (0 .. n n - 1 within one video frame, the game's own order) gets entry
+// k % count; other main camera renders take the entries in turn from the call on. count 0 = off.
+// One call before the export's first stepped frame is enough; calling it again restarts the turn.
+void setLensSamples(const float* xy, int count, float focusDistance);
+// The main camera's last projection (computed just before its RenderCameraBegin, so in the
+// cameraBegin callback: the render that begins): the game's supersampling sample it was for
+// (index 0 .. count - 1 within its video frame; false and -1 when the game didn't supersample it)
+// and the lens table entry it got (-1 none).
+bool mainCameraSample(int& index, int& count, int& lensEntry);
+
 // The view and projection (D3D layout, as SetTransform gets them) the engine computed for the
 // camera that began last, before its RenderCameraBegin. False when it computed none.
 bool cameraMatrices(float view[16], float projection[16]);
