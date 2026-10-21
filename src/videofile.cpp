@@ -2,7 +2,7 @@
 #include "config.h"
 #include "engine.h"
 #include "log.h"
-#include "mp4writer.h"
+#include "videoencoder.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,7 +15,7 @@ namespace {
 struct Export {
     void* file = nullptr;
     std::wstring avi;               // the game's .avi
-    std::unique_ptr<mp4::Writer> mp4;
+    std::unique_ptr<venc::Encoder> mp4;
     bool video = false;             // the MP4 takes the frames
     bool refused = false;           // the game's AVI is written (VideoCodec 0, or Media Foundation failed)
     int width = 0, height = 0, bpp = 3;
@@ -85,12 +85,18 @@ bool videoOpen(void* file, int width, int height, float fps, int bytesPerPixel) 
         e->mp4.reset();
         return false;
     }
-    if (!e->mp4) e->mp4 = std::make_unique<mp4::Writer>();
+    if (!e->mp4) e->mp4 = std::make_unique<venc::Encoder>();
     e->mp4->setPath(mp4Path(e->avi));
     if (e->hasSound) e->mp4->openAudio(e->sound);
     std::string error;
-    TMVS_LOG("video file: encoders: %s", mp4::describeEncoders().c_str());
-    if (!e->mp4->openVideo(width, height, fps, s.videoCodec == 2 ? mp4::Codec::HEVC : mp4::Codec::H264, s.videoBitrate * 1e6, error)) {
+    TMVS_LOG("video file: encoders: %s", venc::describeEncoders().c_str());
+    venc::Options options;
+    options.codec = s.videoCodec == 2 ? venc::Codec::HEVC : venc::Codec::H264;
+    options.width = width;
+    options.height = height;
+    options.fps = fps;
+    options.bitrate = s.videoBitrate * 1e6; // 0: constant quality
+    if (!e->mp4->open(e->mp4->path(), options, error)) {
         TMVS_LOG("video file: no MP4 (%s): the game's AVI instead, with its codec dialog", error.c_str());
         e->mp4->discard();
         e->mp4.reset();
@@ -101,14 +107,14 @@ bool videoOpen(void* file, int width, int height, float fps, int bytesPerPixel) 
     e->width = width;
     e->height = height;
     e->bpp = bytesPerPixel;
-    TMVS_LOG("video file: MP4 %s -> %s", e->mp4->encoderName().c_str(), narrow(e->mp4->path()).c_str());
+    TMVS_LOG("video file: MP4 %s -> %s", e->mp4->description().c_str(), narrow(e->mp4->path()).c_str());
     return true;
 }
 
 bool videoFrame(void* file, const void* pixels) {
     Export* e = find(file);
     if (!e || !e->video || !e->mp4) return false;
-    e->mp4->writeFrame(static_cast<const uint8_t*>(pixels), e->width * e->bpp, e->bpp, true);
+    e->mp4->pushBgr(static_cast<const uint8_t*>(pixels), e->bpp);
     return true; // also when it failed: the game has no stream to write it to (the log says it)
 }
 
@@ -134,7 +140,7 @@ void audioData(void* file, const void* data, unsigned long blocks) {
     if (!e->mp4) {
         const Settings& s = Config::get().settings;
         if (s.videoCodec != 1 && s.videoCodec != 2) return;
-        e->mp4 = std::make_unique<mp4::Writer>();
+        e->mp4 = std::make_unique<venc::Encoder>();
         e->mp4->setPath(mp4Path(e->avi));
         e->mp4->openAudio(e->sound);
     }
