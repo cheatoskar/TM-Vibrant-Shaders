@@ -217,7 +217,11 @@ constexpr InlineSite kCacheSaveSite = {kCacheSave, {0x55, 0x8b, 0xec, 0x83, 0xe4
 // size rounded up to 8 and written back, AVISaveOptions - the codec dialog -, a BI_RGB header
 // at +0x0c of its data [this+4], the image size at +0x20 for GetImageByteSize, the frame
 // counter at +0x40) and writes every finished frame (VideoStreamWrite: bottom-up BGR, 3 bytes
-// a pixel, with supersampling only the averaged frame). DoShoot opens the sound
+// a pixel, with supersampling only the averaged frame). The frame is the one DoShoot flagged
+// (CHmsViewport::VideoAddCurrentFrame, +0x54c) before this render: GetRenderTargetData of the
+// viewport's colour surface, then the write, then EndScene and Present - and while the stream
+// is open only flagged frames are presented: the sub-frames between them never reach Present
+// (docs/engine-video-export.md). DoShoot opens the sound
 // (AudioStreamOpen, an SWaveFormat = WAVEFORMATEX without cbSize) and writes it in pieces
 // between the frames (AudioStreamWrite, a count of blocks). Close and the destructor end it.
 constexpr InlineSite kAviOpenSite = {kAviOpen, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04}, 6, -1, "CVisionVideoAvi::OpenToWrite"};
@@ -303,6 +307,24 @@ float g_zoom = 1.0f;             // photo mode zoom (>= 1: the engine culls with
 // the reflection cameras (water planes, the cube maps of the car, which need their 90 degrees).
 const void* g_mainCamera = nullptr;
 bool g_loggedMainProjection = false;
+// Accumulation depth of field: the eye of the main camera moves by a lens offset (metres, view
+// space) and the projection is sheared so the plane at g_lensFocus stays put. One offset per
+// render, from a table: by the game's own supersampling sample when the camera has it (the
+// video export: CSceneFxSuperSample::FxRender writes the sample index into the CHmsCamera before
+// each render, also for the sub-frames of its motion blur), else one entry per main camera
+// projection in turn. count 0 = off.
+constexpr int kMaxLensSamples = 128; // the game takes at most 11 x 11 samples
+float g_lensXY[kMaxLensSamples][2] = {};
+int g_lensCount = 0;
+float g_lensFocus = 0.0f;
+unsigned g_lensRenders = 0;   // main camera projections since the table was set (without game samples)
+int g_lensUsed = -1;          // the entry the last main camera projection got (-1 none)
+int g_gameSample[2] = {-1, 0}; // the game's sample index and count of that projection (-1: none)
+bool g_loggedLens = false;
+// CHmsCamera, while CSceneFxSuperSample::FxRender renders it (CHmsCamera::ZClipCompute shifts the
+// render frustum by a sub-pixel from them, in both builds): +0x180 on, +0x184 / +0x188 the
+// sample's column and row, +0x18c / +0x190 the columns and rows (n, n).
+constexpr size_t kCameraSuperSample = 0x180;
 // The matrices the engine computed last (ComputeDriverViewMatrix / ComputeDriverProjection), as
 // it hands them to SetTransform, and those it had computed when a camera began. A camera drawn
 // into a texture (TexRender_RenderTexture: TransformStackCameraPush, then RenderCameraBegin; the
@@ -1496,6 +1518,55 @@ void __fastcall viewMatrixDetour(void* self, void* edx, void* location) {
     g_lastViewSet = true;
 }
 
+// The game's supersampling sample this camera is being rendered for (index, count), false when
+// it has none. The projection is computed after CHmsCamera::ZClipCompute and before the render's
+// RenderCameraBegin (RenderCameraNormal, TransformStackCameraPush), so the fields are those of
+// the render about to start.
+bool gameSampleOf(const void* camera, int& index, int& count) {
+    const BYTE* c = static_cast<const BYTE*>(camera);
+    if (!c || !readable(c + kCameraSuperSample, 5 * sizeof(int))) return false;
+    const int* s = reinterpret_cast<const int*>(c + kCameraSuperSample);
+    if (s[0] == 0 || s[3] < 1 || s[4] < 1 || s[3] > 11 || s[4] > 11 || s[1] < 0 || s[2] < 0 || s[1] >= s[3] || s[2] >= s[4]) return false;
+    index = s[2] * s[3] + s[1];
+    count = s[3] * s[4];
+    return true;
+}
+
+// The lens offset on a perspective projection (after zoom, tiles and jitter, so with their
+// scale). D3D row vectors, clip = [x y z 1] P, view space z forward in metres (P23 = 1 makes
+// w = z). The eye moved by a and the image re-aimed so the plane z = F stays put means
+// x -> x + a.x (z / F - 1), y likewise: row 2 gains (a.x row 0 + a.y row 1) / F, row 3 loses
+// a.x row 0 + a.y row 1. Every column, so nothing is assumed about the other terms.
+void applyLens(float* m, const void* camera) {
+    int index = -1, count = 0;
+    g_gameSample[0] = -1;
+    g_gameSample[1] = 0;
+    const bool game = gameSampleOf(camera, index, count);
+    if (game) {
+        g_gameSample[0] = index;
+        g_gameSample[1] = count;
+    }
+    g_lensUsed = -1;
+    if (g_lensCount <= 0 || !(g_lensFocus > 0.0f)) return;
+    const int entry = game ? index % g_lensCount : static_cast<int>(g_lensRenders++ % static_cast<unsigned>(g_lensCount));
+    const float ax = g_lensXY[entry][0], ay = g_lensXY[entry][1];
+    g_lensUsed = entry;
+    if (ax == 0.0f && ay == 0.0f) return;
+    if (!g_loggedLens) {
+        g_loggedLens = true;
+        TMVS_LOG("engine: lens offsets on the main camera's projection (%d of them, focus %.2f m, %s)", g_lensCount, g_lensFocus,
+                 game ? "one per sample of the game's supersampling" : "one per render in turn");
+    }
+    float* p = m + 16;
+    for (int c = 0; c < 4; c++) {
+        const float shift = ax * p[c] + ay * p[4 + c];
+        p[8 + c] += shift / g_lensFocus;
+        p[12 + c] -= shift;
+        m[c * 4 + 2] = p[8 + c]; // the engine's GmMat4 (the transpose) at m[0]
+        m[c * 4 + 3] = p[12 + c];
+    }
+}
+
 // SHmsCameraProjection: +0x00 GmMat4 projection, +0x40 transposed copy.
 void __fastcall projectionDetour(void* self, void* edx, void* projection, const void* frustum, void* camera) {
     g_projection(self, edx, projection, frustum, camera);
@@ -1536,7 +1607,9 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
         m[16 + 8] += g_jitter[0];
         m[16 + 9] += g_jitter[1];
     }
-    memcpy(&g_camera.projection, projection, sizeof(Matrix4));
+    if (main && m[14] == 1.0f && m[16 + 11] == 1.0f) applyLens(m, camera);
+    // The D3D layout, as the header says (m[0] holds the engine's GmMat4, its transpose).
+    memcpy(&g_camera.projection, m + 16, sizeof(Matrix4));
     g_camera.hasProjection = true;
     memcpy(&g_lastProjection, m + 16, sizeof(Matrix4)); // the D3D layout SetTransform(D3DTS_PROJECTION) gets
     g_lastProjectionSet = true;
@@ -1888,6 +1961,38 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 
 void setMainCamera(const void* camera) {
     g_mainCamera = camera;
+}
+
+void setLensOffset(float x, float y, float focusDistance) {
+    const float xy[2] = {x, y};
+    setLensSamples(x == 0.0f && y == 0.0f ? nullptr : xy, 1, focusDistance);
+}
+
+void setLensSamples(const float* xy, int count, float focusDistance) {
+    if (!xy || count <= 0 || !(focusDistance > 0.0f) || !std::isfinite(focusDistance)) {
+        if (g_lensCount > 0) TMVS_LOG("engine: lens offsets off");
+        g_lensCount = 0;
+        g_loggedLens = false;
+        g_lensUsed = -1;
+        return;
+    }
+    count = (std::min)(count, kMaxLensSamples);
+    for (int i = 0; i < count; i++) {
+        const bool ok = std::isfinite(xy[2 * i]) && std::isfinite(xy[2 * i + 1]);
+        g_lensXY[i][0] = ok ? xy[2 * i] : 0.0f;
+        g_lensXY[i][1] = ok ? xy[2 * i + 1] : 0.0f;
+    }
+    g_lensCount = count;
+    // Nearer than about the near plane the shear would throw the image about.
+    g_lensFocus = (std::max)(focusDistance, 0.05f);
+    g_lensRenders = 0;
+}
+
+bool mainCameraSample(int& index, int& count, int& lensEntry) {
+    index = g_gameSample[0];
+    count = g_gameSample[1];
+    lensEntry = g_lensUsed;
+    return index >= 0;
 }
 
 bool cameraMatrices(float view[16], float projection[16]) {
