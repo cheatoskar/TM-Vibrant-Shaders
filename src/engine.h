@@ -220,8 +220,12 @@ struct VideoExport {
     int samplesPerVideoFrame = 1;
     bool writesVideo = true;   // false: a run that writes no video (DoShoot skipped the output)
     int stereo = 0;            // the dialog's 3D stereo mode (0 off)
+    bool sound = false;        // the dialog's sound button (IsAudioStream, off by default): without it
+                               // DoShoot skips its sound pass, the file gets no sound stream at all
     double step = 0.0;         // seconds the game's clock advances per rendered frame, 0 = real time
     double gameClock = 0.0;    // the game's clock (s), for the log
+    double clipStart = 0.0, clipStop = 0.0; // the clip (s): the frames cover start .. stop, the sound
+                               // pass 0 .. stop (it sets the clip's time from 0)
 };
 // The video export's file (the game's AVI writer, CVisionVideoAvi): the mod can write the
 // frames and the sound into a file of its own. `file` identifies one export.

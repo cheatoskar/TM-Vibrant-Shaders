@@ -130,6 +130,7 @@ add_library(tmvs_core STATIC
   src/image.cpp
   src/lut.cpp
   src/videoencoder.cpp
+  src/loopback.cpp
   src/gbufpatch.cpp
   ${TMVS_SHADER_HEADERS}
 )
@@ -162,6 +163,7 @@ add_library(tm_vibrant_shaders SHARED
   src/audio.cpp
   src/proxy.cpp
   src/videofile.cpp
+  src/soundcapture.cpp
   src/exports.def
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
   sounds/sounds.rc
@@ -202,6 +204,12 @@ target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_mp4test tools/mp4test.cpp)
 target_link_libraries(tmvs_mp4test PRIVATE tmvs_core)
 target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
+
+# Loopback test: a tone played and recorded back from this process's own output, as the video
+# export's sound pass does (development tool).
+add_executable(tmvs_loopbacktest tools/loopbacktest.cpp)
+target_link_libraries(tmvs_loopbacktest PRIVATE tmvs_core winmm)
+target_compile_options(tmvs_loopbacktest PRIVATE ${TMVS_OPTIONS})
 
 # Hotkey table test: key names round-trip, conflicts, the ini (development tool).
 add_executable(tmvs_keystest tools/keystest.cpp)

@@ -105,13 +105,18 @@ constexpr InlineSite kClipViewerCams = {kClipCams, {0x6a, 0xff, 0x68, 0, 0, 0, 0
 constexpr InlineSite kVideoShootSite = {kVideoShoot, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CGameCtnMediaVideoShooter::DoShoot"};
 // The export's settings (the same in both builds, from DoShoot): the shooter holds the dialog's
 // CGameCtnMediaVideoParams at +0x4c (Fps +0x14, Width +0x18, Height +0x1c, Hq +0x20,
-// HqSampleSize +0x24, HqMB +0x28, Stereo3d +0x38, from its parameter table); +0x14 set means
+// HqSampleSize +0x24, HqMB +0x28, IsAudioStream +0x34, Stereo3d +0x38, from its parameter table); +0x14 set means
 // this run opens no video output. With Hq and a sample size n > 1 the camera gets a
 // CSceneFxSuperSample of n x n (n at most 11). With HqMB and n x n >= 9 the samples are spread
 // over time ("external loop"): every rendered frame is one sample, the clock advances by
 // 1 / (fps n n), and only the last of them is written. Otherwise its FxRender renders the
 // camera n x n times within the frame, each with a sub-pixel offset, into the same texture.
 constexpr size_t kShooterNoVideo = 0x14;
+// The clip's start and end (ms, CMwTimer::SecondsToMwTime of the clip's StartTimeGet / StopTimeGet).
+// The frames run from the start; the sound pass sets the clip's time from 0 instead (DoShoot,
+// state 0x184: tick - tick at the capture's start), so with a start above 0 its sound begins earlier.
+constexpr size_t kShooterClipStart = 0x30;
+constexpr size_t kShooterClipStop = 0x38;
 constexpr size_t kShooterParams = 0x4c;
 constexpr size_t kVideoParamsSize = 0x3c;
 // CMwCmdBufferCore::EnableFixedTickTime(enable, ms, fraction): while +0x38 or +0x3c is set,
@@ -2108,7 +2113,7 @@ bool videoExport(VideoExport& out) {
     if (!g_doShoot || !g_shooter || g_engineFrames - g_shootFrame > 3) return false;
     const BYTE* shooter = static_cast<const BYTE*>(g_shooter);
     __try {
-        if (!readable(shooter, kShooterParams + sizeof(void*))) return false;
+        if (!readable(shooter, kShooterParams + sizeof(void*))) return false; // covers the clip times too
         const BYTE* params = *reinterpret_cast<const BYTE* const*>(shooter + kShooterParams);
         if (!params || !readable(params, kVideoParamsSize)) return false;
         const auto at = [params](size_t offset) { return *reinterpret_cast<const int*>(params + offset); };
@@ -2119,7 +2124,10 @@ bool videoExport(VideoExport& out) {
         out.hqSamples = out.hq && at(0x24) > 1 ? (at(0x24) > 11 ? 11 : at(0x24)) : 1;
         out.hqMotionBlur = at(0x28) != 0;
         out.stereo = at(0x38);
+        out.sound = at(0x34) != 0;
         out.writesVideo = *reinterpret_cast<const int*>(shooter + kShooterNoVideo) == 0;
+        out.clipStart = *reinterpret_cast<const DWORD*>(shooter + kShooterClipStart) / 1000.0;
+        out.clipStop = *reinterpret_cast<const DWORD*>(shooter + kShooterClipStop) / 1000.0;
         // Not the dialog's numbers (another build, a patched game): no export as far as we know.
         if (out.fps < 1.0f || out.fps > 1000.0f || out.width < 16 || out.height < 16 || out.width > 16384 || out.height > 16384) return false;
         const int samples = out.hqSamples * out.hqSamples;
