@@ -30,6 +30,10 @@
 //     --video                 the video export's quality (photo mode's depth of field, moving)
 //     --repeat <n>            n more sub-pixel samples of the last frame (the export's
 //                             supersampling: history read, not advanced); the last is written
+//     --own [10]              the video export's own frames: the last frame and its repeats summed
+//                             in float and graded once (Inputs::accumulate), then the encoder's
+//                             planes (8 bits NV12, with 10: P010) read back and turned into RGB
+//                             again: <output> is the frame, <output>.yuv.bmp the planes' round trip
 //     --jitter                with RenderScale 1/n (0.5): TAA jitter as in game (TAAJitter), each
 //                             frame takes another of the n x n capture pixels under a scene pixel
 //                             (a raster shifted by sub-pixels, with its aliasing), Halton (2, 3)
@@ -58,6 +62,7 @@
 #include "log.h"
 #include "lut.h"
 #include "pipeline.h"
+#include <algorithm>
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
@@ -376,6 +381,7 @@ int main(int argc, char** argv) {
     bool photoMode = false;              // the photo mode's look (3x reach, full-res blur)
     bool videoMode = false;              // --video: the video export's quality (the same paths, moving)
     int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
+    int ownBits = 0;                     // --own [10]: the export's own frame and its planes (8 or 10 bits), 0 = off
     bool jitterRaster = false;           // --jitter: TAA jitter emulated by RenderScale's point sampling
     int jitterIndex = 0;                 // its Halton index, on across batch jobs (keep=1) as in game
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
@@ -434,6 +440,9 @@ int main(int argc, char** argv) {
             videoMode = true;
         } else if (!strcmp(argv[i], "--repeat") && i + 1 < argc) {
             repeats = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--own")) {
+            ownBits = 8;
+            if (i + 1 < argc && !strcmp(argv[i + 1], "10")) ownBits = (++i, 10);
         } else if (!strcmp(argv[i], "--jitter")) {
             jitterRaster = true;
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
@@ -667,6 +676,7 @@ int main(int argc, char** argv) {
     for (const Job& job : jobs) {
         LoadedCapture* loaded = loadCapture(job.capture);
         gfx::Target output;
+        gfx::Target ownFrame, ownLuma, ownChroma; // --own: the export's frame and its planes
         if (!loaded || !loaded->color || !loaded->depth || !output.create(device, loaded->cap.width, loaded->cap.height, D3DFMT_A8R8G8B8)) {
             failures++;
             continue;
@@ -887,6 +897,27 @@ int main(int argc, char** argv) {
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
             LARGE_INTEGER renderStart;
             QueryPerformanceCounter(&renderStart);
+            if (ownBits && frame == frames - 1) {
+                // The export's own frame: every sample summed, the last one grades the sum.
+                if (!ownFrame.create(device, cap.width, cap.height, D3DFMT_A16B16G16R16F)) fprintf(stderr, "own frame target failed\n");
+                for (int r = 0; r <= repeats; r++) {
+                    Pipeline::Inputs sample = driven;
+                    if (r > 0) {
+                        sample.temporal = false;
+                        sample.repeat = true;
+                    }
+                    sample.accumulate = r == repeats ? 2 : 1;
+                    sample.accumulateFirst = r == 0;
+                    sample.floatOutput = r == repeats;
+                    pipeline.render(device, sample, job.settings, r == repeats ? ownFrame.surface : output.surface);
+                }
+                const UINT vw = cap.width & ~7u, vh = cap.height & ~7u;
+                const float crop[4] = {0.0f, 0.0f, static_cast<float>(vw) / cap.width, static_cast<float>(vh) / cap.height};
+                if (!pipeline.exportPlanes(device, ownFrame.texture, vw, vh, crop, ownBits == 10, 1.0f, ownLuma, ownChroma)) fprintf(stderr, "exportPlanes failed\n");
+                const RECT all = {0, 0, static_cast<LONG>(cap.width), static_cast<LONG>(cap.height)};
+                pipeline.resolveScene(device, ownFrame.texture, output.surface, all);
+                continue;
+            }
             pipeline.render(device, driven, job.settings, output.surface);
             if (firstFrame) printf("CPU: pipeline created in %.1f ms, its first frame %.1f ms\n", initMs, msSince(renderStart));
             // The export's supersampling: the same moment again (the output is the last one).
@@ -949,6 +980,56 @@ int main(int argc, char** argv) {
             fprintf(stderr, "readback failed\n");
             failures++;
             continue;
+        }
+        if (ownBits && ownLuma.valid() && ownChroma.valid()) {
+            // The planes back to RGB (BT.709 studio range), next to the frame, and how far apart.
+            const UINT vw = ownLuma.width * 4, vh = ownLuma.height;
+            const bool ten = ownBits == 10;
+            std::vector<uint8_t> y, uv;
+            auto readPlane = [&](const gfx::Target& t, std::vector<uint8_t>& out) {
+                IDirect3DSurface9* sys = nullptr;
+                if (FAILED(device->CreateOffscreenPlainSurface(t.width, t.height, t.format, D3DPOOL_SYSTEMMEM, &sys, nullptr))) return false;
+                D3DLOCKED_RECT lr{};
+                bool ok = SUCCEEDED(device->GetRenderTargetData(t.surface, sys)) && SUCCEEDED(sys->LockRect(&lr, nullptr, D3DLOCK_READONLY));
+                if (ok) {
+                    const size_t row = static_cast<size_t>(t.width) * (ten ? 8 : 4);
+                    out.resize(row * t.height);
+                    for (UINT r = 0; r < t.height; r++) memcpy(&out[row * r], static_cast<const uint8_t*>(lr.pBits) + static_cast<size_t>(lr.Pitch) * r, row);
+                    sys->UnlockRect();
+                }
+                sys->Release();
+                return ok;
+            };
+            if (readPlane(ownLuma, y) && readPlane(ownChroma, uv)) {
+                auto code = [ten](const std::vector<uint8_t>& p, size_t i) {
+                    return ten ? ((p[2 * i] | (p[2 * i + 1] << 8)) >> 6) / 4.0f : static_cast<float>(p[i]);
+                };
+                std::vector<uint32_t> back(static_cast<size_t>(vw) * vh);
+                double diff = 0.0, worst = 0.0;
+                for (UINT py = 0; py < vh; py++) {
+                    for (UINT px = 0; px < vw; px++) {
+                        const float Y = (code(y, static_cast<size_t>(py) * vw + px) - 16.0f) / 219.0f;
+                        const size_t c = static_cast<size_t>(py / 2) * vw + (px & ~1u);
+                        const float cb = (code(uv, c) - 128.0f) / 224.0f, cr = (code(uv, c + 1) - 128.0f) / 224.0f;
+                        const float r = Y + 1.5748f * cr, b = Y + 1.8556f * cb, g = (Y - 0.2126f * r - 0.0722f * b) / 0.7152f;
+                        auto to8 = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+                        back[static_cast<size_t>(py) * vw + px] = 0xFF000000u | (to8(r) << 16) | (to8(g) << 8) | to8(b);
+                        const uint32_t o = pixels[static_cast<size_t>(py) * cap.width + px];
+                        const double dy = fabs((0.2126 * ((o >> 16) & 255) + 0.7152 * ((o >> 8) & 255) + 0.0722 * (o & 255)) / 255.0 - Y);
+                        diff += dy;
+                        worst = (std::max)(worst, dy);
+                    }
+                }
+                writeBmp((job.output + ".yuv.bmp").c_str(), back, vw, vh);
+                printf("own frame: %u samples, %s planes %ux%u, luma round trip off by %.4f on average, %.4f at most (of 1)\n", repeats + 1,
+                       ten ? "P010" : "NV12", vw, vh, diff / (static_cast<double>(vw) * vh), worst);
+            } else {
+                fprintf(stderr, "planes readback failed\n");
+                failures++;
+            }
+            ownLuma.destroy();
+            ownChroma.destroy();
+            ownFrame.destroy();
         }
         if (labels) {
             // As photo.cpp's save: the names on the finished image (left|right of the line).

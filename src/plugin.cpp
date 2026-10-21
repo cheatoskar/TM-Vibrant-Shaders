@@ -2550,11 +2550,17 @@ void processScene(IDirect3DDevice9* device) {
         // The video export's own frames: this sample into the float sum, the last one finishes the
         // frame into g_own.frame (see OwnExport).
         OwnSample own = ownSample(g_scene.processedCount - 1, part || scaledPath);
-        if (own.accumulate == 2 && !g_own.frame.create(device, width, height, D3DFMT_A16B16G16R16F)) own = OwnSample();
+        // Several samples a frame are the anti-aliasing (FXAA or SMAA over them only softened the
+        // textures: my previewer test, capture_134), and the frame stays float to the planes. A
+        // single sample keeps SMAA, which needs an 8-bit frame, unless 10 bits are wanted.
+        videofile::OwnFormat ownFormat;
+        const bool ownFloat = own.count > 1 || (videofile::ownFormat(ownFormat) && ownFormat.tenBit);
+        if (own.accumulate == 2 && !g_own.frame.create(device, width, height, ownFloat ? D3DFMT_A16B16G16R16F : D3DFMT_A8R8G8B8)) own = OwnSample();
         if (own.accumulate) {
             inputs.accumulate = own.accumulate;
             inputs.accumulateFirst = own.first;
-            inputs.floatOutput = own.accumulate == 2;
+            inputs.floatOutput = own.accumulate == 2 && ownFloat;
+            if (own.count > 1) effective.fxaa = false;
             inputs.lensDof = g_own.lensSamples > 0;
             effective.filmGrain *= settings.videoGrain;
             // The sub-frames are the motion blur: the screen-space one would blur it twice.
