@@ -620,7 +620,8 @@ bool containsNoCase(const char* text, const char* query) {
 
 // --- Widgets -------------------------------------------------------------------
 
-enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kPageCount };
+// kVideo last: the page's number is saved (MenuPage), the bar shows it before Settings.
+enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPageCount };
 
 const ImVec4 kAccent(1.00f, 0.62f, 0.22f, 1.0f);
 
@@ -1664,6 +1665,115 @@ bool drawPerformancePage(Settings& s) {
 }
 
 
+// The replay editor's Shoot video: presets for what the video is for, the game's own dialog in a
+// few lines, then every setting. Only where the game can export (not TrackMania 2).
+bool videoPageShown() {
+    const Field* f = findField("VideoCodec");
+    return f && supported(*f);
+}
+
+struct VideoPreset {
+    const char* name;
+    const char* tip;
+    void (*apply)(Settings& s);
+    bool (*matches)(const Settings& s);
+};
+
+const VideoPreset kVideoPresets[] = {
+    {"YouTube", "H.264 at quality 80, grain halved: clean after YouTube's own encode, a modest file. Shoot at 1440p or more: YouTube gives those more bitrate.",
+     [](Settings& s) {
+         s.videoCodec = 1;
+         s.videoQuality = 80;
+         s.video10Bit = false;
+         s.videoBitrate = 0.0f;
+         s.videoGrain = 0.5f;
+     },
+     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f; }},
+    {"Editing", "H.264 at quality 92 with the full grain: room for cutting and grading, and every editor decodes it smoothly. Large files.",
+     [](Settings& s) {
+         s.videoCodec = 1;
+         s.videoQuality = 92;
+         s.video10Bit = false;
+         s.videoBitrate = 0.0f;
+         s.videoGrain = 1.0f;
+     },
+     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 92 && s.videoBitrate <= 0.0f && s.videoGrain == 1.0f; }},
+    {"Small", "HEVC in 10 bits at quality 78: the smallest file that still looks clean, no bands in the sky. Heavier to edit; fine to keep or share.",
+     [](Settings& s) {
+         s.videoCodec = 2;
+         s.videoQuality = 78;
+         s.video10Bit = true;
+         s.videoBitrate = 0.0f;
+         s.videoGrain = 0.3f;
+     },
+     [](const Settings& s) { return s.videoCodec == 2 && s.video10Bit && s.videoQuality == 78 && s.videoBitrate <= 0.0f; }},
+    {"Discord", "H.264 at quality 62, little grain: short clips small enough for a chat.",
+     [](Settings& s) {
+         s.videoCodec = 1;
+         s.videoQuality = 62;
+         s.video10Bit = false;
+         s.videoBitrate = 0.0f;
+         s.videoGrain = 0.2f;
+     },
+     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 62 && s.videoBitrate <= 0.0f; }},
+};
+
+const VideoPreset kVideoLooks[] = {
+    {"Replay", "The game's look: motion blur over the whole frame (360), no crop.",
+     [](Settings& s) {
+         s.videoShutter = 360.0f;
+         s.videoAspect = 0;
+     },
+     [](const Settings& s) { return s.videoShutter >= 359.0f && s.videoAspect == 0; }},
+    {"Cinema", "Film shutter (180: crisper motion, faster export), lens depth of field and a 2.39:1 picture. Turn up Depth of field in Customize for the blur.",
+     [](Settings& s) {
+         s.videoOwnFrames = true;
+         s.videoShutter = 180.0f;
+         s.videoLensDof = true;
+         s.videoAspect = 2;
+     },
+     [](const Settings& s) { return s.videoShutter > 179.0f && s.videoShutter < 181.0f && s.videoAspect == 2 && s.videoLensDof; }},
+};
+
+// A row of preset buttons; the one the settings match is lit.
+void videoPresetRow(Config& config, Settings& s, const VideoPreset* presets, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        if (i) ImGui::SameLine();
+        if (chip(presets[i].name, presets[i].matches(s))) {
+            presets[i].apply(s);
+            config.markDirty();
+        }
+        if (ImGui::IsItemHovered()) showTip(presets[i].tip);
+    }
+}
+
+bool drawVideoPage(Config& config, Settings& s) {
+    pageTitle("Video export", "Shoot video in the replay editor: what the file is for, how it looks, and the game's own dialog.");
+    std::vector<PanelDef> panels;
+    panels.push_back({"For", 4.0f, [&config, &s] {
+                          videoPresetRow(config, s, kVideoPresets, sizeof(kVideoPresets) / sizeof(kVideoPresets[0]));
+                          ImGui::Spacing();
+                          ImGui::TextDisabled("Look");
+                          videoPresetRow(config, s, kVideoLooks, sizeof(kVideoLooks) / sizeof(kVideoLooks[0]));
+                          return false;
+                      }});
+    panels.push_back({"In the game's Shoot video dialog", 9.0f, [] {
+                          ImGui::TextWrapped("Size: 1440p or 4K for YouTube (it gives those more bitrate), 1080p for a chat. Frame rate: 60.");
+                          ImGui::TextWrapped("High quality: on, with 4 samples (4 x 4 = 16 a frame): smooth edges, the lens depth of field, and with "
+                                             "its Motion blur real motion blur. More samples take longer; at 60 fps more than 4 don't make the "
+                                             "motion blur finer (the game's clock runs in milliseconds).");
+                          ImGui::TextWrapped("Sound: the game plays the clip once more in real time after the frames and records it.");
+                          return false;
+                      }});
+    panels.push_back(settingsPanel("Format", s,
+                                   {{"VideoCodec", nullptr}, {"VideoQuality", nullptr}, {"Video10Bit", nullptr}, {"VideoBitrate", nullptr},
+                                    {"VideoEncoder", nullptr}, {"VideoFfmpegPreset", nullptr}}));
+    panels.push_back(settingsPanel("Rendering", s,
+                                   {{"VideoExportBest", nullptr}, {"VideoOwnFrames", nullptr}, {"VideoShutter", nullptr}, {"VideoLensDof", nullptr},
+                                    {"VideoGrain", nullptr}, {"VideoAspect", nullptr}}));
+    return panelColumns(panels, 380.0f);
+}
+
 // How the mod behaves: switches that aren't part of a look.
 bool drawSettings(Config& config, Settings& s) {
     pageTitle("Settings", "General options. They are not part of presets.");
@@ -1700,13 +1810,11 @@ bool drawSettings(Config& config, Settings& s) {
                           drawHotkeys();
                           return false;
                       }});
-    // Its own panel: in the long Game panel I didn't find it. Left out where the game
-    // can't export (TrackMania 2 showed its title over nothing).
-    panels.push_back(settingsPanel("Video export", s,
-                                   {{"VideoCodec", nullptr}, {"VideoQuality", nullptr}, {"Video10Bit", nullptr}, {"VideoEncoder", nullptr},
-                                    {"VideoFfmpegPreset", nullptr}, {"VideoBitrate", nullptr}, {"VideoExportBest", nullptr}, {"VideoOwnFrames", nullptr},
-                                    {"VideoShutter", nullptr}, {"VideoLensDof", nullptr}, {"VideoGrain", nullptr}, {"VideoAspect", nullptr}}));
-    if (panels.back().rows <= 0.0f) panels.pop_back();
+    // The video export has its own page; TrackMania 2 (no page) keeps its one switch here.
+    if (!videoPageShown()) {
+        panels.push_back(settingsPanel("Video export", s, {{"VideoExportBest", nullptr}}));
+        if (panels.back().rows <= 0.0f) panels.pop_back();
+    }
     panels.push_back(settingsPanel("Effects", s, {{"CinematicOnlyInReplays", nullptr}, {"WeatherSound", nullptr}, {"TAA", nullptr}, {"TAAJitter", nullptr}}));
     // How the mod works with the game itself, as in Studio's group of the same name (same order).
     Entries game;
@@ -2018,13 +2126,16 @@ void drawHeader(Config& config, Settings& s) {
 }
 
 void drawNavigation(Config& config) {
-    static const char* const kPages[] = {"Shaders", "Customize", "Studio", "Maps", "Performance", "Settings", "About"};
+    static const char* const kPages[] = {"Shaders", "Customize", "Studio", "Maps", "Performance", "Settings", "About", "Video"};
     static const char* const kHints[] = {"Browse and apply presets", "Main settings", "All settings", "Presets for day, sunset and night maps",
-                                         "Frame rate and effect costs", "General options", "Version, updates, help"};
+                                         "Frame rate and effect costs", "General options", "Version, updates, help",
+                                         "Shoot video: presets, quality, the camera's look"};
+    static const int kOrder[] = {kShaders, kCustomize, kStudio, kMaps, kPerformance, kVideo, kSettings, kAbout};
     const bool updateOut = update::latest().state == update::State::Available;
     const float h = 38.0f * g_scale;
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    for (int i = 0; i < kPageCount; i++) {
+    for (const int i : kOrder) {
+        if (i == kVideo && !videoPageShown()) continue;
         const bool active = config.menuPage == i;
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float w = ImGui::GetContentRegionAvail().x;
@@ -2097,6 +2208,7 @@ void drawMenu() {
         case kPerformance: look = drawPerformancePage(s); break;
         case kSettings: look = drawSettings(config, s); break;
         case kAbout: drawAbout(config); break;
+        case kVideo: look = videoPageShown() ? drawVideoPage(config, s) : drawSettings(config, s); break;
         default: drawShaders(config); break;
     }
     ImGui::PopItemWidth();
