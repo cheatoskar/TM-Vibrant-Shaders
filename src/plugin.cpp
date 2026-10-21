@@ -328,8 +328,10 @@ void finishOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT wi
     if (g_own.tenBitOk < 0) g_own.tenBitOk = Pipeline::tenBitPlanesSupported(device) ? 1 : 0;
     // P010 wanted but no 16-bit target: NV12 planes, the encoder takes those too.
     const bool tenBit = format.tenBit && g_own.tenBitOk == 1;
+    // Half a step of dither: enough to break the bands of a dark sky, while a full step of noise
+    // on every pixel cost the encoder bits everywhere.
     if (!g_pipeline.exportPlanes(device, g_own.frame.texture, static_cast<UINT>(format.width), static_cast<UINT>(format.height), format.crop, tenBit,
-                                 1.0f, g_own.luma, g_own.chroma)) {
+                                 0.5f, g_own.luma, g_own.chroma)) {
         static bool s_logged = false;
         if (!s_logged) {
             s_logged = true;
@@ -2682,10 +2684,10 @@ void updateVideoExport() {
                  static_cast<int>(stats.targetFormat));
         if (g_own.finished > 0) {
             TMVS_LOG("video export: the mod's own frames: %u finished from %u samples (%u sub-frames past the shutter skipped), %u handed over, "
-                     "%u handed over again, %u replaced before the game wrote them; %u with lens depth of field; %s planes; %.1f s a frame, "
+                     "%u handed over again, %u replaced before the game wrote them; %u with lens depth of field; %s planes; %.1f ms a frame, "
                      "reading back %.1f ms a frame",
                      g_own.finished, g_own.samples, g_own.skipped, g_own.delivered, g_own.repeated, g_own.dropped, g_own.lensFrames,
-                     g_own.tenBit ? "P010" : "NV12", g_own.finished > 1 ? g_own.betweenMs / 1000.0 / (g_own.finished - 1) : 0.0,
+                     g_own.tenBit ? "P010" : "NV12", g_own.finished > 1 ? g_own.betweenMs / (g_own.finished - 1) : 0.0,
                      g_own.delivered + g_own.repeated > 0 ? g_own.readMs / (g_own.delivered + g_own.repeated) : 0.0);
         }
         if (g_own.lensSet) engine::setLensSamples(nullptr, 0, 0.0f);

@@ -505,10 +505,12 @@ UINT32 encoderCount(const GUID& subtype) {
 
 // Quality 0..100 -> the rate control's numbers.
 int qpFor(int quality, Codec c) {
-    // H.264: q100 -> 12, q85 -> 18, q80 -> 20, q60 -> 28. HEVC two higher for about the same
+    // H.264: q100 -> 14, q90 -> 19, q80 -> 24, q60 -> 34. HEVC two higher for about the same
     // look (its QP steps buy more per bit). AV1 MFTs take a q-index (0..255), about 4.2 per
-    // HEVC QP step.
-    const double h264 = 12.0 + (100 - std::clamp(quality, 0, 100)) * 0.4;
+    // HEVC QP step. A constant QP without B-frames and adaptive quantisation (what NVIDIA's MFT
+    // takes) spends far more than x264 at the same number: QP 20 made 126 Mbit/s of a 1440p60
+    // replay over Stadium's grid floor (my test, 2026-10-21), some 900 MB a minute.
+    const double h264 = 14.0 + (100 - std::clamp(quality, 0, 100)) * 0.5;
     if (c == Codec::H264) return std::clamp(static_cast<int>(std::lround(h264)), 0, 51);
     if (c == Codec::HEVC) return std::clamp(static_cast<int>(std::lround(h264 + 2.0)), 0, 51);
     return std::clamp(static_cast<int>(std::lround((h264 + 2.0) * 4.2)), 0, 255);
@@ -1144,8 +1146,8 @@ std::map<std::wstring, FfmpegInfo> g_ffmpegCache;
 // How quality maps to each software encoder's own scale.
 double crfFor(int quality, Codec c) {
     const double q = 100 - std::clamp(quality, 0, 100);
-    if (c == Codec::H264) return std::clamp(10.0 + q * 0.3, 0.0, 51.0);  // q100 10, q80 16, q60 22
-    if (c == Codec::HEVC) return std::clamp(12.0 + q * 0.3, 0.0, 51.0);  // about 2 above x264 for the same look
+    if (c == Codec::H264) return std::clamp(10.0 + q * 0.4, 0.0, 51.0);  // q100 10, q80 18, q60 26
+    if (c == Codec::HEVC) return std::clamp(12.0 + q * 0.4, 0.0, 51.0);  // about 2 above x264 for the same look
     return std::clamp(12.0 + q * 0.6, 1.0, 63.0);                       // SVT-AV1: q80 24, q60 36
 }
 
