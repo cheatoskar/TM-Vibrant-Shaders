@@ -124,22 +124,62 @@ closed.
 
 So the game does not tap its own mix: it records whatever the default recording device hears while
 the clip plays through the speakers. That is why the pass runs in real time, and why a PC whose
-default recording device is a microphone puts the room (or silence) into the video. There is no flag
-that makes it faster: the OpenAL mixer plays at the sound card's rate and the clip follows the real
-clock.
+default recording device is a microphone puts the room into the video. There is no flag that makes
+it faster: the OpenAL mixer plays at the sound card's rate and the clip follows the real clock.
 
-Options, none implemented:
+### When there is no sound at all (confirmed)
 
-- Replace the captured data with a WASAPI loopback of the game's own output during the pass
-  (process loopback, Windows 10 2004 and newer, or the endpoint loopback). Still real time, but the
-  game's sound and nothing else. Risk: low (the mod only swaps what `aviAudioWriteDetour` passes on);
-  the start offset (the capture starts after the 1 s wait, plus audio latency) has to be measured.
-- Offline mix: an OpenAL Soft loopback device (`ALC_SOFT_loopback`, `alcRenderSamplesSOFT`) stepped
-  with the fixed clock during the video frames. Needs the game's OpenAL replaced by OpenAL Soft and
-  its device swapped; the game's sources follow the mixer, not the clip clock, and sound starts
-  triggered per update would land in the right ms only if each step renders exactly step x 44100
-  samples. High risk, a project of its own.
-- Skip the pass (`IsAudioStream` = 0) and leave the video silent.
+- `IsAudioStream` is 0 in a new `CGameCtnMediaVideoParams` (its constructor) and only the dialog's
+  "ButtonShootAudio" sets it (`CGameDialogShootVideo`'s constructor binds the two). Off, state 0x162
+  goes straight to closing the .avi and the "Video captured to" message: no sound pass, no
+  `AudioStreamOpen`, the file has no sound stream. DoShoot keeps running until that message is
+  confirmed (when DoShoot shows it as a message with OK), so the frames rendered after the video in
+  my log (291 at 1440p60, about 5 s) were most likely the time until OK, not a sound pass.
+- Aborted with Esc (context +0x3c set), or a run without video output: no sound pass either.
+- A failing capture device does NOT skip the pass: `AudioStreamOpen` comes right after
+  `SetIsCapturing(1)` whatever it did. `SetIsCapturing` opens the device only when the game's sound
+  is on (`COalAudioPort::GetIsEnabled`, vtable +0x88); if `alcCaptureOpenDevice` fails the capture
+  stays off and the stream gets no data (and a format the port never set). The log would show the
+  sound line then, with no sound in it.
+- The 1 s wait compares the tick with `GetElapsedTimeSinceInit` + 1000. Harmless: without the fixed
+  step `CMwTimer::Tick` sets the tick to the elapsed time, so it is a real second.
+- The sound pass sets the clip's time from 0 (tick minus the tick at the capture's start), the frames
+  from the clip's start: with a clip that starts later than 0 the sound begins before the video.
+  `VideoExport::clipStart` has the start; the log warns.
+- The game pulls the capture once a second (`CaptureDoCapture` takes samples only when 44100 or more
+  are there, at most 44100; at the end everything left).
+
+### The mod's capture device (src/soundcapture.cpp, src/loopback.cpp)
+
+The exe imports the capture functions from OpenAL32.dll (TMNF IAT 00b28384..00b28400, TMUF the
+same names). `soundcapture::install` patches `alcCaptureOpenDevice`, `alcCaptureCloseDevice`,
+`alcCaptureStart`, `alcCaptureStop`, `alcCaptureSamples`, `alcGetIntegerv` and `alcGetError` (all
+or none). While `engine::videoExport` says an export runs, the open returns a device of the mod's
+own (a static address the real OpenAL never sees); the other six answer for it and pass every
+other device through. `alcGetIntegerv(ALC_CAPTURE_SAMPLES)` reports what came in,
+`alcCaptureSamples` copies it out (silence where a read asks for more), `alcGetError` says no error.
+
+The sound comes from WASAPI loopback on its own thread: first process loopback of the game's
+process tree (Windows 10 2004 and newer: the game's sound and the mod's weather sound, nothing else),
+asked for in the game's format, converted by the audio engine; else the loopback of the default
+playback device (everything the PC plays, in its mix format or converted to the game's: float or
+PCM, any rate, the first two channels); else the game's own capture device as before. Each step is
+logged. The loopback is activated when the export's .avi is made (`videofile` opened), so it is
+ready long before the sound pass; when the dialog's sound is off the log says so once.
+
+A playback device that plays nothing sends no packets: the capture thread then puts in silence by
+the clock (more than 0.1 s behind), so the sound keeps its length; a source that runs ahead (more
+than 0.5 s) loses its oldest frames. At the capture's close the log has the seconds handed to the
+game, from the loopback, filled, missing at reads, dropped, and the glitches the audio engine
+reported. The game still decides when the pass starts, its 1 s wait and its length.
+
+`tmvs_loopbacktest` (tools/loopbacktest.cpp) plays a 440 Hz tone with waveOut and records it back:
+on my PC (2026-10-21) process loopback 44.1 kHz 16-bit, the tone 46 ms after it was played, no
+gaps; the playback device's loopback directly in 44.1 kHz and, with `--mix`, from its 48 kHz float
+mix through the converter, both with the pitch exact (440 Hz).
+
+Not done, for later: an offline mix (an OpenAL Soft loopback device, `ALC_SOFT_loopback`, stepped
+with the fixed clock during the frames) would need the game's OpenAL replaced. High risk.
 
 ## If the mod writes its own frames
 

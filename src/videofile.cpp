@@ -2,6 +2,7 @@
 #include "config.h"
 #include "engine.h"
 #include "log.h"
+#include "soundcapture.h"
 #include "videoencoder.h"
 #include <algorithm>
 #include <memory>
@@ -92,6 +93,7 @@ void opened(void* file, const wchar_t* path, bool ok) {
     Export& e = findOrAdd(file);
     e.avi = path;
     TMVS_LOG("video file: the game opens %s%s", narrow(e.avi).c_str(), ok ? "" : " (failed)");
+    soundcapture::exportOpened();
 }
 
 // The encoder for this export, opened at the first of the video and the sound (the sound may
@@ -218,6 +220,7 @@ void audioData(void* file, const void* data, unsigned long blocks) {
 }
 
 void closed(void* file) {
+    soundcapture::exportClosed();
     for (size_t i = 0; i < g_exports.size(); i++) {
         Export& e = g_exports[i];
         if (e.file != file) continue;
@@ -255,6 +258,8 @@ void setFrameSource(const FrameSource& source) {
 }
 
 void install() {
+    // The sound pass's capture: its own imports, also where the file hooks are missing.
+    soundcapture::install();
     if (!engine::videoFileHooked()) return;
     engine::VideoFileHooks hooks;
     hooks.opened = opened;

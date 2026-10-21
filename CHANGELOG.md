@@ -15,7 +15,8 @@ A new video export for *Shoot video* in the replay editor (TrackMania Nations/Un
 - The encoder runs on its own thread: the game no longer waits for it, nor for the colour conversion, which the graphics card does now.
 
 **Good to know**
-- The game records the export's sound from Windows' default recording device while it plays the clip once more in real time, as it always did; with a microphone as default device the video gets the room's sound. Set the default recording device to *Stereo Mix* (or your speakers' loopback) for the game's own sound.
+- **The export's sound is the game's own sound.** After the frames the game plays the clip once more in real time and records it, until now from Windows' default recording device (a microphone gave the room's sound, no recording device gave silence). The mod hands it the game's own output instead (Windows 10 2004 and newer; older Windows: everything the PC plays), whatever recording devices there are. The mod's rain is in it too; its thunder as well, but not yet in time with the flashes in the video.
+- The sound needs the sound button in the *Shoot video* dialog: it is off by default, and without it the game makes no sound pass at all (the log says so).
 - The game's clock for the motion blur sub-frames runs in whole milliseconds: at 60 fps more than 4 × 4 samples share moments (still better edges and lens blur, no finer motion blur); at 30 fps 5 × 5.
 
 ## 1.4.1 (2026-10-18)
