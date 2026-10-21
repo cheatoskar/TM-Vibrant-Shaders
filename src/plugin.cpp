@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <numeric>
 #include <utility>
 #include <vector>
 
@@ -400,35 +401,54 @@ void ownWritten() {
 // the lens (a disc in the camera's plane), sheared so the focus plane stays put: what is out of
 // focus lands somewhere else in each sample and the sum blurs it, with the lens's own bokeh and no
 // halos at edges. With few samples the copies would stay apart: 16 at least, else the usual blur.
-// Called as each main camera begins (its projection is made after that).
-void updateLens(const OwnSample& sample) {
+// The engine makes a camera's projection before the camera begins, so the offsets go to it as a
+// table at the start of each video frame (engine::setLensSamples), indexed by the game's own
+// sample number (docs/engine-video-export.md). Called once a frame, after updateVideoExport.
+void updateLens() {
     const Settings& s = Config::get().settings;
-    if (sample.first) {
-        const float focus = s.focusDistance > 0.0f ? s.focusDistance : g_own.lensFocus;
-        const bool lens = sample.accumulate != 0 && s.videoLensDof && s.depthOfField > 0.0f && sample.count >= 16 && focus > 0.1f;
-        g_own.lensSamples = lens ? sample.count : 0;
-        if (lens) g_own.lensFrames++;
-    }
-    const float p11 = g_scene.haveEngine ? g_scene.engineProjection[5] : 0.0f;
-    if (sample.accumulate == 0 || sample.skip || g_own.lensSamples <= 0 || p11 <= 0.0f) {
-        if (g_own.lensSet) engine::setLensOffset(0.0f, 0.0f, 0.0f);
+    const OwnSample sample = ownSample(0, false); // supersampling: this frame starts a video frame
+    const auto off = [] {
+        if (g_own.lensSet) engine::setLensSamples(nullptr, 0, 0.0f);
         g_own.lensSet = false;
-        if (sample.accumulate == 0) g_own.lensSamples = 0;
+        g_own.lensSamples = 0;
+    };
+    if (sample.accumulate == 0 && !sample.skip) {
+        off();
         return;
     }
+    if (!sample.first) return; // the video frame's table is set
     const float focus = s.focusDistance > 0.0f ? s.focusDistance : g_own.lensFocus;
+    const float p11 = g_scene.haveEngine ? g_scene.engineProjection[5] : 0.0f;
+    if (!s.videoLensDof || s.depthOfField <= 0.0f || sample.count < 16 || focus <= 0.1f || p11 <= 0.0f) {
+        off();
+        return;
+    }
     // The lens's radius: a point at infinity blurs as far as the usual depth of field takes it
     // (circleOfConfusion in the shader: BokehSize px at 1080p, times DepthOfField x 2.5 up to 1).
-    // Its image moves P11 a / F in NDC (half the screen's height per unit).
+    // Its image moves P11 a / F in NDC, half the screen's height per unit.
     const float blurPx = std::min(s.depthOfField * 2.5f, 1.0f) * s.bokehSize;
     const float radius = blurPx / 1080.0f * 2.0f * focus / p11;
-    // A Vogel spiral: even over the disc for any count, turned between frames.
-    const int n = g_own.lensSamples;
-    const int i = std::clamp(sample.index, 0, n - 1);
-    const float r = radius * sqrtf((i + 0.5f) / n);
-    const float angle = i * 2.39996323f + static_cast<float>(g_own.videoFrame) * 0.618034f * 6.2831853f;
-    engine::setLensOffset(r * cosf(angle), r * sinf(angle), focus);
+    // One entry per sample of the game's video frame; the ones past the shutter are never summed.
+    // The game's sub-pixel raster runs column by column: the k-th sample takes the lens point
+    // k x stride (a stride coprime to the count), so lens and raster don't move in step. The points
+    // lie on a Vogel spiral (even over the disc for any count), turned from frame to frame.
+    const int total = std::min(g_export.samplesPerFrame > 1 ? g_export.samplesPerFrame : g_export.samplesPerVideoFrame, 128);
+    const int used = std::min(sample.count, total);
+    int stride = std::max(1, static_cast<int>(used * 0.618034f));
+    while (std::gcd(stride, used) != 1) stride++;
+    float table[2 * 128] = {};
+    const float turn = static_cast<float>(g_own.videoFrame) * 0.618034f * 6.2831853f;
+    for (int j = 0; j < used; j++) {
+        const int k = static_cast<int>((static_cast<long long>(j) * stride) % used);
+        const float r = radius * sqrtf((k + 0.5f) / used);
+        const float angle = k * 2.39996323f + turn;
+        table[2 * j] = r * cosf(angle);
+        table[2 * j + 1] = r * sinf(angle);
+    }
+    engine::setLensSamples(table, total, focus);
     g_own.lensSet = true;
+    g_own.lensSamples = used;
+    g_own.lensFrames++;
 }
 
 // The time the effects see (s).
@@ -2662,7 +2682,7 @@ void updateVideoExport() {
                      g_own.tenBit ? "P010" : "NV12", g_own.finished > 1 ? g_own.betweenMs / 1000.0 / (g_own.finished - 1) : 0.0,
                      g_own.delivered + g_own.repeated > 0 ? g_own.readMs / (g_own.delivered + g_own.repeated) : 0.0);
         }
-        if (g_own.lensSet) engine::setLensOffset(0.0f, 0.0f, 0.0f);
+        if (g_own.lensSet) engine::setLensSamples(nullptr, 0, 0.0f);
         g_own.lensSet = false;
         g_own.lensSamples = 0;
         releaseOwnExport(); // a 4K frame and its planes: some 100 MB of video memory
@@ -2745,6 +2765,7 @@ void onFrameBegin() {
         if (g_gameplayLastFrame && s.enabled) engine::keepNight(true);
     }
     updateVideoExport();
+    updateLens();
     updateJitter();
     g_cameraIndex = 0;
     g_scene.lastFrameCount = g_scene.processedCount;
@@ -2767,8 +2788,6 @@ void onCameraBegin(void* camera) {
                              g_scene.engineProjection[14] != 0.0f;
         g_scene.mainRenders++;
         engine::setMainCamera(camera);
-        // Accumulation depth of field: this sample's place on the lens, before its projection is made.
-        updateLens(ownSample(g_scene.mainRenders - 1, false));
         // Material masks: nothing left from the last frame where nothing is drawn (the sky).
         if (materialsWanted()) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
         g_idFrame = g_captureRequested && materialsWanted();
