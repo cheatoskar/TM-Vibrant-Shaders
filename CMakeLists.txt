@@ -129,7 +129,7 @@ add_library(tmvs_core STATIC
   src/weather.cpp
   src/image.cpp
   src/lut.cpp
-  src/mp4writer.cpp
+  src/videoencoder.cpp
   src/gbufpatch.cpp
   ${TMVS_SHADER_HEADERS}
 )
