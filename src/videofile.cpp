@@ -2,6 +2,7 @@
 #include "config.h"
 #include "engine.h"
 #include "log.h"
+#include "photo.h"
 #include "videoencoder.h"
 #include <algorithm>
 #include <memory>
@@ -54,16 +55,32 @@ std::string narrow(const std::wstring& text) {
     return out;
 }
 
-// The MP4 beside the game's .avi (same name); without one, TMVS\videos. Never over an earlier
-// one: the game picks its next free .avi name, and the empty .avi is deleted after each export,
-// so the next export got the same name and replaced the last video (my test, 2026-10-16).
+bool exists(const std::wstring& path) {
+    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+// The MP4 beside the game's .avi; without one, TMVS\videos. Never over an earlier one: the game
+// picks its next free .avi name, and the empty .avi is deleted after each export, so the game
+// names every export Video02.avi again. Its number goes up past every .mp4 and .avi already
+// there (Video02 -> Video03.mp4), as the game's own numbering would; a name without a number gets
+// _2, _3. The game still says its .avi's name at the end, the screen says the MP4's.
 std::wstring mp4Path(const std::wstring& avi) {
     if (avi.size() > 4 && _wcsicmp(avi.c_str() + avi.size() - 4, L".avi") == 0) {
         const std::wstring stem = avi.substr(0, avi.size() - 4);
-        std::wstring path = stem + L".mp4";
-        for (int i = 2; GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES && i < 1000; i++) {
-            path = stem + L"_" + std::to_wstring(i) + L".mp4";
+        size_t digits = stem.size();
+        while (digits > 0 && iswdigit(stem[digits - 1])) digits--;
+        if (digits < stem.size() && stem.size() - digits <= 6) {
+            const std::wstring prefix = stem.substr(0, digits);
+            const int width = static_cast<int>(stem.size() - digits);
+            for (int n = _wtoi(stem.c_str() + digits); n < 1000000; n++) {
+                wchar_t number[16];
+                swprintf(number, 16, L"%0*d", width, n);
+                const std::wstring name = prefix + number;
+                if (!exists(name + L".mp4") && (name == stem || !exists(name + L".avi"))) return name + L".mp4";
+            }
         }
+        std::wstring path = stem + L".mp4";
+        for (int i = 2; exists(path) && i < 1000; i++) path = stem + L"_" + std::to_wstring(i) + L".mp4";
         return path;
     }
     const std::wstring dir = log::dataDir() + L"\\videos";
@@ -230,6 +247,13 @@ void closed(void* file) {
             // The game's .avi has no video (its stream was never opened): gone once the MP4
             // holds everything. Kept when the MP4 lacks the sound (the .avi has it too).
             if (complete && !e.avi.empty() && DeleteFileW(e.avi.c_str())) TMVS_LOG("video file: the game's .avi (no video in it) deleted");
+            // The game's own message names its .avi: the real file on screen, for a while.
+            const std::wstring& path = e.encoder->path();
+            const size_t slash = path.find_last_of(L"\\/");
+            const std::string text = (complete ? "Video saved: " : "Video saved (see tmvs.log): ") +
+                                     narrow(slash == std::wstring::npos ? path : path.substr(slash + 1)) + " in " +
+                                     narrow(slash == std::wstring::npos ? std::wstring() : path.substr(0, slash));
+            photo::notify(text.c_str(), 20);
         } else if (e.encoder) {
             e.encoder->discard();
         }

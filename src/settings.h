@@ -51,7 +51,7 @@ struct Settings {
     bool videoExportBest = true;   // the game's video export: full quality, effects on the video's clock, every supersample shaded
     int videoCodec = 1;            // the export's file: 0 the game's AVI (its codec dialog), 1 MP4 H.264, 2 MP4 HEVC, 3 MP4 AV1
     float videoBitrate = 0.0f;     // MP4: Mbit/s, 0 = constant quality (VideoQuality) instead of a bitrate
-    int videoQuality = 80;         // MP4: 0..100, the encoder's constant quality (80 clean for YouTube, 90+ for editing)
+    int videoQuality = 80;         // MP4: 0..100; graphics card: its average bitrate (80 = 0.2 bit per pixel and frame), ffmpeg: its CRF (80 = 18)
     bool video10Bit = false;       // HEVC and AV1 in 10 bits (no banding in skies and fog); H.264 stays 8 bits with dither
     int videoEncoder = 0;          // 0 the graphics card's encoder (Media Foundation), 1 a software encoder through your own ffmpeg.exe
     int videoFfmpegPreset = 1;     // ffmpeg: 0 fast, 1 balanced, 2 best (slowest)

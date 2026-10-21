@@ -400,7 +400,7 @@ const char* tooltipFor(const char* key) {
         {"CinematicOnlyInReplays", "Motion blur and depth of field only in replays and video export."},
         {"VideoExportBest", "Renders each video frame with full quality and the effects on the video's own clock."},
         {"VideoCodec", "What the replay editor's Shoot video writes. MP4 skips the game's codec dialog and lands where the .avi would. H.264 plays and edits everywhere; HEVC and AV1 give the same picture in a smaller file but are heavier to edit. Without an encoder for the choice it falls back to H.264."},
-        {"VideoQuality", "Constant quality: calm shots get small, fast ones get the bits they need. 80 is clean on YouTube, 90 and up for editing and archive. Ignored when a bitrate is set."},
+        {"VideoQuality", "How much picture each second gets. Graphics card: an average bitrate with room for peaks, 80 = 44 Mbit/s at 1440p60 (25 at 1080p60, about 330 MB a minute at 1440p), 92 about twice that. ffmpeg: its constant quality (CRF 18 at 80). Ignored when a bitrate is set."},
         {"Video10Bit", "HEVC and AV1 in 10 bits: no bands in skies, fog and glows. H.264 stays 8 bits (graphics cards have no 10-bit H.264) and gets a fine dither instead."},
         {"VideoBitrate", "Mbit/s. 0 uses the constant quality instead (recommended)."},
         {"VideoEncoder", "Graphics card: fast, nothing to install. ffmpeg: a software encoder (x264, x265, SVT-AV1) with the best quality per megabyte; needs ffmpeg.exe in your TMVS folder or on PATH. The export's rendering is the slow part anyway."},

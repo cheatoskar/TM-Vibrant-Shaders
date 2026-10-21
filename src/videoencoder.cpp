@@ -516,11 +516,11 @@ int qpFor(int quality, Codec c) {
     return std::clamp(static_cast<int>(std::lround((h264 + 2.0) * 4.2)), 0, 255);
 }
 
-// The bitrate when the encoder has no quality mode: bits per pixel and frame, about 0.12 for
-// H.264 at quality 80 (visually transparent for fast racing footage) rising steeply to 0.35 at
-// 100; HEVC and AV1 0.65 of that.
+// The graphics card's average bitrate for a quality: bits per pixel and frame, 0.2 for H.264 at
+// quality 80 (1440p60: 44 Mbit/s, the old export's rate, which looked clean to the players who
+// compared it with x264), about 0.45 at 95 and 0.07 at 60; HEVC and AV1 0.65 of that.
 double bitrateFor(const Options& o, Codec c) {
-    const double bpp = 0.12 * std::exp(0.0535 * (std::clamp(o.quality, 0, 100) - 80)) * (c == Codec::H264 ? 1.0 : 0.65);
+    const double bpp = 0.2 * std::exp(0.0535 * (std::clamp(o.quality, 0, 100) - 80)) * (c == Codec::H264 ? 1.0 : 0.65);
     const double rate = bpp * o.width * o.height * o.fps;
     return std::clamp(rate, 2.0e6, c == Codec::H264 ? 240.0e6 : 200.0e6);
 }
@@ -561,12 +561,12 @@ std::vector<Plan> plansFor(const Options& o, Codec c) {
     peak.peak = mean * (vbr ? 1.5 : 2.0);
     Plan plain = peak;
     plain.mode = Mode::VBR;
-    if (!vbr) {
-        // QP first: the same quality means the same QP on every encoder (my calibration),
-        // where the encoders' own quality scales differ (NVIDIA's ends at QP 16 for H.264).
-        if (o.rateControl != RateControl::Quality) plans.push_back(qp);
-        if (o.rateControl != RateControl::ConstantQP) plans.push_back(quality);
-    }
+    // Auto: an average with room for peaks (twice it). A constant QP is what NVIDIA's MFT offers
+    // as its quality mode, without B-frames or adaptive quantisation, and it spent without
+    // measure where a replay is detailed: QP 20 made 126 Mbit/s of 1440p60 over Stadium's grid
+    // floor, QP 17 with 2 x 2 supersampling 275 Mbit/s (my tests, 2026-10-21). On request only.
+    if (!vbr && o.rateControl == RateControl::ConstantQP) plans.push_back(qp);
+    if (!vbr && o.rateControl == RateControl::Quality) plans.push_back(quality);
     plans.push_back(peak);
     plans.push_back(plain);
     return plans;
