@@ -112,7 +112,17 @@ bool startEncoder(Export& e) {
     o.ffmpegPreset = std::clamp(s.videoFfmpegPreset, 0, 2);
     std::string error;
     TMVS_LOG("video file: encoders: %s", venc::describeEncoders().c_str());
-    if (!e.encoder->open(mp4Path(e.avi), o, error)) {
+    bool opened = e.encoder->open(mp4Path(e.avi), o, error);
+    if (!opened && o.backend == venc::Backend::Ffmpeg) {
+        // No ffmpeg.exe (or it failed to start): the graphics card's encoder after all.
+        TMVS_LOG("video file: ffmpeg not usable (%s): the graphics card's encoder instead", error.c_str());
+        e.encoder->discard();
+        e.encoder = std::make_unique<venc::Encoder>();
+        o.backend = venc::Backend::MediaFoundation;
+        error.clear();
+        opened = e.encoder->open(mp4Path(e.avi), o, error);
+    }
+    if (!opened) {
         TMVS_LOG("video file: no MP4 (%s): the game's AVI instead, with its codec dialog", error.c_str());
         e.encoder->discard();
         e.encoder.reset();
