@@ -318,7 +318,12 @@ OwnSample ownSample(int sampleIndex, bool part) {
 void showOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT width, UINT height) {
     if (!g_own.haveFrame || !g_own.frame.valid() || g_own.frame.width != width || g_own.frame.height != height) return;
     const RECT all = {0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
-    g_pipeline.resolveScene(device, g_own.frame.texture, target, all);
+    videofile::OwnFormat format;
+    if (videofile::ownFormat(format) && format.hdrWhite > 0.0f) {
+        g_pipeline.showLinear(device, g_own.frame.texture, target, all);
+    } else {
+        g_pipeline.resolveScene(device, g_own.frame.texture, target, all);
+    }
 }
 
 // The frame's last sample is shaded into g_own.frame: preview, then the encoder's planes.
@@ -331,7 +336,7 @@ void finishOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT wi
     // Half a step of dither: enough to break the bands of a dark sky, while a full step of noise
     // on every pixel cost the encoder bits everywhere.
     if (!g_pipeline.exportPlanes(device, g_own.frame.texture, static_cast<UINT>(format.width), static_cast<UINT>(format.height), format.crop, tenBit,
-                                 0.5f, g_own.luma, g_own.chroma)) {
+                                 0.5f, tenBit ? format.hdrWhite : 0.0f, g_own.luma, g_own.chroma)) {
         static bool s_logged = false;
         if (!s_logged) {
             s_logged = true;
@@ -2556,12 +2561,18 @@ void processScene(IDirect3DDevice9* device) {
         // textures: my previewer test, capture_134), and the frame stays float to the planes. A
         // single sample keeps SMAA, which needs an 8-bit frame, unless 10 bits are wanted.
         videofile::OwnFormat ownFormat;
-        const bool ownFloat = own.count > 1 || (videofile::ownFormat(ownFormat) && ownFormat.tenBit);
+        const bool ownFormatKnown = videofile::ownFormat(ownFormat);
+        const bool ownFloat = own.count > 1 || (ownFormatKnown && ownFormat.tenBit);
         if (own.accumulate == 2 && !g_own.frame.create(device, width, height, ownFloat ? D3DFMT_A16B16G16R16F : D3DFMT_A8R8G8B8)) own = OwnSample();
         if (own.accumulate) {
             inputs.accumulate = own.accumulate;
             inputs.accumulateFirst = own.first;
             inputs.floatOutput = own.accumulate == 2 && ownFloat;
+            // HDR10: P010 planes only (no 16-bit targets: SDR, the frame is cut at white anyway).
+            if (ownFormatKnown && ownFormat.hdrWhite > 0.0f) {
+                if (g_own.tenBitOk < 0) g_own.tenBitOk = Pipeline::tenBitPlanesSupported(device) ? 1 : 0;
+                if (g_own.tenBitOk == 1) inputs.hdrPeak = ownFormat.hdrPeak / ownFormat.hdrWhite;
+            }
             if (own.count > 1) effective.fxaa = false;
             inputs.lensDof = g_own.lensSamples > 0;
             effective.filmGrain *= settings.videoGrain;

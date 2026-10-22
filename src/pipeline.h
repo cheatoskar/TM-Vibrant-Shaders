@@ -100,6 +100,9 @@ public:
         // `output` is a float target (the export's frame): no 8-bit dither in the final pass, and
         // FXAA instead of SMAA (which reads and writes 8-bit sRGB).
         bool floatOutput = false;
+        // HDR10 video (with floatOutput): the tone curve ends at this many times the game's white
+        // instead of at it, and `output` holds linear light (1 = that white); 0 = SDR.
+        float hdrPeak = 0.0f;
         // Accumulation depth of field (the plugin moves the camera's eye over the lens between the
         // samples): the screen-space blur stays off, the focus distance is still measured.
         bool lensDof = false;
@@ -232,8 +235,12 @@ public:
     // videoH / 2, A16B16G16R16 holding P010 codes when tenBit, else A8R8G8B8 holding NV12 bytes,
     // so a plain read of the two gives the encoder's buffer row by row. crop (uv: x, y, w, h): the
     // part of the frame the video shows. dither: the 8-bit dither in steps (0 none, 1 one step).
+    // hdrWhite > 0 (tenBit only): the frame is linear light (Inputs::hdrPeak), 1.0 = that many nits,
+    // and the planes are PQ in BT.2020 (HDR10).
     bool exportPlanes(IDirect3DDevice9* device, IDirect3DTexture9* frame, UINT videoW, UINT videoH, const float crop[4], bool tenBit, float dither,
-                      gfx::Target& luma, gfx::Target& chroma);
+                      float hdrWhite, gfx::Target& luma, gfx::Target& chroma);
+    // The HDR10 frame (linear light) on the screen during the export: cut to white, in sRGB.
+    bool showLinear(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DSurface9* target, const RECT& area);
     // The 16-bit unorm render target P010 needs (else 10 bits aren't offered).
     static bool tenBitPlanesSupported(IDirect3DDevice9* device);
     // The focus distance (metres) the auto focus measured last, 0 = none yet. A GPU read: it waits
@@ -453,7 +460,7 @@ private:
     bool profileResolve(ProfileFrame& frame, bool wait);
     void releaseProfile();
     // resolveScene (cut to 0..1) and addScene (added as it is, one-one blending).
-    bool copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add);
+    bool copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add, bool srgbWrite = false);
 
     bool m_ready = false;
     std::wstring m_shaderDir;

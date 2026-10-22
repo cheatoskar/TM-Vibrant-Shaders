@@ -30,7 +30,8 @@
 //     --video                 the video export's quality (photo mode's depth of field, moving)
 //     --repeat <n>            n more sub-pixel samples of the last frame (the export's
 //                             supersampling: history read, not advanced); the last is written
-//     --own [10]              the video export's own frames: the last frame and its repeats summed
+//     --own [10|hdr]          the video export's own frames: the last frame and its repeats summed
+//                             (hdr: HDR10 at 1000 nits, white 203; the P010 planes go to <out>.p010)
 //                             in float and graded once (Inputs::accumulate), then the encoder's
 //                             planes (8 bits NV12, with 10: P010) read back and turned into RGB
 //                             again: <output> is the frame, <output>.yuv.bmp the planes' round trip
@@ -382,6 +383,7 @@ int main(int argc, char** argv) {
     bool videoMode = false;              // --video: the video export's quality (the same paths, moving)
     int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
     int ownBits = 0;                     // --own [10]: the export's own frame and its planes (8 or 10 bits), 0 = off
+    bool ownHdr = false;                 // --own hdr: the planes in HDR10 (10 bits)
     bool jitterRaster = false;           // --jitter: TAA jitter emulated by RenderScale's point sampling
     int jitterIndex = 0;                 // its Halton index, on across batch jobs (keep=1) as in game
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
@@ -443,6 +445,7 @@ int main(int argc, char** argv) {
         } else if (!strcmp(argv[i], "--own")) {
             ownBits = 8;
             if (i + 1 < argc && !strcmp(argv[i + 1], "10")) ownBits = (++i, 10);
+            if (i + 1 < argc && !strcmp(argv[i + 1], "hdr")) ownBits = (++i, ownHdr = true, 10);
         } else if (!strcmp(argv[i], "--jitter")) {
             jitterRaster = true;
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
@@ -909,13 +912,19 @@ int main(int argc, char** argv) {
                     sample.accumulate = r == repeats ? 2 : 1;
                     sample.accumulateFirst = r == 0;
                     sample.floatOutput = r == repeats;
+                    if (ownHdr) sample.hdrPeak = 1000.0f / 203.0f;
                     pipeline.render(device, sample, job.settings, r == repeats ? ownFrame.surface : output.surface);
                 }
                 const UINT vw = cap.width & ~7u, vh = cap.height & ~7u;
                 const float crop[4] = {0.0f, 0.0f, static_cast<float>(vw) / cap.width, static_cast<float>(vh) / cap.height};
-                if (!pipeline.exportPlanes(device, ownFrame.texture, vw, vh, crop, ownBits == 10, 1.0f, ownLuma, ownChroma)) fprintf(stderr, "exportPlanes failed\n");
+                if (!pipeline.exportPlanes(device, ownFrame.texture, vw, vh, crop, ownBits == 10, 1.0f, ownHdr ? 203.0f : 0.0f, ownLuma, ownChroma))
+                    fprintf(stderr, "exportPlanes failed\n");
                 const RECT all = {0, 0, static_cast<LONG>(cap.width), static_cast<LONG>(cap.height)};
-                pipeline.resolveScene(device, ownFrame.texture, output.surface, all);
+                if (ownHdr) {
+                    pipeline.showLinear(device, ownFrame.texture, output.surface, all);
+                } else {
+                    pipeline.resolveScene(device, ownFrame.texture, output.surface, all);
+                }
                 continue;
             }
             pipeline.render(device, driven, job.settings, output.surface);
@@ -1000,7 +1009,21 @@ int main(int argc, char** argv) {
                 sys->Release();
                 return ok;
             };
-            if (readPlane(ownLuma, y) && readPlane(ownChroma, uv)) {
+            if (ownHdr && readPlane(ownLuma, y) && readPlane(ownChroma, uv)) {
+                // HDR10: the planes as they are (P010, Y then interleaved Cb Cr), for ffmpeg; the
+                // brightest luma code in nits as a check of the PQ curve.
+                FILE* f = fopen((job.output + ".p010").c_str(), "wb");
+                if (f) {
+                    fwrite(y.data(), 1, y.size(), f);
+                    fwrite(uv.data(), 1, uv.size(), f);
+                    fclose(f);
+                }
+                int top = 0;
+                for (size_t i = 0; i < y.size() / 2; i++) top = (std::max)(top, (y[2 * i] | (y[2 * i + 1] << 8)) >> 6);
+                const double e = std::clamp((top / 4.0 - 16.0) / 219.0, 0.0, 1.0), p = pow(e, 1.0 / 78.84375);
+                const double nits = 10000.0 * pow((std::max)(p - 0.8359375, 0.0) / (18.8515625 - 18.6875 * p), 1.0 / 0.1593017578125);
+                printf("own frame: HDR10 planes %ux%u -> %s.p010, brightest luma code %d (%.0f nits)\n", vw, vh, job.output.c_str(), top, nits);
+            } else if (readPlane(ownLuma, y) && readPlane(ownChroma, uv)) {
                 auto code = [ten](const std::vector<uint8_t>& p, size_t i) {
                     return ten ? ((p[2 * i] | (p[2 * i + 1] << 8)) >> 6) / 4.0f : static_cast<float>(p[i]);
                 };

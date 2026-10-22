@@ -3519,7 +3519,8 @@ float4 PS_Adapt(float2 uv : TEXCOORD0) : COLOR0 {
 //   s0 = HDR, s1 = bloom (1/2 res), s2 = light shafts (half), s3 = adapted log lum (1x1),
 //   s4 = full normal/depth (debug), s5 = AO/shadow (debug), s6 = bloom 1/8 (lens flare)
 // ---------------------------------------------------------------------------------
-float3 shoulderCurve(float3 x) {
+// top: where the shoulder ends, 1 = white; the HDR10 video ends it at its peak (in whites).
+float3 shoulderCurve(float3 x, float top) {
     // Linear below the knee (the game's mid-tones stay as they were), then a long
     // exponential shoulder that only reaches white for real light sources.
     const float knee = u_Mat.w > 0.0 ? clamp(u_Mat.w, 0.2, 0.95) : 0.5;
@@ -3527,16 +3528,17 @@ float3 shoulderCurve(float3 x) {
     // GameHdr: light above the game's white is real, not guessed. A longer shoulder spreads it
     // (1..3 linear) over visible steps instead of pressing it all just under white.
     const float width = u_Clean.y > 0.5 ? 3.0 : 1.7;
-    float3 shoulder = knee + (1.0 - knee) * (1.0 - exp(-over / ((1.0 - knee) * width)));
+    float3 shoulder = knee + (top - knee) * (1.0 - exp(-over / ((top - knee) * width)));
     return x < knee ? x : shoulder;
 }
-float3 tonemap(float3 x) {
+float3 tonemap(float3 x, float top) {
     // Half per channel (bright lights desaturate toward white), half on the brightest
     // channel (keeps the hue of sunlit surfaces and neon instead of bleaching them).
     float peak = max(x.r, max(x.g, x.b));
-    float3 hue = x * (shoulderCurve(peak.xxx).x / max(peak, 1e-5));
-    return lerp(shoulderCurve(x), hue, 0.5);
+    float3 hue = x * (shoulderCurve(peak.xxx, top).x / max(peak, 1e-5));
+    return lerp(shoulderCurve(x, top), hue, 0.5);
 }
+float3 tonemap(float3 x) { return tonemap(x, 1.0); }
 
 float3 grade(float3 c) {
     // White balance (simple temperature / tint gains).
@@ -3634,13 +3636,18 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     c *= u_Grade0.x * exp2(autoEv);
 
     c = grade(c);
-    c = tonemap(c);
+    // u_Pass0.w above 1: the HDR10 video, the curve runs on up to its peak (in the game's whites).
+    const bool hdr = u_Pass0.w > 1.0;
+    c = tonemap(c, hdr ? u_Pass0.w : 1.0);
 
     // Vignette.
     float vig = 1.0 - dot(d, d) * u_Grade2.w * 1.6;
     c *= saturate(vig);
 
-    float3 srgb = toSRGB(c);
+    // HDR10: the light above white skips the display steps below (the LUT, the night lamps, the
+    // grain work on 0..1) and is added back to the linear result at the end.
+    float3 above = max(c - 1.0, 0.0);
+    float3 srgb = toSRGB(c - above);
     // A .cube look works on display (sRGB) values, red = x, green = y, blue = z.
     if (u_Lut.x > 0.0) srgb = lerp(srgb, tex3D(s12, saturate(srgb) * u_Lut.y + u_Lut.z).rgb, u_Lut.x);
     // Night maps: what the game drew (nearly) white - lamps and what they light up close by -
@@ -3687,6 +3694,8 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
                       m.b * float3(0.1, 0.3, 1.0) + m.a * float3(1.0, 0.2, 1.0);
         srgb = lerp(srgb, saturate(tint), 0.6 * saturate(m.r + car + glass + grassM + m.b + m.a));
     }
+    // HDR10: linear light, 1 = the game's white (PS_ExportLuma makes PQ of it).
+    if (hdr) return float4(toLinear(srgb) + above, luma(srgb));
     return float4(srgb, luma(srgb));
 }
 
@@ -4302,10 +4311,22 @@ float4 PS_AccumResolve(float2 uv : TEXCOORD0) : COLOR0 {
 // pixel, each the average of its 2 x 2 pixels). u_Pass0.xy = 1 / the video's size, zw = where
 // the video's top left corner lies in s0 (uv), u_Pass1.xy = how much of s0 the video covers
 // (uv; letterbox crops), u_Pass1.z 1: 16-bit unorm target holding P010 codes (value << 6), 0:
-// 8-bit A8R8G8B8 holding NV12 bytes, u_Pass1.w the dither (8-bit only).
+// 8-bit A8R8G8B8 holding NV12 bytes, u_Pass1.w the dither (8-bit only). u_Pass1.z above 1:
+// HDR10, s0 holds linear light (PS_Final with u_Pass0.w), its 1.0 at u_Pass1.z nits, and the
+// planes are PQ in BT.2020 (P010 codes).
+static const float3x3 k709To2020 = {0.6274, 0.3293, 0.0433, 0.0691, 0.9195, 0.0114, 0.0164, 0.0880, 0.8956};
+
+// SMPTE ST 2084: light (1 = 10000 nits) to its PQ signal.
+float3 pq(float3 light) {
+    float3 y = pow(max(light, 0.0), 0.1593017578125);
+    return pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), 78.84375);
+}
+
 float3 exportRgb(float2 pixel) {
     float2 uv = u_Pass0.zw + pixel * u_Pass0.xy * u_Pass1.xy;
-    return saturate(tex2Dlod(s0, float4(uv, 0, 0)).rgb);
+    float3 c = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    if (u_Pass1.z > 1.5) return pq(mul(k709To2020, max(c, 0.0)) * (u_Pass1.z / 10000.0));
+    return saturate(c);
 }
 
 // A value (0..1 luma, -0.5..0.5 chroma) as the code the encoder takes. 8 bits: with triangular
@@ -4318,14 +4339,16 @@ float exportCode(float v, float range, float offset, float2 p) {
     return clamp(floor(v * range + offset + dither + 0.5), 0.0, 255.0) / 255.0;
 }
 
-static const float3 kLuma709 = float3(0.2126, 0.7152, 0.0722);
+// The luma weights: BT.709, or BT.2020 (non-constant luminance) for HDR10.
+float3 exportLumaWeights() { return u_Pass1.z > 1.5 ? float3(0.2627, 0.6780, 0.0593) : float3(0.2126, 0.7152, 0.0722); }
 
 float4 PS_ExportLuma(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float2 cell = floor(vpos);
     float4 y;
+    const float3 weights = exportLumaWeights();
     [unroll] for (int k = 0; k < 4; k++) {
         float2 p = float2(cell.x * 4.0 + k + 0.5, cell.y + 0.5);
-        y[k] = exportCode(dot(exportRgb(p), kLuma709), 219.0, 16.0, p);
+        y[k] = exportCode(dot(exportRgb(p), weights), 219.0, 16.0, p);
     }
     // A8R8G8B8 lies in memory as B G R A, A16B16G16R16 as R G B A.
     return u_Pass1.z > 0.5 ? y : y.zyxw;
@@ -4334,13 +4357,16 @@ float4 PS_ExportLuma(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 float4 PS_ExportChroma(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float2 cell = floor(vpos);
     float4 c;
+    const float3 weights = exportLumaWeights();
+    // Cb = (B - Y) / (2 (1 - Kb)), Cr = (R - Y) / (2 (1 - Kr)).
+    const float2 scale = 2.0 - 2.0 * weights.br;
     [unroll] for (int k = 0; k < 2; k++) {
         // The middle of the chroma sample's 2 x 2 pixels: the bilinear tap there is their average.
         float2 p = float2(cell.x * 4.0 + k * 2.0 + 1.0, cell.y * 2.0 + 1.0);
         float3 rgb = exportRgb(p);
-        float l = dot(rgb, kLuma709);
-        c[k * 2] = exportCode((rgb.b - l) / 1.8556, 224.0, 128.0, p);
-        c[k * 2 + 1] = exportCode((rgb.r - l) / 1.5748, 224.0, 128.0, p + float2(37.0, 11.0));
+        float l = dot(rgb, weights);
+        c[k * 2] = exportCode((rgb.b - l) / scale.x, 224.0, 128.0, p);
+        c[k * 2 + 1] = exportCode((rgb.r - l) / scale.y, 224.0, 128.0, p + float2(37.0, 11.0));
     }
     return u_Pass1.z > 0.5 ? c : c.zyxw;
 }

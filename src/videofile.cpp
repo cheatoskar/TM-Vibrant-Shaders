@@ -129,6 +129,11 @@ bool startEncoder(Export& e) {
     o.quality = std::clamp(s.videoQuality, 0, 100);
     o.bitrate = s.videoBitrate > 0.0f ? s.videoBitrate * 1e6 : 0.0;
     o.ffmpegPreset = std::clamp(s.videoFfmpegPreset, 0, 2);
+    // HDR10 needs the float frame (the mod's own) and 10 bits: the game's 8-bit image has no light
+    // above white to show.
+    o.hdr10 = s.videoHdr && o.tenBit && s.videoOwnFrames;
+    o.hdrPeakNits = static_cast<int>(std::clamp(s.videoHdrPeak, 400.0f, 4000.0f));
+    o.hdrAverageNits = std::min(o.hdrPeakNits, static_cast<int>(std::clamp(s.videoHdrWhite, 100.0f, 400.0f) * 2.0f));
     std::string error;
     TMVS_LOG("video file: encoders: %s", venc::describeEncoders().c_str());
     bool opened = e.encoder->open(mp4Path(e.avi), o, error);
@@ -154,6 +159,10 @@ bool startEncoder(Export& e) {
         e.early.shrink_to_fit();
     }
     e.own.tenBit = e.encoder->wants() == venc::Pixels::P010;
+    // The encoder that opened may not be the one asked for (no HEVC: H.264, 8 bits): HDR only in P010.
+    e.own.hdrWhite = o.hdr10 && e.own.tenBit ? std::clamp(s.videoHdrWhite, 100.0f, 400.0f) : 0.0f;
+    e.own.hdrPeak = e.own.hdrWhite > 0.0f ? static_cast<float>(o.hdrPeakNits) : 0.0f;
+    if (o.hdr10 && e.own.hdrWhite <= 0.0f) TMVS_LOG("video file: HDR10 asked for, but the encoder takes 8 bits: SDR");
     return true;
 }
 

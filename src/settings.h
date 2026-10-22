@@ -60,6 +60,9 @@ struct Settings {
     bool videoLensDof = true;      // depth of field from the samples themselves (the camera moves over the lens), with enough of them
     float videoGrain = 0.5f;       // the look's film grain in the video (grain costs the encoder much of its bits)
     int videoAspect = 0;           // 0 as shot, 1 2:1, 2 2.39:1 (cropped: the file holds only the picture)
+    bool videoHdr = false;         // HDR10 video (PQ, BT.2020; HEVC or AV1 in 10 bits, the mod's own frames)
+    float videoHdrPeak = 1000.0f;  // HDR10: the brightest light in nits (the tone curve's top, the file's metadata)
+    float videoHdrWhite = 203.0f;  // HDR10: the game's white (the SDR image's 1.0) in nits; 203 is BT.2408's reference white
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;
     // The game's 3D image and every effect at this fraction of the screen's resolution, brought back

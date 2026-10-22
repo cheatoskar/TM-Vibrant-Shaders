@@ -3216,7 +3216,8 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     device->SetPixelShaderConstantF(44, finalMaterials, 1);
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
-    passConstants(device, 1.0f / norm, in.floatOutput ? 1.0f : 0.0f, s.nightSurfaces);
+    // c32.w (final pass): HDR10, the tone curve's top in the game's whites (0 = SDR).
+    passConstants(device, 1.0f / norm, in.floatOutput ? 1.0f : 0.0f, s.nightSurfaces, in.floatOutput ? in.hdrPeak : 0.0f);
     // c33 (final pass): the lamp glare's and the lamp haze's strength (0: off, s10 not read).
     device->SetPixelShaderConstantF(33, lampScale, 1);
     if (lampReady) bind(device, 10, m_lampUp[0].texture, true);
@@ -3226,7 +3227,8 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool fxaa = s.fxaa && post && !smaa;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
                      m_taa[1].create(device, in.width, in.height, D3DFMT_A16B16G16R16F);
-    const bool sharpen = s.sharpen > 0.001f && post && !upscale;
+    // Not on the HDR10 frame: the sharpen pass works on 0..1 and cuts at white.
+    const bool sharpen = s.sharpen > 0.001f && post && !upscale && !(in.floatOutput && in.hdrPeak > 0.0f);
     // Chain: Final -> [FXAA | SMAA] -> [TAA] -> [Sharpen | Copy] -> output (RenderScale: -> EASU -> RCAS).
     // The export's frame stays float all the way (its 10 bits, its own dither at the end).
     gfx::Target* ldr = &m_ldr;
@@ -3391,14 +3393,15 @@ bool Pipeline::tenBitPlanesSupported(IDirect3DDevice9* device) {
 }
 
 bool Pipeline::exportPlanes(IDirect3DDevice9* device, IDirect3DTexture9* frame, UINT videoW, UINT videoH, const float crop[4], bool tenBit, float dither,
-                            gfx::Target& luma, gfx::Target& chroma) {
+                            float hdrWhite, gfx::Target& luma, gfx::Target& chroma) {
     if (!m_ready || !frame || videoW < 8 || videoH < 2 || (videoW & 3) || (videoH & 1)) return false;
     const D3DFORMAT format = tenBit ? D3DFMT_A16B16G16R16 : D3DFMT_A8R8G8B8;
     if (!luma.create(device, videoW / 4, videoH, format) || !chroma.create(device, videoW / 4, videoH / 2, format)) return false;
     const BOOL softwareVP = setPassStates(device);
     bind(device, 0, frame, true);
     const float sizes[4] = {1.0f / videoW, 1.0f / videoH, crop[0], crop[1]};
-    const float modes[4] = {crop[2], crop[3], tenBit ? 1.0f : 0.0f, dither};
+    // c33.z: 0 NV12, 1 P010, above 1 P010 in HDR10 with the frame's 1.0 at that many nits.
+    const float modes[4] = {crop[2], crop[3], tenBit ? (hdrWhite > 1.0f ? hdrWhite : 1.0f) : 0.0f, dither};
     device->SetPixelShaderConstantF(32, sizes, 1);
     device->SetPixelShaderConstantF(33, modes, 1);
     runPass(device, kExportLuma, luma);
@@ -3481,6 +3484,10 @@ bool Pipeline::copyColorArea(IDirect3DDevice9* device, IDirect3DTexture9* source
 
 bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area) {
     return copyScene(device, scene, target, area, false);
+}
+
+bool Pipeline::showLinear(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DSurface9* target, const RECT& area) {
+    return copyScene(device, frame, target, area, false, true);
 }
 
 // RenderScale: m_scaled (the finished image at the scene's size) up to `output` with FSR 1. RCAS
@@ -3622,7 +3629,7 @@ bool Pipeline::fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDire
     return drew;
 }
 
-bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add) {
+bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add, bool srgbWrite) {
     if (!m_ready) return false;
     D3DSURFACE_DESC desc{};
     target->GetDesc(&desc);
@@ -3641,7 +3648,9 @@ bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, ID
     passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
     const float mode[4] = {add ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f}; // c33.x: 1 = as it is (added), 0 = cut to 0..1
     device->SetPixelShaderConstantF(33, mode, 1);
+    if (srgbWrite) device->SetRenderState(D3DRS_SRGBWRITEENABLE, TRUE);
     runPass(device, kResolve, target, desc.Width, desc.Height);
+    if (srgbWrite) device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
     if (add) device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
     device->SetTexture(0, nullptr);

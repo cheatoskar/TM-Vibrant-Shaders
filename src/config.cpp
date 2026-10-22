@@ -136,6 +136,9 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("VideoLensDof", "Lens depth of field", "Cinematic", Bool, videoLensDof, 0.0f, 1.0f),
         TMVS_FIELD("VideoGrain", "Film grain in the video", "Cinematic", Float, videoGrain, 0.0f, 1.0f),
         TMVS_FIELD("VideoAspect", "Video aspect", "Cinematic", Int, videoAspect, 0.0f, 2.0f),
+        TMVS_FIELD("VideoHdr", "HDR10 video", "Cinematic", Bool, videoHdr, 0.0f, 1.0f),
+        TMVS_FIELD("VideoHdrPeak", "HDR peak (nits)", "Cinematic", Float, videoHdrPeak, 400.0f, 4000.0f),
+        TMVS_FIELD("VideoHdrWhite", "HDR white (nits)", "Cinematic", Float, videoHdrWhite, 100.0f, 400.0f),
 
         TMVS_FIELD("TAA", "Temporal AA", "Image quality", Bool, taa, 0.0f, 1.0f),
         TMVS_FIELD("TAAJitter", "TAA jitter", "Image quality", Bool, taaJitter, 0.0f, 1.0f),
@@ -1314,6 +1317,9 @@ void applyPreset(Settings& s, Preset preset) {
     s.videoLensDof = keepVideo.videoLensDof;
     s.videoGrain = keepVideo.videoGrain;
     s.videoAspect = keepVideo.videoAspect;
+    s.videoHdr = keepVideo.videoHdr;
+    s.videoHdrPeak = keepVideo.videoHdrPeak;
+    s.videoHdrWhite = keepVideo.videoHdrWhite;
     s.taaJitter = keepJitter;
     s.renderScale = keepScale;
     s.fsrSharpness = keepFsrSharpness;
@@ -1759,6 +1765,13 @@ void Config::load() {
         settings.videoGrain = std::clamp(static_cast<float>(_wtof(target)), 0.0f, 1.0f);
     }
     settings.videoAspect = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoAspect", 0, ini)), 0, 2);
+    settings.videoHdr = GetPrivateProfileIntW(L"Settings", L"VideoHdr", 0, ini) != 0;
+    if (GetPrivateProfileStringW(L"Settings", L"VideoHdrPeak", L"", target, 32, ini)) {
+        settings.videoHdrPeak = std::clamp(static_cast<float>(_wtof(target)), 400.0f, 4000.0f);
+    }
+    if (GetPrivateProfileStringW(L"Settings", L"VideoHdrWhite", L"", target, 32, ini)) {
+        settings.videoHdrWhite = std::clamp(static_cast<float>(_wtof(target)), 100.0f, 400.0f);
+    }
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 1, ini) != 0;
     if (GetPrivateProfileStringW(L"Settings", L"RenderScale", L"", target, 32, ini)) {
         settings.renderScale = std::clamp(static_cast<float>(_wtof(target)), 0.5f, 1.0f);

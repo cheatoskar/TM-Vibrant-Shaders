@@ -23,6 +23,8 @@ struct OwnFormat {
     int width = 0, height = 0; // the encoder's size (multiples of 8; smaller than the game's with VideoAspect)
     bool tenBit = false;       // P010 wanted (else NV12)
     float crop[4] = {0.0f, 0.0f, 1.0f, 1.0f}; // the part of the game's frame the video shows (uv: x, y, w, h)
+    float hdrWhite = 0.0f;     // HDR10 (P010 in PQ, BT.2020): the frame's 1.0 in nits; 0 = SDR
+    float hdrPeak = 0.0f;      // HDR10: the brightest light in nits
 };
 // An export is running whose encoder takes the plugin's frames (VideoOwnFrames, MP4): its format.
 bool ownFormat(OwnFormat& out);

@@ -260,6 +260,8 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("VideoEncoder") || is("VideoBitrate") || is("VideoAspect") || is("VideoOwnFrames")) return mp4;
     if (is("VideoFfmpegPreset")) return mp4 && s.videoEncoder == 1;
     if (is("VideoShutter") || is("VideoLensDof") || is("VideoGrain")) return mp4 && s.videoOwnFrames;
+    if (is("VideoHdr")) return s.videoCodec >= 2 && s.video10Bit && s.videoOwnFrames;
+    if (is("VideoHdrPeak") || is("VideoHdrWhite")) return s.videoCodec >= 2 && s.video10Bit && s.videoOwnFrames && s.videoHdr;
     if (is("TargetFPS")) return s.autoQuality;
     if (is("FsrSharpness")) return s.renderScale < 0.99f;
     if (is("Sharpen")) return s.renderScale >= 0.99f; // FSR sharpening takes its place while scaled
@@ -410,6 +412,9 @@ const char* tooltipFor(const char* key) {
         {"VideoLensDof", "Depth of field from the samples themselves: the camera moves over a lens between them, like a real one (true bokeh, no halos at edges). Needs 16 or more samples per frame (high quality 4x4 and up in Shoot video); with fewer, the usual blur."},
         {"VideoGrain", "How much of the look's film grain goes into the video. Grain is noise to the encoder and eats its bits: 0.5 keeps the feel at half the cost."},
         {"VideoAspect", "Crops the video to a wider picture. The file holds only the picture (no black bars to encode); players add the bars."},
+        {"VideoHdr", "HDR10: lamps, the sun and glows keep their brightness above white instead of being pressed under it. Needs HEVC or AV1 in 10 bits and Mod renders the frames. Only an HDR screen shows it as meant; YouTube makes an SDR copy for the rest. The screen during the export shows it cut to white."},
+        {"VideoHdrPeak", "The brightest light in nits: where the tone curve ends and what the file tells the screen. 1000 suits most HDR monitors and YouTube."},
+        {"VideoHdrWhite", "How bright the game's white (the normal image's 1.0) is in nits. 203 is the broadcast reference; higher makes the whole picture brighter, leaving less room above it for lights."},
 
         {"FocusDistance", "Metres to the sharp point. 0 focuses automatically."},
         {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, wherever the replay camera puts it; the middle again while the car is off screen. A click in the photo mode still wins."},
@@ -1687,8 +1692,21 @@ const VideoPreset kVideoPresets[] = {
          s.video10Bit = false;
          s.videoBitrate = 0.0f;
          s.videoGrain = 0.5f;
+         s.videoHdr = false;
      },
-     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f; }},
+     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f && s.videoEncoder == 0; }},
+    {"Best", "x264 through ffmpeg at quality 80: clearly more detail per megabyte than the graphics card (fine track grids, grain), and about as fast as the export renders. Needs ffmpeg.exe in your TMVS folder or on PATH; without it the graphics card.",
+     [](Settings& s) {
+         s.videoCodec = 1;
+         s.videoQuality = 80;
+         s.video10Bit = false;
+         s.videoBitrate = 0.0f;
+         s.videoEncoder = 1;
+         s.videoFfmpegPreset = 1;
+         s.videoGrain = 0.5f;
+         s.videoHdr = false;
+     },
+     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoEncoder == 1 && s.videoFfmpegPreset == 1; }},
     {"Editing", "H.264 at quality 92 with the full grain: room for cutting and grading, and every editor decodes it smoothly. Large files.",
      [](Settings& s) {
          s.videoCodec = 1;
@@ -1696,6 +1714,7 @@ const VideoPreset kVideoPresets[] = {
          s.video10Bit = false;
          s.videoBitrate = 0.0f;
          s.videoGrain = 1.0f;
+         s.videoHdr = false;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 92 && s.videoBitrate <= 0.0f && s.videoGrain == 1.0f; }},
     {"Small", "HEVC in 10 bits at quality 78: the smallest file that still looks clean, no bands in the sky. Heavier to edit; fine to keep or share.",
@@ -1705,8 +1724,9 @@ const VideoPreset kVideoPresets[] = {
          s.video10Bit = true;
          s.videoBitrate = 0.0f;
          s.videoGrain = 0.3f;
+         s.videoHdr = false;
      },
-     [](const Settings& s) { return s.videoCodec == 2 && s.video10Bit && s.videoQuality == 78 && s.videoBitrate <= 0.0f; }},
+     [](const Settings& s) { return s.videoCodec == 2 && s.video10Bit && s.videoQuality == 78 && s.videoBitrate <= 0.0f && !s.videoHdr; }},
     {"Discord", "H.264 at quality 62, little grain: short clips small enough for a chat.",
      [](Settings& s) {
          s.videoCodec = 1;
@@ -1714,8 +1734,20 @@ const VideoPreset kVideoPresets[] = {
          s.video10Bit = false;
          s.videoBitrate = 0.0f;
          s.videoGrain = 0.2f;
+         s.videoHdr = false;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 62 && s.videoBitrate <= 0.0f; }},
+    {"HDR10", "HEVC in 10 bits with HDR10 at quality 85: lights above white stay bright on an HDR screen. Mod renders the frames needed.",
+     [](Settings& s) {
+         s.videoCodec = 2;
+         s.videoQuality = 85;
+         s.video10Bit = true;
+         s.videoBitrate = 0.0f;
+         s.videoGrain = 0.3f;
+         s.videoOwnFrames = true;
+         s.videoHdr = true;
+     },
+     [](const Settings& s) { return s.videoCodec >= 2 && s.video10Bit && s.videoHdr && s.videoOwnFrames; }},
 };
 
 const VideoPreset kVideoLooks[] = {
@@ -1762,12 +1794,14 @@ bool drawVideoPage(Config& config, Settings& s) {
                           ImGui::TextWrapped("High quality: on, with 4 samples (4 x 4 = 16 a frame): smooth edges, the lens depth of field, and with "
                                              "its Motion blur real motion blur. More samples take longer; at 60 fps more than 4 don't make the "
                                              "motion blur finer (the game's clock runs in milliseconds).");
-                          ImGui::TextWrapped("Sound: the game plays the clip once more in real time after the frames and records it.");
+                          ImGui::TextWrapped("Sound: turn on its sound button (off by default). After the frames the game plays the clip once more "
+                                             "in real time and records the game's own sound; keep it running until that is done.");
                           return false;
                       }});
     panels.push_back(settingsPanel("Format", s,
                                    {{"VideoCodec", nullptr}, {"VideoQuality", nullptr}, {"Video10Bit", nullptr}, {"VideoBitrate", nullptr},
-                                    {"VideoEncoder", nullptr}, {"VideoFfmpegPreset", nullptr}}));
+                                    {"VideoEncoder", nullptr}, {"VideoFfmpegPreset", nullptr}, {"VideoHdr", nullptr}, {"VideoHdrPeak", nullptr},
+                                    {"VideoHdrWhite", nullptr}}));
     panels.push_back(settingsPanel("Rendering", s,
                                    {{"VideoExportBest", nullptr}, {"VideoOwnFrames", nullptr}, {"VideoShutter", nullptr}, {"VideoLensDof", nullptr},
                                     {"VideoGrain", nullptr}, {"VideoAspect", nullptr}}));
