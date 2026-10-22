@@ -194,6 +194,22 @@ bool mapOpen();
 // up axis in the world (unit length), its roof's way: on a banked curve, a wall or in a loop
 // the road's up under the car.
 bool carLocation(float position[3], float up[3] = nullptr);
+// The car's whole pose, for the spray from its tyres: while a race runs the player's car (as
+// carLocation), in the replay editor, its video export and replays the car the clip's cameras
+// show. False otherwise.
+struct CarPose {
+    float position[3] = {};               // as carLocation's (about the height of the wheel centres)
+    float forward[3] = {0.0f, 0.0f, 1.0f}; // the car's axes in the world, unit length
+    float right[3] = {1.0f, 0.0f, 0.0f};  // (the side: its sign is the model's, the tyres are symmetric)
+    float up[3] = {0.0f, 1.0f, 0.0f};
+    // Where its tyres touch the road, in its axes from `position` (m): the front and the rear
+    // axle along forward, half the track, the height along up (negative). Measured on the
+    // environment's car standing at a start (wheelsMeasured), else the Stadium car's estimates.
+    float frontAxle = 0.0f, rearAxle = 0.0f, halfTrack = 0.0f, contactHeight = 0.0f;
+    bool wheelsMeasured = false;
+    int source = 0; // 1 the race's player, 2 a clip's car
+};
+bool carPose(CarPose& pose);
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.
 bool currentMapComments(std::string& comments);

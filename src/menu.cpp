@@ -398,7 +398,7 @@ const char* tooltipFor(const char* key) {
         {"WeatherSound", "Volume of rain and thunder."},
         {"WaterSurfaces", "Reflections on pools and the sea."},
         {"Reflections", "Reflections on the dry track. Above 1 it turns into a mirror."},
-        {"Spray", "Spray behind the car on wet roads and snow."},
+        {"Spray", "Spray from the car's tyres on wet roads and snow."},
         {"CinematicOnlyInReplays", "Motion blur and depth of field only in replays and video export."},
         {"VideoExportBest", "Renders each video frame with full quality and the effects on the video's own clock."},
         {"VideoCodec", "What the replay editor's Shoot video writes. MP4 skips the game's codec dialog and lands where the .avi would. H.264 plays and edits everywhere; HEVC and AV1 give the same picture in a smaller file but are heavier to edit. Without an encoder for the choice it falls back to H.264."},

@@ -70,6 +70,17 @@ public:
         // The car's up (its roof's way, unit length): the trail lies flat on banked curves, walls
         // and loops. The world's up when not known (the depth buffer's car).
         float carUp[3] = {0.0f, 1.0f, 0.0f};
+        // The car's whole pose for the spray (engine::carPose: while driving the player's car, in
+        // the replay editor and its export the car the clip's cameras show): its axes (unit, world)
+        // and where its tyres touch the road in them (front axle, rear axle along forward, half
+        // the track, height along up; m from carPosePosition). Unknown: the spray finds the car
+        // in the depth buffer as before.
+        bool carPoseKnown = false;
+        float carPosePosition[3] = {};
+        float carForward[3] = {0.0f, 0.0f, 1.0f};
+        float carRight[3] = {1.0f, 0.0f, 0.0f};
+        float carPoseUp[3] = {0.0f, 1.0f, 0.0f};
+        float carWheels[4] = {1.7f, -1.2f, 0.86f, -0.35f};
         // A clip of the map plays while the player drives (driving is false then): the trail
         // records the car on.
         bool clipInRace = false;
@@ -299,6 +310,7 @@ public:
         m_historyValid = false;
         m_havePrevious = false;
         m_rainCameraValid = false;
+        m_carPrevValid = false;
         m_heightValid = false;
         m_skyValid = false;
         m_shelterValid = false;
@@ -682,6 +694,12 @@ private:
     float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks, the spray's speed)
     float m_rainCamera[3] = {};                 // the camera at the last frame that measured it
     bool m_rainCameraValid = false;
+    // The spray's car (Inputs::carPose*): its velocity from its position on the same clock (smoothed).
+    float m_carVelocity[3] = {};
+    float m_carPrev[3] = {};
+    bool m_carPrevValid = false;
+    int m_sprayFrom = -1;                       // the log's last spray source (1 the engine's car)
+    int m_sprayLogged = 0;
     float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
     int m_boltSlot = -1000000;                  // lightning strike the bolt direction belongs to
     float m_boltAzimuth = 0.0f;

@@ -16,6 +16,9 @@
 //     --clip                  ... while a clip of the map plays (driving off, clipInRace on)
 //     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
 //                             view, 0.1 s apart (neon trail test)
+//     --carpose <deg>         spray test: the engine's car pose where the depth finder sees the
+//                             car, turned by deg from the camera's level forward (sliding), moving
+//                             with --drive
 //     --bench                 GPU time per pass
 //     --compare <preset>      photo mode's compare split with a preset: that preset's look
 //                             from a second pipeline (its own history, as in game) left of
@@ -394,6 +397,11 @@ int main(int argc, char** argv) {
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
     float refocus[2] = {-2.0f, -2.0f};   // --refocus: the point clicked before (first half of the frames)
     float carAt[2] = {-1.0f, -1.0f};     // --car: where the car is on screen (uv), as the engine would report it
+    // --carpose yaw: the engine's car pose for the spray (Inputs::carPose*): where the depth search
+    // finds the car (as --trail), turned by yaw degrees from the camera's level forward (a car
+    // sliding sideways), moving with the camera's --drive.
+    float carPoseYaw = 0.0f;
+    bool carPoseSet = false;
     const char* compare = nullptr;       // --compare: the preset on the split's other side
     float splitAt = 0.5f;
     const char* labels = nullptr;        // --labels "left|right": the names in a photo of the split
@@ -458,6 +466,9 @@ int main(int argc, char** argv) {
             labels = argv[++i];
         } else if (!strcmp(argv[i], "--car") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &carAt[0], &carAt[1]);
+        } else if (!strcmp(argv[i], "--carpose") && i + 1 < argc) {
+            carPoseYaw = static_cast<float>(atof(argv[++i]));
+            carPoseSet = true;
         } else if (!strcmp(argv[i], "--refocus") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &refocus[0], &refocus[1]);
         } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
@@ -795,8 +806,8 @@ int main(int argc, char** argv) {
         // centre, lowered to the wheel centres), driving there along the line from 1.6 m below
         // the camera (the road it came along).
         float carEnd[3] = {}, carDir[3] = {};
-        bool trail = false;
-        if (job.trail > 0.0f && cap.depth.size() == static_cast<size_t>(cap.width) * cap.height) {
+        bool trail = false, posed = false;
+        if ((job.trail > 0.0f || carPoseSet) && cap.depth.size() == static_cast<size_t>(cap.width) * cap.height) {
             const float* V = cap.view;
             const float* P = cap.projection;
             float best = 1e9f, bestV = 0.6f;
@@ -818,8 +829,29 @@ int main(int argc, char** argv) {
                 for (int j = 0; j < 3; j++) len += (anchor[j] - carEnd[j]) * (anchor[j] - carEnd[j]);
                 len = sqrtf(len);
                 for (int j = 0; j < 3; j++) carDir[j] = (anchor[j] - carEnd[j]) / len;
-                trail = true;
-                printf("%s: trail test, car at %.1f %.1f %.1f, %.1f m/s\n", job.output.c_str(), carEnd[0], carEnd[1], carEnd[2], job.trail);
+                trail = job.trail > 0.0f;
+                posed = carPoseSet;
+                if (trail) printf("%s: trail test, car at %.1f %.1f %.1f, %.1f m/s\n", job.output.c_str(), carEnd[0], carEnd[1], carEnd[2], job.trail);
+            }
+        }
+        // --carpose: the car's axes, and how far the camera (and the car with it) moves each frame.
+        float poseForward[3] = {}, poseRight[3] = {}, poseStep[3] = {};
+        if (posed) {
+            const float* V = cap.view;
+            float f[3] = {V[0 * 4 + 2], 0.0f, V[2 * 4 + 2]};
+            const float fl = sqrtf(f[0] * f[0] + f[2] * f[2]);
+            if (fl < 1e-4f) posed = false;
+            else {
+                f[0] /= fl;
+                f[2] /= fl;
+                const float a = carPoseYaw * 3.14159265f / 180.0f;
+                const float r[3] = {f[2], 0.0f, -f[0]};
+                for (int j = 0; j < 3; j++) poseForward[j] = f[j] * cosf(a) + r[j] * sinf(a);
+                poseRight[0] = poseForward[2];
+                poseRight[2] = -poseForward[0];
+                for (int j = 0; j < 3; j++) poseStep[j] = job.drive[0] * V[j * 4 + 0] + job.drive[1] * V[j * 4 + 1] + job.drive[2] * V[j * 4 + 2];
+                printf("%s: car pose at %.1f %.1f %.1f, turned %.0f degrees from the camera, %.2f m a frame\n", job.output.c_str(), carEnd[0], carEnd[1],
+                       carEnd[2], carPoseYaw, sqrtf(poseStep[0] * poseStep[0] + poseStep[1] * poseStep[1] + poseStep[2] * poseStep[2]));
             }
         }
 
@@ -868,6 +900,20 @@ int main(int argc, char** argv) {
                 // Per frame as far as the frame's time step (time=: 0.02 s, else 0.1 s).
                 const float step = job.trail * (job.time >= 0.0f ? 0.02f : 0.1f);
                 for (int j = 0; j < 3; j++) driven.carPosition[j] = carEnd[j] + carDir[j] * back * step;
+            }
+            if (posed) {
+                driven.carPoseKnown = true;
+                // The depth finder hits the car's tail: its middle (between the axles) is about
+                // 1.6 m ahead of that (and carEnd is 0.25 m towards the camera).
+                const float* V = cap.view;
+                float level[3] = {V[0 * 4 + 2], 0.0f, V[2 * 4 + 2]};
+                const float ll = sqrtf(level[0] * level[0] + level[2] * level[2]);
+                for (int j = 0; j < 3; j++) {
+                    driven.carPosePosition[j] = carEnd[j] + level[j] / ll * 1.85f - poseStep[j] * back;
+                    driven.carForward[j] = poseForward[j];
+                    driven.carRight[j] = poseRight[j];
+                    driven.carPoseUp[j] = j == 1 ? 1.0f : 0.0f;
+                }
             }
             if (jitterGrid > 0) {
                 // TAA jitter as plugin.cpp updateJitter: Halton (2, 3) over 8 frames, here picking

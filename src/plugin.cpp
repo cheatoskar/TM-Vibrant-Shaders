@@ -2426,6 +2426,33 @@ void processScene(IDirect3DDevice9* device) {
     const bool cinematic = engine::cinematicActive() || g_exporting;
     inputs.driving = !cinematic;
     inputs.carKnown = engine::carLocation(inputs.carPosition, inputs.carUp);
+    {
+        // The spray's car: its axes and tyres. Once per export the log says how often they were known.
+        engine::CarPose pose;
+        inputs.carPoseKnown = engine::carPose(pose);
+        if (inputs.carPoseKnown) {
+            memcpy(inputs.carPosePosition, pose.position, sizeof(inputs.carPosePosition));
+            memcpy(inputs.carForward, pose.forward, sizeof(inputs.carForward));
+            memcpy(inputs.carRight, pose.right, sizeof(inputs.carRight));
+            memcpy(inputs.carPoseUp, pose.up, sizeof(inputs.carPoseUp));
+            const float wheels[4] = {pose.frontAxle, pose.rearAxle, pose.halfTrack, pose.contactHeight};
+            memcpy(inputs.carWheels, wheels, sizeof(inputs.carWheels));
+        }
+        static bool s_exporting = false, s_measured = false;
+        static unsigned s_frames = 0, s_known = 0;
+        if (g_exporting) {
+            if (!s_exporting) s_frames = s_known = 0;
+            s_frames++;
+            if (inputs.carPoseKnown) s_known++;
+            if (inputs.carPoseKnown && pose.wheelsMeasured) s_measured = true;
+        } else if (s_exporting) {
+            TMVS_LOG("video export: the spray had the car's axes from the engine in %u of %u shaded cameras%s", s_known, s_frames,
+                     s_known == 0 ? " (none: it found the car in the depth buffer, behind the screen's centre)"
+                                  : (s_measured ? " (its tyres as measured standing)" : " (its tyres: the Stadium car's estimates)"));
+            s_measured = false;
+        }
+        s_exporting = g_exporting;
+    }
     // A clip of the map (in-game trigger) while the player drives: the trail goes on recording.
     inputs.clipInRace = !g_exporting && engine::clipInRace() && inputs.carKnown;
     {
