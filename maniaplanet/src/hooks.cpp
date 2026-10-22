@@ -556,6 +556,8 @@ bool scenePRaster(ID3D11Buffer* buffer, float out[4]) {
 EngineCar g_car;
 CarTracker g_carTracker;
 float g_carCandidates[8][12] = {};
+CarWheels g_carWheels[8] = {}; // each candidate's wheels from its bones (the spray)
+int g_carBoneLogs = 0;          // bone origins logged (a few cars, to check findWheels in the game)
 int g_carCount = 0;
 // The car of the last frames, for captures (car.txt): does it move evenly from frame to frame,
 // and where are the other cars (ghosts) in the camera's view?
@@ -624,6 +626,19 @@ void takeCar(ID3D11DeviceContext* ctx) {
         return;
     }
     if (found) {
+        // Its wheels: bone origins that lie like a car's wheels (read from the same copy).
+        const int bones = std::clamp(static_cast<int>(found->size > kObjectVBones ? (found->size - kObjectVBones) / 48 : 0), 0, kObjectVBoneCount);
+        const float* bone = reinterpret_cast<const float*>(found->data + kObjectVBones);
+        findWheels(bone, bones, g_carWheels[g_carCount]);
+        if (g_carBoneLogs < 2 && bones > 0) {
+            // The bone origins of the first cars (x y z in the car's axes), to check the wheels found.
+            g_carBoneLogs++;
+            char line[2048];
+            int n = snprintf(line, sizeof(line), "hooks: the car's %d bone origins:", bones);
+            for (int i = 0; i < bones && n < static_cast<int>(sizeof(line)) - 40; i++)
+                n += snprintf(line + n, sizeof(line) - n, " %.2f,%.2f,%.2f", bone[i * 12 + 3], bone[i * 12 + 7], bone[i * 12 + 11]);
+            TMVS_LOG("%s", line);
+        }
         memcpy(g_carCandidates[g_carCount++], found->data + kObjectVVisualToCamera, sizeof(float) * 12);
     } else if (!cbs[0] || sceneVCopy(cbs[0], false)) {
         // Not an upload we saw: what is bound instead (a few times), to learn the engine's scheme.
@@ -677,6 +692,23 @@ void resolveCar() {
         toWorld(m[1], m[5], m[9], g_car.up);
         toWorld(m[2], m[6], m[10], g_car.forward);
         g_car.track = g_carTracker.track();
+        g_car.wheels = g_carWheels[index[pick]];
+        // Once per change: whether its bones gave the wheels (the spray's tyres), and where.
+        static int s_wheelsLogged = 0;
+        static float s_last[4] = {-1.0f, 0.0f, 0.0f, 0.0f};
+        const CarWheels& wh = g_car.wheels;
+        const float now4[4] = {wh.known ? 1.0f : 0.0f, wh.zA, wh.zB, wh.halfTrack};
+        bool changed = false;
+        for (int i = 0; i < 4; i++) changed = changed || std::fabs(now4[i] - s_last[i]) > 0.05f;
+        if (changed && s_wheelsLogged < 12) {
+            s_wheelsLogged++;
+            memcpy(s_last, now4, sizeof(s_last));
+            if (wh.known)
+                TMVS_LOG("hooks: the car's wheels from its bones: axles at z %+.2f and %+.2f m, half track %.2f m, centres %.2f / %.2f m over its origin",
+                         wh.zA, wh.zB, wh.halfTrack, wh.heightA, wh.heightB);
+            else
+                TMVS_LOG("hooks: the car's bones hold no wheels like a car's: the spray takes the Stadium car's estimates");
+        }
     }
     CarLogEntry& e = g_carLog[g_carLogNext++ % 240];
     e.time = now;

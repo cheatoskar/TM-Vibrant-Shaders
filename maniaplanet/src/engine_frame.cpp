@@ -263,4 +263,57 @@ int CarTracker::pick(const CarCandidate* cars, int count, double now) {
     return pick;
 }
 
+bool findWheels(const float* bones, int count, CarWheels& out) {
+    out = CarWheels();
+    // The pairs of bone origins mirrored across the car: one per axle (a wheel may have more
+    // bones, hub and brake: those give the same axle again and count once).
+    struct Axle {
+        float z, half, height;
+    };
+    Axle axles[8];
+    int axleCount = 0;
+    count = std::min(count, kObjectVBoneCount);
+    auto origin = [&](int i, float p[3]) {
+        const float* b = bones + i * 12;
+        p[0] = b[3];
+        p[1] = b[7];
+        p[2] = b[11];
+        const float a = std::fabs(p[0]);
+        return std::isfinite(p[0] + p[1] + p[2]) && a >= 0.5f && a <= 1.3f && p[1] >= -0.3f && p[1] <= 1.2f && std::fabs(p[2]) <= 3.5f;
+    };
+    for (int i = 0; i < count; i++) {
+        float a[3];
+        if (!origin(i, a)) continue;
+        for (int j = i + 1; j < count; j++) {
+            float b[3];
+            if (!origin(j, b) || a[0] * b[0] >= 0.0f) continue;
+            // Up to 15 cm apart in height: the body rolls on its springs in a curve.
+            if (std::fabs(std::fabs(a[0]) - std::fabs(b[0])) > 0.1f || std::fabs(a[1] - b[1]) > 0.15f || std::fabs(a[2] - b[2]) > 0.1f)
+                continue;
+            const Axle axle = {(a[2] + b[2]) * 0.5f, (std::fabs(a[0]) + std::fabs(b[0])) * 0.5f, (a[1] + b[1]) * 0.5f};
+            bool seen = false;
+            for (int k = 0; k < axleCount; k++) seen = seen || std::fabs(axles[k].z - axle.z) < 0.08f;
+            if (!seen && axleCount < 8) axles[axleCount++] = axle;
+        }
+    }
+    if (axleCount < 2) return false;
+    // The outermost two (a car with more than two axles has none in TrackMania).
+    int front = 0, rear = 0;
+    for (int k = 1; k < axleCount; k++) {
+        if (axles[k].z > axles[front].z) front = k;
+        if (axles[k].z < axles[rear].z) rear = k;
+    }
+    const Axle& a = axles[front];
+    const Axle& b = axles[rear];
+    const float base = a.z - b.z;
+    if (base < 1.8f || base > 4.5f || std::fabs(a.half - b.half) > 0.35f || std::fabs(a.height - b.height) > 0.3f) return false;
+    out.known = true;
+    out.zA = a.z;
+    out.zB = b.z;
+    out.halfTrack = (a.half + b.half) * 0.5f;
+    out.heightA = a.height;
+    out.heightB = b.height;
+    return true;
+}
+
 } // namespace tmvs_mp

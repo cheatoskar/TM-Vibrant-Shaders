@@ -8,9 +8,11 @@
 #include "shaders/PS_RainSplash.h"
 #include "shaders/PS_Reflect.h"
 #include "shaders/PS_SnowFlake.h"
+#include "shaders/PS_Spray.h"
 #include "shaders/VS_RainDrop.h"
 #include "shaders/VS_RainSplash.h"
 #include "shaders/VS_SnowFlake.h"
+#include "shaders/VS_Spray.h"
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
@@ -31,6 +33,27 @@ template <typename T> void safeRelease(T*& p) {
 constexpr UINT kRainDrops = 24000;
 constexpr UINT kRainSplashes = 5200;
 constexpr UINT kSnowFlakes = 64000;
+constexpr UINT kSprayParticles = 700;
+
+// The Stadium car's tyres (as TMNF's estimates, src/engine.cpp), for a car whose bones show no
+// wheels. Its origin lies on the road (capture 030: 2 mm under it, as the neon trail found).
+constexpr float kFrontAxle = 1.7f;  // m ahead of its origin
+constexpr float kRearAxle = -1.2f;  // m behind it
+constexpr float kHalfTrack = 0.86f; // half the track
+constexpr float kContactHeight = 0.0f;
+
+// Which of the car's model axes is ahead: its z (VisualToCamera's third column) or -z. My check
+// from its motion, as in TMNF: the way the car moves along the road (8 m/s or more, within 25
+// degrees of that axis), 120 times; -z is taken with 9 in 10 of them. Shared by the stages (the
+// compare split's second one sees the same frames).
+struct ForwardVote {
+    int votes[2] = {}; // along +z, along -z
+    int total = 0;
+    float sign = 1.0f;
+    bool decided = false;
+    double lastTime = -1.0;
+};
+ForwardVote g_forward;
 
 // weather.hlsl WeatherParams (b4)
 struct WeatherConstants {
@@ -40,6 +63,7 @@ struct WeatherConstants {
     float motion[4]; // shutter (frames), previous frame valid, frame time (s), longest streak (ndc)
     float snow[4];   // snow wind x, z, fall speed, 0
     float light[4];  // splashes: layer box, near box (0 = none), splash scale; intensity
+    float spray[6][4]; // the spray: car, forward, right, up, velocity, speed and amount (WeatherStage::spray)
 };
 
 // ---- Sound ----
@@ -105,6 +129,8 @@ bool WeatherStage::init(ID3D11Device* device) {
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_RainSplash, sizeof(g_PS_RainSplash), nullptr, &m_splashPs));
     ok &= SUCCEEDED(device->CreateVertexShader(g_VS_SnowFlake, sizeof(g_VS_SnowFlake), nullptr, &m_snowVs));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_SnowFlake, sizeof(g_PS_SnowFlake), nullptr, &m_snowPs));
+    ok &= SUCCEEDED(device->CreateVertexShader(g_VS_Spray, sizeof(g_VS_Spray), nullptr, &m_sprayVs));
+    ok &= SUCCEEDED(device->CreatePixelShader(g_PS_Spray, sizeof(g_PS_Spray), nullptr, &m_sprayPs));
     ok &= SUCCEEDED(device->CreatePixelShader(g_PS_LensDrops, sizeof(g_PS_LensDrops), nullptr, &m_lensPs));
     D3D11_BUFFER_DESC cb = {};
     cb.Usage = D3D11_USAGE_DEFAULT;
@@ -147,6 +173,8 @@ void WeatherStage::release() {
     safeRelease(m_splashPs);
     safeRelease(m_snowVs);
     safeRelease(m_snowPs);
+    safeRelease(m_sprayVs);
+    safeRelease(m_sprayPs);
     safeRelease(m_lensPs);
     safeRelease(m_cb);
     safeRelease(m_add);
@@ -156,7 +184,7 @@ void WeatherStage::release() {
 
 bool WeatherStage::supports(const char* key) {
     static const char* const kKeys[] = {"Wetness", "Rain",      "Snow",     "SnowCover",    "Puddles", "Reflections",
-                                        "ReflectionBlur", "Lightning", "LensDrops", "WeatherSound", "Wind"};
+                                        "ReflectionBlur", "Lightning", "LensDrops", "WeatherSound", "Wind", "Spray"};
     for (const char* k : kKeys)
         if (!strcmp(k, key)) return true;
     return false;
@@ -215,7 +243,9 @@ void WeatherStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame&
     const UINT drops = static_cast<UINT>(kRainDrops * std::min(s.rain, 2.0f) * 0.5f);
     const UINT splashes = static_cast<UINT>(kRainSplashes * std::min(s.rain, 2.0f) * 0.5f);
     const UINT flakes = static_cast<UINT>(kSnowFlakes * std::min(s.snow, 2.0f) * 0.5f);
-    if (drops || flakes) {
+    float sprayConstants[6][4];
+    const float sprayAmount = spray(frame, s, sprayConstants);
+    if (drops || flakes || sprayAmount > 0.0f) {
         const float wind[2] = {2.5f + s.wind * 5.0f, 1.0f + s.wind * 2.0f};
         const float fall = 9.0f;
         const float exposure = 0.03f; // the shutter a streak stands for without a previous frame (s)
@@ -243,6 +273,7 @@ void WeatherStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame&
         wc.snow[0] = (1.0f + s.wind * 7.0f) * snowAmount;
         wc.snow[1] = (0.5f + s.wind * 3.0f) * snowAmount;
         wc.snow[2] = 1.1f;
+        memcpy(wc.spray, sprayConstants, sizeof(wc.spray));
 
         ctx->VSSetConstantBuffers(4, 1, &m_cb);
         ctx->PSSetConstantBuffers(4, 1, &m_cb);
@@ -290,6 +321,16 @@ void WeatherStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame&
                 fx.profiler().mark(ctx, kRainSplash);
             }
         }
+        // The spray behind the car: wet roads (also after the rain has stopped) or powder snow.
+        if (sprayAmount > 0.0f) {
+            wc.light[3] = 1.0f;
+            ctx->UpdateSubresource(m_cb, 0, nullptr, &wc, 0, 0);
+            ctx->OMSetBlendState(m_add, factor, 0xffffffff);
+            ctx->VSSetShader(m_sprayVs, nullptr, 0);
+            ctx->PSSetShader(m_sprayPs, nullptr, 0);
+            ctx->Draw(kSprayParticles * 6, 0);
+            fx.profiler().mark(ctx, kSpray);
+        }
         // Snow 1 = steady snowfall, 2 = blizzard. Blended over the image, not added: white on a
         // white field must not glow.
         if (flakes) {
@@ -313,6 +354,116 @@ void WeatherStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame&
         fx.run(ctx, kRainDrop, m_lensPs, fx.next(), &in, 1);
         fx.swap();
     }
+}
+
+float WeatherStage::spray(const SceneFrame& frame, const tmshaders::Settings& s, float out[6][4]) {
+    memset(out, 0, sizeof(float) * 24);
+    const EngineCar* car = frame.car && frame.car->valid ? frame.car : nullptr;
+    // Another car taken up (the camera went to another one): its speed starts over.
+    if (car && car->track != m_carTrack) {
+        m_carTrack = car->track;
+        m_carPrevTime = -1.0;
+        memset(m_carVelocity, 0, sizeof(m_carVelocity));
+        m_wheels = CarWheels();
+    }
+    if (car && car->wheels.known) m_wheels = car->wheels;
+    // The car's own velocity, from its position on the effects' clock (the camera's lags behind in
+    // curves and is nothing like it in replays' camera moves). More than 150 m/s: a respawn or a
+    // cut, no speed. Once per frame time.
+    bool measured = false;
+    if (car && frame.time != m_heldAt) {
+        const double since = frame.time - m_carPrevTime;
+        if (m_carPrevTime >= 0.0 && since > 1e-4 && since < 0.25) {
+            float v[3];
+            for (int j = 0; j < 3; j++) v[j] = static_cast<float>((car->position[j] - m_carPrev[j]) / since);
+            if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] < 150.0f * 150.0f) {
+                for (int j = 0; j < 3; j++) m_carVelocity[j] += (v[j] - m_carVelocity[j]) * 0.5f;
+                measured = true;
+            }
+        }
+        if (!measured) memset(m_carVelocity, 0, sizeof(m_carVelocity));
+        memcpy(m_carPrev, car->position, sizeof(m_carPrev));
+        m_carPrevTime = frame.time;
+        m_held = *car;
+        m_heldAt = frame.time;
+    }
+    // A frame without it (its draw not found this time): the car last seen, moved on at its
+    // velocity, for 0.15 s.
+    EngineCar held;
+    if (!car && m_heldAt >= 0.0 && frame.time >= m_heldAt && frame.time - m_heldAt < 0.15) {
+        held = m_held;
+        for (int j = 0; j < 3; j++) held.position[j] += m_carVelocity[j] * static_cast<float>(frame.time - m_heldAt);
+        car = &held;
+    }
+    if (car) {
+        // Its speed along the road (jumps and falls don't count).
+        const float* u = car->up;
+        const float* v = m_carVelocity;
+        const float up = v[0] * u[0] + v[1] * u[1] + v[2] * u[2];
+        const float along[3] = {v[0] - u[0] * up, v[1] - u[1] * up, v[2] - u[2] * up};
+        const float speed = sqrtf(along[0] * along[0] + along[1] * along[1] + along[2] * along[2]);
+        ForwardVote& f = g_forward;
+        if (measured && !f.decided && speed > 8.0f && frame.time != f.lastTime) {
+            f.lastTime = frame.time;
+            const float a = (along[0] * car->forward[0] + along[1] * car->forward[1] + along[2] * car->forward[2]) / speed;
+            if (std::fabs(a) > 0.906f) {
+                f.votes[a < 0.0f ? 1 : 0]++;
+                if (++f.total >= 120) {
+                    f.decided = true;
+                    if (f.votes[1] * 10 >= f.total * 9) f.sign = -1.0f;
+                    TMVS_LOG("weather: the car's forward from its motion: its model's %sz in %d of %d moves%s", f.votes[1] > f.votes[0] ? "-" : "+",
+                             std::max(f.votes[0], f.votes[1]), f.total,
+                             f.sign < 0.0f ? ": the spray takes -z" : (f.votes[0] * 10 >= f.total * 9 ? ": +z, as assumed" : ": no clear winner, +z kept"));
+                }
+            }
+        }
+        const float sign = f.sign;
+        float front = kFrontAxle, rear = kRearAxle, half = kHalfTrack;
+        if (m_wheels.known) {
+            const float a = m_wheels.zA * sign, b = m_wheels.zB * sign;
+            front = std::max(a, b);
+            rear = std::min(a, b);
+            half = m_wheels.halfTrack;
+        }
+        for (int j = 0; j < 3; j++) {
+            out[0][j] = car->position[j];
+            out[1][j] = car->forward[j] * sign;
+            out[2][j] = car->right[j];
+            out[3][j] = car->up[j];
+            out[4][j] = m_carVelocity[j];
+        }
+        out[0][3] = 1.0f;
+        out[1][3] = front;
+        out[2][3] = rear;
+        out[3][3] = half;
+        out[4][3] = kContactHeight;
+        out[5][0] = speed;
+    } else {
+        // No car from the engine: the shader finds it in the depth buffer; the camera's speed
+        // stands for its own (the chase camera keeps up with it).
+        for (int j = 0; j < 3; j++) out[4][j] = m_cameraVelocity[j];
+        out[5][0] = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
+    }
+    // Whether the tyres touch the road is checked per particle in the depth buffer.
+    const float thrown = s.spray * std::max(s.wetness, s.snowCover * 2.0f); // water, or powder snow (a lot of it)
+    const float amount = thrown * std::clamp((out[5][0] - 4.0f) / 25.0f, 0.0f, 1.0f);
+    out[5][1] = amount;
+    // Once per change: where the spray comes from, and which way the car faces.
+    if (amount > 0.0f) {
+        const int from = car ? 1 + (g_forward.decided ? 2 : 0) + (g_forward.sign < 0.0f ? 4 : 0) + (m_wheels.known ? 8 : 0) : 0;
+        if (from != m_sprayFrom && m_sprayLogged < 20) {
+            m_sprayFrom = from;
+            m_sprayLogged++;
+            if (car)
+                TMVS_LOG("weather: spray from the car's four tyres (the engine's car and axes; ahead: its model's %sz, %s; wheels %s: "
+                         "axles %+.2f / %+.2f m, half track %.2f m)",
+                         g_forward.sign < 0.0f ? "-" : "+", g_forward.decided ? "checked from its motion" : "until its motion shows",
+                         m_wheels.known ? "from its bones" : "as the Stadium car's", out[1][3], out[2][3], out[3][3]);
+            else
+                TMVS_LOG("weather: spray behind the car found in the depth buffer (no car from the engine)");
+        }
+    }
+    return amount;
 }
 
 void WeatherStage::tick(const tmshaders::Settings& s, double time) {
