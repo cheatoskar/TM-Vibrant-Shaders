@@ -64,8 +64,9 @@ struct Options {
     bool hardware = true;       // Media Foundation: false = Windows' software encoders only (for a driver whose encoder misbehaves)
 
     // Backend::MediaFoundation with `hardware`: NVIDIA's encoder is driven directly (src/nvenc.cpp:
-    // B-frames, adaptive quantisation, lookahead, constant quality with a cap) when the card
-    // and driver allow it; else, or with nvenc = false, the encoder Windows offers (the MFT).
+    // constant quality with a cap, the slowest preset; B-frames, AQ and lookahead on request)
+    // when the card and driver allow it; else, or with nvenc = false, the encoder Windows
+    // offers (the MFT).
     bool nvenc = true;
     // Expert and test knobs (tools/encbench), -1 = my defaults from the measurements.
     int nvencPreset = -1;       // 1..7: P1 (fastest) .. P7 (best)

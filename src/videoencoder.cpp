@@ -1958,9 +1958,10 @@ struct Encoder::Impl {
             o.backend = Backend::MediaFoundation;
         }
         if (o.hardware && o.nvenc) {
-            // NVIDIA's encoder directly: B-frames, adaptive quantisation and lookahead, which
-            // its MFT does not take. Anything wrong (no NVIDIA card, an old driver, no free
-            // session) and the MFT below takes over; the reason is in the log once.
+            // NVIDIA's encoder directly: constant quality and the slowest preset, which its
+            // MFT does not offer (VMAF 98 at 75 Mbit/s where the MFT needs 82 for 97.8). Anything
+            // wrong (no NVIDIA card, an old driver, no free session) and the MFT below takes
+            // over; the reason is in the log once.
             auto nv = std::make_unique<NvencSink>();
             Options tried = o;
             std::string why;

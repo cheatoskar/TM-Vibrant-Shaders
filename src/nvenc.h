@@ -8,8 +8,9 @@
 
 // NVIDIA's hardware encoder driven directly through the driver's nvEncodeAPI.dll, for the video
 // export (src/videoencoder.cpp uses it before Media Foundation's NVENC MFT). The MFT takes no
-// B-frames, no adaptive quantisation and no lookahead, and its constant QP spends without
-// measure; here all of that is set, with a constant quality and a cap on the bitrate.
+// B-frames, no adaptive quantisation, no lookahead and no constant quality (its constant QP
+// spends without measure); here each can be set. My measurement chose a constant quality with
+// a cap, the slowest preset and none of the others (nvenc.cpp has the numbers).
 //
 // Nothing is linked: the DLL is loaded on first use (a 32-bit process gets the one in
 // SysWOW64), the API version is checked against the driver's, and the encoder gets a D3D11
@@ -63,7 +64,7 @@ public:
     const std::vector<uint8_t>& sequenceHeader() const;
     // How many frames the decode order may run ahead of the display order (the B-frames).
     int reorderDelay() const;
-    // e.g. "CQ 23, cap 90 Mbit/s, P7 high quality, 2 B-frames, lookahead 24, spatial + temporal AQ, two passes (quarter)"
+    // e.g. "CQ 24.5, cap 137 Mbit/s, P7, 0 B-frames, lookahead 0, AQ off, one pass"
     const std::string& summary() const;
 
     struct Impl;
