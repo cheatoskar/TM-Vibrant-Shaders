@@ -2179,23 +2179,24 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
     return ok;
 }
 
-void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt, bool splashes,
+void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt, bool advance, bool splashes,
                         IDirect3DSurface9* target) {
     const float* V = in.view;
     const float* P = in.projection;
     float camera[3];
     for (int j = 0; j < 3; j++) camera[j] = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
-    // Camera velocity (smoothed): drops streak along their motion relative to the camera.
-    if (in.temporal) {
+    // Camera velocity (smoothed): drops streak along their motion relative to the camera, the
+    // spray takes it as the car's speed. Measured from frame to frame where the rain is drawn: in
+    // the export's own frames only the finished frame gets here (its samples end before), and it
+    // is a repeat, not temporal; measured on temporal frames only, the spray stayed off there.
+    if (advance) {
         float velocity[3] = {};
-        if (m_temporalValid && dt > 1e-4f) {
-            const float* W = m_prevView;
-            for (int j = 0; j < 3; j++) {
-                const float before = -(W[12] * W[j * 4 + 0] + W[13] * W[j * 4 + 1] + W[14] * W[j * 4 + 2]);
-                velocity[j] = (camera[j] - before) / dt;
-            }
+        if (m_temporalValid && m_rainCameraValid && dt > 1e-4f) {
+            for (int j = 0; j < 3; j++) velocity[j] = (camera[j] - m_rainCamera[j]) / dt;
         }
         for (int j = 0; j < 3; j++) m_cameraVelocity[j] += (velocity[j] - m_cameraVelocity[j]) * 0.3f;
+        memcpy(m_rainCamera, camera, sizeof(m_rainCamera));
+        m_rainCameraValid = true;
     }
     const float wind[2] = {2.5f + s.wind * 5.0f, 1.0f + s.wind * 2.0f};
     const float fall = 9.0f;
@@ -3313,7 +3314,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // Rain particles go on top of the finished image: TAA would erase thin, fast drops as
     // flicker, and keeping them out of its history avoids trails.
     if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && post && ensureRain(device))
-        drawRain(device, in, s, postDt, heightMap && m_heightValid, output);
+        drawRain(device, in, s, postDt, postTemporal, heightMap && m_heightValid, output);
     if (upscale) upscaleOutput(device, in, s, screen);
     profileEnd();
     finishRender(device, in, softwareVP);

@@ -1693,9 +1693,10 @@ const VideoPreset kVideoPresets[] = {
          s.videoBitrate = 0.0f;
          s.videoGrain = 0.5f;
          s.videoHdr = false;
+         s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f; }},
-    {"Best", "H.264 at quality 92, grain halved: the most detail at a file size that still makes sense (about 80 Mbit/s at 1440p60). On an NVIDIA card the graphics card does it best; with AMD or Intel set Video encoder to ffmpeg for it.",
+    {"Best", "H.264 at quality 92, grain halved: the most detail at a file size that still makes sense (about 80 Mbit/s at 1440p60). Every preset picks the graphics card's encoder, on NVIDIA the best; with AMD or Intel set Video encoder to ffmpeg afterwards.",
      [](Settings& s) {
          s.videoCodec = 1;
          s.videoQuality = 92;
@@ -1703,6 +1704,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoBitrate = 0.0f;
          s.videoGrain = 0.5f;
          s.videoHdr = false;
+         s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 92 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f; }},
     {"Editing", "H.264 at quality 92 with the full grain: room for cutting and grading, and every editor decodes it smoothly. Large files.",
@@ -1713,6 +1715,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoBitrate = 0.0f;
          s.videoGrain = 1.0f;
          s.videoHdr = false;
+         s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 92 && s.videoBitrate <= 0.0f && s.videoGrain == 1.0f; }},
     {"Small", "HEVC in 10 bits at quality 70: about two thirds of YouTube's file (40 Mbit/s at 1440p60 on a grainy replay, less on calmer ones), no bands in the sky. Heavier to edit; fine to keep or share.",
@@ -1723,6 +1726,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoBitrate = 0.0f;
          s.videoGrain = 0.3f;
          s.videoHdr = false;
+         s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 2 && s.video10Bit && s.videoQuality == 70 && s.videoBitrate <= 0.0f && !s.videoHdr; }},
     {"Discord", "H.264 at a fixed 8 Mbit/s, little grain: 10 seconds fit Discord's 10 MB. Shoot at 1080p or less for it; at 1440p the picture gets soft.",
@@ -1733,6 +1737,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoBitrate = 8.0f;
          s.videoGrain = 0.2f;
          s.videoHdr = false;
+         s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoBitrate > 7.9f && s.videoBitrate < 8.1f; }},
     {"HDR10", "HEVC in 10 bits with HDR10 at quality 85: lights above white stay bright on an HDR screen. Mod renders the frames needed.",
@@ -1744,6 +1749,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoGrain = 0.3f;
          s.videoOwnFrames = true;
          s.videoHdr = true;
+         s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec >= 2 && s.video10Bit && s.videoHdr && s.videoOwnFrames; }},
 };

@@ -7,6 +7,9 @@
 //   tmvs_loopbacktest [--system] [out.wav]
 //     --system: the loopback of the default playback device instead of the process loopback
 //     --mix: the same in the device's own format, through the converter
+//   tmvs_loopbacktest --restart
+//     silent: plays digital silence (nothing to hear) and starts the capture twice, as the export
+//     does (the latency probe, then the sound pass); both runs must capture
 #include "loopback.h"
 #include <windows.h>
 #include <mmsystem.h>
@@ -49,9 +52,64 @@ bool writeWav(const char* path, const std::vector<int16_t>& pcm, int rate, int c
     return true;
 }
 
+// Two runs of one capture while this process plays zeros: the capture must deliver in both.
+int restartTest() {
+    loopback::Capture capture;
+    capture.prepare(kRate, 2, loopback::Mode::ProcessOnly);
+    if (!capture.waitReady(5000)) {
+        printf("FAIL: no loopback: %s\n", capture.error().c_str());
+        return 1;
+    }
+    printf("source: %s\n", capture.description().c_str());
+    WAVEFORMATEX format{};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nChannels = 2;
+    format.nSamplesPerSec = kRate;
+    format.wBitsPerSample = 16;
+    format.nBlockAlign = 4;
+    format.nAvgBytesPerSec = kRate * 4;
+    HWAVEOUT device = nullptr;
+    if (waveOutOpen(&device, WAVE_MAPPER, &format, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+        printf("FAIL: no playback device\n");
+        return 1;
+    }
+    std::vector<int16_t> silence(static_cast<size_t>(kRate) * 6 * 2, 0);
+    WAVEHDR header{};
+    header.lpData = reinterpret_cast<LPSTR>(silence.data());
+    header.dwBufferLength = static_cast<DWORD>(silence.size() * sizeof(int16_t));
+    waveOutPrepareHeader(device, &header, sizeof(header));
+    waveOutWrite(device, &header, sizeof(header));
+    bool ok = true;
+    for (int run = 0; run < 2; run++) {
+        if (!capture.waitReady(3000) || !capture.start()) {
+            printf("FAIL: run %d did not start\n", run + 1);
+            ok = false;
+            break;
+        }
+        std::vector<int16_t> sink(static_cast<size_t>(kRate) * 2);
+        for (int i = 0; i < 30; i++) {
+            Sleep(50);
+            const size_t n = (std::min)(capture.available(), static_cast<size_t>(kRate));
+            if (n) capture.read(sink.data(), n);
+        }
+        capture.stop();
+        const loopback::Stats s = capture.stats();
+        printf("run %d: captured %.2f s, silence put in %.2f s, glitches %u\n", run + 1, s.captured / static_cast<double>(kRate),
+               s.filled / static_cast<double>(kRate), s.glitches);
+        if (s.captured < kRate) ok = false;
+        Sleep(300);
+    }
+    waveOutReset(device);
+    waveOutUnprepareHeader(device, &header, sizeof(header));
+    waveOutClose(device);
+    printf("%s\n", ok ? "OK: both runs captured" : "FAIL: a run captured nothing");
+    return ok ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 1 && strcmp(argv[1], "--restart") == 0) return restartTest();
     bool system = false, mix = false;
     const char* out = "loopbacktest.wav";
     for (int i = 1; i < argc; i++) {

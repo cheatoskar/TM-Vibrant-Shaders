@@ -298,6 +298,7 @@ public:
     void resetHistory() {
         m_historyValid = false;
         m_havePrevious = false;
+        m_rainCameraValid = false;
         m_heightValid = false;
         m_skyValid = false;
         m_shelterValid = false;
@@ -433,7 +434,9 @@ private:
     bool ensureTrail(IDirect3DDevice9* device);
     static std::string trailSource();
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
-    void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool splashes,
+    // advance: a new frame (a temporal one, or the export's finished frame): the camera's speed
+    // is measured over dt.
+    void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool advance, bool splashes,
                   IDirect3DSurface9* target);
     // The end of every render(): the camera kept for the next frame, nothing of ours left bound.
     void finishRender(IDirect3DDevice9* device, const Inputs& in, BOOL softwareVP);
@@ -676,7 +679,9 @@ private:
     float m_trailRunStart[kTrailRunsMax + 1] = {};
     UINT m_trailRunFirst[kTrailRunsMax + 1] = {};
     int m_trailLogged = 0;
-    float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks)
+    float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks, the spray's speed)
+    float m_rainCamera[3] = {};                 // the camera at the last frame that measured it
+    bool m_rainCameraValid = false;
     float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
     int m_boltSlot = -1000000;                  // lightning strike the bolt direction belongs to
     float m_boltAzimuth = 0.0f;

@@ -533,6 +533,7 @@ void Capture::Impl::run() {
     std::string whyProcess, whySystem;
     bool ok = false;
     if (mode == Mode::Auto || mode == Mode::ProcessOnly) ok = initProcess(client, whyProcess);
+    const bool viaProcess = ok;
     if (!ok && mode != Mode::ProcessOnly) ok = initSystem(client, whySystem);
     if (ok) ok = SUCCEEDED(client->SetEventHandle(event)) && SUCCEEDED(client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(&capture)));
     {
@@ -566,9 +567,30 @@ void Capture::Impl::run() {
             wantStart = false;
             wantStop = false;
             if (quit) ok = false;
+            else state = State::Preparing;
         }
         cv.notify_all();
-        client->Reset();
+        if (!ok) break;
+        // A process loopback client delivers nothing after Stop, Reset and Start (tmvs_loopbacktest
+        // --restart: the second run captured 0 s, so the export's sound pass after the latency
+        // probe was silent): the next run gets a fresh client.
+        capture->Release();
+        capture = nullptr;
+        client->Release();
+        client = nullptr;
+        std::string why;
+        bool again = viaProcess ? initProcess(client, why) : initSystem(client, why);
+        if (again) again = SUCCEEDED(client->SetEventHandle(event)) && SUCCEEDED(client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(&capture)));
+        {
+            std::lock_guard<std::mutex> l(lock);
+            state = again ? State::Ready : State::Failed;
+            if (!again) {
+                error = why.empty() ? "the capture client could not be made again" : why;
+                source = Source::None;
+                ok = false;
+            }
+        }
+        cv.notify_all();
     }
     if (capture) capture->Release();
     if (client) client->Release();
