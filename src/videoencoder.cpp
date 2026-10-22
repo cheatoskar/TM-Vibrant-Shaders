@@ -558,24 +558,53 @@ int qpFor(int quality, Codec c) {
     return std::clamp(static_cast<int>(std::lround((h264 + 2.0) * 4.2)), 0, 255);
 }
 
-// The graphics card's average bitrate for a quality: bits per pixel and frame, 0.2 for H.264 at
-// quality 80 (1440p60: 44 Mbit/s, the old export's rate, which looked clean to the players who
-// compared it with x264), about 0.45 at 95 and 0.07 at 60; HEVC and AV1 0.65 of that.
+// How the quality slider maps to each encoder's own scale. Calibrated by my measurement
+// (tools/encbench, 2026-10-22): 8 s of a 1440p60 replay over Stadium's grid with film grain,
+// scored with VMAF against a near-lossless 275 Mbit/s export of the same frames. Hard footage:
+// the grain is noise every encoder must spend bits on. The targets: 80 (the default) VMAF 96 or
+// more for as few bits as possible, 92 ("Editing") 98 or more, 62 ("Discord") small. Below 80
+// the scales fall faster than above it.
+double sliderStep(int quality, double above80, double below80) {
+    const int q = std::clamp(quality, 0, 100);
+    return q >= 80 ? (80 - q) * above80 : (80 - q) * below80;
+}
+
+// The graphics card's average bitrate through Media Foundation (the MFT, no B-frames, no AQ):
+// bits per pixel and frame, 0.31 for H.264 at quality 80. My measurement of NVIDIA's MFT, peak
+// VBR (Mbit/s -> VMAF mean / worst frame): 45.9 -> 91.37 / 80.6 (the old quality 80, 0.2 bit
+// per pixel), 61.6 -> 95.15 / 85.7, 82.0 -> 97.76 / 90.5, 102.8 -> 99.09 / 94.3. VMAF 96 needs
+// about 68 Mbit/s at 1440p60: quality 80 = 0.31, 92 = 0.39 (87 Mbit/s, about 98), 62 = 0.10
+// (23 Mbit/s). AMD's and Intel's MFTs are not measured; they get the same rates. HEVC: 0.9 of
+// it (NVIDIA's HEVC MFT: 45.6 -> 92.60, 60.7 -> 95.71, a little ahead of its H.264).
+// Checked through the slider (H.264): 62 -> 23.7 Mbit/s, 79.50; 80 -> 70.5, 96.51 / 88.2;
+// 92 -> 89.1, 98.28 / 92.0.
 double bitrateFor(const Options& o, Codec c) {
-    const double bpp = 0.2 * std::exp(0.0535 * (std::clamp(o.quality, 0, 100) - 80)) * (c == Codec::H264 ? 1.0 : 0.65);
+    const double bpp = 0.31 * std::exp(-sliderStep(o.quality, 0.02, 0.06)) * (c == Codec::H264 ? 1.0 : 0.9);
     const double rate = bpp * o.width * o.height * o.fps;
     return std::clamp(rate, 2.0e6, c == Codec::H264 ? 240.0e6 : 200.0e6);
 }
 
-// NVENC driven directly: quality -> its constant quality level (CQ, like a QP)...
+// NVENC driven directly (P7, no B-frames, no AQ; src/nvenc.cpp has why): quality -> its
+// constant quality level (CQ, like a QP, fractions allowed). My measurement, H.264 (CQ ->
+// Mbit/s, VMAF mean / worst frame): 21 -> 93.1, 99.16 / 95.5; 22 -> 84.6, 98.70 / 94.2;
+// 23 -> 75.3, 97.95 / 92.6; 24 -> 66.5, 97.01 / 91.0; 26 -> 51.4, 94.28 / 88.5; 28 -> 39.8,
+// 90.75 / 83.6; 30 -> 31.2, 86.92 / 78.7. For comparison x264 medium CRF 20 (through ffmpeg)
+// gave 75.3 / 97.09 at 18 fps, NVENC CQ 23 the same rate at 97.95 and 117 fps. So quality 80 =
+// CQ 24.5 (about 62 Mbit/s, VMAF 96.4), 92 = CQ 22.5 (about 80, 98.3), 62 = CQ 30.8 (about 28).
+// HEVC (Pascal: no B-frames either) takes the same CQ: 24 -> 63.8, 96.97 / 91.8; 22 -> 81.8,
+// 98.67 (and with lookahead 8: 25 -> 56.4, 95.68; 27 -> 44.9, 93.14), a little ahead of H.264
+// at the same rate, at 80 fps instead of 120. Checked through the slider: quality 62 -> 27.4
+// Mbit/s, VMAF 84.55; 70 -> 39.2, 90.57; 80 -> 61.3, 96.26 / 90.8; 86 -> 69.4, 97.39; 92 ->
+// 78.6, 98.26 / 94.1; 100 -> 94.5, 99.15.
 double cqFor(const Options& o, Codec c) {
     if (o.encoderQ > 0.0) return o.encoderQ;
-    const double q = 100 - std::clamp(o.quality, 0, 100);
-    return std::clamp(17.0 + q * 0.3 + (c == Codec::HEVC ? 1.0 : 0.0), 1.0, 51.0);
+    (void)c;
+    return std::clamp(24.5 + sliderStep(o.quality, 1.0 / 6.0, 0.35), 1.0, 51.0);
 }
 
-// ... and the cap on its bitrate (bits a second), which keeps a burst of detail from blowing up
-// the file: the average a quality would get from bitrateFor, times two.
+// ... and the cap on its bitrate (bits a second), only against a burst of detail blowing up the
+// file: twice what Media Foundation would average at that quality (quality 80, 1440p60: 137
+// Mbit/s against the 62 the CQ spends on my test).
 double capFor(const Options& o, Codec c) {
     if (o.nvencMaxRate >= 0.0) return o.nvencMaxRate * 1e6;
     return 2.0 * bitrateFor(o, c);
@@ -1473,12 +1502,20 @@ std::string logTail(const std::wstring& path, int lines = 4) {
 std::mutex g_ffmpegMutex;
 std::map<std::wstring, FfmpegInfo> g_ffmpegCache;
 
-// How quality maps to each software encoder's own scale.
+// How quality maps to each software encoder's CRF (the same targets as sliderStep's, 8-bit, the
+// "balanced" preset; Mbit/s and VMAF mean / worst frame from my measurement):
+//  - x264 medium: CRF 18 -> 100.2, 98.80 / 93.7; 20 -> 75.3, 97.09 / 92.0; 21 -> 64.6,
+//    95.81 / 90.4; 22 -> 55.1, 94.23 / 88.5; 24 -> 39.6, 90.23 / 84.5; 27 -> 24.0, 82.25 / 76.3.
+//    Quality 80 = CRF 20.5 (about 70 Mbit/s, VMAF 96.4), 92 = 18.7 (about 92, 98.4), 62 = 26.8
+//    (about 25, 83). The old scale (80 = CRF 18) spent 100 Mbit/s.
+//  - x265 fast: CRF 22 -> 63.7, 90.02 / 82.1; 24 -> 44.7, 85.72 / 77.2. Its psycho-visual
+//    tuning costs it dearly in VMAF; 80 = CRF 19 by extrapolation (two points only).
+//  - SVT-AV1 preset 7: CRF 32 -> 84.8, 96.66 / 89.5; 36 -> 57.8, 93.86 / 85.9. 80 = CRF 33.
+//    The old scale (80 = CRF 24) would have spent well over 100 Mbit/s.
 double crfFor(int quality, Codec c) {
-    const double q = 100 - std::clamp(quality, 0, 100);
-    if (c == Codec::H264) return std::clamp(10.0 + q * 0.4, 0.0, 51.0);  // q100 10, q80 18, q60 26
-    if (c == Codec::HEVC) return std::clamp(12.0 + q * 0.4, 0.0, 51.0);  // about 2 above x264 for the same look
-    return std::clamp(12.0 + q * 0.6, 1.0, 63.0);                       // SVT-AV1: q80 24, q60 36
+    if (c == Codec::H264) return std::clamp(20.5 + sliderStep(quality, 0.15, 0.35), 0.0, 51.0);
+    if (c == Codec::HEVC) return std::clamp(19.0 + sliderStep(quality, 0.15, 0.35), 0.0, 51.0);
+    return std::clamp(33.0 + sliderStep(quality, 0.33, 0.5), 1.0, 63.0);
 }
 
 class FfmpegSink : public Sink {
@@ -1645,7 +1682,13 @@ private:
                         : L" -vf setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709";
         args += L" -c:v " + widen(library);
         if (o.codec == Codec::H264) {
-            static const wchar_t* presets[3] = {L"veryfast", L"medium", L"slower"};
+            // My measurement at CRF 20 (1440p60, 12 threads): veryfast 74.6 Mbit/s / VMAF 93.78
+            // at 65 fps, faster 74.8 / 96.47 at 39 fps, medium 75.3 / 97.09 at 18-22 fps, slow
+            // 75.7 / 97.22 at 12 fps (on a quiet machine; with other work running the speeds
+            // halved). The export renders at about 19 fps (2 x 2 samples), so medium about keeps
+            // up, slow would slow it for little and slower even more. -tune film gave 66.6 /
+            // 96.24 at CRF 21 against 64.6 / 95.81, but its psy-trellis costs speed: left out.
+            static const wchar_t* presets[3] = {L"faster", L"medium", L"slow"};
             args += std::wstring(L" -preset ") + presets[preset];
         } else if (o.codec == Codec::HEVC) {
             // x265 is several times slower than x264 at the same preset name (medium: 12 fps

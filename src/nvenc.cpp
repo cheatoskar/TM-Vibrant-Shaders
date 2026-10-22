@@ -155,14 +155,27 @@ const GUID* presetGuid(int preset) {
     return presets[std::clamp(preset, 1, 7) - 1];
 }
 
-// My defaults (tools/encbench on a 1440p60 replay, a GTX 1080 Ti; see videoencoder.cpp for the
-// numbers): the slowest preset still encodes far faster than the export renders.
+// My defaults, from my measurement (tools/encbench, 8 s of a 1440p60 replay over Stadium's grid
+// with film grain, VMAF against a 275 Mbit/s export, GTX 1080 Ti, H.264 at CQ 23 unless said):
+//  - P7: 75.3 Mbit/s, VMAF 97.95 at 117 fps; P4 76.1 / 97.77 at 249 fps; P1 79.1 / 97.01.
+//    The export renders at about 19 fps (2 x 2 samples), so the slowest preset costs nothing.
+//  - No B-frames: three B-frames gave 81.6 Mbit/s / 97.68 at CQ 21, where no B-frames give
+//    about 98.4 at that rate; every B-frame setting lost (the grain makes B-frames expensive).
+//  - No AQ: spatial AQ 74.1 / 96.90 against 75.3 / 97.95 without; temporal AQ changed nothing
+//    (75.4 / 97.98). VMAF punishes AQ; whether it looks better in flat dark areas is not judged
+//    yet by eye (Options::nvencAQ = 1 to try).
+//  - No lookahead: 0 frames 74.2 / 97.89, 8 frames 75.3 / 97.95, 24 frames 75.5 / 97.96, and
+//    every frame of lookahead costs a buffer pair (10 MB of the game's address space at 1440p).
+//  - One pass: 75.3 / 97.95 at 117 fps, two passes (quarter resolution) 75.1 / 97.78 at 161 fps.
+//  - Everything on (3 B-frames, spatial + temporal AQ, lookahead 24, two passes): CQ 23 gave
+//    64.3 Mbit/s / 94.61, CQ 21 81.7 / 96.83: well below the plain setting at the same rate.
+// Today's path, the NVENC MFT, gave 45.9 Mbit/s / 91.37 (quality 80) and needs 82 Mbit/s for 97.76.
 const int kPreset = 7;
-const int kBFrames = 3;
-const int kLookahead = 24;
-const int kAQ = 2;
+const int kBFrames = 0;
+const int kLookahead = 0;
+const int kAQ = 0;
 const int kAQStrength = 0;
-const int kMultipass = 1;
+const int kMultipass = 0;
 
 } // namespace
 
@@ -264,7 +277,8 @@ struct Session::Impl {
     HANDLE eosEvent = nullptr;
     std::deque<size_t> free, pending;
     size_t ready = 0;        // synchronous mode: the first `ready` of `pending` were released by a success
-    size_t maxPairs = 0;     // the pool's limit (address space)
+    size_t maxPairs = 0;     // the pool's limit
+    size_t maxPending = 0;   // the most frames the encoder held at once (for the log)
     int64_t sent = 0;
     std::vector<uint8_t> header;
     int reorder = 0;
@@ -480,11 +494,13 @@ bool Session::open(const Options& o, double cq, int qp, double maxRate, std::str
     if (aq >= 2 && !canTemporalAQ) aq = aq == 2 ? 1 : 0;
     const int aqStrength = std::clamp(o.nvencAQStrength >= 0 ? o.nvencAQStrength : kAQStrength, 0, 15);
     int multipass = std::clamp(o.nvencMultipass >= 0 ? o.nvencMultipass : kMultipass, 0, 2);
-    // The buffers live in the game's 32-bit address space: every frame the encoder may hold
-    // (B-frames, lookahead, a few in flight) needs one. About 200 MB for them, the lookahead
-    // shortened to fit (4K P010: 25 MB a frame).
+    // The buffers live in the game's 32-bit address space (2 GB, TmForever is not large
+    // address aware): every frame the encoder holds (B-frames, lookahead, a few in flight)
+    // needs a pair, about twice a frame (1440p NV12: 10 MB a pair in my measurement; the MFT
+    // path took 222 MB of address space in all, NVENC with lookahead 8 about 360, with 24 570).
+    // About 160 MB for the pairs, the lookahead shortened to fit (4K: 2, 4K 10-bit: none).
     const size_t frameBytes = static_cast<size_t>(o.width) * o.height * 3 / (m->tenBit ? 1 : 2);
-    const int budget = static_cast<int>(std::clamp<size_t>((200u << 20) / std::max<size_t>(frameBytes, 1), 6, 64));
+    const int budget = static_cast<int>(std::clamp<size_t>((160u << 20) / std::max<size_t>(2 * frameBytes, 1), 6, 48));
     lookahead = std::max(0, std::min(lookahead, budget - bframes - 4));
 
     const GUID& presetId = *presetGuid(preset);
@@ -637,13 +653,14 @@ bool Session::open(const Options& o, double cq, int qp, double maxRate, std::str
         return false;
     }
 
-    // The pairs the encoder should need, more on demand up to the budget.
-    m->maxPairs = static_cast<size_t>(std::max(budget, bframes + lookahead + 12));
+    // The pairs the encoder should need, more on demand (it holds a few frames more than its
+    // B-frames and lookahead) up to a limit that only a misbehaving driver reaches.
+    m->maxPairs = static_cast<size_t>(bframes + lookahead + 16);
     if (m->async && !(m->eosEvent = m->registeredEvent(error))) {
         m->destroy();
         return false;
     }
-    for (int i = 0; i < bframes + lookahead + 6; i++) {
+    for (int i = 0; i < bframes + lookahead + 3; i++) {
         if (!m->addPair(error)) {
             m->destroy();
             return false;
@@ -720,6 +737,7 @@ bool Session::encode(const uint8_t* frame, const PacketSink& sink, std::string& 
     }
     st = m->fn().nvEncEncodePicture(m->encoder, &pic);
     m->pending.push_back(slot);
+    m->maxPending = std::max(m->maxPending, m->pending.size());
     m->sent++;
     if (st == NV_ENC_ERR_NEED_MORE_INPUT) return !m->async || m->collect(0, 0, sink, error); // a B-frame or the lookahead: its buffers stay busy
     if (st != NV_ENC_SUCCESS) {
@@ -744,6 +762,7 @@ bool Session::flush(const PacketSink& sink, std::string& error) {
         return false;
     }
     m->ready = m->pending.size();
+    TMVS_LOG("venc: NVENC held up to %u frames at once, %u buffer pairs", static_cast<unsigned>(m->maxPending), static_cast<unsigned>(m->inputs.size()));
     return m->collect(m->pending.size(), 0, sink, error);
 }
 
