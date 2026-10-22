@@ -330,3 +330,64 @@ Notes for the plugin: the table should not run in the same order as the game's s
 on the CPU before the frame's renders (the auto focus lives in a 1x1 texture); with n = 2 there are
 only 4 lens positions; the engine culls with the unmoved frustum, so something very near the camera
 at the screen's edge could be culled a little early.
+
+## The encoders (`src/videoencoder.cpp`, `src/nvenc.cpp`)
+
+Which one writes the MP4:
+
+| *Video encoder* | Card | Encoder |
+|---|---|---|
+| *Graphics card* | NVIDIA, driver R570 or newer | **NVENC driven directly**: the driver's `nvEncodeAPI.dll` (SysWOW64), API 13.0, its own D3D11 device, H.264 High or HEVC Main / Main10. Constant quality (CQ) with a cap on the bitrate, P7, no B-frames, no AQ, no lookahead (the measurements below say why). HDR10: BT.2020 / PQ in the bitstream and mastering display and content light SEI. |
+| *Graphics card* | NVIDIA with an older driver, AMD, Intel; or NVENC refused | The encoder Windows offers through Media Foundation (NVIDIA's, AMD's or Intel's MFT), at an average bitrate with room for peaks; last resort Microsoft's software H.264. |
+| *Graphics card*, AV1 | a card whose NVENC has AV1 (RTX 40 and newer) | NVIDIA's AV1 MFT (AV1 is not driven directly). Without AV1 the chain goes on to HEVC, then H.264. |
+| *ffmpeg* | any | x264, x265 or SVT-AV1 through your own `ffmpeg.exe`; without it the graphics card. |
+
+The log says what happened: `venc: NVENC: <card>, API 13.0 (the driver offers 13.0); H.264: B-frames 4 ...` once with the card's capabilities, or `venc: NVENC not used: <why>`, and per export `venc: NVENC direct: <why>; Media Foundation's encoder instead` when it fell back.
+
+With NVENC the packets go into a temporary elementary stream next to the video (`VideoNN.video.tmp.h264` / `.hevc`) while the export runs; at the end Media Foundation's sink writer copies them into the MP4 with the sound as AAC (nothing is encoded twice). Should that fail, the stream stays as `VideoNN.h264` (VLC and ffmpeg play it; `ffmpeg -i VideoNN.h264 -c copy x.mp4` wraps it) and the sound as `.wav`. NVENC runs in asynchronous mode: each frame's output buffer has an event the driver sets when it is done, so no fixed delay is trusted (the driver holds frames longer than its B-frames and lookahead say).
+
+### My measurement (2026-10-22)
+
+8 s (480 frames) of a 1440p60 replay over Stadium's grid with film grain, rendered by the mod with 2 × 2 samples and exported near-lossless (275 Mbit/s); every encoder got the same decoded frames and was scored with VMAF (ffmpeg's libvmaf, model 0.6.1) against them. GTX 1080 Ti (Pascal), driver 582.78, a 12-thread CPU. Encoder fps is the encoder's own throughput; the export renders at about 19 fps, so anything above that costs no time. The CPU speeds (x264) were noisy: other work ran on the machine, the quiet-run figures are given.
+
+| Variant | Mbit/s | Encoder fps | VMAF mean / worst frame |
+|---|---|---|---|
+| NVENC MFT (the old path), quality 80 (0.2 bit per pixel) | 45.9 | 205 | 91.37 / 80.6 |
+| NVENC MFT, 61.6 / 82.0 / 102.8 Mbit/s | 61.6 / 82.0 / 102.8 | 200 / 194 / 97 | 95.15 / 97.76 / 99.09 |
+| NVENC direct H.264, P7, no B-frames, no AQ, CQ 21 / 22 / 23 / 24 | 93.1 / 84.6 / 75.3 / 66.5 | 110 – 117 | 99.16 / 98.70 / 97.95 / 97.01 |
+| the same, CQ 26 / 28 / 30 | 51.4 / 39.8 / 31.2 | 124 – 131 | 94.28 / 90.75 / 86.92 |
+| NVENC direct H.264 CQ 23, three B-frames | 64.1 | 81 | 95.83 / 85.5 |
+| NVENC direct H.264 CQ 21, three B-frames | 81.6 | 80 | 97.68 / 88.8 |
+| NVENC direct H.264 CQ 23, spatial AQ / temporal AQ | 74.1 / 75.4 | 113 / 118 | 96.90 / 97.98 |
+| NVENC direct H.264 CQ 23, lookahead 0 / 8 / 24 | 74.2 / 75.3 / 75.5 | 129 / 117 / 122 | 97.89 / 97.95 / 97.96 |
+| NVENC direct H.264 CQ 23, two passes (quarter resolution) | 75.1 | 163 | 97.78 / 92.8 |
+| NVENC direct H.264 CQ 23, P4 / P1 | 76.1 / 79.1 | 249 / 275 | 97.77 / 97.01 |
+| NVENC direct H.264, everything on (3 B, spatial + temporal AQ, lookahead 24, two passes), CQ 21 / 23 / 25 | 81.7 / 64.3 / 49.9 | 142 | 96.83 / 94.61 / 91.66 |
+| NVENC direct HEVC 8-bit CQ 24 / 22 | 63.8 / 81.8 | 85 / 79 | 96.97 / 98.67 |
+| NVENC MFT HEVC, 45.6 / 60.7 Mbit/s | 45.6 / 60.7 | 177 / 173 | 92.60 / 95.71 |
+| x264 medium CRF 18 / 20 / 21 / 22 / 24 / 27 | 100.2 / 75.3 / 64.6 / 55.1 / 39.6 / 24.0 | 18 – 23 | 98.80 / 97.09 / 95.81 / 94.23 / 90.23 / 82.25 |
+| x264 CRF 20: veryfast / faster / slow | 74.6 / 74.8 / 75.7 | 65 / 39 / 12 | 93.78 / 96.47 / 97.22 |
+| x264 medium CRF 21: aq-mode 3 / -tune film / psy-rd 0 | 67.8 / 66.6 / 59.1 | 22 – 27 | 95.72 / 96.24 / 95.30 |
+| x265 fast CRF 22 / 24 | 63.7 / 44.7 | 13 | 90.02 / 85.72 |
+| SVT-AV1 preset 7 CRF 32 / 36 | 84.8 / 57.8 | 15 – 21 | 96.66 / 93.86 |
+
+What I take from it:
+- On this card NVENC driven plainly beats x264 medium in VMAF at the same rate (75.3 Mbit/s: 97.95 against 97.09) and is six times faster. The old MFT path needed 82 Mbit/s for what NVENC direct gives at 70.
+- B-frames and AQ lose VMAF here (the grain makes B-frames expensive; AQ moves bits to where VMAF does not look). Whether spatial AQ looks better in dark flat areas, I have not judged by eye; `Options::nvencAQ` is there to try.
+- Lookahead gained nothing and costs a buffer pair per frame in the game's 2 GB address space (10 MB a frame at 1440p: the MFT path took 222 MB of address space, NVENC direct about 360 without lookahead and 570 with 24).
+- HEVC on Pascal: about the same as H.264 at the same rate, slower. x265's and SVT-AV1's defaults lose in VMAF on this footage.
+- 10-bit encodes were scored after rounding to 8 bits and came out lower (NVENC HEVC 10-bit CQ 25: 55.9 Mbit/s, 93.65); I do not trust that comparison.
+
+### The quality slider
+
+Calibrated on the measurement above (1440p60): 80 (the default) ≈ VMAF 96 or more for as few bits as possible, 92 (*Editing*) ≈ 98, 62 (*Discord*) small. Checked through the slider:
+
+| Quality | NVENC direct H.264 | Media Foundation (MFT) | x264 (ffmpeg, medium) |
+|---|---|---|---|
+| 62 | CQ 30.8: 27.4 Mbit/s, VMAF 84.6 | 0.10 bit/px: 23.7 Mbit/s, 79.5 | CRF 26.8: about 25 Mbit/s, 83 |
+| 80 | CQ 24.5: 61.3 Mbit/s, 96.26 | 0.31 bit/px: 70.5 Mbit/s, 96.51 | CRF 20.5: 69.8 Mbit/s, 96.47 |
+| 92 | CQ 22.5: 78.6 Mbit/s, 98.26 | 0.39 bit/px: 89.1 Mbit/s, 98.28 | CRF 18.7: 90.9 Mbit/s, 98.32 |
+
+NVENC's cap is twice the Media Foundation rate (137 Mbit/s at 80, 1440p60), only against bursts. HEVC: NVENC the same CQ (80: 60.6 Mbit/s, 96.53), the MFT 0.9 of the rate, x265 CRF 19 at 80, SVT-AV1 CRF 33. AMD's and Intel's MFTs are not measured and get NVIDIA's rates.
+
+To measure again: `build/Release/tmvs_encbench.exe <reference.mp4> <outdir> --ffmpeg <ffmpeg.exe> --batch variants.txt`, one variant per line (`name quality=80 codec=hevc nvenc=0 bframes=3 aq=1 lookahead=8 q=23 backend=ffmpeg extra="-preset slow"` ...); it prints and appends to `<outdir>\results.tsv`.

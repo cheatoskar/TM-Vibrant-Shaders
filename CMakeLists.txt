@@ -130,12 +130,13 @@ add_library(tmvs_core STATIC
   src/image.cpp
   src/lut.cpp
   src/videoencoder.cpp
+  src/nvenc.cpp
   src/loopback.cpp
   src/gbufpatch.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
-target_include_directories(tmvs_core PRIVATE ${stb_SOURCE_DIR})
+target_include_directories(tmvs_core PRIVATE ${stb_SOURCE_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers")
 target_link_libraries(tmvs_core PUBLIC d3d9 d3dcompiler dxguid ole32 oleaut32)
 
 set(TMVS_DEFINITIONS WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -204,6 +205,12 @@ target_compile_options(tmvs_preview PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_mp4test tools/mp4test.cpp)
 target_link_libraries(tmvs_mp4test PRIVATE tmvs_core)
 target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
+
+# Encoder benchmark: a reference video through every encoder variant, scored with VMAF
+# (development tool; needs ffmpeg with libvmaf).
+add_executable(tmvs_encbench tools/encbench.cpp)
+target_link_libraries(tmvs_encbench PRIVATE tmvs_core)
+target_compile_options(tmvs_encbench PRIVATE ${TMVS_OPTIONS})
 
 # Loopback test: a tone played and recorded back from this process's own output, as the video
 # export's sound pass does (development tool).

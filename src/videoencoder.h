@@ -11,9 +11,11 @@
 //
 // Two backends:
 //  - Media Foundation, which every Windows since 7 brings (Windows N without its Media Feature
-//    Pack: open() fails and says so). The encoder is the one Windows picks for the format: the
-//    graphics card's (NVENC, AMD, Intel) when its driver registers one, else Microsoft's
-//    software encoder. The DLLs are loaded on first use, so the mod still loads without them.
+//    Pack: open() fails and says so). On an NVIDIA card NVENC is driven directly (src/nvenc.cpp,
+//    the driver's nvEncodeAPI.dll; Media Foundation only writes the MP4). Otherwise, or when
+//    NVENC refuses, the encoder is the one Windows picks for the format: the graphics card's
+//    (NVIDIA, AMD, Intel) when its driver registers one, else Microsoft's software encoder.
+//    The DLLs are loaded on first use, so the mod still loads without them.
 //  - ffmpeg, only when the user installed it (the mod is MIT and bundles no GPL code): frames go
 //    to ffmpeg.exe through a pipe, encoded by libx264, libx265 or libsvtav1.
 //
@@ -60,6 +62,22 @@ struct Options {
     int ffmpegPreset = 1;       // 0 fast, 1 balanced, 2 best (x264/x265 presets, SVT-AV1 preset numbers)
     RateControl rateControl = RateControl::Auto;
     bool hardware = true;       // Media Foundation: false = Windows' software encoders only (for a driver whose encoder misbehaves)
+
+    // Backend::MediaFoundation with `hardware`: NVIDIA's encoder is driven directly (src/nvenc.cpp:
+    // constant quality with a cap, the slowest preset; B-frames, AQ and lookahead on request)
+    // when the card and driver allow it; else, or with nvenc = false, the encoder Windows
+    // offers (the MFT).
+    bool nvenc = true;
+    // Expert and test knobs (tools/encbench), -1 = my defaults from the measurements.
+    int nvencPreset = -1;       // 1..7: P1 (fastest) .. P7 (best)
+    int nvencBFrames = -1;      // B-frames between references; cut to what the card takes (Pascal: H.264 only)
+    int nvencLookahead = -1;    // rate control lookahead in frames, 0 = off
+    int nvencAQ = -1;           // 0 off, 1 spatial, 2 spatial + temporal, 3 temporal (where the card has it)
+    int nvencAQStrength = -1;   // spatial AQ 1..15, 0 = the driver's choice
+    int nvencMultipass = -1;    // 0 off, 1 two passes (the first at quarter resolution), 2 two full passes
+    double nvencMaxRate = -1.0; // constant quality: the cap in Mbit/s, 0 = none
+    double encoderQ = 0.0;      // > 0: the encoder's own number instead of `quality` (NVENC CQ, x264 / x265 / SVT-AV1 CRF)
+    std::wstring ffmpegExtra;   // Backend::Ffmpeg: more encoder options after the mod's own (they win), e.g. L"-preset slow"
 };
 
 // Times in milliseconds, summed over all frames (divide by frames for the average).

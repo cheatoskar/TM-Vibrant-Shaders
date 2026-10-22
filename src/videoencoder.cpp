@@ -1,5 +1,6 @@
 #include "videoencoder.h"
 #include "log.h"
+#include "nvenc.h"
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mferror.h>
@@ -455,6 +456,47 @@ bool writeBuffer(IMFSinkWriter* writer, DWORD stream, const void* data, DWORD by
     return ok;
 }
 
+// The kept sound into a sink writer's AAC stream, in pieces of 1/10 s, up to a time: called
+// between the video samples so the file comes out interleaved.
+class SoundFeed {
+public:
+    // `offset`: added to every time (100 ns units), for a video that starts late.
+    SoundFeed(Sound& sound, IMFSinkWriter* writer, DWORD stream, LONGLONG offset = 0)
+        : m_sound(sound), m_writer(writer), m_stream(stream), m_block(sound.format.nBlockAlign), m_rate(sound.format.nSamplesPerSec), m_offset(offset) {
+        m_piece = std::max<DWORD>(m_block, (m_rate / 10) * m_block);
+        m_chunk.resize(m_piece);
+        SetFilePointer(sound.file, 0, nullptr, FILE_BEGIN);
+    }
+
+    // Every piece that starts at or before `until` (100 ns units). False: a write failed.
+    bool until(LONGLONG until) {
+        while (m_done < m_sound.bytes && time(m_done) <= until) {
+            DWORD got = 0;
+            const DWORD want = static_cast<DWORD>(std::min<uint64_t>(m_piece, m_sound.bytes - m_done));
+            if (!ReadFile(m_sound.file, m_chunk.data(), want, &got, nullptr) || got < m_block) {
+                m_done = m_sound.bytes;
+                break;
+            }
+            got -= got % m_block;
+            const LONGLONG t0 = time(m_done);
+            m_done += got;
+            if (!writeBuffer(m_writer, m_stream, m_chunk.data(), got, t0, time(m_done) - t0)) return false;
+        }
+        return true;
+    }
+
+private:
+    LONGLONG time(uint64_t bytes) const { return m_offset + static_cast<LONGLONG>(bytes / m_block * 10000000ull / m_rate); }
+
+    Sound& m_sound;
+    IMFSinkWriter* m_writer;
+    DWORD m_stream;
+    DWORD m_block, m_rate, m_piece = 0;
+    LONGLONG m_offset;
+    std::vector<char> m_chunk;
+    uint64_t m_done = 0; // bytes
+};
+
 // The name of the encoder the sink writer put in front of stream `stream`, and whether it is
 // the graphics card's.
 std::string encoderOf(IMFSinkWriter* writer, DWORD stream) {
@@ -516,13 +558,56 @@ int qpFor(int quality, Codec c) {
     return std::clamp(static_cast<int>(std::lround((h264 + 2.0) * 4.2)), 0, 255);
 }
 
-// The graphics card's average bitrate for a quality: bits per pixel and frame, 0.2 for H.264 at
-// quality 80 (1440p60: 44 Mbit/s, the old export's rate, which looked clean to the players who
-// compared it with x264), about 0.45 at 95 and 0.07 at 60; HEVC and AV1 0.65 of that.
+// How the quality slider maps to each encoder's own scale. Calibrated by my measurement
+// (tools/encbench, 2026-10-22): 8 s of a 1440p60 replay over Stadium's grid with film grain,
+// scored with VMAF against a near-lossless 275 Mbit/s export of the same frames. Hard footage:
+// the grain is noise every encoder must spend bits on. The targets: 80 (the default) VMAF 96 or
+// more for as few bits as possible, 92 ("Editing") 98 or more, 62 ("Discord") small. Below 80
+// the scales fall faster than above it.
+double sliderStep(int quality, double above80, double below80) {
+    const int q = std::clamp(quality, 0, 100);
+    return q >= 80 ? (80 - q) * above80 : (80 - q) * below80;
+}
+
+// The graphics card's average bitrate through Media Foundation (the MFT, no B-frames, no AQ):
+// bits per pixel and frame, 0.31 for H.264 at quality 80. My measurement of NVIDIA's MFT, peak
+// VBR (Mbit/s -> VMAF mean / worst frame): 45.9 -> 91.37 / 80.6 (the old quality 80, 0.2 bit
+// per pixel), 61.6 -> 95.15 / 85.7, 82.0 -> 97.76 / 90.5, 102.8 -> 99.09 / 94.3. VMAF 96 needs
+// about 68 Mbit/s at 1440p60: quality 80 = 0.31, 92 = 0.39 (87 Mbit/s, about 98), 62 = 0.10
+// (23 Mbit/s). AMD's and Intel's MFTs are not measured; they get the same rates. HEVC: 0.9 of
+// it (NVIDIA's HEVC MFT: 45.6 -> 92.60, 60.7 -> 95.71, a little ahead of its H.264).
+// Checked through the slider (H.264): 62 -> 23.7 Mbit/s, 79.50; 80 -> 70.5, 96.51 / 88.2;
+// 92 -> 89.1, 98.28 / 92.0.
 double bitrateFor(const Options& o, Codec c) {
-    const double bpp = 0.2 * std::exp(0.0535 * (std::clamp(o.quality, 0, 100) - 80)) * (c == Codec::H264 ? 1.0 : 0.65);
+    const double bpp = 0.31 * std::exp(-sliderStep(o.quality, 0.02, 0.06)) * (c == Codec::H264 ? 1.0 : 0.9);
     const double rate = bpp * o.width * o.height * o.fps;
     return std::clamp(rate, 2.0e6, c == Codec::H264 ? 240.0e6 : 200.0e6);
+}
+
+// NVENC driven directly (P7, no B-frames, no AQ; src/nvenc.cpp has why): quality -> its
+// constant quality level (CQ, like a QP, fractions allowed). My measurement, H.264 (CQ ->
+// Mbit/s, VMAF mean / worst frame): 21 -> 93.1, 99.16 / 95.5; 22 -> 84.6, 98.70 / 94.2;
+// 23 -> 75.3, 97.95 / 92.6; 24 -> 66.5, 97.01 / 91.0; 26 -> 51.4, 94.28 / 88.5; 28 -> 39.8,
+// 90.75 / 83.6; 30 -> 31.2, 86.92 / 78.7. For comparison x264 medium CRF 20 (through ffmpeg)
+// gave 75.3 / 97.09 at 18 fps, NVENC CQ 23 the same rate at 97.95 and 117 fps. So quality 80 =
+// CQ 24.5 (about 62 Mbit/s, VMAF 96.4), 92 = CQ 22.5 (about 80, 98.3), 62 = CQ 30.8 (about 28).
+// HEVC (Pascal: no B-frames either) takes the same CQ: 24 -> 63.8, 96.97 / 91.8; 22 -> 81.8,
+// 98.67 (and with lookahead 8: 25 -> 56.4, 95.68; 27 -> 44.9, 93.14), a little ahead of H.264
+// at the same rate, at 80 fps instead of 120. Checked through the slider: quality 62 -> 27.4
+// Mbit/s, VMAF 84.55; 70 -> 39.2, 90.57; 80 -> 61.3, 96.26 / 90.8; 86 -> 69.4, 97.39; 92 ->
+// 78.6, 98.26 / 94.1; 100 -> 94.5, 99.15.
+double cqFor(const Options& o, Codec c) {
+    if (o.encoderQ > 0.0) return o.encoderQ;
+    (void)c;
+    return std::clamp(24.5 + sliderStep(o.quality, 1.0 / 6.0, 0.35), 1.0, 51.0);
+}
+
+// ... and the cap on its bitrate (bits a second), only against a burst of detail blowing up the
+// file: twice what Media Foundation would average at that quality (quality 80, 1440p60: 137
+// Mbit/s against the 62 the CQ spends on my test).
+double capFor(const Options& o, Codec c) {
+    if (o.nvencMaxRate >= 0.0) return o.nvencMaxRate * 1e6;
+    return 2.0 * bitrateFor(o, c);
 }
 
 enum class Mode { Quality, QP, PeakVBR, VBR };
@@ -963,26 +1048,9 @@ private:
         if (SUCCEEDED(hr)) hr = writer->SetInputMediaType(audioStream, pcm, nullptr);
         if (SUCCEEDED(hr)) hr = writer->BeginWriting();
         // Sound in pieces of 1/10 s, always a little ahead of the video.
-        const DWORD block = sound.format.nBlockAlign;
-        const DWORD rate = sound.format.nSamplesPerSec;
-        const DWORD piece = std::max<DWORD>(block, (rate / 10) * block);
-        std::vector<char> chunk(piece);
-        uint64_t audioDone = 0; // bytes
-        SetFilePointer(sound.file, 0, nullptr, FILE_BEGIN);
-        const auto audioTime = [&](uint64_t bytes) { return static_cast<LONGLONG>(bytes / block * 10000000ull / rate); };
+        SoundFeed feed(sound, writer, audioStream);
         const auto writeAudioUntil = [&](LONGLONG until) {
-            while (SUCCEEDED(hr) && audioDone < sound.bytes && audioTime(audioDone) <= until) {
-                DWORD got = 0;
-                const DWORD want = static_cast<DWORD>(std::min<uint64_t>(piece, sound.bytes - audioDone));
-                if (!ReadFile(sound.file, chunk.data(), want, &got, nullptr) || got < block) {
-                    audioDone = sound.bytes;
-                    break;
-                }
-                got -= got % block;
-                const LONGLONG t0 = audioTime(audioDone);
-                audioDone += got;
-                if (!writeBuffer(writer, audioStream, chunk.data(), got, t0, audioTime(audioDone) - t0)) hr = E_FAIL;
-            }
+            if (SUCCEEDED(hr) && !feed.until(until)) hr = E_FAIL;
         };
         int copied = 0;
         while (SUCCEEDED(hr)) {
@@ -1031,6 +1099,297 @@ private:
     double m_poolWaitMs = 0.0;
     int m_frames = 0;
     std::string m_encoder;
+};
+
+// ---------------------------------------------------------------------------------------------
+// NVENC driven directly (src/nvenc.cpp). The packets go into a temporary elementary stream
+// (Annex B, playable on its own should the game die mid-export) with an index in memory, and
+// finish() writes the MP4 through Media Foundation's sink writer: the video copied as it came,
+// with decode and presentation times (B-frames), the sound encoded to AAC between it.
+
+class NvencSink : public Sink {
+public:
+    ~NvencSink() override { abort(); }
+
+    // HEVC 10 -> HEVC 8 -> H.264 as the card allows. `o` comes back with what took effect.
+    bool open(const std::wstring& path, Options& o, Pixels& wants, std::string& error) {
+        const nvenc::Support& s = nvenc::support();
+        if (!s.ok) {
+            error = s.why;
+            return false;
+        }
+        if (o.codec == Codec::AV1 && s.av1) {
+            // The card has AV1, which this backend does not drive: NVIDIA's AV1 MFT does it.
+            error = "AV1 goes to the card's Media Foundation encoder";
+            return false;
+        }
+        m_path = path;
+        m_fps = o.fps;
+        rational(o.fps, m_num, m_den);
+        struct Attempt {
+            Codec codec;
+            bool tenBit;
+        };
+        std::vector<Attempt> chain;
+        if (o.codec != Codec::H264 && s.hevc) {
+            if (o.tenBit) chain.push_back({Codec::HEVC, true});
+            chain.push_back({Codec::HEVC, false});
+        }
+        if (s.h264) chain.push_back({Codec::H264, false});
+        for (const Attempt& a : chain) {
+            Options tried = o;
+            tried.codec = a.codec;
+            tried.tenBit = a.tenBit;
+            const double cq = cqFor(tried, a.codec);
+            const double cap = capFor(tried, a.codec);
+            auto session = std::make_unique<nvenc::Session>();
+            std::string why;
+            if (!session->open(tried, cq, qpFor(tried.quality, a.codec), cap, why)) {
+                TMVS_LOG("venc: NVENC %s refused: %s", profileName(a.codec, a.tenBit).c_str(), why.c_str());
+                error += std::string(error.empty() ? "" : "; ") + "NVENC " + profileName(a.codec, a.tenBit) + ": " + why;
+                continue;
+            }
+            m_temp = stem(path) + (a.codec == Codec::HEVC ? L".video.tmp.hevc" : L".video.tmp.h264");
+            m_stream = CreateFileW(m_temp.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+            if (m_stream == INVALID_HANDLE_VALUE) {
+                error = strf("cannot write %s (%lu)", narrow(m_temp.c_str()).c_str(), GetLastError());
+                return false;
+            }
+            m_session = std::move(session);
+            m_options = tried;
+            o = tried;
+            wants = a.tenBit ? Pixels::P010 : Pixels::NV12;
+            m_bytes = Encoder::frameBytes(wants, o.width, o.height);
+            m_scratch.resize(m_bytes);
+            description = strf("%s %dx%d at %.4g fps, ", profileName(a.codec, a.tenBit).c_str(), o.width, o.height, o.fps);
+            description += o.bitrate > 0.0 ? strf("%.1f Mbit/s (", o.bitrate / 1e6) : strf("quality %d (", o.quality);
+            description += m_session->summary() + "), " + s.adapter + strf(" (NVENC direct, API %u.%u)", s.builtApi >> 4, s.builtApi & 15);
+            if (o.hdr10) description += a.tenBit ? ", HDR10" : ", HDR10 in 8 bits";
+            return true;
+        }
+        if (chain.empty()) error = "NVENC offers no codec for this";
+        return false;
+    }
+
+    uint8_t* begin() override { return m_scratch.data(); }
+
+    bool commit(double& encodeMs) override { return encode(m_scratch.data(), encodeMs); }
+
+    bool writeDirect(const uint8_t* frame, size_t, double& encodeMs, double& copyMs) override {
+        copyMs = 0.0; // the copy into the encoder's buffer is part of the encode
+        return encode(frame, encodeMs);
+    }
+
+    bool finish(Sound& sound, int frames, std::string& report) override {
+        bool ok = true;
+        std::string why;
+        if (m_session) {
+            if (!m_session->flush([this](const nvenc::Packet& p) { return store(p); }, why)) {
+                ok = false;
+                report = "the encoder's last frames are lost (" + why + "), ";
+            }
+            m_header = m_session->sequenceHeader();
+            m_session.reset(); // the card's session and buffers go now
+        }
+        if (m_stream == INVALID_HANDLE_VALUE || m_index.empty() || frames == 0) {
+            closeStream(true);
+            report += strf("no video written (%d frames)", frames);
+            return false;
+        }
+        const std::wstring base = stem(m_path);
+        const bool withSound = sound.open && sound.file != INVALID_HANDLE_VALUE && sound.bytes > 0;
+        const bool aac = withSound && sound.aacReady();
+        DeleteFileW(m_path.c_str());
+        if (!mux(aac ? &sound : nullptr, why)) {
+            // The elementary stream stays: ffmpeg or VLC play it, ffmpeg -c copy makes it an MP4.
+            DeleteFileW(m_path.c_str());
+            const std::wstring raw = base + (m_options.codec == Codec::HEVC ? L".hevc" : L".h264");
+            closeStream(false);
+            DeleteFileW(raw.c_str());
+            const bool kept = MoveFileW(m_temp.c_str(), raw.c_str()) != FALSE;
+            report += "the MP4 could not be written (" + why + ")" + (kept ? ", the video stays as " + narrow(raw.c_str()) : std::string());
+            if (withSound && sound.saveWav(base + L".wav")) report += ", the sound as .wav beside it";
+            return false;
+        }
+        closeStream(true);
+        report += strf("%d frames (%.2f s), %.1f MB", static_cast<int>(m_index.size()), m_index.size() / m_fps, fileSize(m_path) / 1048576.0);
+        if (static_cast<int>(m_index.size()) != frames) {
+            ok = false;
+            report += strf(" (%d frames came in)", frames);
+        }
+        if (aac) {
+            report += strf(", sound %.2f s (AAC %u Hz, %u channels)", sound.seconds(), sound.format.nSamplesPerSec, sound.format.nChannels);
+        } else if (withSound) {
+            sound.saveWav(base + L".wav");
+            report += ", sound " + sound.describe() + " as .wav beside it";
+            ok = false;
+        } else if (sound.open) {
+            report += ", no sound came";
+        }
+        return ok;
+    }
+
+    void abort() override {
+        m_session.reset();
+        closeStream(true);
+    }
+
+private:
+    struct Entry {
+        uint64_t offset;
+        uint32_t size;
+        bool key;
+        int64_t pts;
+    };
+
+    bool encode(const uint8_t* frame, double& encodeMs) {
+        const double t0 = nowMs();
+        std::string why;
+        const bool ok = m_session && m_session->encode(frame, [this](const nvenc::Packet& p) { return store(p); }, why);
+        encodeMs = nowMs() - t0;
+        if (!ok) {
+            lastError = strf("frame %d: %s", m_frames, why.empty() ? "no encoder" : why.c_str());
+            return false;
+        }
+        m_frames++;
+        return true;
+    }
+
+    bool store(const nvenc::Packet& p) {
+        DWORD written = 0;
+        if (!WriteFile(m_stream, p.data, p.size, &written, nullptr) || written != p.size) return false;
+        m_index.push_back({m_streamBytes, p.size, p.key, p.pts});
+        m_streamBytes += p.size;
+        return true;
+    }
+
+    void closeStream(bool remove) {
+        if (m_stream != INVALID_HANDLE_VALUE) {
+            CloseHandle(m_stream);
+            m_stream = INVALID_HANDLE_VALUE;
+        }
+        if (remove && !m_temp.empty()) DeleteFileW(m_temp.c_str());
+    }
+
+    LONGLONG timeOf(int64_t frame) const { return static_cast<LONGLONG>(std::llround(static_cast<double>(frame) * 1e7 / m_fps)); }
+
+    // The MP4 from the elementary stream (and the sound when given).
+    bool mux(Sound* sound, std::string& error) {
+        Api& mf = api();
+        if (!mf.ok) {
+            error = mf.error;
+            return false;
+        }
+        const Codec codec = m_options.codec;
+        IMFSinkWriter* writer = nullptr;
+        IMFAttributes* attributes = nullptr;
+        IMFMediaType* video = nullptr;
+        IMFMediaType* aac = nullptr;
+        IMFMediaType* pcm = nullptr;
+        DWORD videoStream = 0, audioStream = 0;
+        HRESULT hr = mf.createAttributes(&attributes, 1);
+        // Everything is at hand: no throttling of WriteSample to the pace of the file.
+        if (SUCCEEDED(hr)) attributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
+        if (SUCCEEDED(hr)) hr = mf.createSinkWriter(m_path.c_str(), nullptr, attributes, &writer);
+        if (SUCCEEDED(hr)) {
+            video = videoType(subtypeOf(codec), m_options, m_num, m_den);
+            hr = video ? S_OK : E_OUTOFMEMORY;
+        }
+        if (SUCCEEDED(hr)) {
+            if (!m_header.empty()) video->SetBlob(MF_MT_MPEG_SEQUENCE_HEADER, m_header.data(), static_cast<UINT32>(m_header.size()));
+            const double seconds = std::max(1e-3, m_index.size() / m_fps);
+            video->SetUINT32(MF_MT_AVG_BITRATE, static_cast<UINT32>(std::min(4.0e9, m_streamBytes * 8.0 / seconds)));
+            UINT32 profile = eAVEncH264VProfile_High;
+            if (codec == Codec::HEVC) profile = m_options.tenBit ? eAVEncH265VProfile_Main_420_10 : eAVEncH265VProfile_Main_420_8;
+            video->SetUINT32(MF_MT_MPEG2_PROFILE, profile);
+            hr = writer->AddStream(video, &videoStream);
+        }
+        if (SUCCEEDED(hr)) hr = writer->SetInputMediaType(videoStream, video, nullptr);
+        if (SUCCEEDED(hr) && sound) {
+            aac = aacType(sound->format);
+            pcm = pcmType(sound->format);
+            hr = aac && pcm ? writer->AddStream(aac, &audioStream) : E_OUTOFMEMORY;
+            if (SUCCEEDED(hr)) hr = writer->SetInputMediaType(audioStream, pcm, nullptr);
+        }
+        if (SUCCEEDED(hr)) hr = writer->BeginWriting();
+        // Decode times run behind the presentation times by the deepest reordering the
+        // B-frames made (the k-th picture in decode order shows as frame pts). Media
+        // Foundation drops a sample with a negative decode time, so the decode times start at
+        // zero and everything shown, the sound too, starts `delay` frames later.
+        int64_t delay = 0;
+        for (size_t k = 0; k < m_index.size(); k++) delay = std::max<int64_t>(delay, static_cast<int64_t>(k) - m_index[k].pts);
+        std::unique_ptr<SoundFeed> feed;
+        if (SUCCEEDED(hr) && sound) feed = std::make_unique<SoundFeed>(*sound, writer, audioStream, timeOf(delay));
+        std::vector<uint8_t> chunk;
+        size_t k = 0;
+        for (; SUCCEEDED(hr) && k < m_index.size(); k++) {
+            const Entry& e = m_index[k];
+            const LONGLONG time = timeOf(e.pts + delay);
+            if (feed && !feed->until(time + 5000000)) {
+                hr = E_FAIL;
+                break;
+            }
+            chunk.resize(e.size);
+            LARGE_INTEGER at;
+            at.QuadPart = static_cast<LONGLONG>(e.offset);
+            DWORD got = 0;
+            if (!SetFilePointerEx(m_stream, at, nullptr, FILE_BEGIN) || !ReadFile(m_stream, chunk.data(), e.size, &got, nullptr) || got != e.size) {
+                hr = E_FAIL;
+                break;
+            }
+            IMFMediaBuffer* buffer = nullptr;
+            IMFSample* sample = nullptr;
+            BYTE* p = nullptr;
+            hr = mf.createMemoryBuffer(e.size, &buffer);
+            if (SUCCEEDED(hr)) hr = buffer->Lock(&p, nullptr, nullptr);
+            if (SUCCEEDED(hr)) {
+                memcpy(p, chunk.data(), e.size);
+                buffer->Unlock();
+                buffer->SetCurrentLength(e.size);
+                hr = mf.createSample(&sample);
+            }
+            if (SUCCEEDED(hr)) hr = sample->AddBuffer(buffer);
+            if (SUCCEEDED(hr)) hr = sample->SetSampleTime(time);
+            if (SUCCEEDED(hr)) hr = sample->SetSampleDuration(timeOf(e.pts + delay + 1) - time);
+            if (SUCCEEDED(hr)) hr = sample->SetUINT32(MFSampleExtension_CleanPoint, e.key ? TRUE : FALSE);
+            if (SUCCEEDED(hr)) hr = sample->SetUINT64(MFSampleExtension_DecodeTimestamp, static_cast<UINT64>(timeOf(static_cast<int64_t>(k))));
+            if (SUCCEEDED(hr)) hr = writer->WriteSample(videoStream, sample);
+            release(sample);
+            release(buffer);
+        }
+        const bool samplesOk = SUCCEEDED(hr);
+        if (SUCCEEDED(hr) && feed && !feed->until(LLONG_MAX)) hr = E_FAIL;
+        if (SUCCEEDED(hr)) hr = writer->Finalize();
+        release(pcm);
+        release(aac);
+        release(video);
+        release(attributes);
+        release(writer);
+        if (FAILED(hr)) {
+            error = "Media Foundation's MP4 writer: " + hex(hr);
+            if (!samplesOk && k > 0 && k <= m_index.size()) {
+                error += strf(" at picture %d of %d (frame %lld, decode delay %lld)", static_cast<int>(k - 1), static_cast<int>(m_index.size()),
+                              static_cast<long long>(m_index[k - 1].pts), static_cast<long long>(delay));
+            } else if (samplesOk) {
+                error += " (finishing the file)";
+            }
+            return false;
+        }
+        return true;
+    }
+
+    std::wstring m_path, m_temp;
+    double m_fps = 0.0;
+    UINT32 m_num = 0, m_den = 1;
+    Options m_options;
+    std::unique_ptr<nvenc::Session> m_session;
+    HANDLE m_stream = INVALID_HANDLE_VALUE;
+    uint64_t m_streamBytes = 0;
+    std::vector<Entry> m_index;
+    std::vector<uint8_t> m_header;
+    size_t m_bytes = 0;
+    std::vector<uint8_t> m_scratch;
+    int m_frames = 0;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1143,12 +1502,20 @@ std::string logTail(const std::wstring& path, int lines = 4) {
 std::mutex g_ffmpegMutex;
 std::map<std::wstring, FfmpegInfo> g_ffmpegCache;
 
-// How quality maps to each software encoder's own scale.
+// How quality maps to each software encoder's CRF (the same targets as sliderStep's, 8-bit, the
+// "balanced" preset; Mbit/s and VMAF mean / worst frame from my measurement):
+//  - x264 medium: CRF 18 -> 100.2, 98.80 / 93.7; 20 -> 75.3, 97.09 / 92.0; 21 -> 64.6,
+//    95.81 / 90.4; 22 -> 55.1, 94.23 / 88.5; 24 -> 39.6, 90.23 / 84.5; 27 -> 24.0, 82.25 / 76.3.
+//    Quality 80 = CRF 20.5 (about 70 Mbit/s, VMAF 96.4), 92 = 18.7 (about 92, 98.4), 62 = 26.8
+//    (about 25, 83). The old scale (80 = CRF 18) spent 100 Mbit/s.
+//  - x265 fast: CRF 22 -> 63.7, 90.02 / 82.1; 24 -> 44.7, 85.72 / 77.2. Its psycho-visual
+//    tuning costs it dearly in VMAF; 80 = CRF 19 by extrapolation (two points only).
+//  - SVT-AV1 preset 7: CRF 32 -> 84.8, 96.66 / 89.5; 36 -> 57.8, 93.86 / 85.9. 80 = CRF 33.
+//    The old scale (80 = CRF 24) would have spent well over 100 Mbit/s.
 double crfFor(int quality, Codec c) {
-    const double q = 100 - std::clamp(quality, 0, 100);
-    if (c == Codec::H264) return std::clamp(10.0 + q * 0.4, 0.0, 51.0);  // q100 10, q80 18, q60 26
-    if (c == Codec::HEVC) return std::clamp(12.0 + q * 0.4, 0.0, 51.0);  // about 2 above x264 for the same look
-    return std::clamp(12.0 + q * 0.6, 1.0, 63.0);                       // SVT-AV1: q80 24, q60 36
+    if (c == Codec::H264) return std::clamp(20.5 + sliderStep(quality, 0.15, 0.35), 0.0, 51.0);
+    if (c == Codec::HEVC) return std::clamp(19.0 + sliderStep(quality, 0.15, 0.35), 0.0, 51.0);
+    return std::clamp(33.0 + sliderStep(quality, 0.33, 0.5), 1.0, 63.0);
 }
 
 class FfmpegSink : public Sink {
@@ -1315,7 +1682,13 @@ private:
                         : L" -vf setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709";
         args += L" -c:v " + widen(library);
         if (o.codec == Codec::H264) {
-            static const wchar_t* presets[3] = {L"veryfast", L"medium", L"slower"};
+            // My measurement at CRF 20 (1440p60, 12 threads): veryfast 74.6 Mbit/s / VMAF 93.78
+            // at 65 fps, faster 74.8 / 96.47 at 39 fps, medium 75.3 / 97.09 at 18-22 fps, slow
+            // 75.7 / 97.22 at 12 fps (on a quiet machine; with other work running the speeds
+            // halved). The export renders at about 19 fps (2 x 2 samples), so medium about keeps
+            // up, slow would slow it for little and slower even more. -tune film gave 66.6 /
+            // 96.24 at CRF 21 against 64.6 / 95.81, but its psy-trellis costs speed: left out.
+            static const wchar_t* presets[3] = {L"faster", L"medium", L"slow"};
             args += std::wstring(L" -preset ") + presets[preset];
         } else if (o.codec == Codec::HEVC) {
             // x265 is several times slower than x264 at the same preset name (medium: 12 fps
@@ -1332,7 +1705,7 @@ private:
                            static_cast<long long>(o.bitrate * 2.0));
             summary = strf("%.1f Mbit/s (VBR, %s preset)", o.bitrate / 1e6, presetNames[preset]);
         } else {
-            const double crf = crfFor(o.quality, o.codec);
+            const double crf = o.encoderQ > 0.0 ? o.encoderQ : crfFor(o.quality, o.codec);
             args += o.codec == Codec::AV1 ? wstrf(L" -crf %d", static_cast<int>(std::lround(crf))) : wstrf(L" -crf %.1f", crf);
             summary = strf("quality %d (CRF %.4g, %s preset)", o.quality, o.codec == Codec::AV1 ? std::round(crf) : crf, presetNames[preset]);
         }
@@ -1351,6 +1724,10 @@ private:
         } else if (o.codec == Codec::AV1 && o.hdr10) {
             args += wstrf(L" -svtav1-params mastering-display=G(0.170,0.797)B(0.131,0.046)R(0.708,0.292)WP(0.3127,0.3290)L(%d,0.005):content-light=%d,%d",
                            o.hdrPeakNits, o.hdrPeakNits, o.hdrAverageNits);
+        }
+        if (!o.ffmpegExtra.empty()) {
+            args += L" " + o.ffmpegExtra;
+            summary += ", " + narrow(o.ffmpegExtra.c_str());
         }
         return args;
     }
@@ -1579,6 +1956,22 @@ struct Encoder::Impl {
             }
             o = req;
             o.backend = Backend::MediaFoundation;
+        }
+        if (o.hardware && o.nvenc) {
+            // NVIDIA's encoder directly: constant quality and the slowest preset, which its
+            // MFT does not offer (VMAF 98 at 75 Mbit/s where the MFT needs 82 for 97.8). Anything
+            // wrong (no NVIDIA card, an old driver, no free session) and the MFT below takes
+            // over; the reason is in the log once.
+            auto nv = std::make_unique<NvencSink>();
+            Options tried = o;
+            std::string why;
+            if (nv->open(path, tried, wants, why)) {
+                sink = std::move(nv);
+                eff = tried;
+                desc = sink->description;
+                return true;
+            }
+            TMVS_LOG("venc: NVENC direct: %s; Media Foundation's encoder instead", why.c_str());
         }
         auto s = std::make_unique<MfSink>();
         std::string why;
@@ -1946,6 +2339,13 @@ std::string describeEncoders(const std::wstring& ffmpegPath) {
             CoTaskMemFree(list);
         }
         if (com == S_OK || com == S_FALSE) CoUninitialize();
+    }
+    const nvenc::Support& nv = nvenc::support();
+    if (nv.ok) {
+        out += strf("; NVENC direct: %s, API %u.%u (the driver's %u.%u):%s%s%s", nv.adapter.c_str(), nv.builtApi >> 4, nv.builtApi & 15, nv.driverApi >> 4,
+                    nv.driverApi & 15, nv.h264 ? " H.264" : "", nv.hevc ? " HEVC" : "", nv.av1 ? " AV1 (left to the MFT)" : "");
+    } else {
+        out += "; NVENC direct: no (" + nv.why + ")";
     }
     const FfmpegInfo ff = findFfmpeg(ffmpegPath);
     if (ff.path.empty()) {
