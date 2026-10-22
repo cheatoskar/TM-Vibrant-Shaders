@@ -1608,7 +1608,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.puddles = 0.55f;
             s.reflections = 1.5f;
             s.lightning = 1.0f;
-            s.spray = 0.25f;
+            s.spray = 0.45f; // from the tyres it reads as spray at 0.45 in my export
             s.wind = 0.9f;
             s.sunLight = 0.0f;
             s.shadowStrength = 0.1f;
