@@ -17,6 +17,27 @@ namespace venc {
 namespace nvenc {
 namespace {
 
+// A step of the encoder that took long goes to the log by name: in my export the game once
+// waited 25 s for one frame of the encoder, which tmvs_mp4test never shows (also not under
+// GPU load).
+LARGE_INTEGER stepStart() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t;
+}
+
+void noteSlow(const char* step, LARGE_INTEGER start, uint64_t frame) {
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    const double ms = static_cast<double>(now.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart);
+    static int s_logged = 0;
+    if (ms > 250.0 && s_logged < 40) {
+        s_logged++;
+        TMVS_LOG("venc: NVENC slow: %s took %.0f ms (frame %llu)", step, ms, static_cast<unsigned long long>(frame));
+    }
+}
+
 std::string strf(const char* fmt, ...) {
     char text[1024];
     va_list args;
@@ -371,7 +392,9 @@ struct Session::Impl {
         while (!pending.empty()) {
             const size_t pair = pending.front();
             if (async) {
+                const LARGE_INTEGER waited = stepStart();
                 const DWORD r = WaitForSingleObject(events[pair], waitFor > 0 ? 20000 : 0);
+                noteSlow("waiting for a finished frame", waited, sent);
                 if (r == WAIT_TIMEOUT && waitFor == 0) break;
                 if (r != WAIT_OBJECT_0) {
                     error = r == WAIT_TIMEOUT ? "the encoder did not finish a frame in 20 s" : "waiting for the encoder failed";
@@ -385,7 +408,9 @@ struct Session::Impl {
             NV_ENC_LOCK_BITSTREAM lock{};
             lock.version = NV_ENC_LOCK_BITSTREAM_VER;
             lock.outputBitstream = outputs[pair];
+            const LARGE_INTEGER locked = stepStart();
             const NVENCSTATUS st = fn().nvEncLockBitstream(encoder, &lock);
+            noteSlow("nvEncLockBitstream", locked, sent);
             if (st != NV_ENC_SUCCESS) {
                 error = fail("nvEncLockBitstream", st);
                 return false;
@@ -395,7 +420,9 @@ struct Session::Impl {
             p.size = lock.bitstreamSizeInBytes;
             p.pts = static_cast<int64_t>(lock.outputTimeStamp);
             p.key = lock.pictureType == NV_ENC_PIC_TYPE_IDR;
+            const LARGE_INTEGER stored = stepStart();
             const bool ok = sink(p);
+            noteSlow("writing the packet", stored, sent);
             fn().nvEncUnlockBitstream(encoder, lock.outputBitstream);
             pending.pop_front();
             free.push_back(pair);
@@ -702,7 +729,9 @@ bool Session::encode(const uint8_t* frame, const PacketSink& sink, std::string& 
     NV_ENC_LOCK_INPUT_BUFFER lock{};
     lock.version = NV_ENC_LOCK_INPUT_BUFFER_VER;
     lock.inputBuffer = m->inputs[slot];
+    const LARGE_INTEGER locked = stepStart();
     NVENCSTATUS st = m->fn().nvEncLockInputBuffer(m->encoder, &lock);
+    noteSlow("nvEncLockInputBuffer", locked, m->sent);
     if (st != NV_ENC_SUCCESS) {
         m->free.push_front(slot);
         error = m->fail("nvEncLockInputBuffer", st);
@@ -716,7 +745,10 @@ bool Session::encode(const uint8_t* frame, const PacketSink& sink, std::string& 
         memcpy(dst + static_cast<size_t>(y) * lock.pitch, src, row);
         src += row;
     }
+    noteSlow("copying the frame in", locked, m->sent);
+    const LARGE_INTEGER unlocked = stepStart();
     m->fn().nvEncUnlockInputBuffer(m->encoder, m->inputs[slot]);
+    noteSlow("nvEncUnlockInputBuffer", unlocked, m->sent);
 
     NV_ENC_PIC_PARAMS pic{};
     pic.version = NV_ENC_PIC_PARAMS_VER;
@@ -735,7 +767,9 @@ bool Session::encode(const uint8_t* frame, const PacketSink& sink, std::string& 
         pic.codecPicParams.hevcPicParams.pMasteringDisplay = &m->mastering;
         pic.codecPicParams.hevcPicParams.pMaxCll = &m->light;
     }
+    const LARGE_INTEGER encoded = stepStart();
     st = m->fn().nvEncEncodePicture(m->encoder, &pic);
+    noteSlow("nvEncEncodePicture", encoded, m->sent);
     m->pending.push_back(slot);
     m->maxPending = std::max(m->maxPending, m->pending.size());
     m->sent++;
