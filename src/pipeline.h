@@ -254,9 +254,9 @@ public:
     bool showLinear(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DSurface9* target, const RECT& area);
     // The 16-bit unorm render target P010 needs (else 10 bits aren't offered).
     static bool tenBitPlanesSupported(IDirect3DDevice9* device);
-    // The focus distance (metres) the auto focus measured last, 0 = none yet. A GPU read: it waits
-    // for the frame (the export only, once a video frame).
-    float focusDistance(IDirect3DDevice9* device);
+    // The 1x1 R32F target with the focus distance (metres) the auto focus measured last (0 = none
+    // yet), or null. The export reads it back with each frame's planes (PlaneReadback).
+    const gfx::Target* focusTarget() const { return m_focus[m_focusIndex].valid() ? &m_focus[m_focusIndex] : nullptr; }
 
     // Capture helpers.
     bool readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out);
@@ -562,7 +562,6 @@ private:
     float m_accumWeight = 0.0f;
     gfx::Target m_ldrFloat;
     gfx::Target m_ldr2Float;
-    IDirect3DSurface9* m_focusRead = nullptr; // system memory copy of the 1x1 focus (focusDistance)
     // The grade's own clock in the export (exposure, focus): the time between two finished frames,
     // not between two samples.
     float m_postLastTime = 0.0f;

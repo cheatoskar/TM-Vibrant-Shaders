@@ -38,6 +38,12 @@
 //                             in float and graded once (Inputs::accumulate), then the encoder's
 //                             planes (8 bits NV12, with 10: P010) read back and turned into RGB
 //                             again: <output> is the frame, <output>.yuv.bmp the planes' round trip
+//     --export <n>            with --own: n export frames in a row (each with the --repeat samples),
+//                             their planes read back straight after each frame (as before 1.4.2) and
+//                             through PlaneReadback (a frame later); prints ms a frame for both
+//     --cpu <ms>              ... with that much busy CPU a frame, standing in for the game's work
+//     --plain                 a plain Direct3D 9 device like the game's (default 9Ex, which keeps
+//                             working while a fullscreen game owns the display)
 //     --jitter                with RenderScale 1/n (0.5): TAA jitter as in game (TAAJitter), each
 //                             frame takes another of the n x n capture pixels under a scene pixel
 //                             (a raster shifted by sub-pixels, with its aliasing), Halton (2, 3)
@@ -66,6 +72,7 @@
 #include "log.h"
 #include "lut.h"
 #include "pipeline.h"
+#include "planeread.h"
 #include <algorithm>
 #include <windows.h>
 #include <cstdio>
@@ -387,6 +394,9 @@ int main(int argc, char** argv) {
     int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
     int ownBits = 0;                     // --own [10]: the export's own frame and its planes (8 or 10 bits), 0 = off
     bool ownHdr = false;                 // --own hdr: the planes in HDR10 (10 bits)
+    int exportFrames = 0;                // --export n: n export frames in a row, read back straight and pipelined
+    double cpuMs = 0.0;                  // --cpu ms: busy CPU a frame in --export (the game's own work)
+    bool plainDevice = false;            // --plain: a plain Direct3D 9 device as the game's (not 9Ex)
     bool jitterRaster = false;           // --jitter: TAA jitter emulated by RenderScale's point sampling
     int jitterIndex = 0;                 // its Halton index, on across batch jobs (keep=1) as in game
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
@@ -454,6 +464,13 @@ int main(int argc, char** argv) {
             ownBits = 8;
             if (i + 1 < argc && !strcmp(argv[i + 1], "10")) ownBits = (++i, 10);
             if (i + 1 < argc && !strcmp(argv[i + 1], "hdr")) ownBits = (++i, ownHdr = true, 10);
+        } else if (!strcmp(argv[i], "--export") && i + 1 < argc) {
+            exportFrames = atoi(argv[++i]);
+            if (!ownBits) ownBits = 8;
+        } else if (!strcmp(argv[i], "--cpu") && i + 1 < argc) {
+            cpuMs = atof(argv[++i]);
+        } else if (!strcmp(argv[i], "--plain")) {
+            plainDevice = true;
         } else if (!strcmp(argv[i], "--jitter")) {
             jitterRaster = true;
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
@@ -527,9 +544,20 @@ int main(int argc, char** argv) {
     pp.BackBufferWidth = 64;
     pp.BackBufferHeight = 64;
     pp.BackBufferFormat = D3DFMT_UNKNOWN;
-    IDirect3DDevice9Ex* device = nullptr;
-    if (!d3d || FAILED(d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
-                                           D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, nullptr, &device))) {
+    IDirect3DDevice9* device = nullptr;
+    if (plainDevice) {
+        // --plain: a device like the game's (no 9Ex), for timings that depend on the driver's path.
+        IDirect3DDevice9* plain = nullptr;
+        if (d3d && SUCCEEDED(d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window, D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
+                                               &pp, &plain)))
+            device = plain;
+    } else {
+        IDirect3DDevice9Ex* ex = nullptr;
+        if (d3d && SUCCEEDED(d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window, D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
+                                                 &pp, nullptr, &ex)))
+            device = ex;
+    }
+    if (!device) {
         fprintf(stderr, "cannot create Direct3D 9 device\n");
         return 1;
     }
@@ -965,6 +993,73 @@ int main(int argc, char** argv) {
                 const float crop[4] = {0.0f, 0.0f, static_cast<float>(vw) / cap.width, static_cast<float>(vh) / cap.height};
                 if (!pipeline.exportPlanes(device, ownFrame.texture, vw, vh, crop, ownBits == 10, 1.0f, ownHdr ? 203.0f : 0.0f, ownLuma, ownChroma))
                     fprintf(stderr, "exportPlanes failed\n");
+                if (exportFrames > 0) {
+                    // --export: frames of the video export in a row, their planes read back as
+                    // before (straight after each frame: the CPU waits for the GPU) and through
+                    // PlaneReadback (locked a frame later), with `--cpu` ms of busy CPU a frame
+                    // standing in for the game's own work. The planes are packed into a buffer
+                    // as for the encoder.
+                    auto drawFrame = [&]() {
+                        for (int r = 0; r <= repeats; r++) {
+                            Pipeline::Inputs sample = driven;
+                            if (r > 0) {
+                                sample.temporal = false;
+                                sample.repeat = true;
+                            }
+                            sample.accumulate = r == repeats ? 2 : 1;
+                            sample.accumulateFirst = r == 0;
+                            sample.floatOutput = r == repeats;
+                            if (ownHdr) sample.hdrPeak = 1000.0f / 203.0f;
+                            pipeline.render(device, sample, job.settings, r == repeats ? ownFrame.surface : output.surface);
+                        }
+                        pipeline.exportPlanes(device, ownFrame.texture, vw, vh, crop, ownBits == 10, 1.0f, ownHdr ? 203.0f : 0.0f, ownLuma, ownChroma);
+                    };
+                    std::vector<uint8_t> packed;
+                    unsigned packedFrames = 0;
+                    const auto take = [&](const PlaneReadback::Frame& f) {
+                        packed.resize(PlaneReadback::packedBytes(f));
+                        PlaneReadback::pack(f, packed.data());
+                        packedFrames++;
+                    };
+                    const auto now = [&]() {
+                        LARGE_INTEGER t;
+                        QueryPerformanceCounter(&t);
+                        return 1000.0 * static_cast<double>(t.QuadPart) / static_cast<double>(freq.QuadPart);
+                    };
+                    for (int pipelined = 0; pipelined < 2; pipelined++) {
+                        PlaneReadback read;
+                        packedFrames = 0;
+                        double readMs = 0.0;
+                        drawFrame(); // warm up, then an idle GPU
+                        if (read.queue(device, ownLuma, ownChroma, pipeline.focusTarget(), ownBits == 10)) read.pop(take);
+                        read.lockMs = 0.0;
+                        packedFrames = 0;
+                        const double start = now();
+                        for (int f = 0; f < exportFrames; f++) {
+                            for (const double busy = now() + cpuMs; now() < busy;) {
+                            }
+                            drawFrame();
+                            const double readStart = now();
+                            if (!pipelined) {
+                                if (read.queue(device, ownLuma, ownChroma, pipeline.focusTarget(), ownBits == 10)) read.pop(take);
+                            } else {
+                                while (!read.canQueue() && read.pending() > 0) read.pop(take);
+                                read.queue(device, ownLuma, ownChroma, pipeline.focusTarget(), ownBits == 10);
+                                while (read.pending() > 0 && read.oldestDone()) read.pop(take);
+                            }
+                            readMs += now() - readStart;
+                        }
+                        const double readStart = now();
+                        while (read.pending() > 0) read.pop(take);
+                        readMs += now() - readStart;
+                        const double total = now() - start;
+                        printf("export %s: %d frames (%u packed), %.1f ms a frame, reading back %.1f ms a frame (%.1f of it waiting in the "
+                               "lock; %u found the copy unfinished, at most %d on the way), %.1f ms of CPU work a frame\n",
+                               pipelined ? "pipelined" : "straight", exportFrames, packedFrames, total / exportFrames, readMs / exportFrames,
+                               read.lockMs / exportFrames, read.waited, read.pendingPeak, cpuMs);
+                        read.release();
+                    }
+                }
                 const RECT all = {0, 0, static_cast<LONG>(cap.width), static_cast<LONG>(cap.height)};
                 if (ownHdr) {
                     pipeline.showLinear(device, ownFrame.texture, output.surface, all);
