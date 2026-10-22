@@ -39,7 +39,7 @@ struct WeatherConstants {
     float wind[4];   // wind x, z, splashes per second per particle, splash box size
     float motion[4]; // shutter (frames), previous frame valid, frame time (s), longest streak (ndc)
     float snow[4];   // snow wind x, z, fall speed, 0
-    float light[4];  // 0, 0, 0, intensity
+    float light[4];  // splashes: layer box, near box (0 = none), splash scale; intensity
 };
 
 // ---- Sound ----
@@ -269,11 +269,24 @@ void WeatherStage::draw(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame&
             ctx->Draw(drops * 6, 0);
             fx.profiler().mark(ctx, kRainDrop);
             if (splashes) {
+                const float nearBox = wc.wind[3];
+                wc.light[0] = nearBox;
+                wc.light[1] = 0.0f;
+                wc.light[2] = 1.0f;
                 wc.light[3] = 0.8f;
                 ctx->UpdateSubresource(m_cb, 0, nullptr, &wc, 0, 0);
                 ctx->VSSetShader(m_splashVs, nullptr, 0);
                 ctx->PSSetShader(m_splashPs, nullptr, 0);
                 ctx->Draw(splashes * 6, 0);
+                // The far layer: the same splashes over sixteen times the ground, 2.5 times as large
+                // (far away they are a few pixels; spread out, they read as the rain hitting the
+                // whole road; its edge 25 m ahead was a hard line in TMNF).
+                wc.light[0] = nearBox * 4.0f;
+                wc.light[1] = nearBox;
+                wc.light[2] = 2.5f;
+                ctx->UpdateSubresource(m_cb, 0, nullptr, &wc, 0, 0);
+                ctx->Draw(splashes * 6, 0);
+                wc.light[0] = wc.light[1] = wc.light[2] = 0.0f;
                 fx.profiler().mark(ctx, kRainSplash);
             }
         }

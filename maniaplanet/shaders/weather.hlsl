@@ -16,7 +16,7 @@ cbuffer WeatherParams : register(b4)
     float4 w_Wind;   // wind x, z (m/s), splashes per second per particle, splash box size (m)
     float4 w_Motion; // shutter (frames), previous frame valid, frame time (s), longest streak (ndc)
     float4 w_Snow;   // snow wind x, z (m/s), fall speed (m/s), 0
-    float4 w_Light;  // 0, 0, 0, intensity of the particles drawn
+    float4 w_Light;  // splashes: this layer's box (m), the near box inside it (m, 0 = none), splash scale; intensity of the particles drawn
 };
 
 // ---------------------------------------------------------------------------------
@@ -226,12 +226,24 @@ ParticleOut VS_RainSplash(uint id : SV_VertexID)
     float k = floor(cycle), age = frac(cycle) / 0.3;
     if (age > 1.0) return o;
     float2 r = frac(sin(float2(k * 12.9898 + seed.x * 78.233, k * 39.3468 + seed.y * 11.135)) * 43758.5453);
-    float size = w_Wind.w;
+    // Two layers, as in TMNF: the near box, and a far one four times its size, reaching about
+    // 110 m ahead, with larger splashes; it takes over where the near one thins out (it ended in
+    // a hard line on the road). Each fades over half its box, so neither edge shows.
+    float size = w_Light.x > 0.0 ? w_Light.x : w_Wind.w;
     float3 cam = cameraWorld();
-    float2 ahead = cam.xz + normalize(u_ViewToW2.xz + 1e-4) * size * 0.4;
+    float2 forward = normalize(u_ViewToW2.xz + 1e-4);
+    float2 ahead = cam.xz + forward * size * (w_Light.y > 0.0 ? 0.45 : 0.4);
     float2 xz = ahead + (frac((r * size - ahead) / size) - 0.5) * size;
+    float2 edge = abs(xz - ahead) / (size * 0.5);
+    float fade = 1.0 - smoothstep(0.5, 1.0, max(edge.x, edge.y));
+    if (w_Light.y > 0.0)
+    {
+        float2 near = abs(xz - (cam.xz + forward * w_Light.y * 0.4)) / (w_Light.y * 0.5);
+        fade *= smoothstep(0.45, 1.0, max(near.x, near.y));
+    }
+    if (fade <= 0.02) return o;
     // Down from above the camera: the first step that ends behind the visible surface.
-    float top = cam.y + 2.0, bottom = cam.y - 60.0;
+    float top = cam.y + 2.0, bottom = cam.y - (w_Light.y > 0.0 ? 90.0 : 60.0);
     float found = -1e5;
     float yPrev = top;
     [loop] for (int s = 1; s <= 20; s++)
@@ -266,7 +278,7 @@ ParticleOut VS_RainSplash(uint id : SV_VertexID)
     // Only where this spot is the surface you see (not a wall seen from the side) and it faces up.
     if (abs(sceneZAt(suv) - v.z) > 0.25 + v.z * 0.02) return o;
     if (viewToWorldDir(sceneNormalAt(suv)).y < 0.7) return o;
-    float sz = 0.08 + 0.06 * seed.w;
+    float sz = (0.08 + 0.06 * seed.w) * (w_Light.z > 0.0 ? w_Light.z : 1.0) * fade;
     float3 up = u_UpView.xyz;
     float3 right = normalize(float3(1.0, 0.0, 0.0) - up * up.x);
     o.pos = toClip(v + right * corner.x * sz * 1.7 + up * corner.y * sz * 1.6);
