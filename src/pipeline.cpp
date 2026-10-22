@@ -1299,6 +1299,7 @@ float4 c_Prev2  : register(c12);
 float4 c_PrevP  : register(c13); // previous P00, P11, P20, P21
 float4 c_Motion : register(c14); // shutter (frames), previous frame valid, frame time (s), max streak (ndc)
 float4 c_Spray  : register(c15); // speed (m/s), spray amount, 0, 0
+float4 c_Splash : register(c19); // this layer's box (m), the near box inside it (m, 0 = none), splash scale, 0
 sampler2D s_height : register(s0);
 sampler2D s_depth  : register(s1);
 sampler2D s_ceiling : register(s3); // undersides of roofs and bridges (0 = none seen)
@@ -1390,10 +1391,20 @@ VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float k = floor(cycle), age = frac(cycle) / 0.3;
     if (age > 1.0) return o;
     float2 r = frac(sin(float2(k * 12.9898 + seed.x * 78.233, k * 39.3468 + seed.y * 11.135)) * 43758.5453);
-    // The box sits ahead of the camera, where the ground is in view.
-    float size = c_Wind.w;
-    float2 ahead = c_Cam.xz + normalize(c_V2.xz + 1e-4) * size * 0.4;
+    // The box sits ahead of the camera, where the ground is in view. Two layers: the near box,
+    // and a far one three times its size with larger splashes that takes over where the near one
+    // thins out at its edge (it ended in a hard line on the road). Each fades at its own edge.
+    float size = c_Splash.x;
+    float2 forward = normalize(c_V2.xz + 1e-4);
+    float2 ahead = c_Cam.xz + forward * size * 0.4;
     float2 xz = ahead + (frac((r * size - ahead) / size) - 0.5) * size;
+    float2 edge = abs(xz - ahead) / (size * 0.5);
+    float fade = 1.0 - smoothstep(0.6, 1.0, max(edge.x, edge.y));
+    if (c_Splash.y > 0.0) {
+        float2 near = abs(xz - (c_Cam.xz + forward * c_Splash.y * 0.4)) / (c_Splash.y * 0.5);
+        fade *= smoothstep(0.6, 1.0, max(near.x, near.y));
+    }
+    if (fade <= 0.02) return o;
     float2 m = (xz - c_Map.xy) * c_Map.z;
     if (any(m < 0.0) || any(m > 1.0)) return o;
     float h = tex2Dlod(s_height, float4(m, 0, 0)).r;
@@ -1407,7 +1418,7 @@ VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     if (any(suv < 0.0) || any(suv > 1.0)) return o;
     float sceneZ = tex2Dlod(s_depth, float4(suv, 0, 0)).r;
     if (abs(sceneZ - v.z) > 0.25 + v.z * 0.02) return o;
-    float s = 0.08 + 0.06 * seed.w;
+    float s = (0.08 + 0.06 * seed.w) * c_Splash.z * fade;
     float3 up = float3(c_V0.y, c_V1.y, c_V2.y);
     float3 right = normalize(float3(1.0, 0.0, 0.0) - up * up.x);
     o.pos = toClip(v + right * corner.x * s * 1.7 + up * corner.y * s * 1.6);
@@ -2367,6 +2378,13 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     const float thrown = s.spray * fmaxf(s.wetness, s.snowCover * 2.0f); // water, or powder snow (a lot of it)
     const float spray[4] = {speed, thrown * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
     device->SetVertexShaderConstantF(15, spray, 1);
+    if (advance && thrown > 0.0f) {
+        m_sprayStats.frames++;
+        if (spray[1] > 0.0f) m_sprayStats.throwing++;
+        m_sprayStats.topSpeed = fmaxf(m_sprayStats.topSpeed, speed);
+        m_sprayStats.speedSum += speed;
+        m_sprayStats.topAmount = fmaxf(m_sprayStats.topAmount, spray[1]);
+    }
     const float* w = in.carWheels;
     const float car[5][4] = {
         {in.carPosePosition[0], in.carPosePosition[1], in.carPosePosition[2], pose ? 1.0f : 0.0f},
@@ -2438,6 +2456,14 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         device->SetVertexShader(m_splashVS);
         device->SetPixelShader(m_shaders[kRainSplash]);
         passConstants(device, 0.8f, 0.0f);
+        const float nearBox = vc[8][3];
+        const float nearLayer[4] = {nearBox, 0.0f, 1.0f, 0.0f};
+        device->SetVertexShaderConstantF(19, nearLayer, 1);
+        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, kRainDrops * 4, 0, splashCount * 4, 0, splashCount * 2);
+        // The far layer: the same splashes over nine times the ground, twice as large (far away
+        // they are a few pixels; spread out, they read as the rain hitting the whole road).
+        const float farLayer[4] = {nearBox * 3.0f, nearBox, 2.0f, 0.0f};
+        device->SetVertexShaderConstantF(19, farLayer, 1);
         device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, kRainDrops * 4, 0, splashCount * 4, 0, splashCount * 2);
         profileMark(kRainSplash);
     }

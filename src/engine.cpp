@@ -2074,7 +2074,8 @@ const BYTE* clipCar(const BYTE* clip, int& which) {
 // its drawn position), only while it stands (async speed below 0.5 m/s: the physics state is a
 // step behind the drawn car, at speed that would move them). False: not that class in this
 // build, not standing, not 4 wheels. Inside __try.
-bool standingWheels(void* vehicle, const float* iso, const float axes[3][3], float local[4][3]) {
+// model: the model's axis for right, up, forward (columns of the car's matrix) and forward's sign.
+bool standingWheels(void* vehicle, const float* iso, const float axes[3][3], const int model[3], float forwardSign, float local[4][3]) {
     void* const* table = *reinterpret_cast<void* const* const*>(vehicle);
     if (!g_build->wheelCount || reinterpret_cast<uintptr_t>(table[kWheelCountSlot]) != rebase(g_build->wheelCount) ||
         reinterpret_cast<uintptr_t>(table[kWheelContactSlot]) != rebase(g_build->wheelContact) ||
@@ -2086,10 +2087,24 @@ bool standingWheels(void* vehicle, const float* iso, const float axes[3][3], flo
     if (*reinterpret_cast<const DWORD*>(car + kVehicleWheels) != 4) return false;
     const BYTE* wheels = *reinterpret_cast<const BYTE* const*>(car + kVehicleWheels + 4);
     if (!wheels) return false;
+    // The contact points are in the car's own frame (my test: read as world points they came out
+    // as the car's position, 686 / -90 / -170 m, with the track and wheelbase swapped); world
+    // points (far from the origin) are still taken as such.
+    bool own = true;
     for (int k = 0; k < 4; k++) {
         const float* p = reinterpret_cast<const float*>(wheels + k * kWheelSize + kWheelContact);
-        const float d[3] = {p[0] - iso[9], p[1] - iso[10], p[2] - iso[11]};
-        for (int a = 0; a < 3; a++) local[k][a] = d[0] * axes[a][0] + d[1] * axes[a][1] + d[2] * axes[a][2];
+        own = own && fabsf(p[0]) < 10.0f && fabsf(p[1]) < 10.0f && fabsf(p[2]) < 10.0f;
+    }
+    for (int k = 0; k < 4; k++) {
+        const float* p = reinterpret_cast<const float*>(wheels + k * kWheelSize + kWheelContact);
+        if (own) {
+            local[k][0] = p[model[0]];
+            local[k][1] = p[model[1]];
+            local[k][2] = p[model[2]] * forwardSign;
+        } else {
+            const float d[3] = {p[0] - iso[9], p[1] - iso[10], p[2] - iso[11]};
+            for (int a = 0; a < 3; a++) local[k][a] = d[0] * axes[a][0] + d[1] * axes[a][1] + d[2] * axes[a][2];
+        }
     }
     return true;
 }
@@ -2193,7 +2208,8 @@ bool carPose(CarPose& pose) {
                                       {pose.up[0], pose.up[1], pose.up[2]},
                                       {pose.forward[0], pose.forward[1], pose.forward[2]}};
             float local[4][3];
-            if (standingWheels(vehicle, iso, axes, local)) {
+            const int model[3] = {r, u, f};
+            if (standingWheels(vehicle, iso, axes, model, sign, local)) {
                 bool steady = true;
                 for (int k = 0; k < 4 && s_samples > 0; k++) {
                     for (int a = 0; a < 3; a++) steady = steady && fabsf(local[k][a] - s_first[k][a]) < 0.03f;

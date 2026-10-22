@@ -252,6 +252,17 @@ public:
                       float hdrWhite, gfx::Target& luma, gfx::Target& chroma);
     // The HDR10 frame (linear light) on the screen during the export: cut to white, in sRGB.
     bool showLinear(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DSurface9* target, const RECT& area);
+    // The spray since the last call (frames that drew the rain and moved its clock): how fast the
+    // car went for it and how much it threw; for the export's log (my export showed none).
+    struct SprayStats {
+        unsigned frames = 0, throwing = 0; // throwing: above 4 m/s with an amount
+        float topSpeed = 0.0f, speedSum = 0.0f, topAmount = 0.0f;
+    };
+    SprayStats takeSprayStats() {
+        const SprayStats s = m_sprayStats;
+        m_sprayStats = SprayStats();
+        return s;
+    }
     // The 16-bit unorm render target P010 needs (else 10 bits aren't offered).
     static bool tenBitPlanesSupported(IDirect3DDevice9* device);
     // The 1x1 R32F target with the focus distance (metres) the auto focus measured last (0 = none
@@ -697,6 +708,7 @@ private:
     float m_carVelocity[3] = {};
     float m_carPrev[3] = {};
     bool m_carPrevValid = false;
+    SprayStats m_sprayStats;
     int m_sprayFrom = -1;                       // the log's last spray source (1 the engine's car)
     int m_sprayLogged = 0;
     float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
