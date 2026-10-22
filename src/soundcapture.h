@@ -13,6 +13,9 @@ namespace soundcapture {
 void install();      // patches the imports (at start-up)
 void exportOpened(); // the export's file was made: is its sound on? prepare the loopback early
 void exportClosed(); // the export's file is closed: the log line, the loopback released
+// While the game's sound pass records: the seconds since its capture started, the clip time it
+// plays (the pass plays the clip from 0). False otherwise.
+bool passClock(double& seconds);
 
 } // namespace soundcapture
 } // namespace tmshaders

@@ -1,6 +1,8 @@
-// Loopback test: plays a 440 Hz tone through waveOut (as the game's and the mod's sound would
-// play) and records this process's own output with src/loopback.cpp, as the video export's sound
-// pass does. Checks that the recording holds the tone at the right pitch and writes it as a WAV.
+// Loopback test: plays a tone through waveOut (as the game's and the mod's sound would play) and
+// records this process's own output with src/loopback.cpp, as the video export's sound pass does.
+// The tone is 19 kHz at -40 dB, as the export's latency measurement: inaudible for most, found in
+// the recording with a Goertzel filter. Checks that it came through, writes the recording as a WAV.
+// Still: it plays through the speakers or headphones; ask before running it on someone's PC.
 //
 //   tmvs_loopbacktest [--system] [out.wav]
 //     --system: the loopback of the default playback device instead of the process loopback
@@ -8,6 +10,7 @@
 #include "loopback.h"
 #include <windows.h>
 #include <mmsystem.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -19,7 +22,8 @@ using namespace tmshaders;
 namespace {
 
 constexpr int kRate = 44100;
-constexpr double kTone = 440.0;
+constexpr double kTone = 19000.0;
+constexpr double kLevel = 330.0; // -40 dB
 
 bool writeWav(const char* path, const std::vector<int16_t>& pcm, int rate, int channels) {
     FILE* f = fopen(path, "wb");
@@ -61,7 +65,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < tone.size() / 2; i++) {
         const double t = static_cast<double>(i) / kRate;
         const double fade = (std::min)(1.0, (std::min)(t, 4.0 - t) / 0.05);
-        const int16_t v = static_cast<int16_t>(std::sin(2.0 * 3.14159265358979 * kTone * t) * 6000.0 * fade);
+        const int16_t v = static_cast<int16_t>(std::sin(2.0 * 3.14159265358979 * kTone * t) * kLevel * fade);
         tone[2 * i] = v;
         tone[2 * i + 1] = v;
     }
@@ -115,33 +119,37 @@ int main(int argc, char** argv) {
     waveOutUnprepareHeader(device, &header, sizeof(header));
     waveOutClose(device);
 
-    // Loudness and pitch (zero crossings) of the part where the tone plays.
-    const size_t frames = recorded.size() / 2;
-    double energy = 0.0;
-    size_t loud = 0, crossings = 0, first = 0, last = 0;
-    for (size_t i = 0; i < frames; i++) {
-        const double v = recorded[2 * i] / 32768.0;
-        energy += v * v;
-        if (std::fabs(v) > 0.05) {
-            if (!loud) first = i;
-            last = i;
-            loud++;
+    // The tone's level over blocks of 32 frames (Goertzel at kTone): where it reaches half its peak.
+    const size_t frames = recorded.size() / 2, block = 32;
+    const double coeff = 2.0 * std::cos(2.0 * 3.14159265358979 * kTone / kRate);
+    double peak = 0.0;
+    size_t first = 0, last = 0, blocks = 0;
+    std::vector<double> level;
+    for (size_t b = 0; b + block <= frames; b += block) {
+        double s1 = 0.0, s2 = 0.0;
+        for (size_t i = 0; i < block; i++) {
+            const double s0 = recorded[2 * (b + i)] + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
         }
+        level.push_back(2.0 * std::sqrt((std::max)(0.0, s1 * s1 + s2 * s2 - coeff * s1 * s2)) / block);
+        peak = (std::max)(peak, level.back());
     }
-    for (size_t i = first + 1; i <= last && last > first; i++) {
-        if ((recorded[2 * (i - 1)] < 0) != (recorded[2 * i] < 0)) crossings++;
+    for (size_t i = 0; i < level.size(); i++) {
+        if (level[i] < 0.5 * peak) continue;
+        if (!blocks) first = i * block;
+        last = i * block;
+        blocks++;
     }
-    const double rms = frames ? std::sqrt(energy / frames) : 0.0;
-    const double span = last > first ? static_cast<double>(last - first) / kRate : 0.0;
-    const double pitch = span > 0.0 ? crossings / 2.0 / span : 0.0;
+    const double span = static_cast<double>(last - first) / kRate;
     const loopback::Stats s = capture.stats();
-    printf("recorded %.2f s (tone heard from %.3f s for %.2f s), rms %.3f, pitch %.1f Hz\n", frames / static_cast<double>(kRate),
-           first / static_cast<double>(kRate), span, rms, pitch);
+    printf("recorded %.2f s (tone heard from %.3f s for %.2f s), its level %.0f (played %.0f)\n", frames / static_cast<double>(kRate),
+           first / static_cast<double>(kRate), span, peak, kLevel);
     printf("stats: captured %.2f s, delivered %.2f s, silence put in %.2f s, missing at reads %.2f s, dropped %.2f s, glitches %u\n",
            s.captured / static_cast<double>(kRate), s.delivered / static_cast<double>(kRate), s.filled / static_cast<double>(kRate),
            s.underrun / static_cast<double>(kRate), s.dropped / static_cast<double>(kRate), s.glitches);
     if (writeWav(out, recorded, kRate, 2)) printf("written: %s\n", out);
-    const bool ok = rms > 0.02 && pitch > kTone - 5.0 && pitch < kTone + 5.0;
+    const bool ok = peak > kLevel * 0.3 && span > 2.0;
     printf("%s\n", ok ? "OK: the tone came through the loopback" : "FAIL: no tone in the recording");
     return ok ? 0 : 1;
 }

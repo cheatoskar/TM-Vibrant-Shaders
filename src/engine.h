@@ -238,6 +238,10 @@ struct VideoFileHooks {
     void (*audioOpen)(void* file, const void* waveFormat) = nullptr; // WAVEFORMATEX without cbSize (16 bytes)
     void (*audioData)(void* file, const void* data, unsigned long blocks) = nullptr;
     void (*closed)(void* file) = nullptr; // the game is done with it (its .avi closed)
+    // Asked at the end of a frame the game is about to write, after the frameEnd callback: true =
+    // videoFrame will take the mod's own frame, so the game skips reading its image back
+    // (GetRenderTargetData and the conversion); videoFrame then gets the last image it did read.
+    bool (*ownFrameReady)(void* file) = nullptr;
 };
 void setVideoFileHooks(const VideoFileHooks& hooks);
 bool videoFileHooked(); // false: another build, the game's AVI as always

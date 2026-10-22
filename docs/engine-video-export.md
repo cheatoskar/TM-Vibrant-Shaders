@@ -173,21 +173,98 @@ than 0.5 s) loses its oldest frames. At the capture's close the log has the seco
 game, from the loopback, filled, missing at reads, dropped, and the glitches the audio engine
 reported. The game still decides when the pass starts, its 1 s wait and its length.
 
-`tmvs_loopbacktest` (tools/loopbacktest.cpp) plays a 440 Hz tone with waveOut and records it back:
-on my PC (2026-10-21) process loopback 44.1 kHz 16-bit, the tone 46 ms after it was played, no
-gaps; the playback device's loopback directly in 44.1 kHz and, with `--mix`, from its 48 kHz float
-mix through the converter, both with the pitch exact (440 Hz).
+`tmvs_loopbacktest` (tools/loopbacktest.cpp) plays a tone with waveOut and records it back. On my
+PC (2026-10-21, then still a 440 Hz tone, audible) process loopback 44.1 kHz 16-bit, the tone 46 ms
+after it was played, no gaps; the playback device's loopback directly in 44.1 kHz and, with `--mix`,
+from its 48 kHz float mix through the converter, both with the pitch exact. A 440 Hz tone heard in
+headphones now and then turned out to be this test: it now plays 19 kHz at -40 dB (like the latency
+measurement), found with a Goertzel filter, and is not run without asking first.
 
-Not done, for later: an offline mix (an OpenAL Soft loopback device, `ALC_SOFT_loopback`, stepped
-with the fixed clock during the frames) would need the game's OpenAL replaced. High risk.
+### Sound and picture in step
+
+- **The clip's start.** The pass plays the clip from 0, the frames start at the clip's start
+  (`VideoExport::clipStart`, shooter +0x30): the first `clipStart` seconds of the pass's sound are
+  left out (`loopback::Capture::start(skipFrames)`).
+- **The output latency.** OpenAL mixes ahead into its output buffer: what the game starts at clip
+  time t reaches the loopback at t + latency. Measured once per export, right after its .avi is made
+  (the clip is stopped, DoShoot waits on the main thread, where the game's own OpenAL calls come
+  from too): a 50 ms tone at 19 kHz and -40 dB (at a mixing rate below 47.5 kHz: 0.4 of it) on a
+  source of the game's own OpenAL context, found again in the loopback with a Goertzel filter, the
+  same way the pass is timed (frame 0 = the capture's start). The latency is left out at the start
+  as well, and at the game's `alcCaptureStop` the capture runs that much longer (at most 0.25 s), so
+  the sound keeps the clip's length. Not heard (sound volume 0, no free source, implausible): not
+  compensated, logged. The log line: "the game's sound output latency x ms (measured)".
+- **The first packet.** A loopback takes a moment for its first packet after `Start`. That packet
+  goes onto the clock by its own time stamp (`GetBuffer`'s QPC position): frame 0 is the start's
+  moment, and the measurement and the pass line up however long each start took. In my test (three
+  runs) the tone was found 49..58 ms after `waveOutWrite`, against 46 ms before the time stamp
+  was used (the first packet then landed early by its delay).
+- **The mod's weather sound** (src/audio.cpp, waveOut in the same process, so in the process
+  loopback) follows the effects' clock now (`effectTime`, before: the real clock, off by the
+  offset an export leaves). In the pass the plugin hands it the video's clock at the clip time
+  played: the effects' clock at the first stepped frame + the pass's time - the clip's start
+  (`soundcapture::passClock`). The strikes are a function of the one-second slot and the amount
+  (`weather::lightningStrike`), so the pass hears the thunder of exactly the flashes in the frames,
+  0.4 s + 5 s per distance after them. A clock that jumps back (into the pass) forgets the thunders
+  still waiting, or they would come twice. During an export the rain is not faded out when the
+  game is in the background (`audio::setAlwaysInFront`).
+
+### Offline sound: what it would take (plan, not built)
+
+Today the sound pass costs the clip's length once more in real time and the sound is a recording.
+An offline mix would render the game's sound in step with the fixed clock while the frames are
+made, exactly `step x 44100` samples per stepped frame. What the game asks of OpenAL (its imports
+and the strings of `COalAudioPort`): sources and buffers (`alGenSources`, `alBufferData`, static
+sounds and streams through `alSourceQueueBuffers` / `alSourceUnqueueBuffers`: music and the
+engine), 3D (`alSource3f`, distance model, Doppler, `AL_SOURCE_RELATIVE`), pitch (engine sounds
+change pitch every frame), gain, looping, and when `ALC_EXT_EFX` is there its EAX reverb
+(`alGenEffects`, `AL_EAXREVERB_*`, an auxiliary slot, sends through `alSource3i`: tunnels, inside
+the car, outside) plus the HRTF choices of its settings (`|Audio|HrtfFull`). No listener calls in the
+imports (they may come through `alGetProcAddress`).
+
+The installed OpenAL (Creative's router, 2007; "Generic Software" on today's Windows) has no
+`ALC_SOFT_loopback`, so nothing in it can render on demand. Three ways:
+
+1. **OpenAL Soft in the mod, for the whole game.** Load a bundled 32-bit OpenAL Soft (soft_oal.dll)
+   and point all 38 OpenAL imports of the exe at it (the IAT, as the capture hooks do now) before
+   the game opens its device; open that device as a loopback device (`alcLoopbackOpenDeviceSOFT`,
+   44.1 kHz stereo float) and play its output through the mod's own WASAPI thread
+   (`alcRenderSamplesSOFT` pulled by the playback clock). During an export the mod stops the
+   playback and pulls `step x 44100` samples per stepped frame straight into the encoder: the sound
+   is mixed in step with the frames, no pass after them, exact sync, also with the motion blur's
+   sub-frames. EFX reverb and HRTF are in OpenAL Soft. Licence: LGPL 2.1; fine as a separate,
+   unmodified DLL beside the mod, with its licence text and a pointer to its source in the release
+   (THIRD_PARTY_NOTICES.md), no static linking. Risk for the normal game sound: high, it changes
+   for everyone: another mixer (its own resampler, panning and reverb sound a little different from
+   Creative's), the mod's thread becomes the sound output (device changes, headphones plugged in,
+   latency, a stall of the mod = silence or crackle), and the import switch must happen before the
+   game opens its device (the mod boots on its own thread from DllMain, a race to check). Behind a
+   setting, off by default at first. Effort: about one agent day (the redirect, loopback device and
+   output thread 2-3 h, the export side 2 h, a standalone test with OpenAL Soft 1-2 h, review), plus
+   my own tests in the game: menus, races, replays, the export, Alt+Tab, device change.
+2. **Own mixer, beside Creative's.** Hook every OpenAL call, pass it on, and keep a copy of the
+   state (buffers' PCM, sources' parameters and queues); during an export mix that state in the mod
+   in step with the clock. The normal sound stays untouched (only bookkeeping: buffer copies in
+   memory, a hook on every call). But the mix has to be written: 3D panning and distance rolloff as
+   OpenAL's model, Doppler, pitch resampling, streams, looping, and an EAX reverb good enough not to
+   sound dry next to the game's. Effort: two to three agent days, much of it in matching OpenAL's
+   behaviour; risk for the normal sound low, risk that the video's sound sounds different from the
+   game's medium to high.
+3. **Keep the real-time pass** (now: process loopback, synced, measured latency). Costs the clip's
+   length once more (the frames take far longer anyway) and records whatever the game does in real
+   time; its sync is as good as the latency measurement (a few ms).
+
+My recommendation: stay with 3 for 1.4.2. If the pass's extra time or a sync complaint comes up, 1
+is the clean way, built as an option and tested on its own first (a test program that plays through
+the redirected OpenAL Soft and renders offline).
 
 ## If the mod writes its own frames
 
 Already the case: `aviVideoOpenDetour` leaves the game's stream closed and `aviVideoWriteDetour`
 returns 1. What still happens or matters:
 
-- The game still reads every flagged frame back (`GetRenderTargetData`, a GPU stall) and converts it,
-  even though the pixels go nowhere. Only time, but at 4K it is a fair part of the frame.
+- The game read every flagged frame back (`GetRenderTargetData`, a GPU stall) and converted it, even
+  though the pixels went nowhere: skipped now when the mod's frame is ready (next section).
 - `VideoStreamClose` / `Close` cope with the null video stream; the game's .avi then holds the sound
   only. The return value of the write is ignored by `RenderFrameEnd`.
 - The size the open hands back must stay the surface's (rounded to 8 as now), or the export fails
@@ -198,6 +275,31 @@ returns 1. What still happens or matters:
   export) the game saves .dds files instead and never calls `VideoStreamWrite`.
 - Viewport +0x150 (0 from the constructor, no other writer found) would spread read-back, copy and
   write over three flagged frames, writing only every third. Not the case in a normal export.
+
+## Skipping the game's read-back (src/engine.cpp, `skipGameReadback`)
+
+`RenderFrameEnd` (TMNF 009a4070, TMUF 009a3df0, the same 614 instructions with the same offsets)
+reads every flagged frame back: `GetRenderTargetData` of its colour surface into a system memory
+surface (the CPU waits until the GPU has finished the whole frame, then 4 bytes a pixel cross the
+bus, 33 MB at 4K), `CopySurfaceToImage` (lock, then every pixel to bottom-up BGR on the CPU, 25 MB
+at 4K), then `VideoStreamWrite`. With the mod's own frames (`VideoOwnFrames`, the MP4) those pixels
+go nowhere. The function has a spread-out mode: with viewport +0x150 set, a global phase (TMNF
+00d77c78, TMUF 00d792d8) does one step per flagged frame (0 read back, 1 convert, 2 write). For a
+frame whose own frame is ready (`videofile`'s `ownFrameReady`, the plugin's `ownReady`: a finished
+frame whose planes have the encoder's size, the same checks `ownDeliver` makes first), +0x150 = 1 and
+phase 2 are set for that one call: the read-back and the conversion are skipped, `VideoStreamWrite`
+still runs (the mod's frame goes in, the game's sound timing and frame count stay), and both values
+are put back after. Only when the stream is open, the frame flagged, no .dds mode, +0x150 and the
+phase 0; the phase's address is checked at install (RenderFrameEnd + 0x322 writes it: `mov [phase],
+ebp`). Present is not affected (its condition is the flag). If the mod's frame fails after all, the
+last image the game did read goes in (logged, counted in the MP4 line). Logged once: "the game's
+read-back of its video frames skipped".
+
+What it saves, from the code (not measured): one full-frame GPU-to-CPU copy with its stall and one
+CPU conversion of every pixel per written frame. The mod's own frame still reads its NV12 / P010
+planes back (`ownDeliver`: 1.5 or 3 bytes a pixel instead of 4, and no conversion). With the
+supersampling inside a frame (n x n renders) the frame is long and the saving small; with the
+motion blur's sub-frames a written frame has one render, there the read-back was a large part.
 
 ## Accumulation depth of field: `setLensOffset` / `setLensSamples`
 

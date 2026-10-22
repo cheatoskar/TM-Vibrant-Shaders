@@ -503,6 +503,11 @@ void update(const Settings& s, float time, bool active, HWND window) {
     // Thunder follows each lightning flash after a delay that grows with the distance
     // (compressed: the real 3 s per kilometre would be up to 20 s).
     const int slot = static_cast<int>(floorf(time));
+    // A clock that jumps back (the export's sound pass replays the clip on the video's clock) forgets
+    // the thunders still waiting: they come again with their strikes, and would be heard twice.
+    if (g_lastSlot >= 0 && slot < g_lastSlot) {
+        for (auto& p : g_pending) p.at = -1.0f;
+    }
     if (g_lastSlot < 0 || slot < g_lastSlot || slot > g_lastSlot + 5) g_lastSlot = slot - 1;
     for (int k = g_lastSlot + 1; k <= slot; k++) {
         weather::Strike strike;

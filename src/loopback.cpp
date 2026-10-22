@@ -148,6 +148,8 @@ struct Capture::Impl {
     // The ring of converted frames (interleaved), read from head.
     std::vector<int16_t> ring;
     size_t capacity = 0, head = 0, count = 0;
+    size_t skip = 0; // frames still to leave out at the start
+    bool anchored = false; // the first packet since start was placed on the clock
 
     // The converter (capture thread only).
     Kind kind = Kind::Unknown;
@@ -198,15 +200,24 @@ bool Capture::waitReady(unsigned timeoutMs) {
     return m->state == Impl::State::Ready;
 }
 
-bool Capture::start() {
+bool Capture::start(size_t skipFrames) {
     std::lock_guard<std::mutex> l(m->lock);
     if (m->state != Impl::State::Ready) return false;
+    m->head = m->count = 0;
+    m->stats = Stats();
+    m->skip = skipFrames;
+    m->anchored = false;
     QueryPerformanceCounter(&m->startQpc);
     m->wantStart = true;
     m->wantStop = false;
     m->stopped = false;
     m->cv.notify_all();
     return true;
+}
+
+int64_t Capture::startCounter() const {
+    std::lock_guard<std::mutex> l(m->lock);
+    return m->startQpc.QuadPart;
 }
 
 void Capture::stop() {
@@ -390,6 +401,14 @@ bool Capture::Impl::initSystem(IAudioClient*& client, std::string& why) {
 
 void Capture::Impl::pushLocked(const int16_t* frames, size_t n) {
     const size_t ch = static_cast<size_t>(channels);
+    if (skip > 0) {
+        const size_t k = (std::min)(skip, n);
+        if (frames) frames += k * ch;
+        n -= k;
+        skip -= k;
+        stats.skipped += k;
+        if (n == 0) return;
+    }
     if (n > capacity) {
         if (frames) frames += (n - capacity) * ch;
         stats.dropped += n - capacity;
@@ -419,7 +438,7 @@ void Capture::Impl::paceLocked() {
     QueryPerformanceCounter(&now);
     const double seconds = static_cast<double>(now.QuadPart - startQpc.QuadPart) / static_cast<double>(qpcFrequency.QuadPart);
     const uint64_t due = static_cast<uint64_t>(seconds * rate);
-    const uint64_t have = stats.delivered + count;
+    const uint64_t have = stats.delivered + count + stats.skipped;
     const uint64_t tenth = static_cast<uint64_t>(rate) / 10;
     if (due > have + tenth) {
         const uint64_t n = due - have - tenth / 2;
@@ -475,12 +494,33 @@ void Capture::Impl::take(IAudioCaptureClient* capture) {
         BYTE* data = nullptr;
         UINT32 frames = 0;
         DWORD flags = 0;
-        if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+        UINT64 position = 0, qpcPosition = 0;
+        if (FAILED(capture->GetBuffer(&data, &frames, &flags, &position, &qpcPosition))) break;
         if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) {
             std::lock_guard<std::mutex> l(lock);
             stats.glitches++;
         }
-        convert(data, frames, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
+        // The first packet since start goes onto the clock by its own time stamp (the moment its
+        // first frame was played, in 100 ns): frame 0 of the sound is the start's moment, however
+        // long the source took to send its first packet. Earlier frames are left out, a gap is
+        // silence. Without a time stamp the clock's filling below does it more coarsely.
+        UINT32 offset = 0;
+        if (!anchored) {
+            anchored = true;
+            if (qpcPosition && qpcFrequency.QuadPart) {
+                const double startAt = static_cast<double>(startQpc.QuadPart) / static_cast<double>(qpcFrequency.QuadPart);
+                const double gap = static_cast<double>(qpcPosition) * 1e-7 - startAt;
+                std::lock_guard<std::mutex> l(lock);
+                if (gap > 0.0 && gap < 1.0) {
+                    const size_t n = static_cast<size_t>(gap * rate + 0.5);
+                    pushLocked(nullptr, n);
+                    stats.filled += n;
+                } else if (gap < 0.0 && gap > -1.0) {
+                    offset = (std::min)(frames, static_cast<UINT32>(-gap * inRate + 0.5));
+                }
+            }
+        }
+        if (offset < frames) convert(data ? data + static_cast<size_t>(offset) * inBytesPerFrame : nullptr, frames - offset, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
         capture->ReleaseBuffer(frames);
     }
 }
