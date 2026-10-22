@@ -186,10 +186,16 @@ bool vmaf(const std::wstring& ffmpeg, const std::wstring& encoded, const std::ws
     swprintf(size, 64, L"%dx%d", w, h);
     wchar_t rate[32];
     swprintf(rate, 32, L"%g", fps);
-    wchar_t filter[512];
-    // Both to 8-bit 4:2:0 planar (a 10-bit encode is rounded), both timed from zero.
-    swprintf(filter, 512,
-             L"[0:v]format=yuv420p,setpts=PTS-STARTPTS[a];[1:v]format=yuv420p,setpts=PTS-STARTPTS[b];[a][b]libvmaf=n_threads=%d:log_fmt=json:log_path=vmaf.json",
+    wchar_t filter[1024];
+    // Both tagged BT.709 studio range (the raw frames carry no tags; with one side tagged and
+    // the other not, ffmpeg converts the range of one and VMAF drops by 1 to 2 points: my
+    // first x264 runs scored 96.0 where the same encode scores 97.1), both to 8-bit 4:2:0
+    // planar (a 10-bit encode without swscale's dither, which VMAF would count as noise), both
+    // timed from zero.
+    swprintf(filter, 1024,
+             L"[0:v]setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709,scale=sws_dither=none,format=yuv420p,setpts=PTS-STARTPTS[a];"
+             L"[1:v]setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709,format=yuv420p,setpts=PTS-STARTPTS[b];"
+             L"[a][b]libvmaf=n_threads=%d:log_fmt=json:log_path=vmaf.json",
              threads);
     const std::wstring cmd = quote(ffmpeg) + L" -hide_banner -v error -i " + quote(encoded) + L" -f rawvideo -pix_fmt nv12 -video_size " + size +
                              L" -framerate " + rate + L" -i " + quote(raw) + L" -lavfi \"" + filter + L"\" -f null -";
