@@ -402,10 +402,10 @@ const char* tooltipFor(const char* key) {
         {"CinematicOnlyInReplays", "Motion blur and depth of field only in replays and video export."},
         {"VideoExportBest", "Renders each video frame with full quality and the effects on the video's own clock."},
         {"VideoCodec", "What the replay editor's Shoot video writes. MP4 skips the game's codec dialog and lands where the .avi would. H.264 plays and edits everywhere; HEVC and AV1 give the same picture in a smaller file but are heavier to edit. Without an encoder for the choice it falls back to H.264."},
-        {"VideoQuality", "How much picture each second gets. Graphics card: an average bitrate with room for peaks, 80 = 44 Mbit/s at 1440p60 (25 at 1080p60, about 330 MB a minute at 1440p), 92 about twice that. ffmpeg: its constant quality (CRF 18 at 80). Ignored when a bitrate is set."},
+        {"VideoQuality", "How much picture each second gets. 80 is hard to tell from the source, 92 for editing, 62 small. NVIDIA: a constant quality, 80 = about 60 Mbit/s at 1440p60 on a grainy replay (450 MB a minute), less on calmer ones. AMD, Intel: an average bitrate, 80 = 70 Mbit/s at 1440p60, 39 at 1080p60. ffmpeg: x264 CRF 20.5 at 80. Ignored when a bitrate is set."},
         {"Video10Bit", "HEVC and AV1 in 10 bits: no bands in skies, fog and glows. H.264 stays 8 bits (graphics cards have no 10-bit H.264) and gets a fine dither instead."},
         {"VideoBitrate", "Mbit/s. 0 uses the constant quality instead (recommended)."},
-        {"VideoEncoder", "Graphics card: fast, nothing to install. ffmpeg: a software encoder (x264, x265, SVT-AV1) with the best quality per megabyte; needs ffmpeg.exe in your TMVS folder or on PATH. The export's rendering is the slow part anyway."},
+        {"VideoEncoder", "Graphics card: fast, nothing to install; on NVIDIA (driver R570 or newer) also the best quality per megabyte. ffmpeg: a software encoder (x264, x265, SVT-AV1), the better choice with AMD or Intel; needs ffmpeg.exe in your TMVS folder or on PATH and can slow the export down."},
         {"VideoFfmpegPreset", "ffmpeg's speed: Best packs the most quality into each megabyte and takes the longest."},
         {"VideoOwnFrames", "The mod renders each video frame itself: every supersample and motion-blur sub-frame is lit and summed in float, then graded once. Bright lights streak like on a real camera, no banding, and bloom and the grade run once a frame. Off: the game's own 8-bit average, as before."},
         {"VideoShutter", "With the game's motion blur: how much of each frame its sub-frames cover. 360 blurs the whole frame (smoothest), 180 is the film look (crisper; the other sub-frames are skipped, faster)."},
@@ -1685,7 +1685,7 @@ struct VideoPreset {
 };
 
 const VideoPreset kVideoPresets[] = {
-    {"YouTube", "H.264 at quality 80, grain halved: clean after YouTube's own encode, a modest file. Shoot at 1440p or more: YouTube gives those more bitrate.",
+    {"YouTube", "H.264 at quality 80, grain halved: hard to tell from the source (about 60 Mbit/s at 1440p60 on a grainy replay), clean after YouTube's own encode. Shoot at 1440p or more: YouTube gives those more bitrate.",
      [](Settings& s) {
          s.videoCodec = 1;
          s.videoQuality = 80;
@@ -1694,19 +1694,17 @@ const VideoPreset kVideoPresets[] = {
          s.videoGrain = 0.5f;
          s.videoHdr = false;
      },
-     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f && s.videoEncoder == 0; }},
-    {"Best", "x264 through ffmpeg at quality 80: clearly more detail per megabyte than the graphics card (fine track grids, grain), and about as fast as the export renders. Needs ffmpeg.exe in your TMVS folder or on PATH; without it the graphics card.",
+     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f; }},
+    {"Best", "H.264 at quality 92, grain halved: the most detail at a file size that still makes sense (about 80 Mbit/s at 1440p60). On an NVIDIA card the graphics card does it best; with AMD or Intel set Video encoder to ffmpeg for it.",
      [](Settings& s) {
          s.videoCodec = 1;
-         s.videoQuality = 80;
+         s.videoQuality = 92;
          s.video10Bit = false;
          s.videoBitrate = 0.0f;
-         s.videoEncoder = 1;
-         s.videoFfmpegPreset = 1;
          s.videoGrain = 0.5f;
          s.videoHdr = false;
      },
-     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoEncoder == 1 && s.videoFfmpegPreset == 1; }},
+     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 92 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f; }},
     {"Editing", "H.264 at quality 92 with the full grain: room for cutting and grading, and every editor decodes it smoothly. Large files.",
      [](Settings& s) {
          s.videoCodec = 1;
@@ -1717,26 +1715,26 @@ const VideoPreset kVideoPresets[] = {
          s.videoHdr = false;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 92 && s.videoBitrate <= 0.0f && s.videoGrain == 1.0f; }},
-    {"Small", "HEVC in 10 bits at quality 78: the smallest file that still looks clean, no bands in the sky. Heavier to edit; fine to keep or share.",
+    {"Small", "HEVC in 10 bits at quality 70: about two thirds of YouTube's file (40 Mbit/s at 1440p60 on a grainy replay, less on calmer ones), no bands in the sky. Heavier to edit; fine to keep or share.",
      [](Settings& s) {
          s.videoCodec = 2;
-         s.videoQuality = 78;
+         s.videoQuality = 70;
          s.video10Bit = true;
          s.videoBitrate = 0.0f;
          s.videoGrain = 0.3f;
          s.videoHdr = false;
      },
-     [](const Settings& s) { return s.videoCodec == 2 && s.video10Bit && s.videoQuality == 78 && s.videoBitrate <= 0.0f && !s.videoHdr; }},
-    {"Discord", "H.264 at quality 62, little grain: short clips small enough for a chat.",
+     [](const Settings& s) { return s.videoCodec == 2 && s.video10Bit && s.videoQuality == 70 && s.videoBitrate <= 0.0f && !s.videoHdr; }},
+    {"Discord", "H.264 at a fixed 8 Mbit/s, little grain: 10 seconds fit Discord's 10 MB. Shoot at 1080p or less for it; at 1440p the picture gets soft.",
      [](Settings& s) {
          s.videoCodec = 1;
          s.videoQuality = 62;
          s.video10Bit = false;
-         s.videoBitrate = 0.0f;
+         s.videoBitrate = 8.0f;
          s.videoGrain = 0.2f;
          s.videoHdr = false;
      },
-     [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 62 && s.videoBitrate <= 0.0f; }},
+     [](const Settings& s) { return s.videoCodec == 1 && s.videoBitrate > 7.9f && s.videoBitrate < 8.1f; }},
     {"HDR10", "HEVC in 10 bits with HDR10 at quality 85: lights above white stay bright on an HDR screen. Mod renders the frames needed.",
      [](Settings& s) {
          s.videoCodec = 2;
