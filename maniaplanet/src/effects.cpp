@@ -284,7 +284,7 @@ void Effects::release() {
 bool Effects::wanted(const tmshaders::Settings& s) {
     return s.aoStrength > 0.0f || s.shadowStrength > 0.0f || s.globalIllumination > 0.0f || s.neonLight > 0.0f || s.sunLight > 0.0f ||
            s.ambientTint > 0.0f || s.fogDensity > 0.0f || s.skyMode > 0 || s.skyEnhance > 0.0f || s.debugView != 0 ||
-           s.volumetricClouds > 0.0f || s.godRays > 0.0f || s.lensFlare > 0.0f || s.wetness > 0.0f || s.rain > 0.0f || s.snow > 0.0f ||
+           s.volumetricClouds > 0.0f || s.godRays > 0.0f || s.lensFlare > 0.0f || s.wetness > 0.0f || s.rain > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f ||
            s.puddles > 0.0f || s.reflections > 0.0f || s.lightning > 0.0f || s.depthOfField > 0.0f || s.motionBlur > 0.0f || s.taa ||
            s.volumetricLight > 0.0f || s.neonTrail > 0.0f;
 }
