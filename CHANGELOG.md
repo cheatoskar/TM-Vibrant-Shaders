@@ -19,6 +19,7 @@ A new video export for *Shoot video* in the replay editor (TrackMania Nations/Un
 - With the mod's own frames the game no longer reads every video frame back from the graphics card and converts it on the CPU (its pixels went nowhere).
 - The encoder runs on its own thread: the game no longer waits for it, nor for the colour conversion, which the graphics card does now.
 - **Car spray from the real tyres** (*Car spray*): the water comes from all four tyres of the car the game draws (the rear ones throw most), along the car's own axes and at its own speed, so a car sliding sideways sprays from its tyres in the way it slides, not from the middle of the screen. In races the player's car, in the replay editor and the video export the car its cameras show. Without the game's car (TrackMania 2) the spray stays as before.
+- Rain splashes on the ground reach about 110 m ahead and fade out softly: they ended in a hard line about 25 m ahead.
 - The mod's frames are read back from the graphics card a frame later instead of at once, so the game no longer waits for the GPU to finish each frame and the GPU no longer idles while the game prepares the next one: in my previewer test at 1440p with 2 × 2 samples 25 ms a frame instead of 41 (1 sample: 12 instead of 20).
 - With NVIDIA's encoder the video stream is written to disk on a thread of its own (up to 64 MB wait in memory): a slow write no longer holds up the encoder or the game.
 

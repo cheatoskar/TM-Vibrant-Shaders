@@ -1299,7 +1299,7 @@ float4 c_Prev2  : register(c12);
 float4 c_PrevP  : register(c13); // previous P00, P11, P20, P21
 float4 c_Motion : register(c14); // shutter (frames), previous frame valid, frame time (s), max streak (ndc)
 float4 c_Spray  : register(c15); // speed (m/s), spray amount, 0, 0
-float4 c_Splash : register(c19); // this layer's box (m), the near box inside it (m, 0 = none), splash scale, 0
+float4 c_Splash : register(c19); // this layer's box (m), the near box inside it (m, 0 = none), splash scale, how far ahead (of the box)
 sampler2D s_height : register(s0);
 sampler2D s_depth  : register(s1);
 sampler2D s_ceiling : register(s3); // undersides of roofs and bridges (0 = none seen)
@@ -1392,17 +1392,18 @@ VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     if (age > 1.0) return o;
     float2 r = frac(sin(float2(k * 12.9898 + seed.x * 78.233, k * 39.3468 + seed.y * 11.135)) * 43758.5453);
     // The box sits ahead of the camera, where the ground is in view. Two layers: the near box,
-    // and a far one three times its size with larger splashes that takes over where the near one
-    // thins out at its edge (it ended in a hard line on the road). Each fades at its own edge.
+    // and a far one four times its size, reaching farther ahead, with larger splashes; it takes
+    // over where the near one thins out at its edge (it ended in a hard line on the road). Each
+    // fades over half its box, so neither edge shows.
     float size = c_Splash.x;
     float2 forward = normalize(c_V2.xz + 1e-4);
-    float2 ahead = c_Cam.xz + forward * size * 0.4;
+    float2 ahead = c_Cam.xz + forward * size * c_Splash.w;
     float2 xz = ahead + (frac((r * size - ahead) / size) - 0.5) * size;
     float2 edge = abs(xz - ahead) / (size * 0.5);
-    float fade = 1.0 - smoothstep(0.6, 1.0, max(edge.x, edge.y));
+    float fade = 1.0 - smoothstep(0.5, 1.0, max(edge.x, edge.y));
     if (c_Splash.y > 0.0) {
         float2 near = abs(xz - (c_Cam.xz + forward * c_Splash.y * 0.4)) / (c_Splash.y * 0.5);
-        fade *= smoothstep(0.6, 1.0, max(near.x, near.y));
+        fade *= smoothstep(0.45, 1.0, max(near.x, near.y));
     }
     if (fade <= 0.02) return o;
     float2 m = (xz - c_Map.xy) * c_Map.z;
@@ -2466,12 +2467,13 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         device->SetPixelShader(m_shaders[kRainSplash]);
         passConstants(device, 0.8f, 0.0f);
         const float nearBox = vc[8][3];
-        const float nearLayer[4] = {nearBox, 0.0f, 1.0f, 0.0f};
+        const float nearLayer[4] = {nearBox, 0.0f, 1.0f, 0.4f};
         device->SetVertexShaderConstantF(19, nearLayer, 1);
         device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, kRainDrops * 4, 0, splashCount * 4, 0, splashCount * 2);
-        // The far layer: the same splashes over nine times the ground, twice as large (far away
-        // they are a few pixels; spread out, they read as the rain hitting the whole road).
-        const float farLayer[4] = {nearBox * 3.0f, nearBox, 2.0f, 0.0f};
+        // The far layer: the same splashes over sixteen times the ground, reaching about 110 m
+        // ahead, 2.5 times as large (far away they are a few pixels; spread out, they read as the
+        // rain hitting the whole road).
+        const float farLayer[4] = {nearBox * 4.0f, nearBox, 2.5f, 0.45f};
         device->SetVertexShaderConstantF(19, farLayer, 1);
         device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, kRainDrops * 4, 0, splashCount * 4, 0, splashCount * 2);
         profileMark(kRainSplash);
