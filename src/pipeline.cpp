@@ -3457,8 +3457,9 @@ void Pipeline::finishRender(IDirect3DDevice9* device, const Inputs& in, BOOL sof
 // to the 3 frames the game lets the GPU fall behind in game, 4 times a second).
 void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
     // Not there after 6 frames (the previewer, which queues frames without presenting them): read
-    // anyway, as before.
-    const bool done = m_waterPending < 0 || !m_waterDone || m_waterDone->GetData(nullptr, 0, D3DGETDATA_FLUSH) == S_OK ||
+    // anyway, as before. Asked without D3DGETDATA_FLUSH: with it the call itself waited for the
+    // GPU (23 ms on my card, the export's plane copies showed it); the game's Present flushes.
+    const bool done = m_waterPending < 0 || !m_waterDone || m_waterDone->GetData(nullptr, 0, 0) == S_OK ||
                       m_frame - m_waterDrawn >= 6;
     if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2 && done) {
         const gfx::Target& t = m_waterLevel[m_waterPending];
