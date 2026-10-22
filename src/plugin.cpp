@@ -3290,7 +3290,10 @@ void onPresent(IDirect3DDevice9* device) {
         const bool pass = g_exporting && soundcapture::passClock(passed);
         const float soundTime = pass ? static_cast<float>(g_exportStats.clockStart + passed - g_export.clipStart) : effectTime();
         audio::setAlwaysInFront(g_exporting);
-        audio::update(settings, soundTime, g_gameplayThisFrame, cp.hFocusWindow);
+        // The sound pass shades no gameplay frames: counted as a race only by those, the rain
+        // faded out at its start (a short hiss at the video's start, my test) and the thunder
+        // stayed silent. The whole export counts, so nothing fades between frames and pass.
+        audio::update(settings, soundTime, g_gameplayThisFrame || g_exporting, cp.hFocusWindow);
     }
     {
         static float s_waterMin = 1e30f, s_waterMax = 1e30f;
