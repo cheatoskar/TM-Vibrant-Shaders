@@ -2478,19 +2478,43 @@ void processScene(IDirect3DDevice9* device) {
             memcpy(inputs.carWheels, wheels, sizeof(inputs.carWheels));
         }
         static bool s_exporting = false, s_measured = false;
-        static unsigned s_frames = 0, s_known = 0;
+        static unsigned s_frames = 0, s_known = 0, s_onScreen = 0;
+        static double s_screen[3] = {};
         if (g_exporting) {
             if (!s_exporting) {
-                s_frames = s_known = 0;
+                s_frames = s_known = s_onScreen = 0;
+                memset(s_screen, 0, sizeof(s_screen));
                 g_pipeline.takeSprayStats();
             }
             s_frames++;
-            if (inputs.carPoseKnown) s_known++;
+            if (inputs.carPoseKnown) {
+                s_known++;
+                // Where the engine's car lands on screen (row vectors: p V P): the chase camera keeps
+                // the drawn car low in the middle, a few metres ahead.
+                const float* p = inputs.carPosePosition;
+                const float* V = inputs.view;
+                const float* P = inputs.projection;
+                float v[4], c[4];
+                for (int j = 0; j < 4; j++) v[j] = p[0] * V[j] + p[1] * V[4 + j] + p[2] * V[8 + j] + V[12 + j];
+                for (int j = 0; j < 4; j++) c[j] = v[0] * P[j] + v[1] * P[4 + j] + v[2] * P[8 + j] + v[3] * P[12 + j];
+                if (c[3] > 0.1f) {
+                    const float u = c[0] / c[3] * 0.5f + 0.5f, w = 0.5f - c[1] / c[3] * 0.5f;
+                    if (u > -0.5f && u < 1.5f && w > -0.5f && w < 1.5f) {
+                        s_onScreen++;
+                        s_screen[0] += u;
+                        s_screen[1] += w;
+                        s_screen[2] += v[2];
+                    }
+                }
+            }
             if (inputs.carPoseKnown && pose.wheelsMeasured) s_measured = true;
         } else if (s_exporting) {
             TMVS_LOG("video export: the spray had the car's axes from the engine in %u of %u shaded cameras%s", s_known, s_frames,
                      s_known == 0 ? " (none: it found the car in the depth buffer, behind the screen's centre)"
                                   : (s_measured ? " (its tyres as measured standing)" : " (its tyres: the Stadium car's estimates)"));
+            if (s_onScreen)
+                TMVS_LOG("video export: the engine's car on screen in %u of %u cameras, on average at %.2f %.2f (0..1 across, down), %.1f m ahead",
+                         s_onScreen, s_known, s_screen[0] / s_onScreen, s_screen[1] / s_onScreen, s_screen[2] / s_onScreen);
             const Pipeline::SprayStats spray = g_pipeline.takeSprayStats();
             if (spray.frames)
                 TMVS_LOG("video export: spray in %u of %u frames (speed %.1f m/s on average, at most %.1f; amount at most %.2f)", spray.throwing,

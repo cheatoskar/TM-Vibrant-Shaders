@@ -1513,9 +1513,12 @@ float4 c_CarUp    : register(c25); // its up, w: half the track (m)
 float4 c_CarVel   : register(c26); // its velocity (world, m/s), w: the road under the tyres (m along up, < 0)
 
 // Whether the road is where a tyre touches it: the surface seen just outside the tyre (where the
-// camera looks past the wheel) lies at the contact's height. 0 half a metre off or more: in the
-// air, or something else in the way (car body, barrier, off screen).
-float roadAt(float3 contact, float3 outward, float3 up) {
+// camera looks past the wheel) lies near the contact's height. 0 1.2 m off or more: in the air, or
+// something else in the way (car body, barrier, off screen). dh: how far above the contact it is
+// (a replay's car stands its drawn position at another height than the race's: my export threw
+// no spray with half a metre allowed).
+float roadAt(float3 contact, float3 outward, float3 up, out float dh) {
+    dh = 0.0;
     float3 bv = toView(contact + outward * 0.55);
     if (bv.z < 0.5) return 0.0;
     float4 bc = toClip(bv);
@@ -1524,7 +1527,8 @@ float roadAt(float3 contact, float3 outward, float3 up) {
     if (any(buv < 0.0) || any(buv > 1.0)) return 0.0;
     float3 rv = viewRay(buv, tex2Dlod(s_depth, float4(buv, 0, 0)).r);
     float3 road = c_Cam.xyz + c_V0.xyz * rv.x + c_V1.xyz * rv.y + c_V2.xyz * rv.z;
-    return saturate(1.0 - (abs(dot(road - contact, up)) - 0.3) / 0.3);
+    dh = dot(road - contact, up);
+    return saturate(1.0 - (abs(dh) - 0.8) / 0.4);
 }
 
 VSOut sprayTyres(float4 seed, float2 corner) {
@@ -1535,13 +1539,18 @@ VSOut sprayTyres(float4 seed, float2 corner) {
     float3 road = c_Car.xyz + up * c_CarVel.w; // the road under the drawn position
     // Only with the tyres on the road (slopes, banks, walls and loops included; jumps not): any
     // of the four will do, a barrier may hide the road beside the others.
-    float grounded = 0.0;
+    float grounded = 0.0, lift = 0.0, weights = 0.0;
     [unroll] for (int k = 0; k < 4; k++) {
         float s = (k == 1 || k == 3) ? 1.0 : -1.0;
         float3 contact = road + fwd * (k < 2 ? c_CarFwd.w : c_CarRight.w) + right * s * c_CarUp.w;
-        grounded = max(grounded, roadAt(contact, right * s, up));
+        float dh;
+        float w = roadAt(contact, right * s, up, dh);
+        grounded = max(grounded, w);
+        lift += w * dh;
+        weights += w;
     }
     if (grounded <= 0.0) return o;
+    road += up * (lift / max(weights, 1e-3)); // onto the road the camera sees
     // Seven of ten particles leave the rear tyres, which throw most (the front ones run on
     // the water the car pushes aside and throw less, with smaller puffs).
     bool rear = seed.x < 0.7;
