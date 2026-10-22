@@ -188,7 +188,7 @@ measurement), found with a Goertzel filter, and is not run without asking first.
 - **The output latency.** OpenAL mixes ahead into its output buffer: what the game starts at clip
   time t reaches the loopback at t + latency. Measured once per export, right after its .avi is made
   (the clip is stopped, DoShoot waits on the main thread, where the game's own OpenAL calls come
-  from too): a 50 ms tone at 19 kHz and -40 dB (at a mixing rate below 47.5 kHz: 0.4 of it) on a
+  from too): a 50 ms tone at 19 kHz and -54 dB (at a mixing rate below 47.5 kHz: 0.4 of it; below 42.5 kHz no measurement, the tone would be audible) on a
   source of the game's own OpenAL context, found again in the loopback with a Goertzel filter, the
   same way the pass is timed (frame 0 = the capture's start). The latency is left out at the start
   as well, and at the game's `alcCaptureStop` the capture runs that much longer (at most 0.25 s), so

@@ -71,7 +71,7 @@ void logSummary() {
 // game starts at clip time t reaches the loopback at t + latency, and the sound pass's sound would
 // lag the picture by it. Measured once per export, right after its .avi is made (the clip stopped,
 // the game waits in DoShoot on the main thread, where its own OpenAL calls come from too): a short
-// quiet tone of 19 kHz (inaudible for most; -40 dB, 50 ms) on a source of the game's own context,
+// quiet tone of 17-19 kHz (inaudible for most; -54 dB, 50 ms) on a source of the game's own context,
 // found again in the loopback the same way the sound pass is timed (frame 0 = the capture's
 // start). Anything that fails leaves the latency at 0 (logged).
 using AlGenFn = void(__cdecl*)(int, unsigned*);
@@ -124,11 +124,16 @@ double measureLatency(loopback::Capture& capture, std::string& why) {
     // The tone stays below the mixer's Nyquist frequency (at a low mixing rate it gets audible).
     const int rate = 44100;
     const double tone = (std::min)(19000.0, 0.4 * (mixRate > 0 ? mixRate : rate));
+    // Below 17 kHz a young ear in headphones hears it at every export start: no measurement then.
+    if (tone < 17000.0) {
+        why = "the game mixes at " + std::to_string(mixRate) + " Hz, a probe tone would be audible";
+        return 0.0;
+    }
     std::vector<int16_t> burst(static_cast<size_t>(rate) / 20); // 50 ms
     for (size_t i = 0; i < burst.size(); i++) {
         const double t = static_cast<double>(i) / rate;
         const double fade = (std::min)(1.0, (std::min)(t, 0.05 - t) / 0.005);
-        burst[i] = static_cast<int16_t>(std::sin(2.0 * 3.14159265358979 * tone * t) * 330.0 * fade);
+        burst[i] = static_cast<int16_t>(std::sin(2.0 * 3.14159265358979 * tone * t) * 66.0 * fade); // -54 dB: heard down to 8 % game volume
     }
     getError(); // a pending error of the game's is not ours to keep
     unsigned buffer = 0, source = 0;
