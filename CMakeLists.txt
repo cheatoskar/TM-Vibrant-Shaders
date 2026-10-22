@@ -206,6 +206,12 @@ add_executable(tmvs_mp4test tools/mp4test.cpp)
 target_link_libraries(tmvs_mp4test PRIVATE tmvs_core)
 target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
 
+# Encoder benchmark: a reference video through every encoder variant, scored with VMAF
+# (development tool; needs ffmpeg with libvmaf).
+add_executable(tmvs_encbench tools/encbench.cpp)
+target_link_libraries(tmvs_encbench PRIVATE tmvs_core)
+target_compile_options(tmvs_encbench PRIVATE ${TMVS_OPTIONS})
+
 # Loopback test: a tone played and recorded back from this process's own output, as the video
 # export's sound pass does (development tool).
 add_executable(tmvs_loopbacktest tools/loopbacktest.cpp)
