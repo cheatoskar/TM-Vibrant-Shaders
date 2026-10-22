@@ -21,6 +21,7 @@
 #include "thumbnails.h"
 #include "tracer.h"
 #include "videofile.h"
+#include "soundcapture.h"
 #include "videoencoder.h"
 #include "tm_shaders_version.h"
 #include <d3d9.h>
@@ -397,6 +398,13 @@ bool ownDeliver(venc::Encoder& encoder, const videofile::OwnFormat& format) {
     QueryPerformanceCounter(&end);
     g_own.readMs += static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
     return true;
+}
+
+// videofile: will ownDeliver have a frame for the game's coming write? (Its own checks, before
+// the read-backs; then the game needn't read its image back.)
+bool ownReady(const videofile::OwnFormat& format) {
+    return g_device && g_own.haveFrame && g_own.luma.valid() && g_own.chroma.valid() && static_cast<int>(g_own.luma.width) * 4 == format.width &&
+           static_cast<int>(g_own.luma.height) == format.height;
 }
 
 // videofile: the game wrote a video frame; the next sub-frame starts the next one.
@@ -3271,7 +3279,19 @@ void onPresent(IDirect3DDevice9* device) {
     if (!photo::active() && !g_exporting) g_autoQuality.onFrame(seconds(), g_gameplayThisFrame, g_pipeline, settings);
     D3DDEVICE_CREATION_PARAMETERS cp{};
     device->GetCreationParameters(&cp);
-    audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);
+    // The weather sound follows the effects' clock, so its thunder follows the flashes on screen
+    // (the real clock drifted from them by the export's offset). In the export's sound pass the
+    // game replays the clip in real time from 0 for its recording: the video's clock at the clip
+    // time it plays, so the thunder in the video's sound comes after the flashes in its frames.
+    // During an export the rain is not faded out when the game is in the background (the export
+    // runs on, and so does its sound pass).
+    {
+        double passed = 0.0;
+        const bool pass = g_exporting && soundcapture::passClock(passed);
+        const float soundTime = pass ? static_cast<float>(g_exportStats.clockStart + passed - g_export.clipStart) : effectTime();
+        audio::setAlwaysInFront(g_exporting);
+        audio::update(settings, soundTime, g_gameplayThisFrame, cp.hFocusWindow);
+    }
     {
         static float s_waterMin = 1e30f, s_waterMax = 1e30f;
         float lo = 0.0f, hi = 0.0f;
@@ -3540,6 +3560,7 @@ void bootOnce() {
     videofile::FrameSource frames;
     frames.deliver = ownDeliver;
     frames.written = ownWritten;
+    frames.ready = ownReady;
     videofile::setFrameSource(frames);
     engine::setMoonAtLoad(moonAtLoad);
 

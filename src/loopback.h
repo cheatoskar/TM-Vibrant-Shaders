@@ -27,6 +27,7 @@ struct Stats {
     uint64_t filled = 0;    // frames of silence put in by the clock (the loopback sent nothing)
     uint64_t underrun = 0;  // frames of silence a read asked for beyond what was there
     uint64_t dropped = 0;   // frames dropped: more came than the clock allows
+    uint64_t skipped = 0;   // frames left out at the start (start's skipFrames)
     unsigned glitches = 0;  // discontinuities the audio engine reported
 };
 
@@ -41,8 +42,11 @@ public:
     void prepare(int rate, int channels, Mode mode = Mode::Auto);
     // Waits until prepared; true when a source is ready.
     bool waitReady(unsigned timeoutMs);
-    // From here the clock runs and the sound collects.
-    bool start();
+    // From here the clock runs and the sound collects (anew: what an earlier run left is gone).
+    // The first skipFrames frames that come in are left out: the sound moves earlier by them.
+    bool start(size_t skipFrames = 0);
+    // QueryPerformanceCounter at the last start (the sound's frame 0).
+    int64_t startCounter() const;
     // Stops and takes in what the source still had (returns when done, at most 300 ms).
     void stop();
     size_t available();

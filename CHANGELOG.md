@@ -15,10 +15,11 @@ A new video export for *Shoot video* in the replay editor (TrackMania Nations/Un
 - **Shutter** for the game's motion blur (*Shutter*, 360): 180 gives the film look and skips the mod's work on the other half of the sub-frames.
 - **Lens depth of field** (*Lens depth of field*): with 16 or more samples per frame the camera moves over a lens between them and the sum blurs like a real lens: true bokeh, no halos at edges.
 - **Film grain in the video** (0.5 of the look's grain: grain costs the encoder much of its bits) and **video aspect** 2:1 or 2.39:1 (cropped, the file holds only the picture).
+- With the mod's own frames the game no longer reads every video frame back from the graphics card and converts it on the CPU (its pixels went nowhere).
 - The encoder runs on its own thread: the game no longer waits for it, nor for the colour conversion, which the graphics card does now.
 
 **Good to know**
-- **The export's sound is the game's own sound.** After the frames the game plays the clip once more in real time and records it, until now from Windows' default recording device (a microphone gave the room's sound, no recording device gave silence). The mod hands it the game's own output instead (Windows 10 2004 and newer; older Windows: everything the PC plays), whatever recording devices there are. The mod's rain is in it too; its thunder as well, but not yet in time with the flashes in the video.
+- **The export's sound is the game's own sound.** After the frames the game plays the clip once more in real time and records it, until now from Windows' default recording device (a microphone gave the room's sound, no recording device gave silence). The mod hands it the game's own output instead (Windows 10 2004 and newer; older Windows: everything the PC plays), whatever recording devices there are. The mod's rain is in it too (also with the game in the background), and its thunder comes after the flashes you see in the video. The sound starts with the video's first frame, also for a clip that doesn't start at 0, and the game's sound output delay is measured at the export's start (a 50 ms tone at 19 kHz, -40 dB) and taken out.
 - The sound needs the sound button in the *Shoot video* dialog: it is off by default, and without it the game makes no sound pass at all (the log says so).
 - The game's clock for the motion blur sub-frames runs in whole milliseconds: at 60 fps more than 4 × 4 samples share moments (still better edges and lens blur, no finer motion blur); at 30 fps 5 × 5.
 

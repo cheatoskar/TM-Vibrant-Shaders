@@ -31,6 +31,8 @@ struct Export {
     // The frames that went in: the plugin's, the game's (no frame of the plugin yet), and the
     // plugin's that came between two of the game's writes (the last of them went in).
     int fromPlugin = 0, fromGame = 0;
+    bool readbackSkipped = false;   // the game skipped reading this frame back (the mod's goes in)
+    int staleFrames = 0;            // ... and the mod's frame failed after all: the last read image went in
 };
 std::vector<Export> g_exports;
 FrameSource g_source;
@@ -205,6 +207,9 @@ bool videoFrame(void* file, const void* pixels) {
         e->fromPlugin++;
         done = true;
     }
+    if (!done && e->readbackSkipped && e->staleFrames++ == 0)
+        TMVS_LOG("video file: the mod's frame failed after the game skipped its read-back: the last image the game read goes in");
+    e->readbackSkipped = false;
     if (!done) {
         // The game's frame (bottom-up rows): the crop is the middle rows, which lie together.
         const size_t stride = static_cast<size_t>(e->width) * e->bpp;
@@ -214,6 +219,14 @@ bool videoFrame(void* file, const void* pixels) {
     }
     if (g_source.written) g_source.written();
     return true; // also when it failed: the game has no stream to write it to (the log says it)
+}
+
+// The game is about to write a frame: the mod's will go in, so its own read-back can be skipped.
+bool ownFrameReady(void* file) {
+    Export* e = find(file);
+    if (!e || !e->video || !e->encoder || !e->ownFrames || !g_source.ready || !g_source.ready(e->own)) return false;
+    e->readbackSkipped = true;
+    return true;
 }
 
 void audioOpen(void* file, const void* format) {
@@ -254,8 +267,9 @@ void closed(void* file) {
             if (!e.early.empty()) e.encoder->writeAudio(e.early.data(), e.early.size());
             std::string report;
             const bool complete = e.encoder->close(report);
-            TMVS_LOG("video file: MP4 written: %s, %s; frames from the mod %d, from the game %d", narrow(e.encoder->path()).c_str(), report.c_str(),
-                     e.fromPlugin, e.fromGame);
+            TMVS_LOG("video file: MP4 written: %s, %s; frames from the mod %d, from the game %d%s", narrow(e.encoder->path()).c_str(), report.c_str(),
+                     e.fromPlugin, e.fromGame,
+                     e.staleFrames ? (" (" + std::to_string(e.staleFrames) + " of them an old image: the mod's frame failed after the read-back was skipped)").c_str() : "");
             // The game's .avi has no video (its stream was never opened): gone once the MP4
             // holds everything. Kept when the MP4 lacks the sound (the .avi has it too).
             if (complete && !e.avi.empty() && DeleteFileW(e.avi.c_str())) TMVS_LOG("video file: the game's .avi (no video in it) deleted");
@@ -301,6 +315,7 @@ void install() {
     hooks.audioOpen = audioOpen;
     hooks.audioData = audioData;
     hooks.closed = closed;
+    hooks.ownFrameReady = ownFrameReady;
     engine::setVideoFileHooks(hooks);
 }
 

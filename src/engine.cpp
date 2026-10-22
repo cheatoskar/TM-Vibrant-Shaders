@@ -50,6 +50,9 @@ struct GameBuild {
     // moon's direction) and GxLight::SetBaseRGB (its colour), and those two functions.
     uintptr_t moonDirectionCall, setDov, moonColorCall, setBaseRgb;
     uintptr_t shaderApplyVTable;   // ??_7CPlugShaderApply@@6B@ (the materials whose textures are read)
+    // RenderFrameEnd's phase of its spread-out video read-back (a global, see kViewportVideoAsync);
+    // RenderFrameEnd + kReadPhaseCheck writes it (mov [phase], ebp), checked before use.
+    uintptr_t videoReadPhase;
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -63,14 +66,14 @@ constexpr GameBuild kBuilds[] = {
       0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0},
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
-     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc},
+     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
       0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0},
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
-     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c},
+     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8},
 };
 const GameBuild* g_build = nullptr;
 
@@ -1507,9 +1510,50 @@ void __fastcall overlayZonesDetour(void* self, void* edx, void* zones, int flags
     if (g_callbacks.overlayEnd) g_callbacks.overlayEnd();
 }
 
+// The game's read-back of a video frame (CVisionViewportDx9::RenderFrameEnd, the same code in both
+// builds): when DoShoot flagged the frame (+0x54c) and the stream is open (+0x554) it copies its
+// colour surface to system memory (GetRenderTargetData: the GPU's whole frame must be done first,
+// 4 bytes a pixel over the bus, 33 MB at 4K), converts it on the CPU into the bottom-up BGR buffer
+// (CopySurfaceToImage) and hands that to VideoStreamWrite. With +0x150 set it spreads the three
+// steps over three flagged frames by a global phase: 0 read-back, 1 convert, 2 write. When the
+// mod hands over its own frame the game's pixels go nowhere: +0x150 and phase 2 for that one call
+// skip straight to the write (aviVideoWriteDetour takes the mod's frame), both restored after.
+// The .dds path (+0x558) and a frame without the stream are left alone.
+constexpr size_t kViewportVideoAsync = 0x150;
+constexpr size_t kViewportVideoFile = 0x160;   // CVisionVideoAvi*
+constexpr size_t kViewportVideoAdd = 0x54c;    // VideoAddCurrentFrame
+constexpr size_t kViewportVideoStream = 0x554; // the stream is open
+constexpr size_t kViewportVideoDds = 0x558;
+constexpr size_t kReadPhaseCheck = 0x322;      // mov dword ptr [phase], ebp (stream open)
+volatile LONG* g_readPhase = nullptr;          // checked at install, null: never skipped
+unsigned g_readbacksSkipped = 0;
+
+bool skipGameReadback(void* viewport) {
+    if (!g_readPhase || !g_videoFile.ownFrameReady) return false;
+    BYTE* v = static_cast<BYTE*>(viewport);
+    if (!readable(v + kViewportVideoAsync, kViewportVideoDds + sizeof(int) - kViewportVideoAsync)) return false;
+    const auto at = [v](size_t offset) { return reinterpret_cast<int*>(v + offset); };
+    if (*at(kViewportVideoAdd) == 0 || *at(kViewportVideoStream) == 0 || *at(kViewportVideoDds) != 0 || *at(kViewportVideoAsync) != 0 ||
+        *g_readPhase != 0)
+        return false;
+    void* file = *reinterpret_cast<void**>(v + kViewportVideoFile);
+    if (!file || !g_videoFile.ownFrameReady(file)) return false;
+    *at(kViewportVideoAsync) = 1;
+    *g_readPhase = 2;
+    if (g_readbacksSkipped++ == 0)
+        TMVS_LOG("engine: the game's read-back of its video frames skipped (GetRenderTargetData and the CPU conversion): the mod hands over its own");
+    return true;
+}
+
 void __fastcall frameEndDetour(void* self, void* edx) {
     if (g_callbacks.frameEnd) g_callbacks.frameEnd();
+    // After the plugin's frameEnd: its frame for this write is finished by then.
+    const bool skipped = skipGameReadback(self);
     g_frameEnd(self, edx);
+    if (skipped) {
+        *reinterpret_cast<int*>(static_cast<BYTE*>(self) + kViewportVideoAsync) = 0;
+        *g_readPhase = 0; // the write wrapped it to 0 already
+    }
 }
 
 // SHmsCameraLocation: +0x00 GmIso4 camera location, +0x60 GmMat4 driver view matrix.
@@ -1698,6 +1742,13 @@ bool install(const Callbacks& callbacks) {
         for (const auto& a : avi) all = all && prologueMatches(*a.site);
         if (all) {
             for (const auto& a : avi) *a.original = inlineHook(*a.site, a.detour);
+            // The read-back's phase: only where RenderFrameEnd writes exactly this global.
+            const BYTE* check = reinterpret_cast<const BYTE*>(rebase(g_build->slots[kFrameEnd]) + kReadPhaseCheck);
+            const uint32_t phase = static_cast<uint32_t>(rebase(g_build->videoReadPhase));
+            if (readable(check, 6) && check[0] == 0x89 && check[1] == 0x2d && memcmp(check + 2, &phase, 4) == 0)
+                g_readPhase = reinterpret_cast<volatile LONG*>(rebase(g_build->videoReadPhase));
+            else
+                TMVS_LOG("engine: RenderFrameEnd's read-back phase not where expected: the game's read-back stays");
         } else {
             TMVS_LOG("engine: the video export's file writer does not match this executable: MP4 export off");
         }

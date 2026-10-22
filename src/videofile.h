@@ -35,6 +35,9 @@ bool ownFormat(OwnFormat& out);
 struct FrameSource {
     bool (*deliver)(venc::Encoder& encoder, const OwnFormat& format) = nullptr;
     void (*written)() = nullptr;
+    // Asked at the end of the frame the game is about to write: will deliver succeed? true lets
+    // the game skip reading its own image back (engine::VideoFileHooks::ownFrameReady).
+    bool (*ready)(const OwnFormat& format) = nullptr;
 };
 void setFrameSource(const FrameSource& source);
 
