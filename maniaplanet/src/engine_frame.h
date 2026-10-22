@@ -96,14 +96,35 @@ struct EngineShadow {
 constexpr UINT kScenePRasterPos = 96;
 
 // The car (Tech3/CarSkin_DefWrite: its vertex constants ObjectV, 2752 bytes): VisualToCamera at
-// 112 (3 rows of 4, the car's axes and origin in camera space), for the neon trail.
+// 112 (3 rows of 4, the car's axes and origin in camera space), for the neon trail and the spray;
+// BonesToVisuals at 208 (up to 45 matrices of 3 rows of 4: its parts in its own axes, the wheels
+// among them). Layout from tools/rdef.py on Tech3/CarSkin_DefWrite_v; the game's buffer is 2368
+// bytes (all 45 bones).
 constexpr UINT kObjectVCarSize = 2752;
 constexpr UINT kObjectVVisualToCamera = 112;
+constexpr UINT kObjectVBones = 208;
+constexpr int kObjectVBoneCount = 45;
+
+// The wheels' centres in the car's own axes (x right, y up, z of its model; m from its origin):
+// a front and a rear pair along z (which one is ahead depends on the model's forward, decided
+// from the car's motion), half the track, the centres' height over the origin.
+struct CarWheels {
+    bool known = false;
+    float zA = 0.0f, zB = 0.0f;   // the two axles along the model's z (zA > zB)
+    float halfTrack = 0.0f;
+    float heightA = 0.0f, heightB = 0.0f;
+};
+// Four bone origins that lie like a car's wheels: two pairs mirrored across the car (z and the
+// distance out within 10 cm, the height within 15 cm, 0.5 - 1.3 m out), 1.8 - 4.5 m apart along z.
+// False: none such.
+bool findWheels(const float* bones, int count, CarWheels& out);
+
 struct EngineCar {
     bool valid = false;     // seen this frame
     float position[3] = {}; // world
     float right[3] = {}, up[3] = {}, forward[3] = {}; // the car's axes in the world (x, y, z of its model)
     unsigned track = 0;     // another number: another car taken up (the trail starts a new line)
+    CarWheels wheels;       // from its bones, when they lie like wheels
 };
 
 // Which of the frame's cars is the player's. Ghosts and other players are drawn like it (the same

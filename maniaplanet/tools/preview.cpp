@@ -26,6 +26,8 @@
 // Performance page shows it (smoothed over frames: give it --frames 200 or so).
 // --runs R (with --car): the frames are R + 1 runs of that drive, each R before the last 2 m
 // further along -x, the car back at the start for each (a restart: TrailKeepRuns).
+// --carfwd x,y,z (with --car): the way the car faces (default: the way it drives); another way
+// than it drives makes it slide (the spray, Spray with Wetness).
 // An output ending in .jpg is a preset picture for the menu (384 x 216, tools/make-thumbnails.ps1).
 #include "effects_trail.h"
 #include "image.h"
@@ -551,6 +553,8 @@ int main(int argc, char** argv) {
     float trailFrom[3] = {}; // --carfrom x,y,z: where it starts (default: from the camera's side, at --car's height)
     bool haveTrailFrom = false;
     float trailUp[3] = {0.0f, 1.0f, 0.0f}; // --carup x,y,z: the car's up (a banked curve: the line tilts with it)
+    float trailFwd[3] = {};                 // --carfwd x,y,z: the way it faces (default: the way it drives)
+    bool haveTrailFwd = false;
     int trailRuns = 0; // --runs: earlier runs of the drive before the last (restarts)
     float focus[2] = {-1.0f, -1.0f}; // --focus u,v: the photo mode's focus point
     std::string compare;              // --compare: the preset on the split's other side
@@ -607,6 +611,7 @@ int main(int argc, char** argv) {
         else if (opt == "--runs") trailRuns = std::max(0, atoi(value.c_str()));
         else if (opt == "--car") haveTrailCar = sscanf(value.c_str(), "%f,%f,%f", &trailCar[0], &trailCar[1], &trailCar[2]) == 3;
         else if (opt == "--carfrom") haveTrailFrom = sscanf(value.c_str(), "%f,%f,%f", &trailFrom[0], &trailFrom[1], &trailFrom[2]) == 3;
+        else if (opt == "--carfwd") haveTrailFwd = sscanf(value.c_str(), "%f,%f,%f", &trailFwd[0], &trailFwd[1], &trailFwd[2]) == 3;
         else if (opt == "--carup") {
             if (sscanf(value.c_str(), "%f,%f,%f", &trailUp[0], &trailUp[1], &trailUp[2]) == 3) {
                 const float l = std::sqrt(trailUp[0] * trailUp[0] + trailUp[1] * trailUp[1] + trailUp[2] * trailUp[2]);
@@ -821,6 +826,17 @@ int main(int argc, char** argv) {
                 car.position[0] -= 2.0f * static_cast<float>(trailRuns - run);
                 car.valid = true;
                 for (int i = 0; i < 3; i++) car.up[i] = trailUp[i];
+                // Its axes: forward the way it drives (or --carfwd), across its up; right across both.
+                float fwd[3];
+                for (int i = 0; i < 3; i++)
+                    fwd[i] = haveTrailFwd ? trailFwd[i] : trailCar[i] - (haveTrailFrom ? trailFrom[i] : camera.eye[i]);
+                const float u = fwd[0] * trailUp[0] + fwd[1] * trailUp[1] + fwd[2] * trailUp[2];
+                for (int i = 0; i < 3; i++) fwd[i] -= trailUp[i] * u;
+                const float l = std::sqrt(fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]);
+                for (int i = 0; i < 3; i++) car.forward[i] = l > 1e-6f ? fwd[i] / l : (i == 2 ? 1.0f : 0.0f);
+                car.right[0] = trailUp[1] * car.forward[2] - trailUp[2] * car.forward[1];
+                car.right[1] = trailUp[2] * car.forward[0] - trailUp[0] * car.forward[2];
+                car.right[2] = trailUp[0] * car.forward[1] - trailUp[1] * car.forward[0];
                 engine.car = &car;
             }
             if (comparing && !rendererB.toneMap(ctx, rtv, in[0], in[1], engineConstants, presetSide, engine)) {

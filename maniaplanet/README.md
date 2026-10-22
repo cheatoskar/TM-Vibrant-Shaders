@@ -13,18 +13,26 @@ knows (its normals, material colours, sun shadow maps, motion vectors and HDR im
   enhanced, volumetric clouds, light shafts, lens flare. Under a night sky over a day map the
   engine's sun goes and "real night" brings its sky light down to moonlight; lamps and neon stay.
 - **Weather:** wet roads, puddles, screen-space reflections, snow cover, rain, snow, splashes,
-  lightning, drops on the lens, the weather sound.
+  the spray behind the car, lightning, drops on the lens, the weather sound.
 - **Cinema:** depth of field, motion blur (the engine's motion vectors), TAA, photo mode with the
   compare split.
 - **Neon trail** behind the car (the car's position from the engine's own constants); *Earlier runs kept*
   (`TrailKeepRuns`) keeps the last runs after a restart (the car back at the run's start), dimmer.
+- **Spray** behind the car (*Car spray*, on wet roads or snow cover) from its four tyres, the rear ones
+  throwing most, along its own axes and at its own speed (the TMNF mod's). The car is the one the
+  camera follows (`Tech3/CarSkin_DefWrite`'s constants: VisualToCamera, and BonesToVisuals for the
+  wheels where four bones lie like a car's; else the Stadium car's axles, +1.7 and -1.2 m, half track
+  0.86 m); the spray stands on the road the camera sees beside each tyre. Which of the model's axes
+  is ahead is checked from the car's motion. Without the car (not drawn) the rear tyres of the car
+  below the screen's centre throw it. The log: `weather: spray from ...` (where it comes from, once per
+  change), `weather: the car's forward from its motion ...`, `hooks: the car's wheels ...`.
 - **Look:** the HDR stage in place of the engine's tone map (curves, bloom), grading, LUT looks.
 - **Auto quality** (the TMNF mod's, on the effects' GPU times) and the Performance page.
 
 - **Author's Shaders:** a look stored in the map's comments is applied when the map loads; in the
   editor *Set as Author's Shader* writes it into the map (save the map to keep it).
 
-What ManiaPlanet can't do (yet): the spray behind the car, long-range shadows (the engine has its own shadow maps), TAA jitter, hi-res photos and zoom (they
+What ManiaPlanet can't do (yet): long-range shadows (the engine has its own shadow maps), TAA jitter, hi-res photos and zoom (they
 need the engine's projection), "only in replays" (replays aren't told from driving yet: with it on,
 depth of field and motion blur run in photo mode only), water surfaces, grass detail.
 
@@ -131,8 +139,8 @@ The log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in `Documents\Man
 
 ## Online, Openplanet
 
-- The mod changes the picture. From the game it reads the camera, the sun and the car's position
-  (from the constants the engine draws with) and the map's comments (for Author's Shaders). It
+- The mod changes the picture. From the game it reads the camera, the sun and the car's position,
+  axes and wheels (from the constants the engine draws with) and the map's comments (for Author's Shaders). It
   writes only the comments of the map open in the editor, when you click *Set as Author's Shader*.
 - Whether servers or competitions allow a `d3d11.dll` mod is not confirmed. Check the rules of where you play.
 - *Soft sun shadows* (on by default, 1°) draws the engine's sun shadow pass with the mod's own shader.
