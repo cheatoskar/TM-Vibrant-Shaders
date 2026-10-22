@@ -1107,6 +1107,132 @@ private:
 // finish() writes the MP4 through Media Foundation's sink writer: the video copied as it came,
 // with decode and presentation times (B-frames), the sound encoded to AAC between it.
 
+// The temporary stream's writes on a thread of their own. In my exports WriteFile of one packet
+// took 318 ms now and then (and the encoder once hung for 25 s, cause unknown), and the game waited
+// for it: the encoder's thread wrote every packet itself. Now up to kLimit bytes wait in memory
+// (about 150 frames at 1440p even near lossless); when that is full the encoder waits for room,
+// nothing is dropped. A failed write stays failed: every later write() and drain() says so.
+class StreamWriter {
+public:
+    // The game's 2 GB of address space: 64 MB of packets at most.
+    static constexpr size_t kLimit = 64u << 20;
+
+    ~StreamWriter() { stop(); }
+
+    void start(HANDLE file) {
+        stop();
+        m_file = file;
+        m_stopping = false;
+        m_failed = false;
+        m_error.clear();
+        m_thread = std::thread([this] { run(); });
+    }
+
+    // Copies the packet and queues it. False: an earlier write failed (`error()` says why).
+    bool write(const uint8_t* data, size_t size) {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if (!m_thread.joinable() || m_failed) return false;
+        if (m_queued + size > kLimit && m_queued > 0) {
+            const double t0 = nowMs();
+            m_room.wait(lock, [&] { return m_failed || m_queued + size <= kLimit || m_queued == 0; });
+            const double waited = nowMs() - t0;
+            m_waitMs += waited;
+            m_waitMaxMs = std::max(m_waitMaxMs, waited);
+            m_waits++;
+            if (m_failed) return false;
+        }
+        m_queue.emplace_back(data, data + size);
+        m_queued += size;
+        m_queuedPeak = std::max(m_queuedPeak, m_queued);
+        m_work.notify_one();
+        return true;
+    }
+
+    // Everything queued written, the thread stopped. False: a write failed.
+    bool drain() {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_stopping = true;
+        }
+        m_work.notify_one();
+        if (m_thread.joinable()) m_thread.join();
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return !m_failed;
+    }
+
+    // Gives up: what still waits is dropped.
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_stopping = true;
+            m_queue.clear();
+            m_queued = 0;
+        }
+        m_work.notify_one();
+        m_room.notify_all();
+        if (m_thread.joinable()) m_thread.join();
+    }
+
+    std::string error() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_error;
+    }
+
+    // For the log, once the thread stopped.
+    std::string summary() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return strf("%u writes, %.1f MB, slowest %.0f ms (%u over 250 ms), at most %.1f MB waiting; the encoder waited for room %u times, %.0f ms "
+                    "(longest %.0f ms)",
+                    m_writes, m_written / 1048576.0, m_writeMaxMs, m_slowWrites, m_queuedPeak / 1048576.0, m_waits, m_waitMs, m_waitMaxMs);
+    }
+
+private:
+    void run() {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        for (;;) {
+            m_work.wait(lock, [&] { return m_stopping || !m_queue.empty(); });
+            if (m_queue.empty()) return; // stopping, all written
+            std::vector<uint8_t> packet = std::move(m_queue.front());
+            m_queue.pop_front();
+            lock.unlock();
+            const double t0 = nowMs();
+            DWORD written = 0;
+            const bool ok = WriteFile(m_file, packet.data(), static_cast<DWORD>(packet.size()), &written, nullptr) && written == packet.size();
+            const DWORD why = ok ? 0 : GetLastError();
+            const double ms = nowMs() - t0;
+            lock.lock();
+            m_queued -= packet.size();
+            m_writes++;
+            m_written += written;
+            m_writeMaxMs = std::max(m_writeMaxMs, ms);
+            if (ms > 250.0 && m_slowWrites++ < 40)
+                TMVS_LOG("venc: NVENC slow: the stream's write thread took %.0f ms for a packet of %.0f KB (%.1f MB waiting)", ms,
+                         packet.size() / 1024.0, m_queued / 1048576.0);
+            if (!ok) {
+                m_failed = true;
+                m_error = strf("writing the video stream failed (error %lu after %.1f MB)", why, m_written / 1048576.0);
+                TMVS_LOG("venc: %s", m_error.c_str());
+                m_queue.clear();
+                m_queued = 0;
+            }
+            m_room.notify_all();
+            if (m_failed) return;
+        }
+    }
+
+    HANDLE m_file = INVALID_HANDLE_VALUE;
+    std::thread m_thread;
+    mutable std::mutex m_mutex;
+    std::condition_variable m_work, m_room;
+    std::deque<std::vector<uint8_t>> m_queue;
+    size_t m_queued = 0, m_queuedPeak = 0;
+    bool m_stopping = false, m_failed = false;
+    std::string m_error;
+    unsigned m_writes = 0, m_slowWrites = 0, m_waits = 0;
+    uint64_t m_written = 0;
+    double m_writeMaxMs = 0.0, m_waitMs = 0.0, m_waitMaxMs = 0.0;
+};
+
 class NvencSink : public Sink {
 public:
     ~NvencSink() override { abort(); }
@@ -1155,6 +1281,7 @@ public:
                 error = strf("cannot write %s (%lu)", narrow(m_temp.c_str()).c_str(), GetLastError());
                 return false;
             }
+            m_writer.start(m_stream);
             m_session = std::move(session);
             m_options = tried;
             o = tried;
@@ -1191,6 +1318,12 @@ public:
             m_header = m_session->sequenceHeader();
             m_session.reset(); // the card's session and buffers go now
         }
+        // The packets still waiting for the write thread, before the stream is read back.
+        if (!m_writer.drain()) {
+            ok = false;
+            report += m_writer.error() + ", ";
+        }
+        TMVS_LOG("venc: NVENC stream: %s", m_writer.summary().c_str());
         if (m_stream == INVALID_HANDLE_VALUE || m_index.empty() || frames == 0) {
             closeStream(true);
             report += strf("no video written (%d frames)", frames);
@@ -1231,6 +1364,7 @@ public:
 
     void abort() override {
         m_session.reset();
+        m_writer.stop();
         closeStream(true);
     }
 
@@ -1255,9 +1389,10 @@ private:
         return true;
     }
 
+    // A packet to the write thread (copied; it writes in order, so the offsets hold). False: an
+    // earlier write failed.
     bool store(const nvenc::Packet& p) {
-        DWORD written = 0;
-        if (!WriteFile(m_stream, p.data, p.size, &written, nullptr) || written != p.size) return false;
+        if (!m_writer.write(p.data, p.size)) return false;
         m_index.push_back({m_streamBytes, p.size, p.key, p.pts});
         m_streamBytes += p.size;
         return true;
@@ -1384,6 +1519,7 @@ private:
     Options m_options;
     std::unique_ptr<nvenc::Session> m_session;
     HANDLE m_stream = INVALID_HANDLE_VALUE;
+    StreamWriter m_writer; // writes m_stream; drained (finish) or stopped (abort) before it closes
     uint64_t m_streamBytes = 0;
     std::vector<Entry> m_index;
     std::vector<uint8_t> m_header;
