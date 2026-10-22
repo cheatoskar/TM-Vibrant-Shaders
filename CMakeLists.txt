@@ -116,6 +116,7 @@ configure_file("${CMAKE_CURRENT_BINARY_DIR}/tmvs_bytecode.h.in" "${CMAKE_CURRENT
 # Rendering core shared by the plugin and the offline previewer.
 add_library(tmvs_core STATIC
   src/pipeline.cpp
+  src/planeread.cpp
   src/gfx.cpp
   src/noise.cpp
   src/framecap.cpp
@@ -242,6 +243,12 @@ target_compile_options(tmvs_aqtest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_sharetest tools/sharetest.cpp)
 target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)
 target_compile_options(tmvs_sharetest PRIVATE ${TMVS_OPTIONS})
+
+# Video export read-back test: the frames come out once each and in order, with repeats, flushes
+# and a device reset in between, on a plain D3D9 device (development tool).
+add_executable(tmvs_planereadtest tools/planereadtest.cpp)
+target_link_libraries(tmvs_planereadtest PRIVATE tmvs_core)
+target_compile_options(tmvs_planereadtest PRIVATE ${TMVS_OPTIONS})
 
 # GameGBuffer test: the game's dumped pixel shaders through the compile patch with the game's own
 # compiler, and (--device) drawn next to the game's on a D3D9 device (development tool).

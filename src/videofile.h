@@ -29,17 +29,24 @@ struct OwnFormat {
 // An export is running whose encoder takes the plugin's frames (VideoOwnFrames, MP4): its format.
 bool ownFormat(OwnFormat& out);
 
-// The plugin's side. deliver: put the frame finished last into `encoder` (acquire, fill, submit);
-// false = none (the game's image goes in instead). written: the game wrote a video frame (after
-// deliver), the plugin's count of the sub-frames of the next one starts over.
+// The plugin's side. deliver: hand the frame finished last to `encoder`; false = none (the game's
+// image goes in instead). The plugin's frames may reach the encoder a write or two later (their
+// read-back runs behind), always in order: before a false the plugin puts every frame still on its
+// way into the encoder, so the game's image lands in its place. written: the game wrote a video
+// frame (after deliver), the plugin's count of the sub-frames of the next one starts over.
 struct FrameSource {
     bool (*deliver)(venc::Encoder& encoder, const OwnFormat& format) = nullptr;
     void (*written)() = nullptr;
     // Asked at the end of the frame the game is about to write: will deliver succeed? true lets
     // the game skip reading its own image back (engine::VideoFileHooks::ownFrameReady).
     bool (*ready)(const OwnFormat& format) = nullptr;
+    // Every frame still on its way into `encoder` (the file closes, the frames end).
+    void (*flush)(venc::Encoder& encoder, const OwnFormat& format) = nullptr;
 };
 void setFrameSource(const FrameSource& source);
+// The open export's frames still on their way go into its encoder now (FrameSource::flush): the
+// plugin calls it when the frames on the video's clock end.
+void flushOwnFrames();
 
 } // namespace videofile
 } // namespace tmshaders

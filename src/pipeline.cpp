@@ -365,7 +365,6 @@ void Pipeline::destroyTargets(bool keepWorld) {
     gfx::release(m_waterDone);
     m_waterPending = -1;
     for (auto& t : m_focus) t.destroy();
-    gfx::release(m_focusRead);
     m_postTimeValid = false;
     m_heightFrame.destroy();
     for (auto& t : m_heightMap) t.destroy();
@@ -3410,19 +3409,6 @@ bool Pipeline::exportPlanes(IDirect3DDevice9* device, IDirect3DTexture9* frame, 
     device->SetTexture(0, nullptr);
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
     return true;
-}
-
-float Pipeline::focusDistance(IDirect3DDevice9* device) {
-    const gfx::Target& focus = m_focus[m_focusIndex];
-    if (!focus.valid()) return 0.0f;
-    if (!m_focusRead && FAILED(device->CreateOffscreenPlainSurface(1, 1, D3DFMT_R32F, D3DPOOL_SYSTEMMEM, &m_focusRead, nullptr))) return 0.0f;
-    float distance = 0.0f;
-    D3DLOCKED_RECT locked{};
-    if (SUCCEEDED(device->GetRenderTargetData(focus.surface, m_focusRead)) && SUCCEEDED(m_focusRead->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
-        distance = *static_cast<const float*>(locked.pBits);
-        m_focusRead->UnlockRect();
-    }
-    return distance > 0.0f && distance < 1e6f ? distance : 0.0f;
 }
 
 bool Pipeline::readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out) {

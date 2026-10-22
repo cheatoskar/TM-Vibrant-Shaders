@@ -18,6 +18,7 @@
 #include "pipeline.h"
 #include "autoquality.h"
 #include "photo.h"
+#include "planeread.h"
 #include "thumbnails.h"
 #include "tracer.h"
 #include "videofile.h"
@@ -242,7 +243,9 @@ bool g_frameStepped = false; // the frame being rendered is on the video's clock
 // the average into `frame` and converts it into the encoder's planes on the GPU. The game's next
 // write of a video frame hands those planes to the encoder (ownDeliver), so the video has exactly
 // the game's frames and stays in sync with its sound. The game's own target only gets the last
-// finished frame, as the preview on screen.
+// finished frame, as the preview on screen. The planes reach the encoder a write or two later
+// (PlaneReadback: the read-back no longer waits for the GPU), in order; before the game's own
+// image goes in, and when the frames on the video's clock end, the ones on their way go first.
 struct OwnExport {
     int framesSinceWrite = 0;  // sub-frame mode: frames on the video's clock since the game's last write
     int subIndex = 0;          // this frame's sub-frame within its video frame
@@ -256,22 +259,30 @@ struct OwnExport {
     int tenBitOk = -1;         // 16-bit unorm targets (P010 planes): -1 not asked yet
     gfx::Target frame;         // the finished frame (float, the shaded size)
     gfx::Target luma, chroma;  // its planes
-    IDirect3DSurface9* lumaRead = nullptr; // their system memory copies
-    IDirect3DSurface9* chromaRead = nullptr;
+    PlaneReadback read;        // their way into system memory (lives through a device reset)
     // For the log: frames finished, handed over (fresh), handed over again (no new one since the
     // game's last write), finished and replaced before a write, sub-frames past the shutter,
-    // samples summed; the time the reads took and the time between two finished frames.
-    unsigned finished = 0, delivered = 0, repeated = 0, dropped = 0, skipped = 0, samples = 0, lensFrames = 0;
+    // samples summed, handed over but lost on the way (a failed lock, the encoder gone); the time
+    // the game spent handing frames over and the time between two finished frames.
+    unsigned finished = 0, delivered = 0, repeated = 0, dropped = 0, skipped = 0, samples = 0, lensFrames = 0, lost = 0;
     double readMs = 0.0, betweenMs = 0.0;
     LARGE_INTEGER lastFinish{};
 } g_own;
 
-void releaseOwnExport() {
+// A device reset takes the render targets (and the read-back's queries); the frames on their way
+// stay in system memory. The export's end takes everything.
+void releaseOwnExport(bool exportOver) {
     g_own.frame.destroy();
     g_own.luma.destroy();
     g_own.chroma.destroy();
-    gfx::release(g_own.lumaRead);
-    gfx::release(g_own.chromaRead);
+    g_own.read.releaseQueries();
+    if (exportOver) {
+        if (g_own.read.pending() > 0) {
+            g_own.lost += static_cast<unsigned>(g_own.read.pending());
+            TMVS_LOG("video export: %d of the mod's frames were still on their way to the encoder when it ended: lost", g_own.read.pending());
+        }
+        g_own.read.release();
+    }
     g_own.fresh = false;
     g_own.haveFrame = false;
 }
@@ -358,46 +369,74 @@ void finishOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT wi
     showOwnFrame(device, target, width, height);
 }
 
-// videofile: the game writes a video frame; the planes finished last go into the encoder.
-bool ownDeliver(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+// The oldest frame on its way back into the encoder (waits for its copy if need be). Every frame
+// handed over comes out here exactly once, so the video keeps the game's frame count.
+void ownSubmitOldest(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    bool copied = false;
+    const bool locked = g_own.read.pop([&](const PlaneReadback::Frame& frame) {
+        if (static_cast<int>(frame.width) * 4 != format.width || static_cast<int>(frame.height) != format.height) return;
+        uint8_t* out = encoder.acquire(frame.tenBit ? venc::Pixels::P010 : venc::Pixels::NV12);
+        if (!out) return;
+        PlaneReadback::pack(frame, out);
+        encoder.submit();
+        copied = true;
+        // The auto focus for a coming frame's lens (copied back with these planes).
+        if (frame.focus > 0.0f) g_own.lensFocus = frame.focus;
+    });
+    if (!copied) {
+        if (g_own.lost++ == 0)
+            TMVS_LOG("video export: one of the mod's frames was lost on its way to the encoder (%s)",
+                     locked ? "the encoder took no frame, or the size changed" : "its system memory copy could not be locked");
+    }
+}
+
+// Every frame on its way, in order (before the game's own image goes in, and at the end).
+void ownFlush(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    while (g_own.read.pending() > 0) ownSubmitOldest(encoder, format);
+}
+
+// The planes finished last start their way back (or the frame queued last once more).
+bool ownQueue(venc::Encoder& encoder, const videofile::OwnFormat& format) {
     IDirect3DDevice9* device = g_device;
     if (!device || !g_own.haveFrame || !g_own.luma.valid() || !g_own.chroma.valid()) return false;
     if (static_cast<int>(g_own.luma.width) * 4 != format.width || static_cast<int>(g_own.luma.height) != format.height) return false;
-    LARGE_INTEGER start, end;
-    QueryPerformanceCounter(&start);
-    const auto readable = [device](const gfx::Target& t, IDirect3DSurface9*& read) {
-        D3DSURFACE_DESC desc{};
-        if (read) read->GetDesc(&desc);
-        if (read && (desc.Width != t.width || desc.Height != t.height || desc.Format != t.format)) gfx::release(read);
-        if (!read && FAILED(device->CreateOffscreenPlainSurface(t.width, t.height, t.format, D3DPOOL_SYSTEMMEM, &read, nullptr))) read = nullptr;
-        return read && SUCCEEDED(device->GetRenderTargetData(t.surface, read));
-    };
-    if (!readable(g_own.luma, g_own.lumaRead) || !readable(g_own.chroma, g_own.chromaRead)) return false;
-    D3DLOCKED_RECT y{}, uv{};
-    if (FAILED(g_own.lumaRead->LockRect(&y, nullptr, D3DLOCK_READONLY))) return false;
-    if (FAILED(g_own.chromaRead->LockRect(&uv, nullptr, D3DLOCK_READONLY))) {
-        g_own.lumaRead->UnlockRect();
+    if (g_own.fresh) {
+        // Every slot taken: the oldest goes in first (the GPU is a frame or more past it).
+        while (!g_own.read.canQueue() && g_own.read.pending() > 0) ownSubmitOldest(encoder, format);
+        if (!g_own.read.queue(device, g_own.luma, g_own.chroma, g_pipeline.focusTarget(), g_own.tenBit)) return false;
+    } else if (!g_own.read.queueAgain()) {
         return false;
     }
-    const size_t row = static_cast<size_t>(format.width) * (g_own.tenBit ? 2 : 1);
-    uint8_t* out = encoder.acquire(g_own.tenBit ? venc::Pixels::P010 : venc::Pixels::NV12);
-    if (out) {
-        for (int r = 0; r < format.height; r++) memcpy(out + row * r, static_cast<const uint8_t*>(y.pBits) + static_cast<size_t>(y.Pitch) * r, row);
-        uint8_t* chromaOut = out + row * format.height;
-        for (int r = 0; r < format.height / 2; r++)
-            memcpy(chromaOut + row * r, static_cast<const uint8_t*>(uv.pBits) + static_cast<size_t>(uv.Pitch) * r, row);
-    }
-    g_own.chromaRead->UnlockRect();
-    g_own.lumaRead->UnlockRect();
-    if (!out) return false;
-    encoder.submit();
     (g_own.fresh ? g_own.delivered : g_own.repeated)++;
     g_own.fresh = false;
-    // The auto focus for the next frame's lens (its 1x1 target; the GPU is past it already).
-    g_own.lensFocus = g_pipeline.focusDistance(device);
+    return true;
+}
+
+// videofile: the game writes a video frame; the planes finished last go to the encoder. They are
+// copied to system memory without waiting, and the frames whose copies are done (normally the
+// one before) go into the encoder. False: the game's image goes in, after every frame on its way.
+bool ownDeliver(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    const bool queued = ownQueue(encoder, format);
+    if (queued) {
+        while (g_own.read.pending() > 0 && g_own.read.oldestDone()) ownSubmitOldest(encoder, format);
+    } else {
+        ownFlush(encoder, format);
+    }
     QueryPerformanceCounter(&end);
     g_own.readMs += static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
-    return true;
+    return queued;
+}
+
+// videofile: the export's file closes, or the frames on the video's clock ended.
+void ownFlushAll(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    if (g_own.read.pending() <= 0) return;
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    ownFlush(encoder, format);
+    QueryPerformanceCounter(&end);
+    g_own.readMs += static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
 }
 
 // videofile: will ownDeliver have a frame for the game's coming write? (Its own checks, before
@@ -2665,8 +2704,12 @@ void updateVideoExport() {
         g_own.tenBitOk = -1;
         g_own.lensFocus = 0.0f;
         g_own.videoFrame = 0;
-        g_own.finished = g_own.delivered = g_own.repeated = g_own.dropped = g_own.skipped = g_own.samples = g_own.lensFrames = 0;
+        g_own.finished = g_own.delivered = g_own.repeated = g_own.dropped = g_own.skipped = g_own.samples = g_own.lensFrames = g_own.lost = 0;
         g_own.readMs = g_own.betweenMs = 0.0;
+        g_own.read.release(); // nothing left from an earlier export (it flushes at its end)
+        g_own.read.lockMs = 0.0;
+        g_own.read.waited = 0;
+        g_own.read.pendingPeak = 0;
         TMVS_LOG("video export: started (its dialog; the settings follow when it shoots)");
     }
     const bool shooting = on && v.step > 0.0;
@@ -2689,6 +2732,8 @@ void updateVideoExport() {
                      v.samplesPerFrame, v.samplesPerVideoFrame, v.stereo);
     }
     if (!on && g_exporting) {
+        // The frames still on their way to the encoder (normally gone when the stepping ended).
+        videofile::flushOwnFrames();
         // Expected: n x n samples a frame with the supersampling inside a frame, else one (the
         // sub-frames are frames of their own). Frames before and after the video's: its dialog,
         // and DoShoot playing the clip again in real time to record the sound.
@@ -2702,23 +2747,33 @@ void updateVideoExport() {
                  stats.engineMatrices, stats.noneSet, stats.floatCopies, stats.targetWidth, stats.targetHeight,
                  static_cast<int>(stats.targetFormat));
         if (g_own.finished > 0) {
+            // Reading back: the game's time in handing frames over (the copies start without
+            // waiting; locking them a write later, the copy into the encoder's buffer). Of it the
+            // wait in the locks: a copy the GPU had not done yet.
+            const unsigned handed = g_own.delivered + g_own.repeated;
             TMVS_LOG("video export: the mod's own frames: %u finished from %u samples (%u sub-frames past the shutter skipped), %u handed over, "
                      "%u handed over again, %u replaced before the game wrote them; %u with lens depth of field; %s planes; %.1f ms a frame, "
-                     "reading back %.1f ms a frame",
+                     "reading back %.1f ms a frame (%.1f of it waiting for the copy; %u frames found it unfinished, at most %d on the way)%s",
                      g_own.finished, g_own.samples, g_own.skipped, g_own.delivered, g_own.repeated, g_own.dropped, g_own.lensFrames,
                      g_own.tenBit ? "P010" : "NV12", g_own.finished > 1 ? g_own.betweenMs / (g_own.finished - 1) : 0.0,
-                     g_own.delivered + g_own.repeated > 0 ? g_own.readMs / (g_own.delivered + g_own.repeated) : 0.0);
+                     handed > 0 ? g_own.readMs / handed : 0.0, handed > 0 ? g_own.read.lockMs / handed : 0.0, g_own.read.waited,
+                     g_own.read.pendingPeak, g_own.lost || g_own.read.pending() > 0
+                         ? (", " + std::to_string(g_own.lost + static_cast<unsigned>(g_own.read.pending())) + " lost on the way").c_str()
+                         : "");
         }
         if (g_own.lensSet) engine::setLensSamples(nullptr, 0, 0.0f);
         g_own.lensSet = false;
         g_own.lensSamples = 0;
-        releaseOwnExport(); // a 4K frame and its planes: some 100 MB of video memory
+        releaseOwnExport(true); // a 4K frame and its planes: some 100 MB of video memory
     }
     g_exporting = on;
     if (on) {
         g_export = v;
         stats.frames++;
     }
+    // The frames on the video's clock ended (the sound pass or the file's close follow): the
+    // game wrote its last one, the mod's frames still on their way go into the encoder now.
+    if (g_frameStepped && !shooting) videofile::flushOwnFrames();
     g_frameStepped = on && v.step > 0.0;
     if (on && !g_frameStepped) (stats.stepped ? stats.after : stats.before)++;
     if (on && v.step > 0.0) {
@@ -3091,7 +3146,7 @@ void onPreReset() {
     perflog::release();
     g_pipeline.setProfiling(true, false); // perflog's bracket is gone until the next Present
     g_pipeline.releaseForReset(); // the shaders stay (they live through the reset)
-    releaseOwnExport();
+    releaseOwnExport(false);
     releaseSideB();
     g_sceneCopy.destroy();
     g_partDepth.destroy();
@@ -3564,6 +3619,7 @@ void bootOnce() {
     frames.deliver = ownDeliver;
     frames.written = ownWritten;
     frames.ready = ownReady;
+    frames.flush = ownFlushAll;
     videofile::setFrameSource(frames);
     engine::setMoonAtLoad(moonAtLoad);
 

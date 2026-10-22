@@ -297,9 +297,64 @@ read-back of its video frames skipped".
 
 What it saves, from the code (not measured): one full-frame GPU-to-CPU copy with its stall and one
 CPU conversion of every pixel per written frame. The mod's own frame still reads its NV12 / P010
-planes back (`ownDeliver`: 1.5 or 3 bytes a pixel instead of 4, and no conversion). With the
-supersampling inside a frame (n x n renders) the frame is long and the saving small; with the
-motion blur's sub-frames a written frame has one render, there the read-back was a large part.
+planes back (`ownDeliver`: 1.5 or 3 bytes a pixel instead of 4, and no conversion), a frame later
+(next section). With the supersampling inside a frame (n x n renders) the frame is long and the
+saving small; with the motion blur's sub-frames a written frame has one render, there the
+read-back was a large part.
+
+## The mod's read-back, a frame later (src/planeread.cpp, `PlaneReadback`)
+
+Until 1.4.2's tests `ownDeliver` read the planes back at the game's write: `GetRenderTargetData`
+into system memory, `LockRect`, copy into the encoder's buffer. The lock waited until the GPU had
+finished the whole frame (my export at 1440p, 2 × 2 samples: 20.7 of 38.8 ms a frame "reading
+back"), and while the CPU then worked out the game's next frame the GPU had nothing to do.
+
+What the driver does (GTX 1080 Ti, driver 582.78, measured in `tmvs_preview`, 9Ex and `--plain`
+alike): `GetRenderTargetData` into a system memory surface returns at once, the copy runs when the
+GPU gets to it in its queue, and `LockRect` is where the CPU waits, for the work queued before the
+copy only. An event query's `GetData` with `D3DGETDATA_FLUSH` waited for the GPU too (23 ms), without
+the flag it returns at once.
+
+So each write starts the copy of the frame's planes (and the 1x1 auto focus, for the lens depth of
+field) into one of three system memory slots and puts the slot in a queue; the frames whose copies
+are done (event query, no flush) go into the encoder in order, normally the one before. When all
+three slots are taken the oldest is locked anyway (it waits, but the GPU is a frame past it). A
+write without a new frame queues the last slot again. Before the game's own image goes in (the
+mod's frame failed), when the frames on the video's clock end, and when the file closes, every
+frame on its way goes in first (`videofile::flushOwnFrames`, `FrameSource::flush`), so the frame
+count and order stay the game's. A device reset keeps the system memory slots (their queries go,
+a slot without one counts as done); the export's end frees them. Address space: three slots of
+5.5 MB at 1440p NV12, 25 MB at 4K P010. The auto focus for the lens now comes one or two frames
+later than before.
+
+`tmvs_preview <cap> out.bmp --video --own [hdr] --repeat 3 --export 60 --cpu 15 [--plain]` renders 60
+export frames and reads them back both ways, with 15 ms of busy CPU a frame standing in for the
+game's own work. My numbers (capture_134, 2560 × 1440, two runs each):
+
+| Samples | CPU a frame | Straight (as before) | A frame later |
+|---|---|---|---|
+| 2 × 2 | 0 ms | 25.3 ms a frame | 25.3 (the GPU alone is the limit) |
+| 2 × 2 | 15 ms | 40.8 ms, reading back 25.5 | 24.9 ms, reading back 9.7 (waiting in the lock) |
+| 1 | 10 ms | 20.2 ms, reading back 10.0 | 11.5 ms, reading back 1.0 |
+| 2 × 2, HDR10 (P010) | 15 ms | 42.5 ms, reading back 27.3 | 26.5 ms, reading back 11.0 |
+| 3 × 3 | 15 ms | 67.5 ms, reading back 52.0 | 50.6 ms, reading back 35.2 |
+
+A frame now takes about the longer of the CPU's and the GPU's time instead of their sum. In the
+game the GPU also draws the game's own scene for every sample, so the gain depends on how much of
+a frame is the CPU's; the log line "the mod's own frames: ... ms a frame, reading back ... ms a
+frame (... of it waiting for the copy ...)" shows it. `tmvs_planereadtest` checks that every frame
+comes out once and in order through repeats, flushes and resets.
+
+## The NVENC stream's write thread
+
+The NVENC path writes its packets into the temporary `.video.tmp.h264` / `.hevc`. That `WriteFile`
+ran on the encoder's thread; in my export it took 318 ms twice and the game waited for it. Now a
+thread of its own writes them (`StreamWriter` in src/videoencoder.cpp): up to 64 MB of packets
+wait in memory (about 150 frames at 1440p even near lossless), beyond that the encoder waits,
+nothing is dropped. A failed write fails the next packet's encode and the export's report as
+before. The log: "venc: NVENC slow: the stream's write thread took ... ms" for writes over 250 ms,
+and once per export "venc: NVENC stream: n writes, ... MB, slowest ... ms, at most ... MB waiting;
+the encoder waited for room ... times".
 
 ## Accumulation depth of field: `setLensOffset` / `setLensSamples`
 

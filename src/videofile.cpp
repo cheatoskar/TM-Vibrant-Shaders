@@ -264,6 +264,8 @@ void closed(void* file) {
         Export& e = g_exports[i];
         if (e.file != file) continue;
         if (e.encoder && e.video) {
+            // The plugin's last frames, still on their way, before the encoder closes.
+            if (e.ownFrames && g_source.flush) g_source.flush(*e.encoder, e.own);
             if (!e.early.empty()) e.encoder->writeAudio(e.early.data(), e.early.size());
             std::string report;
             const bool complete = e.encoder->close(report);
@@ -302,6 +304,12 @@ bool ownFormat(OwnFormat& out) {
 
 void setFrameSource(const FrameSource& source) {
     g_source = source;
+}
+
+void flushOwnFrames() {
+    for (Export& e : g_exports) {
+        if (e.video && e.encoder && e.ownFrames && g_source.flush) g_source.flush(*e.encoder, e.own);
+    }
 }
 
 void install() {
