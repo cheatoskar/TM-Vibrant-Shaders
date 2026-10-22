@@ -219,7 +219,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Wind | `Wind` | 0 – 1 | Slant of the rain, movement of grass and clouds. |
 | Lens drops | `LensDrops` | on / off | Rain drops that run down the screen, or snow flakes, only while it rains or snows. |
 | Dry under roofs | `WeatherShelter` | on / off (on) | No rain or snow falls under roofs, bridges and in buildings the camera has seen; around them it keeps falling. The lens dries off under a wide roof. |
-| Car spray | `Spray` | 0 – 1 | Water (wet roads) or powder snow (snow on the ground) thrown up by the rear tyres, only while they touch the road. Off by default. |
+| Car spray | `Spray` | 0 – 1 | Water (wet roads) or powder snow (snow on the ground) thrown up by the tyres, only while they touch the road: in TrackMania Nations/United from all four tyres of the car the engine draws, along its own axes (also sliding, in replays and in the video export), elsewhere by the rear tyres of the car below the screen's centre. Off by default. |
 | Weather volume | `WeatherSound` | 0 – 2 (0.45) | Volume of rain, thunder and the snow storm's wind, only with rain, lightning or snow. It is the mod's own sound output: the game's sound and music sliders don't change it, the Windows volume mixer (entry *TmForever*) does. |
 | Track reflections | `Reflections` | 0 – 2 | The dry track: up to 1 a glossy sheen; from 1 to 2 polished like a mirror, checkpoints and objects reflect clearly. |
 | Reflection blur | `ReflectionBlur` | 0 – 1 | Blurs the dry track's reflection into a soft sheen. |

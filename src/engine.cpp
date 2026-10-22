@@ -53,6 +53,10 @@ struct GameBuild {
     // RenderFrameEnd's phase of its spread-out video read-back (a global, see kViewportVideoAsync);
     // RenderFrameEnd + kReadPhaseCheck writes it (mov [phase], ebp), checked before use.
     uintptr_t videoReadPhase;
+    // CSceneVehicleCar's WheelGetCount, WheelGetAsyncGroundContactPos and VehicleAsyncWorldSpeedGet
+    // (vtable slots 98, 101, 78): the car's mobil is checked against them before its wheels are
+    // read (see kVehicleWheels).
+    uintptr_t wheelCount, wheelContact, asyncSpeed;
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -66,14 +70,14 @@ constexpr GameBuild kBuilds[] = {
       0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0},
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
-     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78},
+     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
       0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0},
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
-     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8},
+     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70},
 };
 const GameBuild* g_build = nullptr;
 
@@ -197,6 +201,46 @@ constexpr size_t kPlayerMobil = 0x28;
 constexpr size_t kGameMobilScene = 0x14;
 constexpr size_t kGameMobilSceneId = 0x1c;
 constexpr int kInterpolatedLocationSlot = 32;
+// The car's axes in that location (a GmIso4, row-major 3x3, p' = M p + t): its columns are the
+// car's x, y, z. Forward is +z: CSceneVehicleCar::VehicleFrontSpeedGet (TMNF 0x008148a0, TMUF
+// 0x007bcd40) returns the z of CHmsDyna::GetLocalLinearSpeed (the world speed times the
+// transposed matrix) as the car's speed in km/h. Up is y (the model's), x the side.
+constexpr int kForwardColumn = 2;
+// The replay editor, its video export and replays run no race (raceTriggersDetour stays silent:
+// my export logs never had the car), only clip players (CGameCtnMediaClipPlayer::TracksUpdate,
+// already hooked). The car their cameras show, the same in both builds (Ghidra, TMNF names,
+// ported to TMUF over 256 bytes: GameMobilGetFromGhostId, GhostIdToGameMobilId,
+// LocalPlayerGameMobilGet, CGameCtnMediaBlockCameraGame::Update, PlayerGameMobilIdSet,
+// CGameScene::GameMobilGetFromId):
+// - clip player +0x18 its context: +0x20 the CGameScene (its CGameMobils: CFastBuffer at +0x1c,
+//   {count, data}; each mobil's id at +0x18), +0x28 the CGamePlayerCameraSet, whose +0x14 is the
+//   id of the mobil the game cameras follow (set every frame by a game camera block from its
+//   ghost: CameraGame::Update -> PlayerGameMobilIdSet).
+// - clip player +0x60 the local player's CGameCtnGhost (ghost id 0; +0x90 its CGameMobil), else
+//   +0x5c the local player's mobil id (-1 none); +0x98 the ghost blocks (CFastBuffer of
+//   CGameCtnMediaBlockGhost, +0x30 each one's CGameCtnGhost).
+constexpr size_t kClipContext = 0x18;
+constexpr size_t kClipLocalMobilId = 0x5c;
+constexpr size_t kClipLocalGhost = 0x60;
+constexpr size_t kClipGhostBlocks = 0x98;
+constexpr size_t kContextScene = 0x20;
+constexpr size_t kContextCameraSet = 0x28;
+constexpr size_t kSceneMobils = 0x1c;
+constexpr size_t kCameraSetFollowed = 0x14;
+constexpr size_t kGameMobilId = 0x18;
+constexpr size_t kBlockGhost = 0x30;
+constexpr size_t kGhostMobil = 0x90;
+// CSceneVehicleCar (the vehicle of every car, the same layout in both builds, found by pattern):
+// its SSimulationWheels are a CFastBuffer at +0x2e8 (0x2fc bytes each), each one's async ground
+// contact (world, the physics state: up to a step behind the drawn car) at +0x2bc; the car's
+// async world speed at +0x4b4 (m/s). The vtable slots of their getters identify the class.
+constexpr size_t kVehicleWheels = 0x2e8;
+constexpr size_t kWheelSize = 0x2fc;
+constexpr size_t kWheelContact = 0x2bc;
+constexpr size_t kVehicleAsyncSpeed = 0x4b4;
+constexpr int kWheelCountSlot = 98;
+constexpr int kWheelContactSlot = 101;
+constexpr int kAsyncSpeedSlot = 78;
 // Every jump of a weather animation to a time of day (LoadScene3d at map load, and a time
 // set as a parameter later, e.g. when the race starts): 0 = midnight. Real night forces 0
 // here too, or the later jump puts the map's own time back.
@@ -400,6 +444,8 @@ using RaceTriggersFn = void(__fastcall*)(void*, void*, void*, void*);
 RaceTriggersFn g_raceTriggers = nullptr;
 void* g_racePlayer = nullptr;                  // the player the race checked last (its car)
 DWORD g_racePlayerTick = 0;                    // when (a player of a race that ended is gone)
+void* g_clipPlayer = nullptr;                  // the clip player whose tracks ran last (replay editor, export)
+unsigned g_clipPlayerFrame = 0;                // in which frame (g_engineFrames)
 float g_mapDayTime = -1.0f;                   // the loaded map's own time of day (-1 unknown)
 bool g_nightForced = false;                   // the game lights it at midnight instead
 void* g_weather = nullptr;                    // this map's weather (the last to jump in time)
@@ -726,6 +772,8 @@ void markCinematic(unsigned source) {
 
 void __fastcall tracksUpdateDetour(void* self, void* edx, float time, float delta) {
     markCinematic(1);
+    g_clipPlayer = self; // the car its cameras show (carPose)
+    g_clipPlayerFrame = g_engineFrames;
     g_tracksUpdate(self, edx, time, delta);
 }
 
@@ -1226,6 +1274,7 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     // weather, time of day and forced midnight of the map just loaded (its load came first).
     g_freeCam = nullptr;
     g_racePlayer = nullptr;
+    g_clipPlayer = nullptr;
     if (!challenge || challenge != g_sceneChallenge) {
         reportNightJumps();
         g_weather = nullptr;
@@ -1962,6 +2011,267 @@ bool carLocation(float position[3], float up[3]) {
         g_racePlayer = nullptr;
         return false;
     }
+}
+
+namespace {
+
+// The location a CGameMobil is drawn at (GmIso4: 9 floats, then the position), or null: not in
+// the scene, or its vehicle's slot 32 is not this build's GetInterpolatedLocation. vehicle: its
+// CSceneMobil. Inside __try (the pointers may be stale).
+const float* drawnLocation(const BYTE* gameMobil, void*& vehicle) {
+    if (!gameMobil || *reinterpret_cast<const int*>(gameMobil + kGameMobilSceneId) == -1) return nullptr;
+    vehicle = *reinterpret_cast<void* const*>(gameMobil + kGameMobilScene);
+    if (!vehicle) return nullptr;
+    void* const* table = *reinterpret_cast<void* const* const*>(vehicle);
+    if (!table || reinterpret_cast<uintptr_t>(table[kInterpolatedLocationSlot]) != rebase(g_build->interpolatedLocation)) return nullptr;
+    using LocationFn = const float*(__fastcall*)(void*, void*, void*);
+    const float* iso = reinterpret_cast<LocationFn>(table[kInterpolatedLocationSlot])(vehicle, nullptr, nullptr);
+    if (!iso) return nullptr;
+    for (int i = 0; i < 12; i++) {
+        if (!(fabsf(iso[i]) < 1e5f)) return nullptr;
+    }
+    return iso;
+}
+
+// The CGameMobil with this id in the clip's scene, or null.
+const BYTE* sceneMobil(const BYTE* scene, DWORD id) {
+    if (!scene || id == 0xffffffffu) return nullptr;
+    const DWORD count = *reinterpret_cast<const DWORD*>(scene + kSceneMobils);
+    const BYTE* const* mobils = *reinterpret_cast<const BYTE* const* const*>(scene + kSceneMobils + 4);
+    for (DWORD i = 0; mobils && i < count && i < 4096; i++) {
+        if (mobils[i] && *reinterpret_cast<const DWORD*>(mobils[i] + kGameMobilId) == id) return mobils[i];
+    }
+    return nullptr;
+}
+
+// The car a clip player's cameras show: the mobil the game cameras follow, else the local
+// player's ghost (ghost id 0), else the first ghost of the clip. Inside __try.
+const BYTE* clipCar(const BYTE* clip, int& which) {
+    const BYTE* context = *reinterpret_cast<const BYTE* const*>(clip + kClipContext);
+    const BYTE* scene = context ? *reinterpret_cast<const BYTE* const*>(context + kContextScene) : nullptr;
+    const BYTE* cameras = context ? *reinterpret_cast<const BYTE* const*>(context + kContextCameraSet) : nullptr;
+    which = 0;
+    if (cameras) {
+        if (const BYTE* m = sceneMobil(scene, *reinterpret_cast<const DWORD*>(cameras + kCameraSetFollowed))) return m;
+    }
+    which = 1;
+    if (const BYTE* ghost = *reinterpret_cast<const BYTE* const*>(clip + kClipLocalGhost)) {
+        if (const BYTE* m = *reinterpret_cast<const BYTE* const*>(ghost + kGhostMobil)) return m;
+    }
+    if (const BYTE* m = sceneMobil(scene, *reinterpret_cast<const DWORD*>(clip + kClipLocalMobilId))) return m;
+    which = 2;
+    const DWORD blocks = *reinterpret_cast<const DWORD*>(clip + kClipGhostBlocks);
+    const BYTE* const* block = *reinterpret_cast<const BYTE* const* const*>(clip + kClipGhostBlocks + 4);
+    if (blocks && block && block[0]) {
+        if (const BYTE* ghost = *reinterpret_cast<const BYTE* const*>(block[0] + kBlockGhost)) {
+            return *reinterpret_cast<const BYTE* const*>(ghost + kGhostMobil);
+        }
+    }
+    return nullptr;
+}
+
+// The wheels' contact points of a CSceneVehicleCar in the car's axes (right, up, forward; m from
+// its drawn position), only while it stands (async speed below 0.5 m/s: the physics state is a
+// step behind the drawn car, at speed that would move them). False: not that class in this
+// build, not standing, not 4 wheels. Inside __try.
+bool standingWheels(void* vehicle, const float* iso, const float axes[3][3], float local[4][3]) {
+    void* const* table = *reinterpret_cast<void* const* const*>(vehicle);
+    if (!g_build->wheelCount || reinterpret_cast<uintptr_t>(table[kWheelCountSlot]) != rebase(g_build->wheelCount) ||
+        reinterpret_cast<uintptr_t>(table[kWheelContactSlot]) != rebase(g_build->wheelContact) ||
+        reinterpret_cast<uintptr_t>(table[kAsyncSpeedSlot]) != rebase(g_build->asyncSpeed))
+        return false;
+    const BYTE* car = static_cast<const BYTE*>(vehicle);
+    const float* speed = reinterpret_cast<const float*>(car + kVehicleAsyncSpeed);
+    if (!(speed[0] * speed[0] + speed[1] * speed[1] + speed[2] * speed[2] < 0.25f)) return false;
+    if (*reinterpret_cast<const DWORD*>(car + kVehicleWheels) != 4) return false;
+    const BYTE* wheels = *reinterpret_cast<const BYTE* const*>(car + kVehicleWheels + 4);
+    if (!wheels) return false;
+    for (int k = 0; k < 4; k++) {
+        const float* p = reinterpret_cast<const float*>(wheels + k * kWheelSize + kWheelContact);
+        const float d[3] = {p[0] - iso[9], p[1] - iso[10], p[2] - iso[11]};
+        for (int a = 0; a < 3; a++) local[k][a] = d[0] * axes[a][0] + d[1] * axes[a][1] + d[2] * axes[a][2];
+    }
+    return true;
+}
+
+// The Stadium car's tyres (estimates from its model: a long car, the front wheels far ahead of
+// the cockpit; the drawn position is about the height of the wheel centres): until the map's own
+// car was measured standing at a start.
+constexpr float kFrontAxle = 1.7f;     // m ahead of the drawn position
+constexpr float kRearAxle = -1.2f;     // m behind it (wheelbase 2.9 m)
+constexpr float kHalfTrack = 0.86f;    // half the track (1.72 m)
+constexpr float kContactHeight = -0.35f; // the road under the tyres (wheel radius)
+
+} // namespace
+
+bool carPose(CarPose& pose) {
+    pose = CarPose();
+    if (!g_build || !g_build->interpolatedLocation) return false;
+    const bool race = g_racePlayer && GetTickCount() - g_racePlayerTick <= 300;
+    // Counted in frames (one frame of a 4K export with supersampling takes seconds).
+    const bool clip = !race && g_clipPlayer && g_engineFrames - g_clipPlayerFrame <= 3;
+    if (!race && !clip) return false;
+    const float* iso = nullptr;
+    void* vehicle = nullptr;
+    int which = -1;
+    __try {
+        const BYTE* mobil = race ? *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(g_racePlayer) + kPlayerMobil)
+                                 : clipCar(static_cast<const BYTE*>(g_clipPlayer), which);
+        iso = drawnLocation(mobil, vehicle);
+        if (!iso) return false;
+        memcpy(pose.position, iso + 9, sizeof(pose.position));
+        float column[3][3], length[3];
+        for (int c = 0; c < 3; c++) {
+            for (int r = 0; r < 3; r++) column[c][r] = iso[r * 3 + c];
+            length[c] = sqrtf(column[c][0] * column[c][0] + column[c][1] * column[c][1] + column[c][2] * column[c][2]);
+            if (!(length[c] > 1e-3f && length[c] < 1e3f)) return false;
+            for (int r = 0; r < 3; r++) column[c][r] /= length[c];
+        }
+        // My check of the forward axis from the car's motion: the column the car moves along
+        // (within 25 degrees) while it moves 0.3 m or more from one call to the next, counted in
+        // races and exports (the replay editor's clock also runs backwards). After 120 such
+        // calls, the column with 90 % of them is logged, and taken if it is not +z (my reading
+        // of the engine above would be wrong then).
+        static float s_last[3] = {};
+        static bool s_haveLast = false;
+        static int s_votes[6] = {}, s_total = 0;
+        static int s_forward = kForwardColumn * 2; // column * 2 + (negated)
+        static bool s_decided = false;
+        const bool counted = race || g_engineFrames - g_shootFrame <= 3;
+        if (s_haveLast && counted && !s_decided) {
+            const float d[3] = {pose.position[0] - s_last[0], pose.position[1] - s_last[1], pose.position[2] - s_last[2]};
+            const float moved = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if (moved > 0.3f && moved < 20.0f) {
+                for (int c = 0; c < 3; c++) {
+                    const float along = (d[0] * column[c][0] + d[1] * column[c][1] + d[2] * column[c][2]) / moved;
+                    if (fabsf(along) > 0.906f) {
+                        s_votes[c * 2 + (along < 0.0f ? 1 : 0)]++;
+                        s_total++;
+                    }
+                }
+                if (s_total >= 120) {
+                    int best = 0;
+                    for (int k = 1; k < 6; k++) best = s_votes[k] > s_votes[best] ? k : best;
+                    s_decided = true;
+                    if (s_votes[best] * 10 >= s_total * 9) s_forward = best;
+                    TMVS_LOG("engine: the car's forward from its motion: column %d%s in %d of %d moves (the engine's VehicleFrontSpeedGet: column %d)%s",
+                             best / 2, (best & 1) ? " negated" : "", s_votes[best], s_total, kForwardColumn,
+                             s_forward == kForwardColumn * 2 ? ", the same: kept"
+                                                             : (s_forward == best ? ", NOT the same: the spray takes the measured one"
+                                                                                  : ", no clear winner: kept the engine's"));
+                }
+            }
+        }
+        memcpy(s_last, pose.position, sizeof(s_last));
+        s_haveLast = true;
+        const int f = s_forward / 2;
+        const float sign = (s_forward & 1) ? -1.0f : 1.0f;
+        const int u = f == 1 ? 2 : 1; // the model's y (when it isn't forward)
+        const int r = 3 - f - u;
+        for (int k = 0; k < 3; k++) {
+            pose.forward[k] = column[f][k] * sign;
+            pose.up[k] = column[u][k];
+            pose.right[k] = column[r][k];
+        }
+        // The map's car standing (at the start of a race): its tyres' contact points, kept per
+        // environment for the session (the export's replays then have them too). Each wheel
+        // within 3 cm over 15 calls, and like a car: two ahead, two behind, a pair on each side.
+        pose.frontAxle = kFrontAxle;
+        pose.rearAxle = kRearAxle;
+        pose.halfTrack = kHalfTrack;
+        pose.contactHeight = kContactHeight;
+        static char s_measuredFor[32] = {};
+        static float s_measured[4] = {};
+        static float s_sum[4][3] = {}, s_first[4][3] = {};
+        static int s_samples = 0;
+        static char s_rejectedFor[32] = {};
+        if (s_measuredFor[0] && !strcmp(s_measuredFor, g_environment)) {
+            memcpy(&pose.frontAxle, s_measured, sizeof(s_measured));
+            pose.wheelsMeasured = true;
+        } else if (race && g_environment[0]) {
+            const float axes[3][3] = {{pose.right[0], pose.right[1], pose.right[2]},
+                                      {pose.up[0], pose.up[1], pose.up[2]},
+                                      {pose.forward[0], pose.forward[1], pose.forward[2]}};
+            float local[4][3];
+            if (standingWheels(vehicle, iso, axes, local)) {
+                bool steady = true;
+                for (int k = 0; k < 4 && s_samples > 0; k++) {
+                    for (int a = 0; a < 3; a++) steady = steady && fabsf(local[k][a] - s_first[k][a]) < 0.03f;
+                }
+                if (!steady || s_samples == 0) {
+                    memcpy(s_first, local, sizeof(s_first));
+                    memset(s_sum, 0, sizeof(s_sum));
+                    s_samples = 0;
+                }
+                for (int k = 0; k < 4; k++) {
+                    for (int a = 0; a < 3; a++) s_sum[k][a] += local[k][a];
+                }
+                if (++s_samples >= 15) {
+                    float m[4][3];
+                    for (int k = 0; k < 4; k++) {
+                        for (int a = 0; a < 3; a++) m[k][a] = s_sum[k][a] / s_samples;
+                    }
+                    s_samples = 0;
+                    // Front: the two farthest ahead.
+                    int order[4] = {0, 1, 2, 3};
+                    for (int i = 0; i < 4; i++) {
+                        for (int j = i + 1; j < 4; j++) {
+                            if (m[order[j]][2] > m[order[i]][2]) {
+                                const int t = order[i];
+                                order[i] = order[j];
+                                order[j] = t;
+                            }
+                        }
+                    }
+                    const float* a0 = m[order[0]];
+                    const float* a1 = m[order[1]];
+                    const float* b0 = m[order[2]];
+                    const float* b1 = m[order[3]];
+                    const float front = (a0[2] + a1[2]) * 0.5f, rear = (b0[2] + b1[2]) * 0.5f;
+                    const float track = (fabsf(a0[0] - a1[0]) + fabsf(b0[0] - b1[0])) * 0.25f;
+                    const float height = (a0[1] + a1[1] + b0[1] + b1[1]) * 0.25f;
+                    const bool sides = a0[0] * a1[0] < 0.0f && b0[0] * b1[0] < 0.0f;
+                    const bool like = sides && front > 0.3f && front < 3.5f && rear < -0.2f && rear > -3.5f && track > 0.4f && track < 1.5f &&
+                                      height < 0.2f && height > -1.2f;
+                    if (like) {
+                        strncpy(s_measuredFor, g_environment, sizeof(s_measuredFor) - 1);
+                        s_measured[0] = front;
+                        s_measured[1] = rear;
+                        s_measured[2] = track;
+                        s_measured[3] = height;
+                        memcpy(&pose.frontAxle, s_measured, sizeof(s_measured));
+                        pose.wheelsMeasured = true;
+                    }
+                    if (like || strcmp(s_rejectedFor, g_environment)) {
+                        if (!like) strncpy(s_rejectedFor, g_environment, sizeof(s_rejectedFor) - 1);
+                        TMVS_LOG("engine: the %s car's tyres touch the road (standing, in its axes right/up/forward): %.2f %.2f %.2f, %.2f %.2f %.2f, "
+                                 "%.2f %.2f %.2f, %.2f %.2f %.2f -> front axle %+.2f m, rear %+.2f m, half track %.2f m, %.2f m below its "
+                                 "position%s",
+                                 g_environment, m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], m[3][0],
+                                 m[3][1], m[3][2], front, rear, track, -height,
+                                 like ? "" : ": not like a car, the spray keeps the Stadium car's estimates");
+                    }
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (race) g_racePlayer = nullptr;
+        else g_clipPlayer = nullptr;
+        return false;
+    }
+    pose.source = race ? 1 : 2;
+    // Once per change: where the pose comes from (the clip's: which car).
+    static int s_logged = -1, s_lines = 0;
+    const int state = race ? 0 : 1 + which;
+    if (state != s_logged && s_lines < 20) {
+        s_logged = state;
+        s_lines++;
+        static const char* const kFrom[] = {"the race's player", "the clip's camera follows (replay editor, export)",
+                                            "the clip's local player (no game camera followed one)", "the clip's first ghost"};
+        TMVS_LOG("engine: the car's axes come from the car %s; forward %.2f %.2f %.2f, up %.2f %.2f %.2f", kFrom[state], pose.forward[0],
+                 pose.forward[1], pose.forward[2], pose.up[0], pose.up[1], pose.up[2]);
+    }
+    return true;
 }
 
 int mapCloses() {

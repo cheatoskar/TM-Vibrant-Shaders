@@ -55,6 +55,7 @@ tmvs_preview --play 20 0.5                                     # play the weathe
 | `--bench` | GPU time per pass |
 | `--batch <jobs.txt>` | One job per line: `out.bmp [cap=file.tmcap] [preset=Golden_Hour] [Key=Value ...]` |
 | `--move x,y,z` / `--drive x,y,z` | Fake camera motion (motion blur, neon trail) |
+| `--carpose deg` | Spray test: the engine's car pose where the depth finder sees the car, turned by `deg` (sliding), moving with `--drive` |
 | `--time s`, `--water y`, `--sun x,y,z`, `--suncolor r,g,b` | Time, water height and sun for the capture |
 
 GPU clocks vary between runs; compare benchmarks by their ratio to the `LinearDepth` pass, which does a fixed amount of work.

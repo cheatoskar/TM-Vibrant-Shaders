@@ -1485,13 +1485,88 @@ SnowOut snowVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     return o;
 }
 
-// Spray: water thrown up by the rear tyres on a wet road. The car is found in the depth
-// buffer where the chase camera keeps it (low in the middle of the screen); every particle
-// leaves a tyre, rises, falls and hangs in the air while the car drives on.
+// Spray: water thrown up by the tyres on a wet road. With the engine's car (sprayTyres) from
+// its four tyres along its own axes; without, the car is found in the depth buffer where the
+// chase camera keeps it (low in the middle of the screen) and the rear tyres throw it. Every
+// particle leaves a tyre, rises, falls and hangs in the air while the car drives on.
 // uv = texel centre; the game drew that pixel at ndc 2(uv - texel / 2) - 1 (D3D9 pixel centre).
 float3 viewRay(float2 uv, float z) {
     float2 ndc = float2(uv.x * 2.0 - 1.0 - c_Proj2.z * 0.5, 1.0 - uv.y * 2.0 + c_Proj2.w * 0.5);
     return float3((ndc.x - c_Proj.z) / c_Proj.x * z, (ndc.y - c_Proj.w) / c_Proj.y * z, z);
+}
+
+// The engine's car (Inputs::carPose*): the spray leaves its four tyres instead.
+float4 c_Car      : register(c22); // its position (world, about the wheel centres), 1 = known
+float4 c_CarFwd   : register(c23); // its forward (unit, world), w: the front axle (m along it)
+float4 c_CarRight : register(c24); // its side, w: the rear axle (m along forward, < 0)
+float4 c_CarUp    : register(c25); // its up, w: half the track (m)
+float4 c_CarVel   : register(c26); // its velocity (world, m/s), w: the road under the tyres (m along up, < 0)
+
+// Whether the road is where a tyre touches it: the surface seen just outside the tyre (where the
+// camera looks past the wheel) lies at the contact's height. 0 half a metre off or more: in the
+// air, or something else in the way (car body, barrier, off screen).
+float roadAt(float3 contact, float3 outward, float3 up) {
+    float3 bv = toView(contact + outward * 0.55);
+    if (bv.z < 0.5) return 0.0;
+    float4 bc = toClip(bv);
+    // toClip shifted it by half a pixel for drawing; the texel centre is a whole pixel over.
+    float2 buv = float2(bc.x / bc.w * 0.5 + 0.5, 0.5 - bc.y / bc.w * 0.5) + c_Proj2.zw * 0.5;
+    if (any(buv < 0.0) || any(buv > 1.0)) return 0.0;
+    float3 rv = viewRay(buv, tex2Dlod(s_depth, float4(buv, 0, 0)).r);
+    float3 road = c_Cam.xyz + c_V0.xyz * rv.x + c_V1.xyz * rv.y + c_V2.xyz * rv.z;
+    return saturate(1.0 - (abs(dot(road - contact, up)) - 0.3) / 0.3);
+}
+
+VSOut sprayTyres(float4 seed, float2 corner) {
+    VSOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    float3 fwd = c_CarFwd.xyz, right = c_CarRight.xyz, up = c_CarUp.xyz;
+    float3 road = c_Car.xyz + up * c_CarVel.w; // the road under the drawn position
+    // Only with the tyres on the road (slopes, banks, walls and loops included; jumps not): any
+    // of the four will do, a barrier may hide the road beside the others.
+    float grounded = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float s = (k == 1 || k == 3) ? 1.0 : -1.0;
+        float3 contact = road + fwd * (k < 2 ? c_CarFwd.w : c_CarRight.w) + right * s * c_CarUp.w;
+        grounded = max(grounded, roadAt(contact, right * s, up));
+    }
+    if (grounded <= 0.0) return o;
+    // Seven of ten particles leave the rear tyres, which throw most (the front ones run on
+    // the water the car pushes aside and throw less, with smaller puffs).
+    bool rear = seed.x < 0.7;
+    float side = rear ? (seed.x < 0.35 ? -1.0 : 1.0) : (seed.x < 0.85 ? -1.0 : 1.0);
+    float strength = rear ? 1.0 : 0.55;
+    float life = 0.6;
+    float age = frac(c_Cam.w / life * (0.85 + 0.3 * seed.w) + seed.z);
+    float ts = age * life;
+    float t = c_Cam.w;
+    float wheel = side + (rear ? 0.0 : 3.0);
+    float gust = 0.6 + 0.2 * sin(t * (1.7 + 0.6 * side) + wheel) + 0.15 * sin(t * (4.3 - 1.1 * side) + 2.0 * wheel);
+    if (frac(seed.w * 5.31 + seed.z * 2.7) > gust * grounded * strength) return o;
+    float3 contact = road + fwd * (rear ? c_CarRight.w : c_CarFwd.w) + right * side * c_CarUp.w;
+    // The car's motion in its own axes: rolling along fwd, sliding along right.
+    float3 v = c_CarVel.xyz;
+    float rolling = dot(v, fwd), sliding = dot(v, right);
+    float back = rolling >= 0.0 ? 1.0 : -1.0; // the tread throws to the back of the way it rolls
+    float3 tyre = contact - fwd * back * 0.3 + up * 0.1;
+    // Relative to the car: thrown off the tread backwards along the car's own axis and swept
+    // along in its wake (keeping 3/4 of its rolling speed, so it trails close behind); sideways
+    // a sliding tyre pushes the water out the way it slides (between a little behind and a third
+    // ahead of the tyre: the spray flies off the leading side); fanning out, rising.
+    float3 rel = -fwd * (back * (1.5 + 3.0 * seed.y) + rolling * 0.25)
+               + right * (sliding * (-0.1 + 0.45 * frac(seed.z * 9.7)) + side * (0.3 + 1.5 * frac(seed.x * 13.3)))
+               + up * (1.2 + 2.8 * frac(seed.y * 7.1));
+    float3 p = tyre + rel * ts;
+    p.y -= 4.9 * ts * ts;
+    float h = dot(p - contact, up); // not below the road
+    p += up * max(-0.05 - h, 0.0);
+    float3 view = toView(p);
+    if (view.z < 0.5) return o;
+    float size = lerp(0.15, 1.1, sqrt(age)) * (0.7 + 0.6 * frac(seed.w * 3.7)) * (0.6 + 0.4 * gust) * (rear ? 1.0 : 0.75);
+    o.pos = toClip(view + float3(corner.x, corner.y * 2.0 - 1.0, 0.0) * size);
+    o.data = float4(corner.x, corner.y * 2.0 - 1.0, view.z, age);
+    return o;
 }
 
 VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
@@ -1500,7 +1575,8 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     o.data = 0;
     float speed = c_Spray.x;
     if (speed < 4.0 || c_Spray.y <= 0.0) return o;
-    // The car: the closest surface on three points below the screen centre.
+    if (c_Car.w > 0.5) return sprayTyres(seed, corner);
+    // No car from the engine: the closest surface on three points below the screen centre.
     // (The road right below the car would be closer still: stay above it.)
     float z0 = tex2Dlod(s_depth, float4(0.5, 0.6, 0, 0)).r;
     float z1 = tex2Dlod(s_depth, float4(0.5, 0.65, 0, 0)).r;
@@ -2197,6 +2273,22 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         for (int j = 0; j < 3; j++) m_cameraVelocity[j] += (velocity[j] - m_cameraVelocity[j]) * 0.3f;
         memcpy(m_rainCamera, camera, sizeof(m_rainCamera));
         m_rainCameraValid = true;
+        // The spray's car from the engine: its own velocity, from its position on the same clock
+        // (the camera's lags behind in curves and is nothing like it in replays' camera moves).
+        // More than 150 m/s: a respawn or a cut, no speed.
+        float car[3] = {};
+        bool moved = false;
+        if (in.carPoseKnown && m_carPrevValid && dt > 1e-4f) {
+            for (int j = 0; j < 3; j++) car[j] = (in.carPosePosition[j] - m_carPrev[j]) / dt;
+            moved = car[0] * car[0] + car[1] * car[1] + car[2] * car[2] < 150.0f * 150.0f;
+        }
+        if (moved) {
+            for (int j = 0; j < 3; j++) m_carVelocity[j] += (car[j] - m_carVelocity[j]) * 0.5f;
+        } else if (!in.carPoseKnown || m_carPrevValid) {
+            memset(m_carVelocity, 0, sizeof(m_carVelocity));
+        }
+        memcpy(m_carPrev, in.carPosePosition, sizeof(m_carPrev));
+        m_carPrevValid = in.carPoseKnown;
     }
     const float wind[2] = {2.5f + s.wind * 5.0f, 1.0f + s.wind * 2.0f};
     const float fall = 9.0f;
@@ -2261,11 +2353,36 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     pc[4][3] = 0.25f; // longest streak: 1/8 of the screen
     device->SetVertexShaderConstantF(0, &vc[0][0], 10);
     device->SetVertexShaderConstantF(10, &pc[0][0], 5);
-    const float speed = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
+    // The spray: from the engine's car when its pose is known (its own speed along the road), else
+    // the camera's speed (the chase camera keeps up with the car).
+    const bool pose = in.carPoseKnown;
+    float speed = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
+    if (pose) {
+        const float* u = in.carPoseUp;
+        const float* v = m_carVelocity;
+        const float up = v[0] * u[0] + v[1] * u[1] + v[2] * u[2];
+        const float along[3] = {v[0] - u[0] * up, v[1] - u[1] * up, v[2] - u[2] * up};
+        speed = sqrtf(along[0] * along[0] + along[1] * along[1] + along[2] * along[2]);
+    }
     // Whether the tyres touch the road is checked per particle in the depth buffer.
     const float thrown = s.spray * fmaxf(s.wetness, s.snowCover * 2.0f); // water, or powder snow (a lot of it)
     const float spray[4] = {speed, thrown * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
     device->SetVertexShaderConstantF(15, spray, 1);
+    const float* w = in.carWheels;
+    const float car[5][4] = {
+        {in.carPosePosition[0], in.carPosePosition[1], in.carPosePosition[2], pose ? 1.0f : 0.0f},
+        {in.carForward[0], in.carForward[1], in.carForward[2], w[0]},
+        {in.carRight[0], in.carRight[1], in.carRight[2], w[1]},
+        {in.carPoseUp[0], in.carPoseUp[1], in.carPoseUp[2], w[2]},
+        {m_carVelocity[0], m_carVelocity[1], m_carVelocity[2], w[3]},
+    };
+    device->SetVertexShaderConstantF(22, &car[0][0], 5);
+    if (spray[1] > 0.0f && advance && (pose ? 1 : 0) != m_sprayFrom && m_sprayLogged < 20) {
+        m_sprayFrom = pose ? 1 : 0;
+        m_sprayLogged++;
+        TMVS_LOG("pipeline: spray %s", pose ? "from the car's four tyres (the engine's car and axes)"
+                                            : "behind the car found in the depth buffer (no car from the engine)");
+    }
 
     device->SetRenderTarget(0, target);
     D3DVIEWPORT9 viewport = {0, 0, in.width, in.height, 0.0f, 1.0f};
