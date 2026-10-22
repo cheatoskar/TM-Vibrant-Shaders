@@ -32,7 +32,9 @@ static bool isMachine(const Field& f) {
     static const char* const kMachine[] = {"NeonTrail", "TrailColor", "TrailWidth", "TrailTyres", "TrailDuration", "TrailKeepRuns",
                                            "DisableGameMSAA", "ReadableGameDepth", "AutoQuality", "DisableGameFX", "GameMaterials",
                                            "TargetFPS", "WeatherSound", "CinematicOnlyInReplays", "VideoExportBest", "VideoCodec",
-                                           "VideoBitrate", "TAAJitter", "GameNight", "EngineMoon", "GameSkyClouds", "CleanHighlights",
+                                           "VideoBitrate", "VideoQuality", "Video10Bit", "VideoEncoder", "VideoFfmpegPreset", "VideoOwnFrames",
+                                           "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
+                                           "TAAJitter", "GameNight", "EngineMoon", "GameSkyClouds", "CleanHighlights",
                                            "GameHdr", "EngineLights", "CasterShadows", "CasterAlphaTest", "CleanWater", "WaterFarReflections", "GameGBuffer", "GameLight", "ShadeMenuBars",
                                            "RenderScale", "FsrSharpness"};
     for (const char* key : kMachine) {
