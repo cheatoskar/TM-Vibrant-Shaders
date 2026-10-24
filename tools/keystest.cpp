@@ -62,6 +62,7 @@ int main() {
     CHECK(get(Action::Reload) == Binding{VK_F9, kCtrl});
     CHECK(name(get(Action::Reload)) == "Ctrl+F9");
     CHECK(get(Action::Trace) == Binding{VK_F11, 0});
+    CHECK(get(Action::PhotoPanel) == Binding{VK_F10, 0});
 #endif
 
     // Plain letters would eat the game's keys.

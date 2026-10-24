@@ -42,6 +42,7 @@ Status g_status;
 // The compare split's bar at the bottom (the two looks, the other side switchable) was drawn last
 // frame: it takes the mouse over it, also with the menu closed.
 bool g_splitBar = false;
+bool g_photoPanel = false; // photo mode's panel is on screen this frame (it takes the mouse over itself)
 
 // Sharing the mouse with the other mod that hooks this window (100% TMX + Bingo). The property's
 // value is the HMODULE of the mod that wants the mouse right now; whoever finds it taken by a mod
@@ -186,12 +187,42 @@ bool g_swallowedButton[5] = {};
 // (or while ImGui holds one: its release), so the game keeps every other click and its mouse
 // capture (the backend takes and releases the capture with each press).
 bool splitBarMouse(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (!g_splitBar || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
+    if (!(g_splitBar || g_photoPanel) || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
     ImGuiIO& io = ImGui::GetIO();
     const bool held = io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2];
     if (msg != WM_MOUSEMOVE && !io.WantCaptureMouse && !held) return false;
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam);
     return msg != WM_MOUSEMOVE;
+}
+
+// Photo mode's compact panel, top right: the look's exposure, vignette and grain, the lens (aperture,
+// zoom, focus), the colour look-up table's strength, hide car / HUD. Drawn at
+// Present like the line at the top left: never in the photos. Its key hides it all.
+void drawPhotoPanel() {
+    Config& config = Config::get();
+    const float s = menu::scale();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(size.x - 16.0f * s, 16.0f * s), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.7f);
+    ImGui::Begin("##photoPanel", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+    ImGui::TextDisabled("Photo   %s hides this", keys::name(keys::get(keys::Action::PhotoPanel)).c_str());
+    ImGui::PushItemWidth(170.0f * s);
+    if (ImGui::SliderFloat("Exposure", &config.settings.exposure, -2.0f, 2.0f, "%+.1f EV")) config.markDirty();
+    char aperture[32];
+    snprintf(aperture, sizeof(aperture), "f/%.1f", photo::fNumber(config.photoDof));
+    if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
+    ImGui::SliderFloat("Zoom", &photo::zoom(), 1.0f, 8.0f, "%.1fx", ImGuiSliderFlags_Logarithmic);
+    if (ImGui::SliderFloat("Vignette", &config.settings.vignette, 0.0f, 1.0f, "%.2f")) config.markDirty();
+    if (ImGui::SliderFloat("Film grain", &config.settings.filmGrain, 0.0f, 0.15f, "%.3f")) config.markDirty();
+    if (!config.lutFile.empty() && ImGui::SliderFloat("Look strength", &config.lutAmount, 0.0f, 1.0f, "%.2f")) config.markDirty();
+    ImGui::PopItemWidth();
+    if (ImGui::Button("Clear focus")) photo::clearFocus();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Middle click in the picture sets the focus; this goes back to the automatic one.");
+    if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
+    if (ImGui::Checkbox("Hide HUD", &config.photoHideHud)) config.markDirty();
+    ImGui::End();
 }
 
 // Why the menu opened or closed this frame, for the log (null: its own close button).
@@ -233,6 +264,7 @@ void handleHotkeys() {
     }
     if (keys::take(keys::Action::PhotoSplit)) photo::toggleSplit();
     if (keys::take(keys::Action::Photo)) photo::toggle();
+    if (keys::take(keys::Action::PhotoPanel)) photo::togglePanel();
 }
 
 
@@ -274,6 +306,7 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case keys::Action::Effects:
         case keys::Action::PhotoSplit:
         case keys::Action::Photo:
+        case keys::Action::PhotoPanel:
             hotkeyMessage(static_cast<unsigned>(wparam), action, lparam);
             return true;
         default:
@@ -508,6 +541,7 @@ void draw(IDirect3DDevice9* device) {
         Config::get().previewPreset.clear();
         if (!*photoHint) {
             g_splitBar = false;
+            g_photoPanel = false;
             publishMouseOwner(false);
             removeTop(); // nothing of ours on screen: the other mod is on top
             return;
@@ -519,7 +553,7 @@ void draw(IDirect3DDevice9* device) {
     ImGui_ImplWin32_NewFrame();
     // Draw ImGui's cursor over the menu or the split's bar (the game hides the OS cursor), the game's elsewhere.
     // Only while we own the mouse: with both mods' menus open only one pointer is drawn.
-    ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
+    ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
     if (menu) {
         // The pipeline's GPU timings for the Performance page.
@@ -575,9 +609,11 @@ void draw(IDirect3DDevice9* device) {
     // never in the photos).
     g_splitBar = photo::splitShown() && !photo::tiling() && *photoHint; // not over a hi-res photo's tiles
     if (g_splitBar) drawSplitBar();
+    g_photoPanel = photo::panelShown();
+    if (g_photoPanel) drawPhotoPanel();
     ImGui::EndFrame();
     // Does one of our windows want the mouse (hovered or held)? Then the other mod stays out of it.
-    publishMouseOwner((menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse);
+    publishMouseOwner((menu || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse);
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
         {

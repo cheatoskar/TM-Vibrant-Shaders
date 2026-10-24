@@ -14,6 +14,13 @@ namespace photo {
 bool active();
 void toggle();
 
+// The compact panel (exposure, aperture, zoom, vignette, grain, focus, hide car / HUD): drawn by
+// the overlay while photo mode is on; its key (PhotoPanel, F10) hides it for a clean view.
+bool panelShown();
+void togglePanel();
+float& zoom();     // Shift+wheel's zoom, 1..8
+void clearFocus(); // back to the automatic focus
+
 // Once per frame before the game renders (RenderFrameBegin): follows the free camera, hides
 // the HUD, and sets the projection of the hi-res tile being taken.
 void beginFrame();

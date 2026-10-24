@@ -17,6 +17,7 @@ namespace {
 
 int g_manual = -1;          // F6: -1 follow the free camera, 0 off, 1 on
 bool g_wasFreeCam = false;
+bool g_panel = true;        // the compact panel (its key hides it)
 bool g_active = false;
 float g_focus[2] = {-1.0f, -1.0f};
 float g_zoom = 1.0f;        // Shift+wheel, 1..8
@@ -159,6 +160,23 @@ void cancel(const char* why) {
 
 bool active() {
     return g_active;
+}
+
+bool panelShown() {
+    return g_active && g_panel && g_job == Job::None;
+}
+
+void togglePanel() {
+    g_panel = !g_panel;
+    if (g_active) setStatus(g_panel ? "Photo panel on" : "Photo panel off", 2);
+}
+
+float& zoom() {
+    return g_zoom;
+}
+
+void clearFocus() {
+    g_focus[0] = g_focus[1] = -1.0f;
 }
 
 float fNumber(float dof) {

@@ -29,6 +29,7 @@ const Info kInfo[kCount] = {
     {"Capture", "Frame capture / photo", {VK_F12, 0}, true},
     {"Reload", "Reload shaders", {VK_F9, kCtrl}, kTmnf},
     {"Trace", "Trace", {VK_F11, 0}, kTmnf},
+    {"PhotoPanel", "Photo mode: panel on / off", {VK_F10, 0}, kTmnf},
 };
 
 struct Named {
