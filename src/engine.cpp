@@ -1996,11 +1996,29 @@ bool install(const Callbacks& callbacks) {
     g_baseRgb = reinterpret_cast<BaseRgbFn>(inlineHook(kBaseRgbSite, reinterpret_cast<void*>(&baseRgbDetour)));
     // Environment mods: the answer and the load screen's scope together, or neither (the
     // decoration's scope is the hook above).
-    if (g_loadDecoration && prologueMatches(kModPackDescSite) && prologueMatches(kLoadProgressSite) && readable(reinterpret_cast<const void*>(rebase(g_build->packManager)), 4)) {
-        g_modPackDesc = reinterpret_cast<ModPackDescFn>(inlineHook(kModPackDescSite, reinterpret_cast<void*>(&modPackDescDetour)));
-        g_loadProgress = reinterpret_cast<LoadProgressFn>(inlineHook(kLoadProgressSite, reinterpret_cast<void*>(&loadProgressDetour)));
-    } else {
-        TMVS_LOG("modpack: the game's mod code is not where expected: resource packs off");
+    // A site another mod (TMUnlimiter) already jumps away from is fine: inlineHook chains onto it.
+    {
+        const auto hookable = [](const InlineSite& site) {
+            if (prologueMatches(site)) return true;
+            const BYTE* code = reinterpret_cast<const BYTE*>(rebase(g_build->sites[site.id]));
+            return readable(code, 6) && (code[0] == 0xE9 || code[0] == 0xEB || (code[0] == 0xFF && code[1] == 0x25) || (code[0] == 0x68 && code[5] == 0xC3));
+        };
+        const bool desc = hookable(kModPackDescSite), progress = hookable(kLoadProgressSite);
+        const bool manager = readable(reinterpret_cast<const void*>(rebase(g_build->packManager)), 4);
+        if (g_loadDecoration && desc && progress && manager) {
+            g_modPackDesc = reinterpret_cast<ModPackDescFn>(inlineHook(kModPackDescSite, reinterpret_cast<void*>(&modPackDescDetour)));
+            g_loadProgress = reinterpret_cast<LoadProgressFn>(inlineHook(kLoadProgressSite, reinterpret_cast<void*>(&loadProgressDetour)));
+            if (!g_modPackDesc || !g_loadProgress) TMVS_LOG("modpack: hooking failed (GetModPackDesc %s, LoadProgress %s): resource packs off", g_modPackDesc ? "ok" : "no", g_loadProgress ? "ok" : "no");
+        } else {
+            const BYTE* a = reinterpret_cast<const BYTE*>(rebase(g_build->sites[kModPackDesc]));
+            const BYTE* b = reinterpret_cast<const BYTE*>(rebase(g_build->sites[kLoadProgress]));
+            BYTE fa[8] = {}, fb[8] = {};
+            if (readable(a, 8)) memcpy(fa, a, 8);
+            if (readable(b, 8)) memcpy(fb, b, 8);
+            TMVS_LOG("modpack: the game's mod code is not where expected: resource packs off (decoration hook %s, GetModPackDesc %s [%02x %02x %02x %02x %02x %02x %02x %02x], LoadProgress %s [%02x %02x %02x %02x %02x %02x %02x %02x], pack manager %s)",
+                     g_loadDecoration ? "ok" : "missing", desc ? "ok" : "differs", fa[0], fa[1], fa[2], fa[3], fa[4], fa[5], fa[6], fa[7],
+                     progress ? "ok" : "differs", fb[0], fb[1], fb[2], fb[3], fb[4], fb[5], fb[6], fb[7], manager ? "ok" : "unreadable");
+        }
     }
     // The export's file: all six or none (a frame written without the open would go nowhere).
     {
