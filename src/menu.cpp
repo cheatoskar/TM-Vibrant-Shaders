@@ -1759,16 +1759,16 @@ bool packCard(const std::string& title, const std::string& line, ImTextureID tex
 // map mood). The choice is used when a map loads; nothing of it goes into maps, replays or online.
 void drawPacks(Config& config) {
     ResourcePacks* rp = g_host->resourcePacks;
-    pageTitle("Resource packs", "Texture mods (Skins\\<Environment>\\Mod) on every map. Click one to use it; Apply now switches the map you are on.");
+    pageTitle("Resource packs", "Texture mods from Skins\\<Environment>\\Mod, on every map.");
     if (!rp->hooked()) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "This game build can't use them (tmvs.log says why).");
     if (ImGui::Button("Refresh")) rp->refresh();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Looks for new packs. The game can use a new one after a restart.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Finds new packs. New ones work after a restart.");
     ImGui::SameLine(0.0f, 20.0f * g_scale);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Also replace a map's own mod");
     ImGui::SameLine();
     if (toggle("replace", &config.packReplaceMapMod)) config.markDirty();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Off: maps that bring their own mod keep it.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Off: maps with their own mod keep it.");
     const std::string status = rp->status();
     ImGui::TextDisabled("Last map: %s", status.empty() ? "none loaded yet" : status.c_str());
     // The loaded map: switch its textures now instead of at the next map.
@@ -1779,13 +1779,13 @@ void drawPacks(Config& config) {
         if (ImGui::Button("Apply now")) s_applied = rp->applyNow();
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Switches this map's textures to your choice without loading it again (a short pause).");
+            ImGui::SetTooltip("Switches the textures on this map.");
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
         if (live.differs) {
-            ImGui::TextColored(kAccent, "This map shows %s, your choice gives %s.", live.shown.c_str(), live.wanted.c_str());
+            ImGui::TextColored(kAccent, "Shown: %s. Selected: %s.", live.shown.c_str(), live.wanted.c_str());
         } else {
-            ImGui::TextDisabled("This map shows your choice (%s: %s).", live.environment.c_str(), live.shown.c_str());
+            ImGui::TextDisabled("Shown: %s.", live.shown.c_str());
         }
     }
     if (!s_applied.empty()) ImGui::TextDisabled("%s", s_applied.c_str());
@@ -1809,7 +1809,7 @@ void drawPacks(Config& config) {
             config.packChoice(env).perMood = perMood;
             config.markDirty();
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("A pack for day, sunset and night maps each. All moods: when the mood isn't known.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Separate packs for day, sunset and night maps.");
         int& slot = s_slot.emplace(env, -1).first->second;
         if (!perMood) slot = -1;
         if (perMood) {
@@ -1820,7 +1820,7 @@ void drawPacks(Config& config) {
         }
         ImGui::SameLine(0.0f, 20.0f * g_scale);
         if (ImGui::SmallButton("Open folder")) rp->openFolder(env);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens Skins\\%s\\Mod. In fullscreen the game may minimise.", env.c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens Skins\\%s\\Mod.", env.c_str());
         const std::string& selected = slot < 0 ? choice.all : choice.mood[slot];
 
         std::vector<size_t> mine;
@@ -1834,11 +1834,11 @@ void drawPacks(Config& config) {
             bool usable = true;
             if (i == 0) {
                 title = "Map's own";
-                line = "The mod the map brings, if any (the game's way).";
+                line = "The map's own mod, if it has one.";
             } else if (i == 1) {
                 value = "None";
                 title = "None";
-                line = "No mod: the game's own textures.";
+                line = "The game's textures.";
             } else {
                 const ResourcePacks::Pack& pack = packs[mine[i - 2]];
                 value = pack.file;
@@ -1866,7 +1866,6 @@ void drawPacks(Config& config) {
         ImGui::PopID();
         ImGui::Spacing();
     }
-    ImGui::TextDisabled("Only your game shows the pack: maps, replays and the server never get it.");
 }
 
 // The replay editor's Shoot video: presets for what the video is for, the game's own dialog in a
