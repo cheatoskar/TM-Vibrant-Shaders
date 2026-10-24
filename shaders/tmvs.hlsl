@@ -2099,6 +2099,7 @@ float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
     dir *= sEnd;
     k1 = lerp(k0, k1, sEnd);
     float sPrev = 0.0;
+    float zPrev = p.z;
     [loop] for (int i = 1; i <= (int)steps; i++) {
         float x = (i - 1 + noise) / steps;
         // Somewhat finer near the start: where things stand in the water, their mirror image
@@ -2112,7 +2113,11 @@ float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
         float level;
         if (delta > 0.0 && waterLevelMatch(worldPosition(viewPosition(quv, sceneZ)), level) > 0.1) delta = -1.0;
         float t = length(viewPosition(quv, rayZ) - p);
-        if (delta > 0.0 && delta < 0.4 + t * 0.1) {
+        // The ray's depth changes by a long way in one step across the screen: a thin mast or a
+        // banner's rim fell between two steps and the mirror image came out in dashes and holes.
+        // The window for a hit is the step's own depth change; a ray that went behind a surface
+        // is dropped below (the depth jump at the hit).
+        if (delta > 0.0 && delta < 0.4 + t * 0.1 + abs(rayZ - zPrev)) {
             // Refine between the last two steps.
             float a = sPrev, b = s;
             [unroll] for (int k = 0; k < 6; k++) {
@@ -2127,6 +2132,7 @@ float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
             float4 hitNd = tex2Dlod(s1, float4(quv, 0, 0));
             if (dot(hitNd.xyz, r) > 0.0 || rayZ - hitNd.w > 0.1 + t * 0.03) {
                 sPrev = s;
+                zPrev = rayZ;
                 continue;
             }
             float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
@@ -2138,6 +2144,7 @@ float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
             return float4(hit, confidence);
         }
         sPrev = s;
+        zPrev = rayZ;
     }
     return 0;
 }
@@ -2764,7 +2771,11 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
         float3 r = reflect(rd, nRefl);
         float NdotV = saturate(dot(nRefl, -rd));
         float smoothness = max(max(max(puddle, water), wet * 0.35), polish);
-        float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.04;
+        // Clean water: the mirror image wobbles by a quarter of the waves' slope (as the mirrored
+        // direction above). The full slope (up to 0.13, 0.5 % of the screen) moved every pixel
+        // of the half-res image by its own amount: the banners and stands came out torn into
+        // strips and smeared, with the sky showing through between them.
+        float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.04 * (1.0 - water * u_Water2.x * 0.75);
         float4 ssr = tex2Dlod(s8, float4(uv + distort, 0, 0));
         // Rough wet asphalt and the polished dry track blur the reflection (5 taps): no
         // speckles from the half-res ray hits. Puddles and water stay sharp.
@@ -4454,13 +4465,18 @@ float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     [branch] if (tex2Dlod(s13, float4(uv, 0, 0)).b < 0.5 || u_Water.z < 0.5) return src;
     float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
     float clarity = u_Pass0.x;
+    // Far away (230 - 350 m) the edge taps stop (a tap ring of 5 m is a few pixels there, and the
+    // depth beside an edge is too coarse to tell land from water): the depth stays the deep
+    // average, and the bottom's detail (waves, sand, caustics) gives way to its average. The
+    // water keeps its clear tint at any distance, with nothing that switches on or off.
     float reach = saturate((350.0 - nd.w) / 120.0);
+    float distant = saturate((nd.w - 150.0) / 250.0);
     float3 rd = viewToWorldDir(normalize(viewPosition(uv, 1.0)));
     float3 cam = cameraWorld();
     float3 world = worldPosition(viewPosition(uv, nd.w));
     float level;
     float onPlane = waterLevelMatch(world, level);
-    float blend = saturate(clarity * 2.0) * reach * onPlane;
+    float blend = saturate(clarity * 2.0) * onPlane;
     [branch] if (blend <= 0.0 || rd.y > -0.01) return src;
     float3 surf = waterSurface(rd, level, world);
     float t = u_Proj2.z;
@@ -4469,7 +4485,7 @@ float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // camera sees there: something above the water's level but under 5 m is land, a wall or a pier.
     float turn = ign(vpos) * 1.0471976;
     float3 hit = 0;
-    [unroll] for (int ring = 0; ring < 3; ring++) {
+    [branch] if (reach > 0.0) [unroll] for (int ring = 0; ring < 3; ring++) {
         float radius = ring == 0 ? 0.9 : (ring == 1 ? 2.4 : 5.5);
         float count = 0.0;
         [loop] for (int k = 0; k < 6; k++) {
@@ -4482,13 +4498,13 @@ float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
             float yq = worldPosition(viewPosition(quv, zq)).y;
             count += (zq < SKY_Z && yq > level + 0.3 && yq < level + 5.0) ? 1.0 : 0.0;
         }
-        hit[ring] = saturate(count / 3.0); // half the ring on land counts as all of it
+        hit[ring] = saturate(count / 3.0) * reach; // half the ring on land counts as all of it
     }
     float depth = 2.6 * (1.0 - 0.92 * hit.x) * (1.0 - 0.7 * hit.y) * (1.0 - 0.4 * hit.z) + 0.05;
 
     // Through the surface: refracted by the waves (the same slope the lighting gives them).
     float footprint = nd.w / (abs(u_Proj.y) * 0.5 * u_Screen.y * max(abs(rd.y), 0.05));
-    float2 slope = waveSlope(surf.xz, t, footprint);
+    float2 slope = waveSlope(surf.xz, t, footprint) * (1.0 - distant);
     float3 refracted = refract(rd, normalize(float3(-slope.x * 0.8, 1.0, -slope.y * 0.8)), 0.752);
     float cosT = max(-refracted.y, 0.25);
     float2 floorXZ = surf.xz + refracted.xz * (depth / cosT);
@@ -4497,8 +4513,11 @@ float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 
     // The light on the water is what the game lit its surface with (shadows of the stands stay).
     float lit = clamp(luma(toLinear(src.rgb)), 0.02, 1.2);
-    float3 bottom = poolFloor(floorXZ);
-    bottom *= 1.0 + causticLines(floorXZ, t) * 1.6 * u_SunWorld.w * exp(-0.18 * depth);
+    float3 bottom = float3(0.42, 0.37, 0.28);
+    [branch] if (distant < 1.0) {
+        bottom = lerp(poolFloor(floorXZ), bottom, distant);
+        bottom *= 1.0 + causticLines(floorXZ, t) * 1.6 * u_SunWorld.w * exp(-0.18 * depth) * (1.0 - distant);
+    }
     float3 deep = float3(0.015, 0.13, 0.16);
     float3 colour = (bottom * through * 1.5 + deep * (1.0 - through.g) * 2.4) * lit * 1.5;
 
