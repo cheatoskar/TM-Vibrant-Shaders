@@ -2,7 +2,7 @@
 
 ## 1.4.2 (in testing)
 
-A new video export for *Shoot video* in the replay editor (TrackMania Nations/United).
+A new video export, resource packs, the Horror look with car headlights, clear water and splashes, a fix for overlapped blocks, photo mode in the MediaTracker, and the Misc page (TrackMania Nations/United); car spray and menu windows also in TrackMania 2.
 
 **New**
 - **Photo mode in the replay editor's MediaTracker** (TrackMania Nations/United): the focus click lands where you click in the small 3D view (it was mapped to the whole screen), the screenshot of an F12 capture is of the view only, and clicks on the editor's panels stay the game's.
