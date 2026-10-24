@@ -78,6 +78,9 @@ struct Picture {
     bool carChecked = false;
 };
 Picture g_picture;
+// The window as drawn last (the split times go under it).
+ImVec2 g_shownAt, g_shownSize;
+int g_shownFrame = -10;
 
 bool read32(uintptr_t address, uint32_t& out) {
     __try {
@@ -275,21 +278,27 @@ void checkCarCell(const engine::CarPose& pose) {
 
 } // namespace
 
+bool rect(ImVec2& pos, ImVec2& size) {
+    pos = g_shownAt;
+    size = g_shownSize;
+    return ImGui::GetFrameCount() - g_shownFrame <= 1;
+}
+
 bool wanted() {
     return settings().minimap && engine::currentMap() != nullptr && engine::stadium();
 }
 
 void drawPageInfo() {
     if (!engine::currentMap()) {
-        ImGui::TextDisabled("Shows once a map is open.");
+        ImGui::TextDisabled("Open a map.");
         return;
     }
     if (!engine::stadium()) {
-        ImGui::TextDisabled("Stadium maps only (the other environments have other grid sizes).");
+        ImGui::TextDisabled("Stadium maps only.");
         return;
     }
     const Picture& p = g_picture;
-    if (p.read && p.cells > 0) ImGui::TextDisabled("%d blocks on %d cells (%d x %d)", p.blocks, p.cells, p.sizeX, p.sizeZ);
+    if (p.read && p.cells > 0) ImGui::TextDisabled("%d blocks, %d x %d cells", p.blocks, p.sizeX, p.sizeZ);
 }
 
 void draw(const Frame& frame) {
@@ -299,35 +308,31 @@ void draw(const Frame& frame) {
     Settings& s = settings();
     const float scale = menu::scale();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    const float side = s.mapSize * scale;
-    // Placed from the settings with the menu closed (and when it opens); moved by hand while it is open.
-    static bool s_wasOpen = false;
-    const bool place = !frame.menuOpen || !s_wasOpen;
-    s_wasOpen = frame.menuOpen;
-    if (place) {
-        const ImVec2 pos(s.mapX >= 0.0f ? s.mapX : display.x - side - 16.0f * scale, s.mapY >= 0.0f ? s.mapY : 16.0f * scale);
-        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(side, side), ImGuiCond_Always);
-    }
+    const float side = s.mapSize * screenScale();
+    // The size and place are the settings'; the slider and dragging the corner both change them.
+    // (The window's own size used to be written back every frame while the menu was open: the size
+    // slider jumped back at once.)
+    static WindowPlace s_place;
+    const float margin = 16.0f * screenScale();
+    s_place.before(frame, ImVec2(s.mapX >= 0.0f ? s.mapX : display.x - side - margin, s.mapY >= 0.0f ? s.mapY : margin), ImVec2(side, side));
     ImGui::SetNextWindowBgAlpha(0.45f * s.mapOpacity);
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse |
-                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
-    if (!frame.menuOpen) flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * scale, 4.0f * scale));
-    ImGui::Begin("Minimap##misc", nullptr, flags);
+    ImGui::Begin("Minimap##misc", nullptr, windowFlags(frame, true));
     ImGui::PopStyleVar();
-    if (frame.menuOpen && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        const ImVec2 pos = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
-        const float newSide = std::clamp(std::max(size.x, size.y) / scale, 120.0f, 1200.0f);
-        if (fabsf(pos.x - s.mapX) > 0.5f || fabsf(pos.y - s.mapY) > 0.5f || fabsf(newSide - s.mapSize) > 0.5f) {
-            s.mapX = pos.x;
-            s.mapY = pos.y;
-            s.mapSize = newSide;
-            settingsChanged();
-        }
+    ImVec2 pos, size;
+    if (s_place.after(frame, pos, size)) {
+        s.mapX = pos.x;
+        s.mapY = pos.y;
+        s.mapSize = std::clamp(std::max(size.x, size.y) / screenScale(), 120.0f, 800.0f);
+        settingsChanged();
     }
-    const ImVec2 lo = ImGui::GetWindowContentRegionMin(), hi = ImGui::GetWindowContentRegionMax(), wp = ImGui::GetWindowPos();
-    const ImVec2 a(wp.x + lo.x, wp.y + lo.y), b(wp.x + hi.x, wp.y + hi.y);
+    g_shownAt = ImGui::GetWindowPos();
+    g_shownSize = ImGui::GetWindowSize();
+    g_shownFrame = ImGui::GetFrameCount();
+    windowChrome(frame, "Minimap", true);
+    const ImVec2 lo = ImGui::GetCursorScreenPos(), wp = ImGui::GetWindowPos();
+    const ImVec2 hi = ImGui::GetWindowContentRegionMax();
+    const ImVec2 a(lo.x, lo.y), b(wp.x + hi.x, wp.y + hi.y);
     const ImVec2 centre((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
     const float view = std::min(b.x - a.x, b.y - a.y);
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -378,7 +383,7 @@ void draw(const Frame& frame) {
         }
         draw->PopClipRect();
     } else {
-        ImGui::TextDisabled(p.read ? "No blocks read" : "Reading the map...");
+        ImGui::TextDisabled(p.read ? "No blocks" : "Loading...");
     }
     ImGui::End();
 }
