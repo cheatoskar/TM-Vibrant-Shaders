@@ -1772,6 +1772,7 @@ bool install(const Callbacks& callbacks) {
     g_freeCamSet = reinterpret_cast<FreeCamFn>(inlineHook(kFreeCamSite, reinterpret_cast<void*>(&freeCamDetour)));
     g_zclip = reinterpret_cast<ZClipFn>(inlineHook(kZClipSite, reinterpret_cast<void*>(&zclipDetour)));
     g_drawShader = reinterpret_cast<DrawShaderFn>(inlineHook(kDrawShaderSite, reinterpret_cast<void*>(&drawShaderDetour)));
+    blockorder::setIdNameFunction(rebase(g_build->idGetString));
     g_drawPass = reinterpret_cast<DrawPassFn>(inlineHook(kDrawPassSite, reinterpret_cast<void*>(&drawPassDetour)));
     g_lensFlare = reinterpret_cast<LensFlareFn>(inlineHook(kLensFlareSite, reinterpret_cast<void*>(&lensFlareDetour)));
     g_readInput = reinterpret_cast<ReadInputFn>(inlineHook(kReadInputSite, reinterpret_cast<void*>(&readInputDetour)));

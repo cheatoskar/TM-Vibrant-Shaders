@@ -1,9 +1,12 @@
 #pragma once
+#include <cstdint>
 
 // BlockOrder: which block the engine is drawing, and where it was placed among the blocks
 // that overlap it. Blocks that share a grid unit (TMUnlimiter maps stack blocks in one cell,
 // a turbo road on a platform) have coplanar surfaces and z-fight; the render side pushes the
-// block placed last towards the camera by a small depth bias scaled with this rank.
+// block placed last towards the camera by a small depth bias scaled with this rank. Action blocks
+// (boosters, engine off, start / finish / checkpoint / multilap) always rank above normal blocks,
+// whatever the placement order; among action blocks, or among normal ones, the later placed wins.
 //
 // The engine side (Ghidra, TMNF names): CGameCtnChallenge +0x54 is a CFastBuffer<CGameCtnBlock*>
 // (count, data), CreateBlock appends, RemoveBlock shifts the rest down, so the array is the
@@ -17,11 +20,14 @@ namespace blockorder {
 // The depth bias rank of the block the engine is drawing right now (called from the D3D9 device
 // wrapper before each draw of the game's own scene): 0 = not a block, or a block that overlaps no
 // other block (no bias); 1..7 = its place among the blocks that overlap at its spot, later placed
-// = higher. Cheap: called for every draw call.
+// = higher (action blocks above normal ones). Cheap: called for every draw call.
 int currentDrawRank();
 
 // Map loaded / block removed / editor changes: rebuild the overlap groups (call sites in engine.cpp).
 void invalidate();
+
+// For engine.cpp: CMwId::GetString (block names, for the action blocks below), once at startup.
+void setIdNameFunction(uintptr_t address);
 
 // For engine.cpp. The current map (null: none); a new map rebuilds the groups on its next draw.
 void setChallenge(const void* challenge);

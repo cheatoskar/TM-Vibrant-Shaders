@@ -2,6 +2,8 @@
 #include "log.h"
 #include <windows.h>
 #include <algorithm>
+#include <cstring>
+#include <string>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +16,9 @@ namespace {
 // logged) when it does not hold.
 constexpr size_t kChallengeBlocks = 0x54;   // CFastBuffer<CGameCtnBlock*>: count, then the data pointer
 constexpr size_t kBlockUnits = 0x28;        // CFastArray<CGameCtnBlockUnit*>: count, data
+constexpr size_t kBlockInfo = 0x24;         // CGameCtnBlockInfo*
+constexpr size_t kInfoId = 0x24;            // its SGameCtnIdentifier: the block's name as a CMwId (CMwId::GetString)
+constexpr size_t kInfoWaypoint = 0x11c;     // its waypoint type: 0 start, 1 finish, 2 checkpoint, 4 start/finish (multilap), 3 none
 constexpr size_t kBlockMobil = 0x30;        // CSceneMobil*
 constexpr size_t kBlockCoord = 0x48;        // x, y, z (ints)
 constexpr size_t kUnitOffset = 0x28;        // x, y, z (ints), added to the block's coordinate
@@ -42,6 +47,7 @@ uint32_t g_draws = 0, g_known = 0, g_ranked = 0, g_delayedDraws = 0, g_delayedKn
 bool g_reported = false;
 
 struct BlockRead {
+    uintptr_t info = 0;
     uintptr_t mobil = 0;
     uintptr_t item = 0;
     bool chainOk = false;
@@ -59,6 +65,48 @@ bool read32(uintptr_t address, uintptr_t& out) {
     }
 }
 
+// Action blocks always show on top of the others: boosters, engine off, and the waypoints
+// (start, finish, checkpoint, multilap), the blocks people place twice most. The waypoint type
+// is the block info's own field; boosters and engine off have none, so they are told by name
+// (TMNF: StadiumRoadMainTurbo, ...Turbo2, ...FreeWheeling, PlatformTurboUp; case-sensitive).
+// Unreadable name: a normal block.
+using IdGetStringFn = const char*(__fastcall*)(const void*, void*);
+IdGetStringFn g_idGetString = nullptr;
+
+struct InfoClass {
+    bool action = false;
+    char name[48] = {};
+};
+std::unordered_map<uintptr_t, InfoClass> g_infoClass; // by block info; cleared with every new map
+
+bool readName(uintptr_t info, char* out, size_t size) {
+    out[0] = 0;
+    if (!g_idGetString || !info) return false;
+    __try {
+        const char* name = g_idGetString(reinterpret_cast<const void*>(info + kInfoId), nullptr);
+        if (!name) return false;
+        size_t i = 0;
+        for (; i + 1 < size && name[i]; i++) out[i] = name[i];
+        out[i] = 0;
+        return i > 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out[0] = 0;
+        return false;
+    }
+}
+
+const InfoClass& classOf(uintptr_t info) {
+    auto it = g_infoClass.find(info);
+    if (it != g_infoClass.end()) return it->second;
+    InfoClass c;
+    uintptr_t waypoint = 3;
+    if (read32(info + kInfoWaypoint, waypoint) && waypoint <= 4 && waypoint != 3) c.action = true;
+    if (readName(info, c.name, sizeof(c.name)) && !c.action) {
+        c.action = strstr(c.name, "Turbo") || strstr(c.name, "Boost") || strstr(c.name, "FreeWheel");
+    }
+    return g_infoClass.emplace(info, c).first->second;
+}
+
 bool readBuffer(const void* challenge, uint32_t& count, uintptr_t& data) {
     uintptr_t c = 0, d = 0;
     if (!challenge || !read32(reinterpret_cast<uintptr_t>(challenge) + kChallengeBlocks, c) || !read32(reinterpret_cast<uintptr_t>(challenge) + kChallengeBlocks + 4, d)) return false;
@@ -71,6 +119,7 @@ bool readBuffer(const void* challenge, uint32_t& count, uintptr_t& data) {
 bool readBlock(uintptr_t block, BlockRead& out) {
     __try {
         const BYTE* b = reinterpret_cast<const BYTE*>(block);
+        out.info = *reinterpret_cast<const uint32_t*>(b + kBlockInfo);
         out.mobil = *reinterpret_cast<const uint32_t*>(b + kBlockMobil);
         out.x = *reinterpret_cast<const int*>(b + kBlockCoord);
         out.y = *reinterpret_cast<const int*>(b + kBlockCoord + 4);
@@ -124,6 +173,8 @@ void scan() {
     // The blocks of each grid unit, in array (placement) order.
     std::vector<uintptr_t> items(count, 0);
     std::vector<std::vector<uint64_t>> cells(count);
+    std::vector<uint8_t> action(count, 0);
+    std::vector<uintptr_t> infos(count, 0);
     std::unordered_map<uint64_t, std::vector<uint32_t>> groups;
     groups.reserve(count * 2);
     uint32_t unreadable = 0, withMobil = 0, chainOk = 0;
@@ -139,6 +190,8 @@ void scan() {
         if (!r.chainOk) continue;
         chainOk++;
         items[i] = r.item;
+        infos[i] = r.info;
+        action[i] = classOf(r.info).action ? 1 : 0;
         for (uint32_t u = 0; u < r.nUnits; u++) {
             const uint64_t key = unitKey(r.units[u][0], r.units[u][1], r.units[u][2]);
             std::vector<uint32_t>& g = groups[key];
@@ -152,9 +205,10 @@ void scan() {
         TMVS_LOG("blockorder: %u blocks, the engine's block -> mobil -> item chain does not hold (%u of %u mobils, %u unreadable): no depth ranks", count, chainOk, withMobil, unreadable);
         return;
     }
-    // Each block one above every earlier block it shares a unit with (the first placed: 0, no
-    // bias), so in every overlapping pair the later one ranks higher, also when a large block
-    // shares only one of its units (its place in each unit's list alone would not say that).
+    // Blocks are ranked in the order (action, placement): each one above every block before it in
+    // that order that it shares a unit with (none: 0, no bias). So in every overlapping pair the
+    // later placed block ranks higher, but an action block above a normal one whatever their
+    // placement; also when a large block shares only one of its units.
     std::vector<uint8_t> rank(count, 0);
     std::vector<uint8_t> overlapping(count, 0);
     size_t largest = 0;
@@ -163,22 +217,46 @@ void scan() {
         largest = std::max(largest, entry.second.size());
         for (uint32_t i : entry.second) overlapping[i] = 1;
     }
-    for (uint32_t i = 0; i < count; i++) {
+    std::vector<uint32_t> order;
+    order.reserve(count);
+    for (uint32_t i = 0; i < count; i++) order.push_back(i);
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return action[a] < action[b]; });
+    std::vector<uint8_t> done(count, 0);
+    for (uint32_t i : order) {
+        bool above = false;
+        int top = 0;
         for (uint64_t key : cells[i]) {
             for (uint32_t j : groups[key]) {
-                if (j >= i) break; // the list is in placement order
-                rank[i] = static_cast<uint8_t>(std::max<int>(rank[i], std::min<int>(rank[j] + 1, kMaxRank)));
+                if (!done[j]) continue;
+                above = true;
+                top = std::max<int>(top, rank[j]);
             }
         }
+        if (above) rank[i] = static_cast<uint8_t>(std::min<int>(top + 1, kMaxRank));
+        done[i] = 1;
     }
-    uint32_t inGroups = 0;
+    uint32_t inGroups = 0, actionInGroups = 0;
+    std::string sample;
+    uint32_t sampled = 0;
     g_itemRank.reserve(count);
     for (uint32_t i = 0; i < count; i++) {
         if (!items[i]) continue;
-        if (overlapping[i]) inGroups++;
+        if (overlapping[i]) {
+            inGroups++;
+            if (action[i]) actionInGroups++;
+            if (sampled < 8) {
+                sampled++;
+                const InfoClass& c = classOf(infos[i]);
+                sample += (sampled > 1 ? ", " : "");
+                sample += c.name[0] ? c.name : "(no name)";
+                sample += action[i] ? " [action]" : "";
+                sample += " #" + std::to_string(rank[i]);
+            }
+        }
         g_itemRank[items[i]] = rank[i];
     }
-    TMVS_LOG("blockorder: %u blocks, %u in overlap groups (largest %zu)", count, inGroups, largest);
+    TMVS_LOG("blockorder: %u blocks, %u in overlap groups (largest %zu), %u of them action blocks", count, inGroups, largest, actionInGroups);
+    if (sampled) TMVS_LOG("blockorder: first overlapping blocks: %s", sample.c_str());
 }
 
 // A change in the block array (a block placed or removed in the editor) or an invalidate().
@@ -208,6 +286,8 @@ void report() {
 
 int currentDrawRank() { return g_rank; }
 
+void setIdNameFunction(uintptr_t address) { g_idGetString = reinterpret_cast<IdGetStringFn>(address); }
+
 void invalidate() { InterlockedExchange(&g_dirty, 1); }
 
 void setChallenge(const void* challenge) {
@@ -218,6 +298,7 @@ void setChallenge(const void* challenge) {
     g_scanCount = 0;
     g_scanData = 0;
     g_itemRank.clear();
+    g_infoClass.clear();
     invalidate();
 }
 
