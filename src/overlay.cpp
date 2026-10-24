@@ -223,7 +223,7 @@ void drawPhotoPanel() {
     if (!config.lutFile.empty() && ImGui::SliderFloat("Look strength", &config.lutAmount, 0.0f, 1.0f, "%.2f")) config.markDirty();
     ImGui::PopItemWidth();
     if (ImGui::Button("Clear focus")) photo::clearFocus();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Middle click in the picture sets the focus; this goes back to the automatic one.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to automatic focus. Middle click in the picture sets it.");
     if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
     if (ImGui::Checkbox("Hide HUD", &config.photoHideHud)) config.markDirty();
     ImGui::End();

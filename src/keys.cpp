@@ -245,7 +245,7 @@ bool assign(Action a, const Binding& b) {
             return false;
         }
         if (!plainOk(b.vk) && !(b.mods & (kCtrl | kAlt))) {
-            g_note = "Letters, digits and the game's own keys need Ctrl or Alt (else they stop working in the game). F keys, Insert, Delete, Home, End and the number pad work alone.";
+            g_note = "Letters, digits and the game's own keys need Ctrl or Alt. F keys, Insert, Delete, Home, End and the number pad work alone.";
             return false;
         }
     }

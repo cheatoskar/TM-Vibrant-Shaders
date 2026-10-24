@@ -89,7 +89,7 @@ void drawPerformance() {
     const float total = pipeline->total();
     const float fps = ImGui::GetIO().Framerate;
     if (total <= 0.0f) {
-        ImGui::TextDisabled("Measuring... (needs GPU timestamp queries)");
+        ImGui::TextDisabled("Measuring...");
         return;
     }
     const float frameMs = fps > 1.0f ? 1000.0f / fps : 0.0f;
@@ -340,12 +340,12 @@ const char* tooltipFor(const char* key) {
         const char* tip;
     } kTips[] = {
         {"AOStrength", "Darkens corners and creases where light would not reach."},
-        {"AORadius", "How far around a point the occlusion looks. Large values darken whole areas, small ones only tight corners."},
+        {"AORadius", "Reach of the occlusion. Large values darken whole areas, small ones only tight corners."},
         {"SunLight", "How strongly sunlit surfaces take on the sun colour."},
         {"AmbientTint", "How strongly surfaces in shade take on the sky colour."},
         {"SunColor", "The colour of the sunlight."},
         {"SkyColor", "The colour of shade and ambient light."},
-        {"SkyBrightness", "Brightness of the mod's sky."},
+        {"SkyBrightness", "Brightness of the custom sky."},
         {"CloudCoverage", "How much of the sky the clouds cover."},
         {"CloudHeight", "Height of the cloud layer. Lower clouds look bigger and closer."},
         {"SkyEnhance", "A richer colour gradient on the game's own sky."},
@@ -356,7 +356,7 @@ const char* tooltipFor(const char* key) {
         {"HazeDistance", "Where the haze closes in. 1 is the default, lower brings it nearer."},
         {"GodRayDecay", "How far the light shafts reach from the sun."},
         {"AutoExposure", "How much the brightness adapts to the scene, like an eye. 0 keeps it fixed."},
-        {"ToneCurve", "How bright colours roll off to white (TrackMania 2): 0 the game's curve, 1 the mod's, 2 ACES."},
+        {"ToneCurve", "How bright colours roll off to white."},
         {"Vibrance", "Boosts weak colours more than strong ones. Below 0 mutes them."},
         {"Temperature", "Warmer (orange) or cooler (blue) image."},
         {"Tint", "Shifts the image towards green or magenta."},
@@ -369,11 +369,11 @@ const char* tooltipFor(const char* key) {
         {"MowingStripes", "Light and dark mowing stripes on grass."},
         {"Wind", "Slant of the rain, movement of grass and clouds."},
         {"BokehSize", "The largest blur size of depth of field, at 1080p."},
-        {"ShadowStrength", "Sun shadows drawn by the mod. 0 leaves the game's own."},
-        {"ShadowLength", "How far a shadow is traced from each point. Longer is more accurate but slower."},
+        {"ShadowStrength", "Strength of the added sun shadows. 0 keeps the game's own."},
+        {"ShadowLength", "How far shadows reach from each point. Longer is more accurate but slower."},
         {"LongShadows", "Shadows from far-away objects, such as hills and buildings."},
         {"LongShadowRange", "How far the long shadows reach, in metres."},
-        {"LongShadowQuality", "Stepped is fast. Every cell checks the whole map grid, so thin walls leave no gaps."},
+        {"LongShadowQuality", "Stepped is fast. Every cell is slower but leaves no gaps behind thin walls."},
         {"NeonLight", "Neon blocks light the road and walls around them."},
         {"GlobalIllumination", "Sunlit surfaces light their surroundings."},
         {"GameSunColor", "How much of the sun's colour comes from the map instead of the preset."},
@@ -387,11 +387,11 @@ const char* tooltipFor(const char* key) {
         {"VolumetricLight", "Haze that shows the sun's shadows as beams."},
         {"HighlightBoost", "How strongly lamps and bright spots glow."},
         {"BorderGlow", "Glow of the neon strips along the road. Needs Game light sources."},
-        {"CarHeadlights", "Two spotlights from the front of your car: they light the road and the walls ahead, show as beams in the haze and glare when you look into them. 1 = full, 0 = off. Needs the car the game reports (races, replays)."},
-        {"LampGlare", "Part of the lamps' light leaves the bright core and spreads wide and soft around them: the bulbs stay apart, the light reaches farther. 0 = off. Needs Game light sources."},
-        {"LampHaze", "The light the haze takes from the lamps glows in the air around them; stronger with more haze and for far lamps. 1 = all of it, 0 = off. Needs Game light sources."},
-        {"LampSkyHalos", "At night the lamps' halos also shine over the sky instead of ending at the edge of the lamp's frame. Needs Game light sources."},
-        {"Floodlights", "Brightness and glow of stadium floodlights, start lights and other lamps, and the light they throw around them. The neon borders and the light intensity stay as they are. 1 = as before. Needs Game light sources."},
+        {"CarHeadlights", "Two spotlights on the front of your car that light the road and show as beams in haze. 1 is full, 0 is off. Works in races and replays."},
+        {"LampGlare", "Soft glare around lamps. 0 is off. Needs Game light sources."},
+        {"LampHaze", "Lamps glow in the haze around them, more with more haze. 1 is full, 0 is off. Needs Game light sources."},
+        {"LampSkyHalos", "Lamp halos also shine over the sky at night. Needs Game light sources."},
+        {"Floodlights", "Brightness and glow of stadium floodlights, start lights and other lamps. 1 is the default. Needs Game light sources."},
         {"ToneKnee", "Where bright colours start to roll off instead of clipping."},
         {"NightSurfaces", "How bright floodlit surfaces get at night. 1 keeps the game's white."},
         {"Rain", "0 is dry, 2 is a downpour."},
@@ -400,62 +400,60 @@ const char* tooltipFor(const char* key) {
         {"WeatherShelter", "No rain or snow under roofs and bridges."},
         {"WeatherSound", "Volume of rain and thunder."},
         {"WaterSurfaces", "Reflections on pools and the sea."},
-        {"WaterClarity", "Pools and the sea look clear: you see the bottom, deeper water turns blue-green, foam sits where the water meets the edge. 0 is the game's own murky water."},
-        {"WaterSplash", "The car throws up spray, ripples and foam where it enters water, a bow wave while it drives through, and drips when it leaves. 0 is off."},
+        {"WaterClarity", "Clear water: you see the bottom, deeper water turns blue-green. 0 is the game's murky water."},
+        {"WaterSplash", "Spray, ripples and foam where the car enters water, plus a bow wave and drips. 0 is off."},
         {"Reflections", "Reflections on the dry track. Above 1 it turns into a mirror."},
         {"Spray", "Spray from the car's tyres on wet roads and snow."},
         {"CinematicOnlyInReplays", "Motion blur and depth of field only in replays and video export."},
-        {"VideoExportBest", "While the replay editor exports: every effect at full quality (no auto quality) and running on the video's clock, so exposure, focus, rain and lightning move with the picture, not with the export's slow real time."},
-        {"VideoCodec", "What the replay editor's Shoot video writes. MP4 skips the game's codec dialog and lands where the .avi would. H.264 plays and edits everywhere; HEVC and AV1 give the same picture in a smaller file but are heavier to edit. Without an encoder for the choice it falls back to H.264."},
-        {"VideoQuality", "How much picture each second gets. 80 is hard to tell from the source, 92 for editing, 62 small. NVIDIA: a constant quality, 80 = about 60 Mbit/s at 1440p60 on a grainy replay (450 MB a minute), less on calmer ones. AMD, Intel: an average bitrate, 80 = 70 Mbit/s at 1440p60, 39 at 1080p60. ffmpeg: x264 CRF 20.5 at 80. Ignored when a bitrate is set."},
-        {"Video10Bit", "HEVC and AV1 in 10 bits: no bands in skies, fog and glows. H.264 stays 8 bits (graphics cards have no 10-bit H.264) and gets a fine dither instead."},
-        {"VideoBitrate", "A fixed average bitrate in Mbit/s instead of Video quality, for upload limits (Discord: 8 Mbit/s fits 10 s in 10 MB). 0 = Video quality decides (recommended)."},
-        {"VideoEncoder", "Graphics card: fast, nothing to install; on NVIDIA (driver R570 or newer) also the best quality per megabyte. ffmpeg: a software encoder (x264, x265, SVT-AV1), the better choice with AMD or Intel; needs ffmpeg.exe in your TMVS folder or on PATH and can slow the export down."},
-        {"VideoFfmpegPreset", "How hard ffmpeg works on each frame: Fast keeps up with any export, Balanced packs more quality into each megabyte, Best (slow) the most, but the export then waits for it."},
-        {"VideoOwnFrames", "Shoot video's samples (supersampling and motion blur) are added up in HDR before the tone curve, then bloom, exposure and the grade run once on the result. Bright lights streak like on a real camera instead of a grey smear, and the encoder gets 10 bits or a fine dither: no bands. Needed for HDR10 and lens depth of field. Off: the game averages its 8-bit frames, as before 1.4.2."},
-        {"VideoShutter", "With Shoot video's motion blur: how much of each frame's time the blur covers, like a film camera's shutter. 360 blurs over the whole frame (smoothest), 180 is the classic film look (crisper motion; the other half of the sub-frames is skipped, so the export is faster)."},
-        {"VideoLensDof", "Depth of field from the samples themselves: the camera moves over a lens between them, like a real one (true bokeh, no halos at edges). Needs 16 or more samples per frame (high quality 4x4 and up in Shoot video); with fewer, the usual blur."},
-        {"VideoGrain", "How much of the look's film grain goes into the video (1 = as on screen). Grain is noise to the encoder and costs many of its bits: 0.5 keeps the feel, 0 gives the smallest file."},
-        {"VideoAspect", "Crops the video to a wider picture, from the middle of the frame. The file holds only the picture (no black bars to encode); players and YouTube add the bars. Pick a larger size in Shoot video for the width you want."},
-        {"VideoHdr", "SDR (classic): the game blends the samples itself, as before 1.4.2.\n"
-                     "SDR (HDR blend): the mod blends them before the colours are finished. Lights leave clean streaks, no colour bands. Recommended.\n"
-                     "HDR10: for HDR screens, lights stay brighter than white. Switches to HEVC in 10 bits. YouTube makes a normal copy for other screens."},
-        {"VideoHdrPeak", "The brightest light in nits: where the tone curve ends and what the file tells the screen. 1000 suits most HDR monitors and YouTube."},
-        {"VideoHdrWhite", "How bright the game's white (the normal picture's white) is on an HDR screen, in nits. 203 is the broadcast reference. If the video looks darker than the game next to it, raise it towards Windows' SDR brightness (often 250-300); higher leaves less room above it for lights."},
+        {"VideoExportBest", "During export: full effect quality, no auto quality, and effects timed to the video so rain and exposure match the picture."},
+        {"VideoCodec", "File format of Shoot video. H.264 plays everywhere; HEVC and AV1 make smaller files but are harder to edit. Falls back to H.264 if the encoder is missing."},
+        {"VideoQuality", "Picture quality. 80 is close to the source, 92 suits editing, 62 is small. Ignored when a bitrate is set."},
+        {"Video10Bit", "10-bit HEVC and AV1 avoid colour bands in skies, fog and glows. H.264 stays 8-bit and gets a fine dither."},
+        {"VideoBitrate", "Fixed average bitrate in Mbit/s, for upload limits (Discord: 8 Mbit/s fits 10 s in 10 MB). 0 lets Video quality decide (recommended)."},
+        {"VideoEncoder", "Graphics card: fast, and on NVIDIA (driver R570 or newer) the best quality per megabyte. ffmpeg: software encoding, better on AMD or Intel; needs ffmpeg.exe in your TMVS folder or on PATH and can slow the export."},
+        {"VideoFfmpegPreset", "Encoder effort. Fast keeps up with any export; Best (slow) packs the most quality per megabyte but the export waits for it."},
+        {"VideoOwnFrames", "Blends the export's samples in HDR before tone curve, bloom and grading. Lights streak like on a real camera and the file gets 10 bits or dither. Needed for HDR10 and lens depth of field. Off: the game blends 8-bit frames."},
+        {"VideoShutter", "How much of each frame the motion blur covers. 360 blurs the whole frame (smoothest); 180 is the film look, crisper and faster to export. Needs motion blur in Shoot video."},
+        {"VideoLensDof", "Depth of field from the samples themselves: true bokeh, no halos at edges. Needs 16 or more samples per frame (high quality 4x4 or more in Shoot video); with fewer, a normal blur."},
+        {"VideoGrain", "How much film grain goes into the video (1 = as on screen). Grain costs file size: 0.5 keeps the feel, 0 is smallest."},
+        {"VideoAspect", "Crops the video to a wider picture from the centre; the file has no black bars. Pick a larger size in Shoot video for the width you want."},
+        {"VideoHdr", "SDR (classic): the game blends the samples itself.\nSDR (HDR blend): the mod blends them before colours are finished: cleaner light streaks, no colour bands. Recommended.\nHDR10: for HDR screens; lights stay brighter than white. Uses 10-bit HEVC. YouTube makes an SDR copy."},
+        {"VideoHdrPeak", "Brightest light in nits. 1000 suits most HDR monitors and YouTube."},
+        {"VideoHdrWhite", "Brightness of the normal picture's white on an HDR screen, in nits. 203 is the broadcast reference. If the video looks darker than the game, raise it towards your Windows SDR brightness (often 250-300)."},
 
         {"FocusDistance", "Metres to the sharp point. 0 focuses automatically."},
-        {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, wherever the replay camera puts it; the middle again while the car is off screen. A click in the photo mode still wins."},
+        {"DofAutofocus", "Where automatic focus sits. Middle: the screen centre. Car: your car, or the centre while it is off screen. A click in photo mode still wins."},
         {"TAA", "Smooths edges by blending frames. Costs a little sharpness."},
         {"TAAJitter", "Shifts the image by sub-pixels each frame for finer edges."},
-        {"Sharpen", "Contrast-adaptive sharpening (CAS). With Render scale (FSR) below 1.00, FSR sharpening takes its place."},
-        {"AutoQuality", "Below the target FPS it switches off the effects that cost most for least look, and back on when there is room. The light shafts, the neon light and the long shadows always stay. Your settings stay as they are."},
+        {"Sharpen", "Contrast-adaptive sharpening (CAS). Replaced by FSR sharpening when Render scale is below 1.00."},
+        {"AutoQuality", "Switches off the costliest effects when FPS falls below the target, and back on when there is room. Light shafts, neon light and long shadows stay. Your settings are kept."},
         {"TargetFPS", "The frame rate auto quality aims for."},
-        {"RenderScale", "Draws the game's 3D image and every effect at this fraction of your screen's resolution and scales it back up with AMD FSR 1 before the HUD, which stays sharp. 1.00 is off. 0.77 costs a little sharpness, 0.67 more, for clearly more FPS when the graphics card is the limit. Photo mode, captures and the video export always use the full resolution. Needs Game HDR."},
-        {"FsrSharpness", "How much FSR sharpens the scaled-up image. 1 is AMD's strongest, 0 none. Takes the place of Sharpening while the render scale is below 1."},
-        {"DisableGameMSAA", "Turns off the game's own MSAA, which the mod's effects do not need. (restart)"},
-        {"ReadableGameDepth", "Lets the effects work in replays and video export. (restart)"},
-        {"GameMaterials", "Reads the game's material ids. Used for the TMUF sea and the debug view."},
+        {"RenderScale", "Renders at this fraction of your screen resolution and scales up with AMD FSR 1; the HUD stays sharp. 1.00 is off. 0.77 costs a little sharpness, 0.67 more, for clearly more FPS. Photos, captures and video export use full resolution. Needs Game HDR."},
+        {"FsrSharpness", "FSR sharpening of the scaled image: 0 none, 1 strongest. Replaces Sharpening while Render scale is below 1."},
+        {"DisableGameMSAA", "Turns off the game's own MSAA, which the effects don't need. (restart)"},
+        {"ReadableGameDepth", "Lets effects work in replays and video export. (restart)"},
+        {"GameMaterials", "Reads the game's material ids, for the TMUF sea and the debug view."},
         {"DisableGameFX", "Turns off the game's own bloom and colour filter. (next map)"},
-        {"GameNight", "Under night skies the game lights day maps as at midnight."},
-        {"EngineMoon", "Under the black hole: the game's moonlight (baked light and shadows, glints, the car) comes from the black hole, stays as the game has it, or is left out. (next map)"},
-        {"GameSkyClouds", "Keeps the game's sunset clouds, and the sea mirroring them, under night skies."},
-        {"GameHdr", "The game draws into a float image, so bright light keeps its texture. The capture key saves it too."},
-        {"CleanHighlights", "Floodlit white at night stays even. Off: the look of earlier versions, with frost-like patches on floodlit white."},
-        {"EngineLights", "Lamps and glows glow as the game draws them instead of being guessed from the image. Needs Game HDR."},
-        {"CasterShadows", "Long shadows from the game's own meshes, cast from the sun or black hole. Needs Long shadows."},
-        {"CasterAlphaTest", "Fences, grids and lattice towers cast their pattern into the long mesh shadows, holes included. Off: they cast none."},
-        {"CleanWater", "Pools mirror only what they can see, sharp. Off shows blotches of the ramps over them."},
-        {"WaterFarReflections", "Pools and the sea mirror the stands and masts across them, not only what is near. Off: as before."},
-        {"OverlapFix", "TMUnlimiter maps: where two blocks overlap at the same height, engine off is shown on top, then boosters, then start, finish and checkpoints, otherwise the block placed last, instead of flickering stripes. Also with the shaders off."},
-        {"GameGBuffer", "Surface normals from the game's shaders, so AO, shadows, reflections and light follow bump maps and the car's real shape. Needs Game HDR. (restart the first time)"},
-        {"GameLight", "Under night skies, darkens and cools the light the game lit each surface with instead of the whole image: paint keeps its colour, and what the game's lamps light stays as bright as the game drew it. Needs Game HDR and Game light sources. (restart the first time)"},
-        {"ShadeMenuBars", "The replay mirrored under the replay menu's bars. Off: black bars."},
+        {"GameNight", "Lights day maps like midnight under night skies."},
+        {"EngineMoon", "Moonlight under the black hole sky: from the black hole, the game's own, or off. (next map)"},
+        {"GameSkyClouds", "Keeps the game's sunset clouds, and their reflection in the sea, under night skies."},
+        {"GameHdr", "Draws in high dynamic range so bright lights keep detail. Captures include it."},
+        {"CleanHighlights", "Evens out floodlit white at night. Off: the old look with patchy highlights."},
+        {"EngineLights", "Lamps and glows use the game's own light sources. Needs Game HDR."},
+        {"CasterShadows", "Long shadows from the game's own models, lit by the sun or black hole. Needs Long shadows."},
+        {"CasterAlphaTest", "Fences, grids and lattice towers cast patterned shadows. Off: they cast none."},
+        {"CleanWater", "Sharp reflections in pools. Off: blotchy ramp reflections."},
+        {"WaterFarReflections", "Pools and the sea also mirror distant stands and masts. Off: near objects only."},
+        {"OverlapFix", "TMUnlimiter maps: overlapping blocks at the same height no longer flicker. Engine off shows on top, then boosters, then start, finish and checkpoints, then the block placed last. Works with shaders off too."},
+        {"GameGBuffer", "Real surface normals, so AO, shadows and reflections follow bump maps and the car's shape. Needs Game HDR. (restart the first time)"},
+        {"GameLight", "Darkens night by dimming the game's own lighting, not the whole image: paint keeps its colour and lamp-lit areas stay bright. Needs Game HDR and Game light sources. (restart the first time)"},
+        {"ShadeMenuBars", "Shows the mirrored replay under the replay menu bars. Off: black bars."},
         {"NeonTrail", "A glowing trail behind the car. 0 is off."},
         {"TrailTyres", "Two lines from the rear tyres instead of one."},
         {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},
         {"TrailKeepRuns", "How many earlier runs' trails stay after a restart, dimmer the older they are. 0 clears the trail on every restart."},
         // The plainer ones too, so every setting says something when the pointer rests on it.
-        {"SkyMode", "Game sky keeps the game's own sky, the others replace it with the mod's. Picking one also sets what suits it (planet, the black hole's light, night darkening)."},
+        {"SkyMode", "Game sky keeps the game's own sky, the others replace it. Picking one also sets what suits it (planet, black hole light, night darkness)."},
         {"SkyRotation", "Turns stars, black hole, planet and aurora around you."},
         {"StarAmount", "Number and brightness of the stars, and how often shooting stars cross."},
         {"AuroraSpeed", "How fast the aurora's curtains move."},
@@ -484,19 +482,15 @@ const char* tooltipFor(const char* key) {
         {"MotionBlur", "Blur from camera movement. 1 is one full frame of movement."},
         {"DepthOfField", "Blurs what is in front of and behind the point in focus."},
         {"FXAA", "Smooths edges within one frame: SMAA, or FXAA (a little softer, a little faster)."},
-        {"SMAA", "SMAA finds the edges and blends along them: smoother long edges, sharper textures than FXAA. About 0.2 ms more at 1440p. Off: FXAA."},
+        {"SMAA", "Smoother long edges and sharper textures than FXAA. About 0.2 ms more at 1440p. Off: FXAA."},
         {"Quality", "Samples for AO, shadows, clouds, volumetric light and bounce light. Low is clearly faster."},
         // Sharing presets as text (Shaders page).
-        {"ShareCopy", "Puts the current look on the clipboard as one line of text (TMVS1:...) to paste into a chat. Only the look's settings are in it, not your installation's (auto quality, sound volume, neon trail, ...). The same code works in TrackMania Nations/United and TrackMania 2."},
-        {"SharePaste", "Reads a share code from the clipboard and makes it your look: unsaved, on top of the built-in preset it is closest to, so Save as preset keeps it. Nothing saved is replaced. Settings this version doesn't know are ignored and counted; values out of range are moved into range."},
+        {"ShareCopy", "Copies the current look as a line of text (TMVS1:...) to share. Machine settings (auto quality, sound volume, neon trail) are not included. Works in TrackMania Nations/United and TrackMania 2."},
+        {"SharePaste", "Applies a share code from the clipboard as an unsaved look; Save as preset keeps it. Saved presets are not changed. Unknown settings are ignored, out-of-range values are clamped."},
         // Photo mode (General, not a look setting).
-        {"SplitPhotoLabels", "Photos of the compare split get both sides' names burnt in at the bottom, at the line (the list on the screen is never in them)."},
+        {"SplitPhotoLabels", "Adds both sides' names to the bottom of split photos."},
         // TrackMania 2 (maniaplanet.ini, the host's own panel).
-        {"BlackHoleMoon", "With Game moonlight Black hole (Game integration), how bright the black hole lights night maps under it:\n"
-                          "the game's moon (its blue glint on chrome and the sculptures, its light) is taken out of the picture and the\n"
-                          "black hole lights the scene instead, warm, with the game's own shine on each material.\n"
-                          "1 = as bright as the moon was. Shadows: the game's moon shadows where the black hole stands near the moon,\n"
-                          "else only short contact shadows. Only the mod's shaders change, nothing in the game."},
+        {"BlackHoleMoon", "Brightness of the black hole's light on night maps, with Game moonlight set to Black hole. 1 is as bright as the moon was. Shadows: the game's moon shadows where the black hole stands near the moon, otherwise only short contact shadows."},
     };
     for (const auto& t : kTips)
         if (!strcmp(t.key, key)) return t.tip;
@@ -843,7 +837,7 @@ const BuiltInInfo kBuiltIn[] = {
     {"Replay Cinema", "Film look with motion blur and depth of field, for replays.", 3},
     {"Storm", "Low clouds, pouring rain, deep puddles, lightning and thunder.", 3},
     {"Snowstorm", "A blizzard: driving snow and thick haze close around you.", 2},
-    {"Horror", "Black night, every lamp off. Only your headlights light the road, in thick fog.", 2},
+    {"Horror", "Black night in thick fog. Only your headlights light the road.", 2},
 };
 
 const BuiltInInfo* builtInInfo(const std::string& name) {
@@ -976,7 +970,7 @@ bool presetCard(const std::string& name, bool active, float width) {
             ImGui::Separator();
             if (ImGui::MenuItem("Edit description")) editDescription = true;
             if (ImGui::MenuItem("Update picture", nullptr, false, active)) config.requestPicture(name);
-            if (!active && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Apply the preset first: the picture is taken from the game view.");
+            if (!active && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Apply the preset first to update its picture.");
             if (ImGui::MenuItem("Delete")) askDelete = true;
         }
         ImGui::EndPopup();
@@ -1154,7 +1148,7 @@ void drawShaders(Config& config) {
     });
     savePresetPopup(config);
     // Sharing: a preset is its .ini (and .jpg) in this folder; dropped-in ones appear by themselves.
-    if (ImGui::Button("Open the presets folder")) {
+    if (ImGui::Button("Open presets folder")) {
         CreateDirectoryW(config.presetDir().c_str(), nullptr);
         ShellExecuteW(nullptr, L"open", config.presetDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
@@ -1329,7 +1323,7 @@ PanelDef lutPanel(Config& config) {
                               ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                               if (ImGui::SliderFloat("Amount", &config.lutAmount, 0.0f, 1.0f, "%.2f")) config.markDirty();
                           }
-                          if (ImGui::Button("Open the LUT folder")) {
+                          if (ImGui::Button("Open LUT folder")) {
                               CreateDirectoryW(lut::folder().c_str(), nullptr);
                               ShellExecuteW(nullptr, L"open", lut::folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                           }
@@ -1565,7 +1559,7 @@ bool drawStudio(Config& config, Settings& s) {
 
 // Which look on which map: a preset per map mood, and the looks map authors ship.
 void drawMaps(Config& config, const std::vector<std::string>& names) {
-    pageTitle("Maps", "Presets for day, sunset and night maps. The map type is detected from its lighting.");
+    pageTitle("Maps", "A preset for day, sunset and night maps. The type is detected from the map's lighting.");
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Preset per map type");
     ImGui::SameLine();
@@ -1576,8 +1570,8 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
     ImGui::SameLine();
     ImGui::TextDisabled("this map: %s", moodName(config.mood));
     if (config.autoMood && config.manualPick) {
-        ImGui::TextWrapped("Your pick (%s) holds on every map until you choose a preset for a map type below.", config.preset.c_str());
-        if (ImGui::Button("Use the presets per map type again")) config.resumeMoodPresets();
+        ImGui::TextWrapped("%s is used on every map until you pick a preset for a map type below.", config.preset.c_str());
+        if (ImGui::Button("Use map type presets")) config.resumeMoodPresets();
     }
     ImGui::Spacing();
 
@@ -1840,7 +1834,7 @@ void drawPacks(Config& config) {
             bool usable = true;
             if (i == 0) {
                 title = "Map's own";
-                line = "The map's own mod, if it has one.";
+                line = "The map's own mod.";
             } else if (i == 1) {
                 value = "None";
                 title = "None";
@@ -1889,7 +1883,7 @@ struct VideoPreset {
 };
 
 const VideoPreset kVideoPresets[] = {
-    {"YouTube", "H.264 at quality 80, grain halved: hard to tell from the source (about 60 Mbit/s at 1440p60 on a grainy replay), clean after YouTube's own encode. Shoot at 1440p or more: YouTube gives those more bitrate.",
+    {"YouTube", "H.264, quality 80, half grain: close to the source and clean after YouTube's encode. Shoot at 1440p or more for a higher YouTube bitrate.",
      [](Settings& s) {
          s.videoCodec = 1;
          s.videoQuality = 80;
@@ -1900,7 +1894,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 80 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f; }},
-    {"Best", "H.264 at quality 92, grain halved: the most detail at a file size that still makes sense (about 80 Mbit/s at 1440p60). Every preset picks the graphics card's encoder, on NVIDIA the best; with AMD or Intel set Video encoder to ffmpeg afterwards.",
+    {"Best", "H.264, quality 92, half grain: the most detail at a sensible file size. Presets use the graphics card's encoder; with AMD or Intel set Video encoder to ffmpeg afterwards.",
      [](Settings& s) {
          s.videoCodec = 1;
          s.videoQuality = 92;
@@ -1911,7 +1905,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 92 && s.videoBitrate <= 0.0f && s.videoGrain == 0.5f; }},
-    {"Editing", "H.264 at quality 92 with the full grain: room for cutting and grading, and every editor decodes it smoothly. Large files.",
+    {"Editing", "H.264, quality 92, full grain: smooth to edit and grade. Large files.",
      [](Settings& s) {
          s.videoCodec = 1;
          s.videoQuality = 92;
@@ -1922,7 +1916,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoQuality == 92 && s.videoBitrate <= 0.0f && s.videoGrain == 1.0f; }},
-    {"Small", "HEVC in 10 bits at quality 70: about two thirds of YouTube's file (40 Mbit/s at 1440p60 on a grainy replay, less on calmer ones), no bands in the sky. Heavier to edit; fine to keep or share.",
+    {"Small", "HEVC 10-bit, quality 70: about two thirds of the YouTube file size, no bands in the sky. Harder to edit.",
      [](Settings& s) {
          s.videoCodec = 2;
          s.videoQuality = 70;
@@ -1933,7 +1927,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 2 && s.video10Bit && s.videoQuality == 70 && s.videoBitrate <= 0.0f && !s.videoHdr; }},
-    {"Discord", "H.264 at a fixed 8 Mbit/s, little grain: 10 seconds fit Discord's 10 MB. Shoot at 1080p or less for it; at 1440p the picture gets soft.",
+    {"Discord", "H.264 at 8 Mbit/s, little grain: 10 seconds fit Discord's 10 MB. Shoot at 1080p or less.",
      [](Settings& s) {
          s.videoCodec = 1;
          s.videoQuality = 62;
@@ -1944,7 +1938,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoBitrate > 7.9f && s.videoBitrate < 8.1f; }},
-    {"HDR10", "HEVC in 10 bits with HDR10 at quality 85: lights above white stay bright on an HDR screen.",
+    {"HDR10", "HEVC 10-bit HDR10, quality 85: lights above white stay bright on an HDR screen.",
      [](Settings& s) {
          s.videoCodec = 2;
          s.videoQuality = 85;
@@ -1965,7 +1959,7 @@ const VideoPreset kVideoLooks[] = {
          s.videoAspect = 0;
      },
      [](const Settings& s) { return s.videoShutter >= 359.0f && s.videoAspect == 0; }},
-    {"Cinema", "Film shutter (180: crisper motion, faster export), lens depth of field and a 2.39:1 picture. Turn up Depth of field in Customize for the blur.",
+    {"Cinema", "Film shutter (180), lens depth of field and a 2.39:1 picture. Raise Depth of field in Customize for the blur.",
      [](Settings& s) {
          s.videoOwnFrames = true;
          s.videoShutter = 180.0f;
@@ -1988,7 +1982,7 @@ void videoPresetRow(Config& config, Settings& s, const VideoPreset* presets, siz
 }
 
 bool drawVideoPage(Config& config, Settings& s) {
-    pageTitle("Video export", "Shoot video in the replay editor: what the file is for, how it looks, and the game's own dialog.");
+    pageTitle("Video export", "Settings for Shoot video in the replay editor.");
     std::vector<PanelDef> panels;
     panels.push_back({"For", 4.0f, [&config, &s] {
                           videoPresetRow(config, s, kVideoPresets, sizeof(kVideoPresets) / sizeof(kVideoPresets[0]));
@@ -2024,13 +2018,13 @@ bool drawSettings(Config& config, Settings& s) {
     }
     panels.push_back({"Presets and maps", 4.0f, [&config] {
                           if (switchRow("Preset per map type", &config.autoMood,
-                                        "Day, sunset and night maps each use their own preset (see Maps). Off: the same preset everywhere.\n"
-                                        "A preset you pick holds on every map until you choose one for a map type again.") &&
+                                        "Day, sunset and night maps each use their own preset (see Maps). Off: one preset everywhere.\n"
+                                        "A preset you pick applies to all maps until you pick one for a map type.") &&
                               config.autoMood)
                               config.resumeMoodPresets();
                           ImGui::BeginDisabled(!config.autoMood);
                           switchRow("Remember preset picks", &config.rememberMoodPick,
-                                    "On: picking a preset on a night map makes it the preset for all night maps (same for day and sunset).\nOff: only the Maps page sets these.");
+                                    "On: a preset picked on a night map becomes the night preset (same for day and sunset).\nOff: only the Maps page sets them.");
                           ImGui::EndDisabled();
                           bool mapLooks = config.useMapLooks;
                           if (switchRow("Author's Shaders", &mapLooks, "Use the preset a map's author stored in the map.")) {
@@ -2064,31 +2058,31 @@ bool drawSettings(Config& config, Settings& s) {
                           const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
                           switchRow("Auto photo mode", &config.photoAuto,
-                                    ("Photo mode turns on by itself with the free camera (cam 7): no HUD, full quality, far-reaching effects.\n" + photoKey +
-                                     " turns it on or off anywhere.").c_str());
-                          switchRow("Hide HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
+                                    ("Photo mode starts with the free camera (cam 7): no HUD, full quality.\n" + photoKey +
+                                     " toggles it anywhere.").c_str());
+                          switchRow("Hide HUD", &config.photoHideHud, "Off: the HUD stays visible in photo mode. Photos never include it.");
                           if (g_host->photoHideCar)
-                              switchRow("Hide car", &config.photoHideCar, "Photo mode leaves the cars out of the picture (and their shadows), also in photos. Smoke and tyre marks stay.");
+                              switchRow("Hide car", &config.photoHideCar, "Hides cars and their shadows in photo mode and photos. Smoke and tyre marks stay.");
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           char factor[48];
                           snprintf(factor, sizeof(factor), "%d x %d tiles = %.1fx", config.photoTiles, config.photoTiles, config.photoTiles * 0.84f);
                           if (ImGui::SliderInt("Hi-res photo", &config.photoTiles, 2, 4, factor)) config.markDirty();
-                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+%s: a photo this many times the screen size. Pause the replay while the tiles are taken.", capKey.c_str());
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+%s takes a photo this many times the screen size. Pause the replay while it renders.", capKey.c_str());
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           char aperture[32];
                           snprintf(aperture, sizeof(aperture), "f/%.1f", (g_host->fNumber ? g_host->fNumber(config.photoDof) : 0.0f));
                           if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
-                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Like a camera lens: wide open (f/1.4) blurs most around the clicked focus point, f/16 keeps all sharp (Ctrl+wheel in the game).");
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("f/1.4 blurs most around the focus point, f/16 keeps everything sharp. Ctrl+wheel in the game.");
                           if (g_host->splitOn) {
                               bool& split = *g_host->splitOn;
                               if (switchRow("Compare split", &split,
-                                            ("One side of a line shows the game's image without the mod's effects (or another preset's look), the other yours (" + splitKey +
+                                            ("The game's image (or another preset) on one side of a line, your look on the other (" + splitKey +
                                              ").\n" +
                                              (g_host->splitNote ? std::string(g_host->splitNote)
                                                                 // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
-                                                                : std::string(g_host->splitPreset ? "In photos too, hi-res ones included; the aperture blurs both sides alike."
-                                                                                                  : "In photos too, not in hi-res ones.") +
-                                                                      " The game's own changes stay on both sides (its bloom off, real night).")).c_str())) {
+                                                                : std::string(g_host->splitPreset ? "Also in photos, hi-res ones too. The aperture applies to both sides."
+                                                                                                  : "Also in photos, not in hi-res ones.") +
+                                                                      " Game bloom off and real night apply to both sides.")).c_str())) {
                                   if (split && g_host->photoOn) g_host->photoOn();
                               }
                               ImGui::BeginDisabled(!split);
@@ -2104,15 +2098,15 @@ bool drawSettings(Config& config, Settings& s) {
                                       ImGui::EndCombo();
                                   }
                                   if (ImGui::IsItemHovered())
-                                      ImGui::SetTooltip("What the other side of the line shows: the game's own image, or a preset's look next to yours.\n"
-                                                        "A preset costs a second run of the effects every frame (photo mode only).");
+                                      ImGui::SetTooltip("The game's image or a preset on the other side.\n"
+                                                        "A preset runs the effects twice (photo mode only).");
                                   switchRow("Photo labels", &config.splitPhotoLabels, tooltipFor("SplitPhotoLabels"));
                               }
                               ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                               ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");
-                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where the line sits, from the left (Ctrl+Shift+wheel in the game).");
+                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Line position from the left. Ctrl+Shift+wheel in the game.");
                               ImGui::Checkbox("Swap sides", g_host->splitSwapped);
-                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the game's image on the right of the line instead of the left.");
+                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the game's image on the right.");
                               ImGui::EndDisabled();
                           }
                           ImGui::TextDisabled("%s photo  |  Shift+%s hi-res  |  middle click: focus", capKey.c_str(), capKey.c_str());
@@ -2121,10 +2115,10 @@ bool drawSettings(Config& config, Settings& s) {
                           return false;
                       }});
     panels.push_back({"Files", 3.0f, [&config] {
-                          if (ImGui::Button("Open the TMVS folder")) ShellExecuteW(nullptr, L"open", log::dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                          if (ImGui::Button("Open TMVS folder")) ShellExecuteW(nullptr, L"open", log::dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("settings.ini, tmvs.log, the F12 captures and the photos.");
                           ImGui::SameLine();
-                          if (ImGui::Button("Open the presets folder")) {
+                          if (ImGui::Button("Open presets folder")) {
                               CreateDirectoryW(config.presetDir().c_str(), nullptr);
                               ShellExecuteW(nullptr, L"open", config.presetDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                           }
@@ -2205,7 +2199,7 @@ void drawAbout(Config& config) {
                                   if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the release page in your browser. In fullscreen the game may minimise.");
                                   if (install == update::Install::ModLoader) {
                                       ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                                      ImGui::TextWrapped("Or let the ModLoader update the mod by itself: add our server under servers: in its config.yaml.");
+                                      ImGui::TextWrapped("To update through the ModLoader, add our server under servers: in its config.yaml.");
                                       ImGui::PopStyleColor();
                                       if (ImGui::Button("Copy server address")) ImGui::SetClipboardText(update::kModLoaderServer);
                                       if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", update::kModLoaderServer);
@@ -2236,7 +2230,7 @@ void drawAbout(Config& config) {
                           if (ImGui::Button("Report a problem")) openLink(repo + "/issues");
                           ImGui::SameLine();
                           if (ImGui::Button("All releases")) openLink(repo + "/releases");
-                          if (ImGui::Button("Open the TMVS folder")) {
+                          if (ImGui::Button("Open TMVS folder")) {
                               ShellExecuteW(nullptr, L"open", log::dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                           }
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("Settings, presets, tmvs.log and F12 captures. Attach tmvs.log to bug reports.");
@@ -2567,12 +2561,12 @@ void drawMenu() {
     if (isDetached(config, page)) {
         // The page is in a window (it was the open one when saved, or About from the update note).
         ImGui::TextDisabled("%s is in its own window.", page.title);
-        if (ImGui::Button("Show the window")) {
+        if (ImGui::Button("Show window")) {
             windowOf(config, page).minimized = false;
             ImGui::SetWindowFocus(windowName(page).c_str());
         }
         ImGui::SameLine();
-        if (ImGui::Button("Bring it back here")) attachPage(config, page);
+        if (ImGui::Button("Move back")) attachPage(config, page);
     } else {
         drawPageBody(page, config, s, config.presetNames());
     }
@@ -2636,7 +2630,7 @@ void drawDetachedWindow(const PageDef& page, Config& config, bool menuOpen) {
             if (ImGui::Checkbox("Keep open when the menu closes", &w.keepOpen)) config.markDirty();
             ImGui::SetNextItemWidth(180.0f * sc);
             if (ImGui::SliderInt("Opacity", &w.opacity, 30, 100, "%d%%")) config.markDirty();
-            if (ImGui::Button("Back to the menu")) {
+            if (ImGui::Button("Back to menu")) {
                 open = false;
                 ImGui::CloseCurrentPopup();
             }

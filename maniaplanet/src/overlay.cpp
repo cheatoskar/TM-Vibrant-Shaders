@@ -254,7 +254,7 @@ void hotkeys() {
     if (effectsKey && allowed(keys::Action::Effects)) {
         config.settings.enabled = !config.settings.enabled;
         config.markDirty();
-        toast(config.settings.enabled ? "TM Vibrant Shaders: on" : "TM Vibrant Shaders: off (the game's own image)");
+        toast(config.settings.enabled ? "TM Vibrant Shaders: on" : "TM Vibrant Shaders: off");
     }
     if (splitKey && allowed(keys::Action::PhotoSplit)) photo::toggleSplit();
     if (photoKey && allowed(keys::Action::Photo)) photo::toggle();
@@ -290,32 +290,30 @@ void gamePanel() {
     const ImVec4 good(0.45f, 0.85f, 0.45f, 1), warn(0.95f, 0.75f, 0.3f, 1), bad(0.95f, 0.4f, 0.35f, 1);
     bool changed = ImGui::Checkbox("HDR stage", &o.hdrStage);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("On: the mod replaces the engine's tone map; bright lights and sky keep colour and detail.\n"
-                          "Off: the engine's tone map stays and the look goes on its finished image.");
+        ImGui::SetTooltip("On: bright lights and sky keep colour and detail.\n"
+                          "Off: the game's tone map stays and the look is applied on top.");
     int placement = static_cast<int>(o.placement);
     changed |= ImGui::RadioButton("Before HUD", &placement, 0);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The look is applied before the interface is drawn, so the HUD stays untouched.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The look is applied before the HUD, which stays untouched.");
     ImGui::SameLine();
     changed |= ImGui::RadioButton("End of frame", &placement, 1);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The look is applied to the finished frame, interface included.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The look also applies to the HUD.");
     o.placement = static_cast<Placement>(placement);
     changed |= ImGui::Checkbox("Fallback: end of frame", &o.fallbackAtEnd);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Use the end of the frame when the start of the interface isn't found.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Applies the look at the end of the frame if the HUD start can't be found.");
     changed |= ImGui::Checkbox("Game light sources", &o.engineLightDraws);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("On: lamps, light strips, screens, halos and the car's lights glow as the engine draws them\n"
-                          "(drawn a second time into a buffer of their own); nothing is guessed from colours.\n"
-                          "Off: the light sources are guessed from the image (as before). F12 saves the buffer.");
+        ImGui::SetTooltip("On: lamps, light strips, screens, halos and car lights glow as the game draws them.\n"
+                          "Off: light sources are guessed from the image. F12 saves the buffer.");
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
     ImGui::SliderFloat("Soft sun shadows", &o.softShadows, 0.0f, 4.0f, o.softShadows > 0.0f ? "%.2f deg" : "Off");
     if (o.softShadows < 0.05f) o.softShadows = 0.0f;
     changed |= ImGui::IsItemDeactivatedAfterEdit();
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("The sun's shadows soft like real ones: sharp where a thing touches the ground, wider the farther\n"
-                          "they fall from it. The value is the sun's size in the sky (the real sun: 0.5 degrees; more is softer).\n"
+        ImGui::SetTooltip("Sharp where a shadow starts, softer the farther it falls.\n"
+                          "The value is the sun's size in the sky (real sun: 0.5 degrees; more is softer).\n"
                           "Off: the game's own shadows.\n"
-                          "The mod draws the game's shadow pass with its own shader (nothing in the game's memory changes).\n"
-                          "Whether ManiaPlanet's anti-cheat minds that is not known.");
+                          "Not tested against ManiaPlanet's anti-cheat.");
     // Only while Game moonlight is Black hole (engineMoonChoice): its brightness. Off is that choice's job.
     if (o.blackHoleMoon > 0.0f) {
         ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
@@ -332,7 +330,7 @@ void gamePanel() {
                      "The mod\0Split with the game\0Check: depth\0Check: normals\0Check: motion\0Check: albedo\0"
                      "Check: world grid\0"))
         o.view = static_cast<View>(view);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compare with the game or check what the mod reads from the engine (debug views).");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Compare with the game, or show debug views of what the mod reads.");
     if (o.view == View::Split) {
         ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
         ImGui::SliderFloat("Split", &o.split, 0.0f, 1.0f);
@@ -400,7 +398,7 @@ void init(HWND window, ID3D11Device* device, ID3D11DeviceContext* ctx) {
     ImGui_ImplDX11_Init(device, ctx);
     g_originalProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&windowProc)));
     g_ready = true;
-    toast("TM Vibrant Shaders " TMVS_MP_VERSION " is running - " + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Menu)) +
+    toast("TM Vibrant Shaders " TMVS_MP_VERSION ": " + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Menu)) +
               " menu, " + tmshaders::keys::name(tmshaders::keys::get(tmshaders::keys::Action::Effects)) + " on/off",
           8000);
     TMVS_LOG("overlay: ready on window %p", static_cast<void*>(window));
@@ -481,29 +479,18 @@ void frame(ID3D11RenderTargetView* backBuffer) {
                             {40, "Depth of field: blur size"},
                             {41, "Motion"}};
             // What works differently here than in TMNF (the shared tooltips describe TMNF's).
-            h.tips = {{"GameNight", "Day and sunset maps under a night sky (Starry night, Black hole, Aurora): TrackMania 2's time "
-                                    "of day can't be changed, so the mod brings the map's sky light, light maps and reflections "
-                                    "down to moonlight itself (the sun goes either way). Lamps and neon stay. Nothing on night "
-                                    "maps, which are night already (only with Game moonlight Off it darkens their sky light too)."},
-                      {"EngineMoon", "Night maps under a night sky (Starry night, Black hole, Aurora). TrackMania 2's moon can't be "
-                                     "moved. Game's: the moon stays as the game has it. Black hole: under the black hole the mod "
-                                     "takes the moon's light and its blue glint out and the black hole lights the scene instead, "
-                                     "warm (brightness: Black hole light, ManiaPlanet panel); under the other skies the moon stays. "
-                                     "Off: the moon's light and glint go (with Real night on, the sky light comes down too); "
-                                     "lamps and neon stay. At once, no map reload."},
-                      {"CinematicOnlyInReplays", "Motion blur and depth of field only in photo mode (TrackMania 2's replays can't "
-                                                 "be told from driving yet). Off: always."},
-                      {"DofAutofocus", "Where the automatic focus sits. Middle: what is in the middle of the screen. Car: your car, "
-                                       "wherever the camera puts it; the middle again while the car is off screen. A click in "
-                                       "the photo mode still wins."}};
+            h.tips = {{"GameNight", "Day and sunset maps under a night sky (Starry night, Black hole, Aurora): darkens sky light, light maps and reflections to moonlight, since TrackMania 2 can't change the time of day. Lamps and neon stay. Night maps are unchanged (with Game moonlight Off their sky light is darkened too)."},
+                      {"EngineMoon", "Night maps under a night sky (Starry night, Black hole, Aurora). Game's: the moon stays as it is. Black hole: the moon's light and blue glint are replaced by the black hole's warm light (brightness: Black hole light, ManiaPlanet panel); under other skies the moon stays. Off: the moon's light and glint go (with Real night on, the sky light dims too). Lamps and neon stay. Applies at once."},
+                      {"CinematicOnlyInReplays", "Motion blur and depth of field only in photo mode (TrackMania 2 can't tell replays from driving yet). Off: always."},
+                      {"DofAutofocus", "Where automatic focus sits. Middle: the screen centre. Car: your car, or the centre while it is off screen. A click in photo mode still wins."}};
             h.engineMoon = engineMoonChoice;
             h.fNumber = photo::fNumber;
             h.splitOn = &photo::splitOn();
             h.splitPosition = &photo::splitPosition();
             h.splitSwapped = &photo::splitSwapped();
             h.splitPreset = &photo::splitPreset();
-            h.splitNote = "In photos too. A preset side gets the aperture too; the game's image stays sharp. "
-                          "Soft shadows and the light draws are the game's, the same on both sides.";
+            h.splitNote = "Also in photos. A preset side gets the aperture; the game's image stays sharp. "
+                          "Soft shadows and light sources are the same on both sides.";
             h.photoOn = [] {
                 if (!photo::active()) photo::toggle();
             };

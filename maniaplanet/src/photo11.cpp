@@ -72,7 +72,7 @@ void save(std::vector<unsigned char>&& rgb, int width, int height) {
         if (GetFileAttributesW((tmshaders::log::dataDir() + name).c_str()) == INVALID_FILE_ATTRIBUTES) break;
     }
     job->path = tmshaders::log::dataDir() + name;
-    setStatus("Saving the photo ...", 0);
+    setStatus("Saving photo...", 0);
     // A PNG of 2560x1440 takes a while: not on the game's render thread.
     HANDLE thread = CreateThread(nullptr, 0, saveThread, job, 0, nullptr);
     if (thread) CloseHandle(thread);
