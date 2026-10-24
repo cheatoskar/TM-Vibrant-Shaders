@@ -41,6 +41,13 @@ struct ResourcePacks {
     virtual void openFolder(const std::string& environment) = 0;
     virtual std::string status() = 0; // what the last map loaded with ("" before the first)
     virtual bool hooked() = 0;        // false: this game build can't
+    // The loaded map: whether its pack can be switched now, and whether the choice differs.
+    struct Live {
+        bool possible = false, differs = false;
+        std::string environment, shown, wanted;
+    };
+    virtual Live live() = 0;
+    virtual std::string applyNow() = 0; // switches the loaded map's textures; a line saying how it went
 };
 
 struct Host {

@@ -289,6 +289,20 @@ std::string modPackStatus();
 // Whether the game has Skins\<environment>\Mod\<file> among its packs (it finds them at start:
 // one added while it runs can't be used before the next start).
 bool modPackKnown(const char* environment, const std::wstring& file);
+// The loaded map's pack, switched without loading the map again: every texture of the
+// environment gets the chosen pack's file (or the game's own) through the engine's path for a
+// mod file that arrives while a map runs (CPlugBitmap::OnPackAvailable).
+struct ModPackLive {
+    bool possible = false;   // a map is loaded (not loading) and this build can
+    bool differs = false;    // the choice now is not what its textures show
+    std::string environment; // "Stadium"
+    std::string shown;       // what its textures show ("DarkBlue.zip", "none")
+    std::string wanted;      // what the choice gives for this map
+};
+ModPackLive modPackLive();
+// Switches now (the game's thread, between frames). False with the reason in `status`; true with
+// what was swapped ("Stadium: DarkBlue.zip -> NEONglowSTICKS.zip, 37 textures").
+bool applyModPackNow(std::string& status);
 
 } // namespace engine
 } // namespace tmshaders

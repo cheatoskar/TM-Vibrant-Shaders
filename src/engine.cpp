@@ -60,6 +60,12 @@ struct GameBuild {
     // read (see kVehicleWheels).
     uintptr_t wheelCount, wheelContact, asyncSpeed;
     uintptr_t packManager;         // CSystemPackManager* CSystemEngine::s_PackManager (the game's packs: mods, skins, ...)
+    // Resource packs switched live (applyModPackNow): CGameCtnCatalog::GetArticleFromIdent,
+    // CSystemPackManager::SimpleGetPackElem, CPlugBitmap::OnPackAvailable (checked in each bitmap's
+    // vtable before it is called); CGameCtnCollection::s_GlobalCatalog, and the loaded articles'
+    // cache key CGameCtnArticle::s_LoadedArticles_DecoSkin / _DecoIdent.
+    uintptr_t articleFromIdent, packElem, bitmapPackAvailable;
+    uintptr_t globalCatalog, decoSkin, decoIdent;
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -73,14 +79,16 @@ constexpr GameBuild kBuilds[] = {
       0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0, 0x005abea0, 0x0072aab0},
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20, 0, 0, 0x00ac1e72}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
-     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70, 0x00d54250},
+     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70, 0x00d54250,
+     0x005a0db0, 0x0043d360, 0x00845f00, 0x00d69674, 0x00d69e48, 0x00d69e94},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
       0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0, 0x005ac030, 0x0072a970},
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720, 0, 0, 0x00ac1872}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
-     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70, 0x00d558b0},
+     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70, 0x00d558b0,
+     0x005a0f90, 0x0043d3e0, 0x00846020, 0x00d6acd4, 0x00d6b4a8, 0x00d6b4f4},
 };
 const GameBuild* g_build = nullptr;
 
@@ -309,6 +317,7 @@ constexpr InlineSite kLoadProgressSite = {kLoadProgress, {0x6a, 0xff, 0x68, 0, 0
 constexpr size_t kChallengeDecoration = 0xc4;  // SGameCtnIdentifier: id (the decoration), collection, author
 constexpr size_t kChallengeCollection = 0xe0;  // CMwId of the map's environment (GetModPackDesc compares it)
 constexpr size_t kChallengeMod = 0x13c;        // CSystemPackDesc*: the map's own mod (saved with the map)
+constexpr size_t kAppForcedMods = 0x310;       // CGameCtnApp: SCtnForcedMods (a server's forced mods)
 constexpr size_t kPackManagerPacks = 0x44;     // CFastBuffer<CSystemPackDesc*> {count, data}
 constexpr size_t kPackDescName = 0x1c;         // CFastStringInt: "Skins\Stadium\Mod\X.zip" (relative)
 constexpr size_t kPackDescFile = 0x48;         // CSystemFidFile*: the file on disk (0: not there)
@@ -1472,10 +1481,16 @@ std::string shortPackName(const wchar_t* name) {
     return toUtf8(start, static_cast<int>(wcslen(start)));
 }
 
-void* chooseModPack(void* challenge, void* gamePack) {
+// The pack the chooser wants for this map: `gamePack` is the game's own answer (the map's mod,
+// or the server's forced one). line: for the log ("Stadium: DarkBlue.zip (instead of ...)"),
+// wanted: the pack's short name ("none"). False when the map doesn't look as expected.
+bool decideModPack(void* challenge, void* gamePack, bool loadScreen, void** result, std::string& line, std::string& environmentName,
+                   std::string& wanted) {
     char environment[64], decoration[64];
     const void* own = nullptr;
-    if (!readModPackAsk(challenge, environment, decoration, sizeof(environment), &own)) return gamePack;
+    *result = gamePack;
+    if (!readModPackAsk(challenge, environment, decoration, sizeof(environment), &own)) return false;
+    environmentName = environment;
     wchar_t ownName[512] = {}, gameName[512] = {};
     if (own) packName(own, ownName, 512);
     if (gamePack) packName(gamePack, gameName, 512);
@@ -1483,20 +1498,22 @@ void* chooseModPack(void* challenge, void* gamePack) {
     ask.environment = environment;
     ask.decoration = decoration;
     ask.mapMod = own ? ownName : nullptr;
-    ask.loadScreen = g_modScopeLoadScreen;
+    ask.loadScreen = loadScreen;
     const ModPackAnswer answer = g_chooseModPack(ask);
     const std::string instead = own ? " (instead of the map's " + shortPackName(ownName) + ")" : " (the map has none)";
     const std::string game = gamePack ? shortPackName(gameName) : std::string("none");
-    void* result = gamePack;
-    std::string line = std::string(environment) + ": ";
+    line = std::string(environment) + ": ";
+    wanted = game;
     if (answer.kind == ModPackAnswer::None) {
-        result = nullptr;
+        *result = nullptr;
+        wanted = "none";
         line += "none" + (own ? instead : std::string());
     } else if (answer.kind == ModPackAnswer::Pack) {
         const std::wstring tail = modTail(environment, answer.file);
         const std::string file = toUtf8(answer.file.c_str(), static_cast<int>(answer.file.size()));
         if (void* pack = const_cast<void*>(findPack(tail.c_str(), tail.size()))) {
-            result = pack;
+            *result = pack;
+            wanted = file;
             line += file + instead;
         } else {
             line += file + " is not known to the game (added after it started? restart TrackMania), map's own: " + game;
@@ -1505,6 +1522,13 @@ void* chooseModPack(void* challenge, void* gamePack) {
         line += "map's own: " + game;
     }
     if (!answer.note.empty()) line += "; " + answer.note;
+    return true;
+}
+
+void* chooseModPack(void* challenge, void* gamePack) {
+    void* result = gamePack;
+    std::string line, environment, wanted;
+    if (!decideModPack(challenge, gamePack, g_modScopeLoadScreen, &result, line, environment, wanted)) return gamePack;
     // Once a map: the load screen asks the same just before.
     if (!g_modScopeLoadScreen) {
         TMVS_LOG("modpack: %s", line.c_str());
@@ -1517,6 +1541,233 @@ void* __fastcall modPackDescDetour(void* challenge, void* edx, const void* force
     void* const pack = g_modPackDesc(challenge, edx, forcedMods);
     if (!g_chooseModPack || g_modScopeDepth <= 0 || g_modScopeThread != GetCurrentThreadId()) return pack;
     return chooseModPack(challenge, pack);
+}
+
+// --- Resource packs switched while a map is loaded ------------------------------------------
+// The engine's own path for a mod file that arrives while a map runs (a map's mod downloaded
+// during a race): CSystemPackManager::UpdatePacksAvailabilityAndUse calls the waiting nod's
+// OnPackAvailable(old fid, new fid); CPlugBitmap::OnPackAvailable loads the image of the new fid
+// (CSystemArchiveNod::LoadFromFid) and gives it to the bitmap (SetImage: SetDirty, the renderer
+// makes its texture again). The live switch does the same for every texture of the environment:
+// the decoration's skin (the decoration article's CGameSkin, +0x58) lists the game's folders a
+// mod replaces (+0x34, CSystemFids), the folder's name in the zip (+0x40, CFastString) and the
+// file class (+0x4c); a file there is looked up in a pack as <name>\<path without extension>
+// (CSystemFidParameters::DoOneRemap, CSystemPackManager::SimpleGetPackElem), as at map load.
+// Nothing of the map, the network or the race is touched: only bitmaps' images, and the loaded
+// articles' cache key (s_LoadedArticles_DecoSkin), so that the next map knows what they show.
+constexpr size_t kArticleSkin = 0x58;          // CGameSkin*
+constexpr size_t kSkinFolders = 0x34;          // CFastBuffer<CMwNod*>: the game's folders (CSystemFids) a pack replaces
+constexpr size_t kSkinNames = 0x40;            // CFastBuffer<CFastString>: their names in a pack ("Image")
+constexpr size_t kSkinClassIds = 0x4c;         // CFastBuffer<ulong>: the class of their files
+constexpr size_t kFidsFiles = 0x1c;            // CSystemFids: CFastBuffer<CSystemFid*>
+constexpr size_t kFidsFolders = 0x28;          // CSystemFids: CFastBuffer<CSystemFids*>
+constexpr size_t kFidsName = 0x40;             // CSystemFids: CFastStringInt
+constexpr size_t kFidNod = 0x20;               // CSystemFid: the nod loaded from it
+constexpr size_t kFidVariants = 0x24;          // CSystemFid: CFastBuffer<CSystemFid*>, loaded with other fid parameters
+constexpr size_t kFidBase = 0x30;              // CSystemFid: a variant's base fid (0: none)
+constexpr size_t kFidFileName = 0x74;          // CSystemFidFile: CFastStringInt
+constexpr size_t kNodFid = 0x08;               // CMwNod: its fid
+constexpr size_t kImageBitmap = 0x14;          // CPlugFileImg: the bitmap it was last given to
+constexpr size_t kBitmapImage = 0x48;          // CPlugBitmap: its CPlugFileImg
+constexpr unsigned kClassFids = 0x0b009000, kClassFidFile = 0x0b00a000, kClassFileImg = 0x09025000;
+constexpr int kOnPackAvailableSlot = 0x50 / 4;
+using IsKindFn = int(__fastcall*)(const void*, void*, unsigned);
+using ArticleFromIdentFn = void*(__fastcall*)(void*, void*, const void*);
+using PackElemFn = void*(__fastcall*)(void*, void*, void*, const void*, unsigned, int*, int);
+using PackAvailableFn = void(__fastcall*)(void*, void*, void*, void*);
+struct FastString {
+    uint32_t size;
+    const char* text;
+};
+
+bool isKind(const void* nod, unsigned classId) {
+    if (!nod) return false;
+    void* const* table = *reinterpret_cast<void* const* const*>(nod);
+    return reinterpret_cast<IsKindFn>(table[4])(nod, nullptr, classId) != 0;
+}
+
+struct LiveSwap {
+    void* manager = nullptr;
+    void* from = nullptr;     // the pack the textures show now (null: the game's own)
+    void* to = nullptr;       // the one they get
+    unsigned classId = 0;
+    int files = 0, swapped = 0, unchanged = 0, failed = 0;
+};
+
+void* packFile(LiveSwap& s, void* pack, const char* path) {
+    if (!pack) return nullptr;
+    const FastString name = {static_cast<uint32_t>(strlen(path)), path};
+    int pending = 0;
+    return reinterpret_cast<PackElemFn>(rebase(g_build->packElem))(s.manager, nullptr, pack, &name, s.classId, &pending, 0);
+}
+
+// The bitmap showing `image` (null: none, or not a plain CPlugBitmap).
+void* bitmapOf(const void* image) {
+    if (!image || !isKind(image, kClassFileImg)) return nullptr;
+    void* bitmap = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(image) + kImageBitmap);
+    if (!bitmap || *reinterpret_cast<void* const*>(static_cast<const BYTE*>(bitmap) + kBitmapImage) != image) return nullptr;
+    void* const* table = *reinterpret_cast<void* const* const*>(bitmap);
+    if (reinterpret_cast<uintptr_t>(table[kOnPackAvailableSlot]) != rebase(g_build->bitmapPackAvailable)) return nullptr;
+    return bitmap;
+}
+
+// One file of a skin folder: every bitmap showing it (from the game's file, a variant of it, or
+// the pack shown now) gets the file of the new pack, or the game's own.
+// The nods loaded from a fid and from its variants (the same file loaded with other fid
+// parameters, as a skinned load does), up to the array's end.
+void addLoaded(void* fid, void** images, int& count, int size) {
+    if (!fid) return;
+    if (count < size) images[count++] = *reinterpret_cast<void**>(static_cast<BYTE*>(fid) + kFidNod);
+    const uint32_t variants = *reinterpret_cast<const uint32_t*>(static_cast<BYTE*>(fid) + kFidVariants);
+    void* const* variant = *reinterpret_cast<void* const* const*>(static_cast<BYTE*>(fid) + kFidVariants + 4);
+    for (uint32_t i = 0; variant && i < variants && count < size; i++) {
+        if (variant[i]) images[count++] = *reinterpret_cast<void**>(static_cast<BYTE*>(variant[i]) + kFidNod);
+    }
+}
+
+void swapFile(LiveSwap& s, void* fid, const char* path) {
+    void* target = packFile(s, s.to, path);
+    if (!target) target = fid;
+    constexpr int kMax = 24;
+    void* images[kMax] = {};
+    int count = 0;
+    addLoaded(fid, images, count, kMax);
+    addLoaded(packFile(s, s.from, path), images, count, kMax);
+    if (target != fid) addLoaded(target, images, count, kMax);
+    void* done[kMax] = {};
+    int doneCount = 0;
+    for (int i = 0; i < count; i++) {
+        void* bitmap = bitmapOf(images[i]);
+        if (!bitmap) continue;
+        bool seen = false;
+        for (int k = 0; k < doneCount; k++) seen |= done[k] == bitmap;
+        if (seen) continue;
+        done[doneCount++] = bitmap;
+        void* shown = *reinterpret_cast<void**>(static_cast<BYTE*>(images[i]) + kNodFid);
+        // A variant of the file is the file (other fid parameters, the same pixels).
+        if (shown == target || (shown && *reinterpret_cast<void**>(static_cast<BYTE*>(shown) + kFidBase) == target)) {
+            s.unchanged++;
+            continue;
+        }
+        __try {
+            void* const* table = *reinterpret_cast<void* const* const*>(bitmap);
+            reinterpret_cast<PackAvailableFn>(table[kOnPackAvailableSlot])(bitmap, nullptr, shown, target);
+            void* now = *reinterpret_cast<void**>(static_cast<BYTE*>(bitmap) + kBitmapImage);
+            void* nowFid = now ? *reinterpret_cast<void**>(static_cast<BYTE*>(now) + kNodFid) : nullptr;
+            if (nowFid && (nowFid == target || *reinterpret_cast<void**>(static_cast<BYTE*>(nowFid) + kFidBase) == target)) s.swapped++;
+            else s.failed++;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            s.failed++;
+        }
+    }
+}
+
+// A CFastStringInt as ASCII (file and folder names of the game's data are), false if too long.
+bool asciiName(const BYTE* fastString, char* out, size_t size) {
+    const FastStringInt* name = reinterpret_cast<const FastStringInt*>(fastString);
+    if (!name->text || name->size == 0 || name->size >= size) return false;
+    for (uint32_t i = 0; i < name->size; i++) out[i] = name->text[i] < 128 ? static_cast<char>(name->text[i]) : '_';
+    out[name->size] = '\0';
+    return true;
+}
+
+// The files of a game folder and its sub-folders, `prefix` their path in a pack so far
+// ("Image\" , "Image\Sub\").
+void swapFolder(LiveSwap& s, const BYTE* folder, const char* prefix, int depth) {
+    if (depth > 4) return;
+    const uint32_t files = *reinterpret_cast<const uint32_t*>(folder + kFidsFiles);
+    void* const* file = *reinterpret_cast<void* const* const*>(folder + kFidsFiles + 4);
+    for (uint32_t i = 0; file && i < files && i < 100000; i++) {
+        void* fid = file[i];
+        if (!fid || !isKind(fid, kClassFidFile) || *reinterpret_cast<void* const*>(static_cast<BYTE*>(fid) + kFidBase)) continue;
+        char name[260], path[600];
+        if (!asciiName(static_cast<BYTE*>(fid) + kFidFileName, name, sizeof(name))) continue;
+        if (char* dot = strrchr(name, '.')) *dot = '\0'; // the pack is searched by base name and class
+        snprintf(path, sizeof(path), "%s%s", prefix, name);
+        s.files++;
+        swapFile(s, fid, path);
+    }
+    const uint32_t folders = *reinterpret_cast<const uint32_t*>(folder + kFidsFolders);
+    const BYTE* const* sub = *reinterpret_cast<const BYTE* const* const*>(folder + kFidsFolders + 4);
+    for (uint32_t i = 0; sub && i < folders && i < 10000; i++) {
+        char name[260], path[600];
+        if (!sub[i] || !asciiName(sub[i] + kFidsName, name, sizeof(name))) continue;
+        snprintf(path, sizeof(path), "%s%s%s", prefix, name, name[strlen(name) - 1] == '\\' ? "" : "\\");
+        swapFolder(s, sub[i], path, depth + 1);
+    }
+}
+
+// Every folder of the decoration's skin. False: no skin, or the game's memory is not as expected.
+bool swapSkin(void* challenge, LiveSwap& s, char* why, size_t whySize) {
+    __try {
+        void* catalog = *reinterpret_cast<void* const*>(rebase(g_build->globalCatalog));
+        s.manager = *reinterpret_cast<void* const*>(rebase(g_build->packManager));
+        if (!catalog || !s.manager) {
+            strncpy_s(why, whySize, "no catalog or pack manager", _TRUNCATE);
+            return false;
+        }
+        void* article = reinterpret_cast<ArticleFromIdentFn>(rebase(g_build->articleFromIdent))(catalog, nullptr, static_cast<BYTE*>(challenge) + kChallengeDecoration);
+        const BYTE* skin = article ? *reinterpret_cast<const BYTE* const*>(static_cast<BYTE*>(article) + kArticleSkin) : nullptr;
+        if (!skin) {
+            strncpy_s(why, whySize, article ? "the decoration has no skin" : "the decoration was not found", _TRUNCATE);
+            return false;
+        }
+        const uint32_t count = *reinterpret_cast<const uint32_t*>(skin + kSkinFolders);
+        const BYTE* const* folders = *reinterpret_cast<const BYTE* const* const*>(skin + kSkinFolders + 4);
+        const FastString* names = *reinterpret_cast<const FastString* const*>(skin + kSkinNames + 4);
+        const unsigned* classes = *reinterpret_cast<const unsigned* const*>(skin + kSkinClassIds + 4);
+        if (count > 64 || *reinterpret_cast<const uint32_t*>(skin + kSkinNames) != count || *reinterpret_cast<const uint32_t*>(skin + kSkinClassIds) != count) {
+            strncpy_s(why, whySize, "the skin's folder lists don't match", _TRUNCATE);
+            return false;
+        }
+        for (uint32_t i = 0; i < count; i++) {
+            if (!folders[i] || !isKind(folders[i], kClassFids) || !names[i].text) continue;
+            char prefix[300];
+            const size_t n = names[i].size < 250 ? names[i].size : 250;
+            memcpy(prefix, names[i].text, n);
+            prefix[n] = '\0';
+            if (n && prefix[n - 1] != '\\') strcat_s(prefix, "\\");
+            s.classId = classes[i];
+            swapFolder(s, folders[i], prefix, 0);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        strncpy_s(why, whySize, "the game's memory is not as expected", _TRUNCATE);
+        return false;
+    }
+}
+
+// The pack the loaded articles were skinned with, if they are this map's decoration's (same
+// environment); false otherwise.
+bool shownPack(void* challenge, void** pack) {
+    __try {
+        const uint32_t* ident = reinterpret_cast<const uint32_t*>(rebase(g_build->decoIdent));
+        if (ident[1] != *reinterpret_cast<const uint32_t*>(static_cast<BYTE*>(challenge) + kChallengeDecoration + 4)) return false;
+        *pack = *reinterpret_cast<void* const*>(rebase(g_build->decoSkin));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void setShownPack(void* pack) {
+    __try {
+        *reinterpret_cast<void**>(rebase(g_build->decoSkin)) = pack;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void* gameModPack(void* challenge) {
+    __try {
+        const void* forced = g_app ? static_cast<const BYTE*>(g_app) + kAppForcedMods : nullptr;
+        return g_modPackDesc(challenge, nullptr, forced);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+bool liveSwitchReady() {
+    return g_modPackDesc && g_chooseModPack && g_build->articleFromIdent && !g_loadingChallenge && g_modScopeDepth == 0;
 }
 
 void __fastcall loadProgressDetour(void* self, void* edx, void* challenge) {
@@ -2078,6 +2329,73 @@ bool modPackKnown(const char* environment, const std::wstring& file) {
     if (!g_modPackDesc) return false;
     const std::wstring tail = modTail(environment, file);
     return findPack(tail.c_str(), tail.size()) != nullptr;
+}
+
+ModPackLive modPackLive() {
+    ModPackLive live;
+    void* challenge = currentChallenge();
+    if (!challenge || !liveSwitchReady()) return live;
+    void* shown = nullptr;
+    if (!shownPack(challenge, &shown)) return live;
+    void* wanted = nullptr;
+    std::string line;
+    if (!decideModPack(challenge, gameModPack(challenge), false, &wanted, line, live.environment, live.wanted)) return live;
+    wchar_t name[512] = {};
+    live.shown = shown && packName(shown, name, 512) ? shortPackName(name) : std::string("none");
+    live.possible = true;
+    live.differs = wanted != shown;
+    return live;
+}
+
+bool applyModPackNow(std::string& status) {
+    void* challenge = currentChallenge();
+    if (!challenge || !liveSwitchReady()) {
+        status = challenge ? "Not now (a map is loading)." : "No map loaded.";
+        return false;
+    }
+    void* shown = nullptr;
+    if (!shownPack(challenge, &shown)) {
+        status = "The loaded textures are not this map's.";
+        TMVS_LOG("modpack: live: the loaded articles belong to another environment, nothing switched");
+        return false;
+    }
+    void* wanted = nullptr;
+    std::string line, environment, wantedName;
+    if (!decideModPack(challenge, gameModPack(challenge), false, &wanted, line, environment, wantedName)) {
+        status = "The map doesn't look as expected.";
+        return false;
+    }
+    wchar_t name[512] = {};
+    const std::string shownName = shown && packName(shown, name, 512) ? shortPackName(name) : std::string("none");
+    if (wanted == shown) {
+        status = environment + ": " + shownName + " already.";
+        return true;
+    }
+    LiveSwap swap;
+    swap.from = shown;
+    swap.to = wanted;
+    char why[128] = "";
+    const DWORD start = GetTickCount();
+    const bool ok = swapSkin(challenge, swap, why, sizeof(why));
+    const DWORD ms = GetTickCount() - start;
+    if (!ok) {
+        TMVS_LOG("modpack: live: %s: %s -> %s failed: %s (%d textures swapped before)", environment.c_str(), shownName.c_str(), wantedName.c_str(), why,
+                 swap.swapped);
+        status = std::string("Failed: ") + why + ".";
+        if (swap.swapped == 0) return false;
+    }
+    // The loaded articles show the new pack now: the next map with it keeps them, one with
+    // another pack loads them again (CGameCtnArticle::PrepareCacheForLoading compares this).
+    setShownPack(wanted);
+    TMVS_LOG("modpack: live: %s: %s -> %s: %d textures swapped, %d already right, %d failed (%d files in the skin's folders, %lu ms)",
+             environment.c_str(), shownName.c_str(), wantedName.c_str(), swap.swapped, swap.unchanged, swap.failed, swap.files,
+             static_cast<unsigned long>(ms));
+    char text[256];
+    snprintf(text, sizeof(text), "%s: %s, %d textures switched%s.", environment.c_str(), wantedName.c_str(), swap.swapped,
+             swap.failed ? (", " + std::to_string(swap.failed) + " failed").c_str() : "");
+    status = text;
+    g_modPackStatus = line + " (switched live)";
+    return ok;
 }
 
 void setNightAtLoad(bool (*decide)(float dayTime)) {

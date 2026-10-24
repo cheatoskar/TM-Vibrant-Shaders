@@ -430,6 +430,21 @@ struct GamePacks : menu::ResourcePacks {
         ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
     std::string status() override { return engine::modPackStatus(); }
+    Live live() override {
+        const engine::ModPackLive l = engine::modPackLive();
+        Live out;
+        out.possible = l.possible;
+        out.differs = l.differs;
+        out.environment = l.environment;
+        out.shown = l.shown;
+        out.wanted = l.wanted;
+        return out;
+    }
+    std::string applyNow() override {
+        std::string status;
+        engine::applyModPackNow(status);
+        return status;
+    }
     bool hooked() override { return engine::modPacksHooked(); }
 };
 GamePacks g_packs;

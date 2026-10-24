@@ -1759,7 +1759,7 @@ bool packCard(const std::string& title, const std::string& line, ImTextureID tex
 // map mood). The choice is used when a map loads; nothing of it goes into maps, replays or online.
 void drawPacks(Config& config) {
     ResourcePacks* rp = g_host->resourcePacks;
-    pageTitle("Resource packs", "Texture mods (Skins\\<Environment>\\Mod) on every map. Click one to use it from the next map on.");
+    pageTitle("Resource packs", "Texture mods (Skins\\<Environment>\\Mod) on every map. Click one to use it; Apply now switches the map you are on.");
     if (!rp->hooked()) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "This game build can't use them (tmvs.log says why).");
     if (ImGui::Button("Refresh")) rp->refresh();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Looks for new packs. The game can use a new one after a restart.");
@@ -1771,6 +1771,24 @@ void drawPacks(Config& config) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Off: maps that bring their own mod keep it.");
     const std::string status = rp->status();
     ImGui::TextDisabled("Last map: %s", status.empty() ? "none loaded yet" : status.c_str());
+    // The loaded map: switch its textures now instead of at the next map.
+    static std::string s_applied;
+    const ResourcePacks::Live live = rp->live();
+    if (live.possible) {
+        ImGui::BeginDisabled(!live.differs);
+        if (ImGui::Button("Apply now")) s_applied = rp->applyNow();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Switches this map's textures to your choice without loading it again (a short pause).");
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        if (live.differs) {
+            ImGui::TextColored(kAccent, "This map shows %s, your choice gives %s.", live.shown.c_str(), live.wanted.c_str());
+        } else {
+            ImGui::TextDisabled("This map shows your choice (%s: %s).", live.environment.c_str(), live.shown.c_str());
+        }
+    }
+    if (!s_applied.empty()) ImGui::TextDisabled("%s", s_applied.c_str());
     ImGui::Spacing();
 
     static const char* const kSlots[] = {"All moods", "Day", "Sunset", "Night"};
