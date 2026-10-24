@@ -149,7 +149,7 @@ add_library(tm_vibrant_shaders SHARED
   src/dllmain.cpp
   src/plugin.cpp
   src/casters.cpp
-  src/blockorder_stub.cpp # STUB: replace by src/blockorder.cpp when it is merged
+  src/blockorder.cpp
   src/perflog.cpp
   src/engine.cpp
   src/hook.cpp
