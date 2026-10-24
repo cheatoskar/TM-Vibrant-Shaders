@@ -3150,7 +3150,11 @@ int overlapRank(IDirect3DDevice9* device) {
 
 void overlapBiasBegin(IDirect3DDevice9* device) {
     const Settings& s = Config::get().settings;
-    if (!g_scene.inMainCamera || !s.overlapFix || !s.enabled) return;
+    // Not tied to Settings::enabled: the flicker is the game's own, so the fix also works with the
+    // shaders off (F7). Everything it reads runs then too: engine hooks (blockorder, onCameraBegin
+    // with inMainCamera and the depth step) are unconditional, and the readable game depth that
+    // isMainTarget needs depends on readableGameDepth alone.
+    if (!g_scene.inMainCamera || !s.overlapFix) return;
     const int rank = overlapRank(device);
     if (rank <= 0) return;
     if (!overlapBiasSupported(device)) return;
