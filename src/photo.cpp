@@ -21,6 +21,8 @@ bool g_panel = true;        // the compact panel (its key hides it)
 bool g_active = false;
 float g_focus[2] = {-1.0f, -1.0f};
 float g_zoom = 1.0f;        // Shift+wheel, 1..8
+float g_view[4] = {0.0f, 0.0f, 1.0f, 1.0f}; // the 3D view in fractions of the back buffer: x, y, width, height
+bool g_viewPart = false;    // a part of the screen (the replay editor), not the whole
 bool g_split = false;       // Shift+F6: the game's image on one side of a line
 float g_splitAt = 0.5f;     // the line, 0..1 from the left
 bool g_splitSwap = false;   // the game's image on the right
@@ -187,6 +189,39 @@ void toggle() {
     g_manual = g_active ? 0 : 1;
 }
 
+void setView(bool part, const RECT& area, UINT bufferWidth, UINT bufferHeight) {
+    float v[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+    if (part && bufferWidth > 0 && bufferHeight > 0) {
+        v[0] = static_cast<float>(area.left) / bufferWidth;
+        v[1] = static_cast<float>(area.top) / bufferHeight;
+        v[2] = static_cast<float>(area.right - area.left) / bufferWidth;
+        v[3] = static_cast<float>(area.bottom - area.top) / bufferHeight;
+    } else {
+        part = false;
+    }
+    bool changed = part != g_viewPart;
+    for (int i = 0; i < 4; i++) changed = changed || fabsf(v[i] - g_view[i]) > 0.0005f;
+    if (!changed) return;
+    memcpy(g_view, v, sizeof(g_view));
+    g_viewPart = part;
+    g_focus[0] = g_focus[1] = -1.0f; // a click in the old view means nothing in the new
+    static int s_lines = 0;
+    if (part && s_lines < 20) {
+        s_lines++;
+        TMVS_LOG("photo: 3D view is %ld,%ld,%ld,%ld of %u,%u (replay editor)", area.left, area.top, area.right - area.left, area.bottom - area.top,
+                 bufferWidth, bufferHeight);
+    }
+}
+
+bool viewArea(UINT bufferWidth, UINT bufferHeight, RECT& out) {
+    if (!g_viewPart || !bufferWidth || !bufferHeight) return false;
+    out.left = static_cast<LONG>(lroundf(g_view[0] * bufferWidth));
+    out.top = static_cast<LONG>(lroundf(g_view[1] * bufferHeight));
+    out.right = static_cast<LONG>(lroundf((g_view[0] + g_view[2]) * bufferWidth));
+    out.bottom = static_cast<LONG>(lroundf((g_view[1] + g_view[3]) * bufferHeight));
+    return out.right > out.left && out.bottom > out.top && out.right <= static_cast<LONG>(bufferWidth) && out.bottom <= static_cast<LONG>(bufferHeight);
+}
+
 void beginFrame() {
     const bool freeCam = engine::freeCamActive();
     if (freeCam != g_wasFreeCam) {
@@ -228,8 +263,23 @@ void beginFrame() {
     }
 }
 
+// The pointer of a mouse message in the 3D view's own UV; false when it is outside the view (on the
+// editor's panels: the game keeps those clicks and wheel turns). A wheel message has screen coordinates.
+bool pointerInView(HWND hwnd, UINT msg, LPARAM lparam, float& u, float& v) {
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    if (client.right <= 0 || client.bottom <= 0) return false;
+    POINT p = {static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam))};
+    if (msg == WM_MOUSEWHEEL) ScreenToClient(hwnd, &p);
+    u = (static_cast<float>(p.x) / client.right - g_view[0]) / g_view[2];
+    v = (static_cast<float>(p.y) / client.bottom - g_view[1]) / g_view[3];
+    return u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f;
+}
+
 bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (!g_active || g_job != Job::None) return false;
+    float viewU = 0.0f, viewV = 0.0f;
+    if (g_viewPart && (msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP || msg == WM_MOUSEWHEEL) && !pointerInView(hwnd, msg, lparam, viewU, viewV)) return false;
     if (msg == WM_MBUTTONDOWN) {
         if (wparam & MK_SHIFT) {
             g_zoom = 1.0f;
@@ -241,11 +291,13 @@ bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             setStatus("Focus off", 2);
             return true;
         }
+        // In the view's own UV (the whole screen's when the game draws all of it).
+        if (!pointerInView(hwnd, msg, lparam, viewU, viewV) && g_viewPart) return false;
         RECT client{};
         GetClientRect(hwnd, &client);
         if (client.right <= 0 || client.bottom <= 0) return false;
-        g_focus[0] = static_cast<float>(static_cast<short>(LOWORD(lparam))) / client.right;
-        g_focus[1] = static_cast<float>(static_cast<short>(HIWORD(lparam))) / client.bottom;
+        g_focus[0] = viewU;
+        g_focus[1] = viewV;
         if (Config::get().photoDof <= 0.0f) {
             Config::get().photoDof = 0.5f;
             Config::get().markDirty();

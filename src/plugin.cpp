@@ -2362,6 +2362,7 @@ void processScene(IDirect3DDevice9* device) {
         }
         s_wasPart = part;
     }
+    if (temporal) photo::setView(part, area, desc.Width, desc.Height);
     if (!g_pipeline.ready() && (g_pipelineFailed || !g_pipeline.init(device, g_dev.shaderDir))) {
         g_pipelineFailed = true;
         target->Release();
@@ -3591,6 +3592,18 @@ void onPresent(IDirect3DDevice9* device) {
                     TMVS_LOG("capture: not enough memory for the screenshot");
                 }
                 QueryPerformanceCounter(&end);
+                // The replay editor: only the 3D view (between its panels), as the capture's own images are.
+                RECT view{};
+                if (read && pixels->pitch == pixels->width * 4 && photo::viewArea(pixels->width, pixels->height, view)) {
+                    const size_t w = static_cast<size_t>(view.right - view.left) * 4;
+                    std::vector<unsigned char> cut(w * (view.bottom - view.top));
+                    for (LONG y = view.top; y < view.bottom; y++)
+                        memcpy(&cut[w * (y - view.top)], &pixels->bytes[pixels->pitch * y + static_cast<size_t>(view.left) * 4], w);
+                    pixels->bytes.swap(cut);
+                    pixels->width = static_cast<UINT>(view.right - view.left);
+                    pixels->height = static_cast<UINT>(view.bottom - view.top);
+                    pixels->pitch = static_cast<UINT>(w);
+                }
                 if (read) {
                     wchar_t name[64];
                     swprintf(name, 64, L"screen_%03d.bmp", g_screenshotNumber);
