@@ -91,6 +91,8 @@ void setProjectionZoom(float zoom);
 
 // Hides the race / replay interface (HUD) while true: the photo mode. Through the game's own
 // switch (CGamePlaygroundInterface), so menus and the 3D view are drawn as always.
+// Photo mode's Hide car: the game's draws of the cars (not their smoke or tyre marks) are skipped.
+void hideCars(bool hide);
 void hideOverlay(bool hide);
 
 // Skips the game's own FX post-processing (bloom and colour filter, the launcher's "FX"

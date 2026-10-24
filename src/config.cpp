@@ -1726,6 +1726,7 @@ void Config::load() {
     checkUpdates = GetPrivateProfileIntW(L"General", L"CheckForUpdates", 1, ini) != 0;
     photoAuto = GetPrivateProfileIntW(L"General", L"PhotoAuto", 1, ini) != 0;
     photoHideHud = GetPrivateProfileIntW(L"General", L"PhotoHideHud", 1, ini) != 0;
+    photoHideCar = GetPrivateProfileIntW(L"General", L"PhotoHideCar", 0, ini) != 0;
     photoFreeze = GetPrivateProfileIntW(L"General", L"PhotoFreeze", 1, ini) != 0;
     photoTiles = static_cast<int>(GetPrivateProfileIntW(L"General", L"PhotoTiles", 2, ini));
     photoTiles = photoTiles < 2 ? 2 : (photoTiles > 4 ? 4 : photoTiles);
@@ -1868,6 +1869,7 @@ void Config::save() {
     ini.set(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0");
     ini.set(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0");
     ini.set(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0");
+    ini.set(L"General", L"PhotoHideCar", photoHideCar ? L"1" : L"0");
     ini.set(L"General", L"PhotoFreeze", photoFreeze ? L"1" : L"0");
     wchar_t photo[32];
     swprintf(photo, 32, L"%d", photoTiles);

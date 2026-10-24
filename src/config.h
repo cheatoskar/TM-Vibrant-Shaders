@@ -95,6 +95,7 @@ public:
     // of a hi-res photo (2..4, ~0.84x the screen each), depth of field on the clicked point.
     bool photoAuto = true;
     bool photoHideHud = true;
+    bool photoHideCar = false; // photo mode leaves the cars out (TMNF)
     bool photoFreeze = true; // photo mode pauses a finished race, or an editor test (TMNF)
     int photoTiles = 2;
     float photoDof = 0.5f;

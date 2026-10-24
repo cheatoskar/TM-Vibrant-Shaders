@@ -2056,13 +2056,15 @@ bool drawSettings(Config& config, Settings& s) {
         if (!strcmp(f.category, "Game integration")) game.push_back({f.key, nullptr});
     }
     panels.push_back(settingsPanel("Game integration", s, game));
-    panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) + (g_host->photoFreeze ? 1.0f : 0.0f), [&config] {
+    panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) + (g_host->photoFreeze ? 2.0f : 0.0f), [&config] {
                           const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
                           switchRow("Auto photo mode", &config.photoAuto,
                                     ("Photo mode turns on by itself with the free camera (cam 7): no HUD, full quality, far-reaching effects.\n" + photoKey +
                                      " turns it on or off anywhere.").c_str());
                           switchRow("Hide HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
+                          if (g_host->photoFreeze)
+                              switchRow("Hide car", &config.photoHideCar, "Photo mode leaves the cars out of the picture (and their shadows), also in photos. Smoke and tyre marks stay.");
                           if (g_host->photoFreeze)
                               switchRow("Pause the game", &config.photoFreeze,
                                         "In photo mode the game itself pauses (as its own menu does), but only where no timed run is live: after the finish line and in the editor's test. Never online, never in a live run, and replays keep their own pause.");
