@@ -35,6 +35,7 @@ constexpr DWORD kPollMs = 250;              // how often the block array is look
 // The render thread alone calls beginDraw, scans and reads; invalidate() may come from the game's
 // main thread and only sets a flag.
 volatile LONG g_dirty = 1;
+volatile LONG g_countDrops = 0; // polls that found fewer blocks than before (a block was removed)
 const void* g_challenge = nullptr;
 bool g_scanned = false;
 uint32_t g_scanCount = 0;
@@ -277,7 +278,9 @@ void pollChanges() {
     if (!g_dirty && g_scanned) {
         uint32_t count = 0;
         uintptr_t data = 0;
-        if (readBuffer(g_challenge, count, data) && count == g_scanCount && data == g_scanData) return;
+        const bool read = readBuffer(g_challenge, count, data);
+        if (read && count == g_scanCount && data == g_scanData) return;
+        if (read && count < g_scanCount) InterlockedIncrement(&g_countDrops);
     }
     scan();
 }
@@ -298,6 +301,8 @@ int currentDrawRank() { return g_rank; }
 void setIdNameFunction(uintptr_t address) { g_idGetString = reinterpret_cast<IdGetStringFn>(address); }
 
 void invalidate() { InterlockedExchange(&g_dirty, 1); }
+
+int countDrops() { return static_cast<int>(g_countDrops); }
 
 void setChallenge(const void* challenge) {
     if (challenge == g_challenge) return;

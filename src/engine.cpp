@@ -2,6 +2,7 @@
 #include "blockorder.h"
 #include "gbx.h"
 #include "hook.h"
+#include "inlinehook.h"
 #include "log.h"
 #include <windows.h>
 #include <cstring>
@@ -537,10 +538,47 @@ bool prologueMatches(const InlineSite& site) {
     return readable(target, site.length) && memcmp(target, expected, site.length) == 0;
 }
 
+void describeCode(uintptr_t address, char* out, size_t size);
+
+// The function starts with another mod's jump instead of the expected bytes (TMUnlimiter hooks
+// CGameCtnChallenge::RemoveBlock, among others): the hooker of inlinehook.cpp chains onto it, so
+// the call runs us, then them, then the function. False when the start is no jump we know.
+bool chainOntoJump(const InlineSite& site, BYTE* target, void* detour, void** trampoline) {
+    static inlinehook::Hook s_hooks[kSiteCount];
+    BYTE head[16] = {};
+    if (!readable(target, sizeof(head))) return false;
+    memcpy(head, target, sizeof(head));
+    const bool jump = head[0] == 0xE9 || head[0] == 0xEB || (head[0] == 0xFF && head[1] == 0x25) || (head[0] == 0x68 && head[5] == 0xC3);
+    if (!jump) return false;
+    inlinehook::Hook& hook = s_hooks[site.id];
+    const char* why = "";
+    if (!inlinehook::install(target, detour, hook, &why)) {
+        TMVS_LOG("engine: %s starts with a jump (%02x %02x %02x %02x %02x %02x) that can't be chained: %s", site.name,
+                 head[0], head[1], head[2], head[3], head[4], head[5], why);
+        return false;
+    }
+    char where[96] = "?";
+    describeCode(reinterpret_cast<uintptr_t>(hook.previous), where, sizeof(where));
+    TMVS_LOG("engine: %s starts with another mod's jump (to %s): chained, ours runs first, then theirs", site.name, where);
+    *trampoline = hook.trampoline;
+    return true;
+}
+
 void* inlineHook(const InlineSite& site, void* detour) {
     BYTE* target = reinterpret_cast<BYTE*>(rebase(g_build->sites[site.id]));
     if (!prologueMatches(site)) {
-        TMVS_LOG("engine: %s does not match this executable, not hooked", site.name);
+        void* chained = nullptr;
+        if (chainOntoJump(site, target, detour, &chained)) return chained;
+        BYTE found[12] = {};
+        if (readable(target, sizeof(found))) {
+            memcpy(found, target, sizeof(found));
+            TMVS_LOG("engine: %s does not match this executable, not hooked (found %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x, expected %02x %02x %02x %02x %02x %02x %02x%s)", site.name,
+                     found[0], found[1], found[2], found[3], found[4], found[5], found[6], found[7], found[8], found[9], found[10], found[11],
+                     site.prologue[0], site.prologue[1], site.prologue[2], site.prologue[3], site.prologue[4], site.prologue[5], site.prologue[6],
+                     site.length > 7 ? " ..." : "");
+        } else {
+            TMVS_LOG("engine: %s does not match this executable, not hooked (code not readable)", site.name);
+        }
         return nullptr;
     }
     BYTE* trampoline = static_cast<BYTE*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
@@ -2335,7 +2373,8 @@ int respawns() {
 }
 
 int blocksRemoved() {
-    return static_cast<int>(g_blocksRemoved);
+    // The hook's count, plus the removals the block array's count showed (when RemoveBlock isn't hooked).
+    return static_cast<int>(g_blocksRemoved) + blockorder::countDrops();
 }
 
 void setProjectionJitter(float x, float y) {
