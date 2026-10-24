@@ -2207,8 +2207,15 @@ void __fastcall shadowsSetDetour(void* self, void* edx, int mode) {
 // Mine never touches a field: the game's functions in the game's order, nothing else.
 // The race's local player's info (CGameRace::GetLocalPlayerInfo, the function behind the
 // race clock) has the finish at +0x33c (CTrackManiaRace::OnFinishLine sets it to 1; the race
-// time reads the final time at +0x2b0 once it is set).
-constexpr size_t kAppSwitcher = 0x410, kAppEditor = 0x414, kAppNetwork = 0x12c, kAppPlayground = 0x454;
+// time reads the final time at +0x2b0 once it is set). CTrackManiaRace::RespawnPlayer, which every
+// restart and respawn runs (ResetPlayer, SmallRespawn), clears it first thing, and a multi-lap race sets it
+// only on the last lap's finish.
+// The editor's test: the game's challenge type (app +0x418, CTrackMania::SetChallengeType) is 4 or 5, and
+// CTrackManiaRace::OnFinishLine treats exactly those two as the editor's test (the finish only sets +0x33c,
+// no time is kept). The type alone could outlive the editor, so the editor itself must be current as well:
+// CTrackManiaSwitcher::Clean (run by ExitChallenge) zeroes the switcher's modes and the app's editor and
+// race, and only a switch from the editor leaves the mode before the race at 1 with the editor set.
+constexpr size_t kAppSwitcher = 0x410, kAppEditor = 0x414, kAppNetwork = 0x12c, kAppPlayground = 0x454, kAppChallengeType = 0x418;
 constexpr size_t kSwitcherMode = 0x14, kSwitcherPrevious = 0x18;
 constexpr size_t kCoreRunning = 0x34;
 constexpr size_t kPlayerFinished = 0x33c;
@@ -2252,8 +2259,9 @@ const char* freezeReason() {
         // Online, or a network object that can't tell: never.
         if (reinterpret_cast<ThisIntFn>(rebase(g_build->networkIsConnected))(network, nullptr) != 0) return nullptr;
         if (*reinterpret_cast<const int*>(o.switcher + kSwitcherMode) != kSwitcherRace || !o.playground) return nullptr;
-        if (*reinterpret_cast<const int*>(o.switcher + kSwitcherPrevious) == kSwitcherEditor && readable(o.app + kAppEditor, sizeof(void*)) &&
-            *reinterpret_cast<void* const*>(o.app + kAppEditor))
+        const int type = readable(o.app + kAppChallengeType, sizeof(int)) ? *reinterpret_cast<const int*>(o.app + kAppChallengeType) : 0;
+        if ((type == 4 || type == 5) && *reinterpret_cast<const int*>(o.switcher + kSwitcherPrevious) == kSwitcherEditor &&
+            readable(o.app + kAppEditor, sizeof(void*)) && *reinterpret_cast<void* const*>(o.app + kAppEditor))
             return "editor test";
         void* info = reinterpret_cast<void*(__fastcall*)(const void*, void*)>(rebase(g_build->localPlayerInfo))(o.playground, nullptr);
         if (info && readable(static_cast<const BYTE*>(info) + kPlayerFinished, sizeof(int)) &&
