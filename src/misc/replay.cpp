@@ -10,6 +10,7 @@ namespace misc {
 namespace {
 
 constexpr uint32_t kReplayClass = 0x03093000;     // CGameCtnReplayRecord
+constexpr uint32_t kReplayClassOld = 0x2407E000;  // the same class under its old id (older replays, e.g. TMX records of Nadeo maps); its chunks use the new ids
 constexpr uint32_t kHeaderReplay = 0x03093000;    // version, map ident (UID, environment, author), time, nickname
 constexpr uint32_t kHeaderXml = 0x03093001;       // the replay's XML (<challenge uid=...>)
 constexpr uint32_t kGhostRaceTime = 0x03092005;   // u32 race time (ms)
@@ -283,7 +284,7 @@ bool parseReplay(const std::vector<unsigned char>& file, bool body, Replay& out,
         return false;
     }
     const uint32_t classId = r.u32();
-    if (classId != kReplayClass) {
+    if (classId != kReplayClass && classId != kReplayClassOld) {
         char text[64];
         snprintf(text, sizeof(text), "not a replay (class %08X)", classId);
         error = text;

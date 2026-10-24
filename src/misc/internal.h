@@ -123,7 +123,7 @@ struct Status {
 };
 // The replay downloaded before for this map (Documents\TrackMania\TMVS\Replays\<uid>_*.Replay.Gbx), "" none.
 std::wstring cached(const std::string& uid);
-// The map was looked up before and isn't on TMX (or has no record replay).
+// The map was looked up before and is on neither TMX site.
 bool knownMissing(const std::string& uid);
 // Starts the lookup and download now (the page's button). False: not now (one runs, or too soon).
 bool request(const std::string& uid);

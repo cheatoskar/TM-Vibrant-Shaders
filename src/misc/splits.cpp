@@ -284,7 +284,7 @@ Reference reference() {
     switch (settings().splitCompare) {
     case kCompareRecord:
         if (!g.record.checkpoints.empty()) return fromReplay(g.record, "record");
-        return fromBest(tmx::knownMissing(g.uid) ? "not on TMX" : (tmx::status().state == tmx::State::Busy ? "fetching the record" : "no record yet"));
+        return fromBest(tmx::knownMissing(g.uid) ? "not on TMX" : (tmx::status().state == tmx::State::Busy ? "fetching the record" : (g.recordNote.empty() ? "no record yet" : "record not readable")));
     case kCompareGhost: {
         Reference r;
         int time = -1;
@@ -994,6 +994,7 @@ void drawPage() {
     const tmx::Status t = tmx::status();
     if (s.splitCompare == kCompareRecord) {
         if (!g.record.checkpoints.empty()) ImGui::TextDisabled("Record: %s", g.recordNote.c_str());
+        else if (!g.recordNote.empty()) ImGui::TextDisabled("Record: %s", g.recordNote.c_str()); // downloaded, but not readable
         else if (tmx::knownMissing(g.uid)) ImGui::TextDisabled("Record: not on TMX");
         else if (t.uid == g.uid && !t.message.empty()) ImGui::TextDisabled("Record: %s", t.message.c_str());
     }

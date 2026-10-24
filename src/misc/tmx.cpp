@@ -38,7 +38,7 @@ void set(State state, const std::string& message, const std::wstring& file = std
 
 std::wstring safeName(const std::string& uid);
 
-// Notes that the map isn't on TMX (or has no record replay): never asked again.
+// Notes that the map is on neither site: never asked again.
 void markMissing(const std::string& uid) {
     FILE* f = _wfopen((dataFolder(L"Replays") + L"\\" + safeName(uid) + L".notontmx").c_str(), L"w");
     if (f) fclose(f);
@@ -101,7 +101,9 @@ std::wstring safeName(const std::string& uid) {
 }
 
 void run(std::string uid) {
+    // Both sites: a Stadium map can be on either, one may have no record or not answer.
     const wchar_t* const hosts[] = {L"tmnf.exchange", L"tmuf.exchange"};
+    bool onTmx = false, answered = false;
     for (const wchar_t* host : hosts) {
         set(State::Busy, "asking " + utf8(host));
         std::string body;
@@ -109,25 +111,23 @@ void run(std::string uid) {
         const std::wstring path = L"/api/tracks?uid=" + wide(uid) + L"&fields=TrackId,TrackName,WRReplay.ReplayId,WRReplay.ReplayTime";
         if (!get(host, path, body, 1u << 20, status)) {
             TMVS_LOG("misc: TMX: %ls answered %lu to the map's lookup", host, status);
-            set(State::Failed, "no answer" + (status ? " (HTTP " + std::to_string(status) + ")" : std::string()));
-            return;
+            continue;
         }
+        answered = true;
         const long long track = jsonNumber(body, "TrackId");
         if (track < 0) continue; // not on this site
+        onTmx = true;
         const long long replay = jsonNumber(body, "ReplayId");
         if (replay < 0) {
             TMVS_LOG("misc: TMX: map %s is on %ls without a record replay", uid.c_str(), host);
-            markMissing(uid);
-            set(State::Failed, "no record on TMX");
-            return;
+            continue;
         }
         set(State::Busy, "downloading");
         std::string file;
         Sleep(1000); // two requests, not at once
         if (!get(host, L"/recordgbx/" + std::to_wstring(replay), file, 32u << 20, status) || file.compare(0, 3, "GBX") != 0) {
             TMVS_LOG("misc: TMX: %ls answered %lu to the replay %lld", host, status, replay);
-            set(State::Failed, "download failed");
-            return;
+            continue;
         }
         const std::wstring target = dataFolder(L"Replays") + L"\\" + safeName(uid) + L"_" + std::to_wstring(replay) + L".Replay.Gbx";
         FILE* f = _wfopen(target.c_str(), L"wb");
@@ -142,9 +142,16 @@ void run(std::string uid) {
         set(State::Done, "downloaded", target);
         return;
     }
-    TMVS_LOG("misc: TMX: map %s is on neither tmnf.exchange nor tmuf.exchange", uid.c_str());
-    markMissing(uid);
-    set(State::Failed, "not on TMX");
+    if (!answered) {
+        set(State::Failed, "no answer");
+    } else if (onTmx) {
+        // Not noted as missing: a record may come later (asked again next session).
+        set(State::Failed, "no record on TMX");
+    } else {
+        TMVS_LOG("misc: TMX: map %s is on neither tmnf.exchange nor tmuf.exchange", uid.c_str());
+        markMissing(uid);
+        set(State::Failed, "not on TMX");
+    }
 }
 
 } // namespace
