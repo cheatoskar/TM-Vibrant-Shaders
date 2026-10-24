@@ -1242,13 +1242,60 @@ bool isVehicle(const void* shader) {
     return vehicle;
 }
 
+// Hide car, every pass: the cars' colour draws use Vehicles shaders, but the same visuals are drawn again
+// by passes with other shaders (the shadow maps, volumes and depth passes: a car-shaped black patch stayed
+// where the car was). A draw is the car's when its shader is a vehicle's or its corpus's item (CHmsCorpus
+// +0x48, the one blockorder reads) is one a vehicle shader drew: the items are learned from the colour
+// draws, which are skipped like all the others, and forgotten with the map.
+constexpr size_t kCorpusItemOffset = 0x48;
+constexpr size_t kDelayedCorpusOffset = 0x00;
+std::unordered_set<uintptr_t> g_vehicleItems;
+LONG g_vehicleItemsMap = -1;
+
+uintptr_t corpusItem(const void* corpus) {
+    if (!corpus) return 0;
+    __try {
+        return *reinterpret_cast<const uintptr_t*>(static_cast<const BYTE*>(corpus) + kCorpusItemOffset);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+uintptr_t delayedItem(const void* delayed) {
+    if (!delayed) return 0;
+    __try {
+        return corpusItem(*reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedCorpusOffset));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+bool skipCarDraw(const void* shader, uintptr_t item) {
+    if (!g_hideCars) return false;
+    if (g_vehicleItemsMap != g_mapLoads) {
+        g_vehicleItems.clear();
+        g_vehicleItemsMap = g_mapLoads;
+    }
+    if (isVehicle(shader)) {
+        if (item && g_vehicleItems.size() < 512 && g_vehicleItems.insert(item).second) {
+            static int s_lines = 0;
+            if (s_lines < 10) {
+                s_lines++;
+                TMVS_LOG("engine: hide car: %u item(s) of the cars known", static_cast<unsigned>(g_vehicleItems.size()));
+            }
+        }
+        return true;
+    }
+    return item && g_vehicleItems.count(item) != 0;
+}
+
 void __fastcall drawShaderDetour(void* self, void* edx, void* shader, void* corpus, void* tree, void* visual) {
     const void* previous = g_currentShader;
     g_currentShader = shader;
     if (g_shaderCensus) censusShader(shader);
     // The block this draw belongs to gives the device wrapper its depth bias rank (blockorder.h).
     const int previousRank = blockorder::beginDraw(corpus, false);
-    if (!(g_hideGameSky && isPaintedHorizon(shader)) && !(g_hideCars && isVehicle(shader))) g_drawShader(self, edx, shader, corpus, tree, visual);
+    if (!(g_hideGameSky && isPaintedHorizon(shader)) && !skipCarDraw(shader, g_hideCars ? corpusItem(corpus) : 0)) g_drawShader(self, edx, shader, corpus, tree, visual);
     blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
@@ -1258,7 +1305,7 @@ void __fastcall drawPassDetour(void* self, void* edx, void* delayed) {
     g_currentShader = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedRenderShader);
     if (g_shaderCensus) censusShader(g_currentShader);
     const int previousRank = blockorder::beginDraw(delayed, true);
-    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader)) && !(g_hideCars && isVehicle(g_currentShader))) g_drawPass(self, edx, delayed);
+    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader)) && !skipCarDraw(g_currentShader, g_hideCars ? delayedItem(delayed) : 0)) g_drawPass(self, edx, delayed);
     blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
