@@ -1992,10 +1992,9 @@ bool drawVideoPage(Config& config, Settings& s) {
                           videoPresetRow(config, s, kVideoLooks, sizeof(kVideoLooks) / sizeof(kVideoLooks[0]));
                           return false;
                       }});
-    panels.push_back({"In the game's dialog", 4.0f, [] {
+    panels.push_back({"Recommended dialog settings", 3.0f, [] {
                           ImGui::BulletText("Size 1440p or 4K, 60 fps");
-                          ImGui::BulletText("High quality on, 4 samples");
-                          ImGui::BulletText("Sound on (the clip plays once more for it)");
+                          ImGui::BulletText("High quality on, 4 samples, or 9 with motion blur");
                           return false;
                       }});
     panels.push_back(settingsPanel("Format", s,
