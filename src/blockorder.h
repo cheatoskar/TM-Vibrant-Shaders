@@ -5,8 +5,8 @@
 // that overlap it. Blocks that share a grid unit (TMUnlimiter maps stack blocks in one cell,
 // a turbo road on a platform) have coplanar surfaces and z-fight; the render side pushes the
 // block placed last towards the camera by a small depth bias scaled with this rank. Action blocks
-// (boosters, engine off, start / finish / checkpoint / multilap) always rank above normal blocks,
-// whatever the placement order; among action blocks, or among normal ones, the later placed wins.
+// rank above normal blocks whatever the placement order, in the order engine off, boosters, then
+// start / finish / checkpoint / multilap; of two blocks of the same kind the later placed wins.
 //
 // The engine side (Ghidra, TMNF names): CGameCtnChallenge +0x54 is a CFastBuffer<CGameCtnBlock*>
 // (count, data), CreateBlock appends, RemoveBlock shifts the rest down, so the array is the

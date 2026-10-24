@@ -73,8 +73,14 @@ bool read32(uintptr_t address, uintptr_t& out) {
 using IdGetStringFn = const char*(__fastcall*)(const void*, void*);
 IdGetStringFn g_idGetString = nullptr;
 
+// Which block shows through where two overlap, highest first: engine off, boosters, then the
+// waypoints (start, finish, checkpoint, multilap), then every other block. A booster mixed into a
+// start block shows the booster at the start, as I want it.
+enum Priority : uint8_t { kNormal = 0, kWaypoint = 1, kBooster = 2, kEngineOff = 3 };
+const char* const kPriorityNames[] = {"", " [waypoint]", " [booster]", " [engine off]"};
+
 struct InfoClass {
-    bool action = false;
+    uint8_t priority = kNormal;
     char name[48] = {};
 };
 std::unordered_map<uintptr_t, InfoClass> g_infoClass; // by block info; cleared with every new map
@@ -100,9 +106,10 @@ const InfoClass& classOf(uintptr_t info) {
     if (it != g_infoClass.end()) return it->second;
     InfoClass c;
     uintptr_t waypoint = 3;
-    if (read32(info + kInfoWaypoint, waypoint) && waypoint <= 4 && waypoint != 3) c.action = true;
-    if (readName(info, c.name, sizeof(c.name)) && !c.action) {
-        c.action = strstr(c.name, "Turbo") || strstr(c.name, "Boost") || strstr(c.name, "FreeWheel");
+    if (read32(info + kInfoWaypoint, waypoint) && waypoint <= 4 && waypoint != 3) c.priority = kWaypoint;
+    if (readName(info, c.name, sizeof(c.name))) {
+        if (strstr(c.name, "FreeWheel")) c.priority = kEngineOff;
+        else if (strstr(c.name, "Turbo") || strstr(c.name, "Boost")) c.priority = kBooster;
     }
     return g_infoClass.emplace(info, c).first->second;
 }
@@ -191,7 +198,7 @@ void scan() {
         chainOk++;
         items[i] = r.item;
         infos[i] = r.info;
-        action[i] = classOf(r.info).action ? 1 : 0;
+        action[i] = classOf(r.info).priority;
         for (uint32_t u = 0; u < r.nUnits; u++) {
             const uint64_t key = unitKey(r.units[u][0], r.units[u][1], r.units[u][2]);
             std::vector<uint32_t>& g = groups[key];
@@ -205,10 +212,10 @@ void scan() {
         TMVS_LOG("blockorder: %u blocks, the engine's block -> mobil -> item chain does not hold (%u of %u mobils, %u unreadable): no depth ranks", count, chainOk, withMobil, unreadable);
         return;
     }
-    // Blocks are ranked in the order (action, placement): each one above every block before it in
+    // Blocks are ranked in the order (priority, placement): each one above every block before it in
     // that order that it shares a unit with (none: 0, no bias). So in every overlapping pair the
-    // later placed block ranks higher, but an action block above a normal one whatever their
-    // placement; also when a large block shares only one of its units.
+    // block of the higher priority ranks higher whatever their placement, and of two of the same
+    // priority the later placed; also when a large block shares only one of its units.
     std::vector<uint8_t> rank(count, 0);
     std::vector<uint8_t> overlapping(count, 0);
     size_t largest = 0;
@@ -249,7 +256,7 @@ void scan() {
                 const InfoClass& c = classOf(infos[i]);
                 sample += (sampled > 1 ? ", " : "");
                 sample += c.name[0] ? c.name : "(no name)";
-                sample += action[i] ? " [action]" : "";
+                sample += kPriorityNames[action[i] & 3];
                 sample += " #" + std::to_string(rank[i]);
             }
         }
