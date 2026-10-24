@@ -109,7 +109,7 @@ void save(std::vector<unsigned char>&& rgb, int width, int height) {
         if (GetFileAttributesW((log::dataDir() + name).c_str()) == INVALID_FILE_ATTRIBUTES) break;
     }
     job->path = log::dataDir() + name;
-    setStatus("Saving the photo ...", 0);
+    setStatus("Saving photo...", 0);
     // PNG of a large photo takes seconds: not on the game's thread.
     HANDLE thread = CreateThread(nullptr, 0, saveThread, job, 0, nullptr);
     if (thread) CloseHandle(thread);

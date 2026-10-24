@@ -452,7 +452,7 @@ std::string choiceFor(const Config& config, const char* environment, const char*
     if (!choice->perMood) return choice->all;
     const Mood mood = moodOfDecoration(decoration);
     if (mood == Mood::Unknown) {
-        note = std::string("the map's mood is not known yet (decoration \"") + (decoration ? decoration : "") + "\"): the all-moods choice";
+        note = std::string("map type not known (decoration \"") + (decoration ? decoration : "") + "\"): using the All moods choice";
         return choice->all;
     }
     static const char* const kMoods[] = {"day", "sunset", "night"};

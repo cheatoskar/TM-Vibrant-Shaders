@@ -1563,7 +1563,7 @@ bool decideModPack(void* challenge, void* gamePack, bool loadScreen, void** resu
             wanted = file;
             line += file + instead;
         } else {
-            line += file + " is not known to the game (added after it started? restart TrackMania), map's own: " + game;
+            line += file + " is not loaded yet (restart TrackMania), map's own: " + game;
         }
     } else {
         line += "map's own: " + game;
