@@ -5,6 +5,7 @@
 #include <vector>
 
 namespace tmshaders {
+class IniFile;
 
 enum class Preset : int {
     Vibrant = 0,     // Sildur's Vibrant style: saturated, warm sun, strong shafts
@@ -115,6 +116,8 @@ public:
     bool packReplaceMapMod = true; // a chosen pack also replaces a map's own mod
     PackChoice& packChoice(const std::string& environment);
     const PackChoice* findPackChoice(const std::string& environment) const;
+    // Another part's own section of settings.ini, written with the rest (the Misc page's [Misc]).
+    void (*saveExtra)(IniFile& ini) = nullptr;
     // Picking a preset also makes it the one for this kind of map (day / sunset / night).
     bool rememberMoodPick = false;
     // The preset the menu points at: shown in the game until the pointer leaves (not saved).

@@ -1898,6 +1898,7 @@ void Config::save() {
     ini.set(L"General", L"LastMood", value);
     writeFields(own, ini, L"Settings", true);
     keys::save(ini);
+    if (saveExtra) saveExtra(ini);
     if (ini.save(m_path)) {
         m_dirty = false;
         return;

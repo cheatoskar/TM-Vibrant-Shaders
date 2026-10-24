@@ -647,7 +647,7 @@ bool containsNoCase(const char* text, const char* query) {
 
 // New pages last: the page's number is saved (MenuPage); the bar shows Video and Resource packs
 // before Settings.
-enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPacks, kPageCount };
+enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPacks, kMisc, kPageCount };
 
 const ImVec4 kAccent(1.00f, 0.62f, 0.22f, 1.0f);
 
@@ -2360,17 +2360,19 @@ void drawHeader(Config& config, Settings& s) {
 }
 
 void drawNavigation(Config& config) {
-    static const char* const kPages[] = {"Shaders", "Customize", "Studio", "Maps", "Performance", "Settings", "About", "Video", "Resource packs"};
+    static const char* const kPages[] = {"Shaders", "Customize", "Studio", "Maps", "Performance", "Settings", "About", "Video", "Resource packs", "Misc"};
     static const char* const kHints[] = {"Browse and apply presets", "Main settings", "All settings", "Presets for day, sunset and night maps",
                                          "Frame rate and effect costs", "General options", "Version, updates, help",
-                                         "Shoot video: presets, quality, the camera's look", "Texture mods on every map"};
-    static const int kOrder[] = {kShaders, kCustomize, kStudio, kMaps, kPerformance, kVideo, kPacks, kSettings, kAbout};
+                                         "Shoot video: presets, quality, the camera's look", "Texture mods on every map",
+                                         "Minimap, split times, finish effects"};
+    static const int kOrder[] = {kShaders, kCustomize, kStudio, kMaps, kPerformance, kVideo, kPacks, kMisc, kSettings, kAbout};
     const bool updateOut = update::latest().state == update::State::Available;
     const float h = 38.0f * g_scale;
     ImDrawList* draw = ImGui::GetWindowDrawList();
     for (const int i : kOrder) {
         if (i == kVideo && !videoPageShown()) continue;
         if (i == kPacks && !g_host->resourcePacks) continue;
+        if (i == kMisc && !g_host->miscPage) continue;
         const bool active = config.menuPage == i;
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float w = ImGui::GetContentRegionAvail().x;
@@ -2446,6 +2448,10 @@ void drawMenu() {
         case kVideo: look = videoPageShown() ? drawVideoPage(config, s) : drawSettings(config, s); break;
         case kPacks:
             if (g_host->resourcePacks) drawPacks(config);
+            else look = drawSettings(config, s);
+            break;
+        case kMisc:
+            if (g_host->miscPage) g_host->miscPage();
             else look = drawSettings(config, s);
             break;
         default: drawShaders(config); break;

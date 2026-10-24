@@ -15,6 +15,8 @@ struct Status {
     const char* shaderError = nullptr;
     const Pipeline* pipeline = nullptr;       // GPU time per pass (measured while the menu is open)
     const AutoQuality* autoQuality = nullptr;
+    bool hideTools = false; // the Misc page's windows and the menus' status line stay away: the video
+                            // export, photo mode, a frame capture or screenshot
 };
 
 // Gives back the shared mouse property (TMMods.MouseOwner) if it is ours.

@@ -14,6 +14,7 @@
 #include "keys.h"
 #include "log.h"
 #include "lut.h"
+#include "misc/misc.h"
 #include "modpack.h"
 #include "overlay.h"
 #include "pipeline.h"
@@ -3564,6 +3565,8 @@ void onPresent(IDirect3DDevice9* device) {
     status.engineHooks = engine::active();
     status.sunKnown = sunDirection(Config::get().settings, status.sunDirection);
     status.shaderError = g_pipeline.lastError().empty() ? nullptr : g_pipeline.lastError().c_str();
+    // The F12 screenshot reads the back buffer after the overlay: the Misc page's windows stay out of it.
+    status.hideTools = g_exporting || g_captureRequested || g_screenshotNumber >= 0;
     overlay::setStatus(status);
     overlay::draw(device);
     // overlay::draw polled the hotkeys (keys::poll, once a frame).
@@ -3803,6 +3806,7 @@ void bootOnce() {
     TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
     loadDevOptions();
     Config::get().load();
+    misc::boot();
     lut::writeBuiltInLooks();
     gameshaders::install();
 

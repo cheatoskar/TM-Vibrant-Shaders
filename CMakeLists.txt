@@ -183,6 +183,20 @@ add_library(tm_vibrant_shaders SHARED
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
 )
 target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm shell32 winhttp)
+
+# The Misc page's tools (src/misc, see its README.md): the minimap, split times against your best and
+# a replay, finish effects. OFF removes them all: no page, no overlays, no downloads.
+option(TMVS_MISC_TOOLS "Build the Misc page (minimap, split times, finish effects)" ON)
+if(TMVS_MISC_TOOLS)
+  target_sources(tm_vibrant_shaders PRIVATE
+    src/misc/misc.cpp
+    src/misc/mapview.cpp
+    src/misc/splits.cpp
+    src/misc/replay.cpp
+    src/misc/tmx.cpp
+    src/misc/confetti.cpp)
+  target_compile_definitions(tm_vibrant_shaders PRIVATE TMVS_MISC_TOOLS=1)
+endif()
 target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR})
 target_compile_options(tm_vibrant_shaders PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
 

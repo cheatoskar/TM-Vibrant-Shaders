@@ -7,6 +7,7 @@
 #include "pipeline.h"
 #include "log.h"
 #include "lut.h"
+#include "misc/misc.h"
 #include "modpack.h"
 #include "photo.h"
 #include "thumbnails.h"
@@ -484,6 +485,24 @@ void drawSplitBar() {
                        photo::splitSwapped(), photo::splitLightNote());
 }
 
+// The mod's name and version at the top right of the game's menus and login screen (no map open),
+// as TrackMania 2's build greets with its version. Never in a race, a replay, the editor, the video
+// export or photos (those have a map open, or hideTools).
+bool statusLineWanted() {
+    return engine::active() && !engine::mapOpen() && !photo::active() && !g_status.hideTools;
+}
+
+void drawStatusLine() {
+    const float scale = menu::scale();
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 12.0f * scale, 8.0f * scale), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.35f);
+    ImGui::Begin("##statusLine", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::TextDisabled("TM Vibrant Shaders %s", TM_SHADERS_VERSION_A);
+    ImGui::End();
+}
+
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
     if (!g_initialized) init(device);
@@ -504,9 +523,15 @@ void draw(IDirect3DDevice9* device) {
     }
     const bool menu = Config::get().showOverlay;
     const char* photoHint = photo::status();
+    misc::Frame tools;
+    tools.device = device;
+    tools.menuOpen = menu;
+    tools.hide = g_status.hideTools || photo::active();
+    const bool toolsWanted = misc::wantsOverlay(tools); // once a frame: it also follows the race
+    const bool statusLine = statusLineWanted();
     if (!menu) {
         Config::get().previewPreset.clear();
-        if (!*photoHint) {
+        if (!*photoHint && !toolsWanted && !statusLine) {
             g_splitBar = false;
             publishMouseOwner(false);
             removeTop(); // nothing of ours on screen: the other mod is on top
@@ -521,6 +546,8 @@ void draw(IDirect3DDevice9* device) {
     // Only while we own the mouse: with both mods' menus open only one pointer is drawn.
     ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
+    if (statusLine) drawStatusLine();
+    if (toolsWanted) misc::drawOverlay(tools); // before the menu: it stays on top
     if (menu) {
         // The pipeline's GPU timings for the Performance page.
         struct Timings : menu::PassTimings {
@@ -557,6 +584,7 @@ void draw(IDirect3DDevice9* device) {
         host.supports = [](const Field& f) { return strcmp(f.key, "ToneCurve") != 0; }; // ManiaPlanet only
         g_packs.device = device;
         host.resourcePacks = &g_packs;
+        if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
         menu::draw(host);
     }
     if (*photoHint) {
@@ -583,7 +611,10 @@ void draw(IDirect3DDevice9* device) {
             CleanFixedFunction clean(device); // given back to the game at the end of this block
             ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
         }
-        if (ImGui::GetDrawData()->TotalVtxCount > 0) SetPropW(g_hwnd, kTopOverlay, selfHandle()); // drawn last: on top
+        // Drawn last: on top. Only windows that take the mouse count (the Misc page's windows and the
+        // status line ignore it with the menu closed: the other mod keeps its place then).
+        if (ImGui::GetDrawData()->TotalVtxCount > 0 && (menu || g_splitBar)) SetPropW(g_hwnd, kTopOverlay, selfHandle());
+        else if (!menu && !g_splitBar) removeTop();
         device->EndScene();
     }
 }

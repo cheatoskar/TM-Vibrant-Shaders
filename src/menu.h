@@ -53,6 +53,9 @@ struct ResourcePacks {
 struct Host {
     // The Resource packs page (null: no such page, TrackMania 2).
     ResourcePacks* resourcePacks = nullptr;
+    // The Misc page: minimap, split times, finish effects (null: no such page, TrackMania 2 or a build
+    // without TMVS_MISC_TOOLS). Draws the page's content.
+    std::function<void()> miscPage;
     bool depthAvailable = true;
     bool engineHooks = true;
     bool sunKnown = false;
