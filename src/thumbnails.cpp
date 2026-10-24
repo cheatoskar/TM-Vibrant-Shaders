@@ -2,7 +2,11 @@
 #include "config.h"
 #include "image.h"
 #include "log.h"
+#include "modpack.h"
+#include <atomic>
 #include <map>
+#include <memory>
+#include <thread>
 #include <vector>
 
 namespace tmshaders {
@@ -27,6 +31,27 @@ ULONGLONG writeTime(const std::wstring& path) {
 std::map<std::string, Entry> g_cache;
 IDirect3DDevice9* g_device = nullptr;
 IDirect3DTexture9* g_icon = nullptr;
+// Resource pack pictures, by the zip's path: the texture (null: none) and the file's write time
+// it was made from (a replaced zip gets a new one).
+struct PackEntry {
+    IDirect3DTexture9* texture = nullptr;
+    unsigned long long written = 0;
+    int width = 0, height = 0;
+};
+std::map<std::wstring, PackEntry> g_packs;
+// A picture being made on a thread of its own (reading the zip and decoding its DDS take 30 to
+// 60 ms: in the game's frame that was a stutter per card). One at a time; the game's thread
+// uploads it when it is done. Shared with the thread, which may outlive a closed menu.
+struct PackJob {
+    std::wstring zip;
+    unsigned long long written = 0;
+    std::vector<uint32_t> pixels;
+    int width = 0, height = 0;
+    std::string error;
+    bool ok = false;
+    std::atomic<bool> done{false};
+};
+std::shared_ptr<PackJob> g_packJob;
 int g_iconSize = 0; // the size g_icon was made for (also when that failed: tried once per size)
 
 IDirect3DTexture9* upload(IDirect3DDevice9* device, const std::vector<uint32_t>& pixels, int width, int height) {
@@ -63,6 +88,10 @@ void useDevice(IDirect3DDevice9* device) {
         if (entry.second.texture) entry.second.texture->Release();
     }
     g_cache.clear();
+    for (auto& entry : g_packs) {
+        if (entry.second.texture) entry.second.texture->Release();
+    }
+    g_packs.clear();
     if (g_icon) g_icon->Release();
     g_icon = nullptr;
     g_iconSize = 0;
@@ -113,6 +142,45 @@ IDirect3DTexture9* icon(IDirect3DDevice9* device, int size) {
     std::vector<uint32_t> pixels;
     if (image::menuIcon(size, pixels)) g_icon = upload(device, pixels, size, size);
     return g_icon;
+}
+
+IDirect3DTexture9* packPreview(IDirect3DDevice9* device, const std::wstring& zip, unsigned long long written, int& width, int& height) {
+    useDevice(device);
+    // A finished picture: uploaded (also when it was asked for another zip).
+    if (g_packJob && g_packJob->done) {
+        const PackJob& job = *g_packJob;
+        PackEntry& entry = g_packs[job.zip];
+        if (entry.texture) entry.texture->Release();
+        entry = PackEntry();
+        entry.written = job.written;
+        if (job.ok) {
+            entry.width = job.width;
+            entry.height = job.height;
+            entry.texture = upload(device, job.pixels, job.width, job.height);
+        } else {
+            const size_t slash = job.zip.find_last_of(L'\\');
+            TMVS_LOG("menu: no picture for %ls: %s", (slash == std::wstring::npos ? job.zip : job.zip.substr(slash + 1)).c_str(), job.error.c_str());
+        }
+        g_packJob.reset();
+    }
+    auto it = g_packs.find(zip);
+    if (it != g_packs.end() && it->second.written == written) {
+        width = it->second.width;
+        height = it->second.height;
+        return it->second.texture;
+    }
+    width = height = 0;
+    if (!g_packJob) {
+        auto job = std::make_shared<PackJob>();
+        job->zip = zip;
+        job->written = written;
+        g_packJob = job;
+        std::thread([job] {
+            job->ok = modpack::loadPreview(job->zip, kPackPreviewWidth, job->pixels, job->width, job->height, job->error);
+            job->done = true;
+        }).detach();
+    }
+    return nullptr;
 }
 
 bool savePicture(IDirect3DDevice9* device, IDirect3DSurface9* frame, const std::wstring& path) {

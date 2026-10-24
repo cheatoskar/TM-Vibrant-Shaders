@@ -26,7 +26,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kBaseRgb, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kBaseRgb, kModPackDesc, kLoadProgress, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -58,6 +58,7 @@ struct GameBuild {
     // (vtable slots 98, 101, 78): the car's mobil is checked against them before its wheels are
     // read (see kVehicleWheels).
     uintptr_t wheelCount, wheelContact, asyncSpeed;
+    uintptr_t packManager;         // CSystemPackManager* CSystemEngine::s_PackManager (the game's packs: mods, skins, ...)
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -68,17 +69,17 @@ constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
      {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0,
-      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0, 0x005abea0, 0x0072aab0},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20, 0, 0x00ac1e72}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
-     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70},
+     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70, 0x00d54250},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
-      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0, 0x005ac030, 0x0072a970},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720, 0, 0x00ac1872}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
-     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70},
+     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70, 0x00d558b0},
 };
 const GameBuild* g_build = nullptr;
 
@@ -294,6 +295,22 @@ constexpr InlineSite kRemoveBlockSite = {kRemoveBlock, {0x6a, 0xff, 0x68, 0, 0, 
 // fld [eax]) run unchanged in the trampoline. GxLight: +0x14 flags, +0x18 base rgb, +0x24 and
 // +0x28 the intensity factors, +0x2c rgb * both (what the shaders get).
 constexpr InlineSite kBaseRgbSite = {kBaseRgb, {0x8b, 0x44, 0x24, 0x04, 0xd9, 0x00}, 6, -1, "GxLight::SetBaseRGB"};
+// Environment mods (resource packs): CGameCtnChallenge::GetModPackDesc(forcedMods) picks
+// the mod a map loads with: the server's forced mod for the map's environment (challenge +0xe0),
+// if any and the map has none or the server overrides it, else the map's own (+0x13c, what the
+// map's file holds). Its callers: LoadDecorationAndCollection (the decoration's skin: every
+// texture the collection loads by name comes from the zip when it has one), the load screen
+// (CGameCtnLoadProgress::Start), and GetPackDescList (the map's header when it is saved, the
+// network's downloads): the mod answers only inside the first two. Prologue: five pushes and
+// mov edi, [esp+0x18], all position independent.
+constexpr InlineSite kModPackDescSite = {kModPackDesc, {0x51, 0x53, 0x55, 0x56, 0x57, 0x8b, 0x7c, 0x24, 0x18}, 9, -1, "CGameCtnChallenge::GetModPackDesc"};
+constexpr InlineSite kLoadProgressSite = {kLoadProgress, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnLoadProgress::Start"};
+constexpr size_t kChallengeDecoration = 0xc4;  // SGameCtnIdentifier: id (the decoration), collection, author
+constexpr size_t kChallengeCollection = 0xe0;  // CMwId of the map's environment (GetModPackDesc compares it)
+constexpr size_t kChallengeMod = 0x13c;        // CSystemPackDesc*: the map's own mod (saved with the map)
+constexpr size_t kPackManagerPacks = 0x44;     // CFastBuffer<CSystemPackDesc*> {count, data}
+constexpr size_t kPackDescName = 0x1c;         // CFastStringInt: "Skins\Stadium\Mod\X.zip" (relative)
+constexpr size_t kPackDescFile = 0x48;         // CSystemFidFile*: the file on disk (0: not there)
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
 
@@ -344,6 +361,17 @@ SetChallengeFn g_setChallenge = nullptr;
 void* g_app = nullptr;          // CGameCtnApp (holds the current map)
 RespawnFn g_respawn = nullptr;
 RemoveBlockFn g_removeBlock = nullptr;
+using ModPackDescFn = void*(__fastcall*)(void*, void*, const void*);
+using LoadProgressFn = void(__fastcall*)(void*, void*, void*);
+ModPackDescFn g_modPackDesc = nullptr;
+LoadProgressFn g_loadProgress = nullptr;
+ModPackAnswer (*g_chooseModPack)(const ModPackAsk&) = nullptr;
+// Inside the load screen's start or the decoration's load (the only callers the mod answers):
+// the thread and how deep (both run on the game's main thread, one inside the other never).
+DWORD g_modScopeThread = 0;
+int g_modScopeDepth = 0;
+bool g_modScopeLoadScreen = false;
+std::string g_modPackStatus;
 volatile LONG g_raceResets = 0; // counters: the plugin compares them every frame
 volatile LONG g_respawns = 0;
 volatile LONG g_blocksRemoved = 0;
@@ -1317,10 +1345,154 @@ bool writeComments(void* challenge, const wchar_t* text, uint32_t length) {
     }
 }
 
+// The two map-load calls of GetModPackDesc the mod answers (the decoration's and the load
+// screen's); the others (the map's header when it is saved, the network's downloads) get the
+// game's own answer. Also left when the game's code throws through it.
+struct ModPackScope {
+    bool loadScreen;
+    explicit ModPackScope(bool screen) : loadScreen(g_modScopeLoadScreen) {
+        if (g_modScopeDepth++ == 0) g_modScopeThread = GetCurrentThreadId();
+        g_modScopeLoadScreen = screen;
+    }
+    ~ModPackScope() {
+        g_modScopeDepth--;
+        g_modScopeLoadScreen = loadScreen;
+    }
+};
+
+// A pack's name as the game keeps it ("Skins\Stadium\Mod\X.zip"). Guarded: a pack the game
+// freed must not take it down.
+bool packName(const void* pack, wchar_t* out, size_t size) {
+    out[0] = L'\0';
+    __try {
+        const FastStringInt* s = reinterpret_cast<const FastStringInt*>(static_cast<const BYTE*>(pack) + kPackDescName);
+        if (!s->text || s->size >= size) return false;
+        memcpy(out, s->text, s->size * sizeof(wchar_t));
+        out[s->size] = L'\0';
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out[0] = L'\0';
+        return false;
+    }
+}
+
+// The map's environment and decoration (names) and its own mod, read from the map as the game
+// loads it. False when the map doesn't look as expected (then the game's answer stays).
+bool readModPackAsk(const void* challenge, char* environment, char* decoration, size_t size, const void** own) {
+    environment[0] = decoration[0] = '\0';
+    *own = nullptr;
+    __try {
+        const BYTE* c = static_cast<const BYTE*>(challenge);
+        const IdGetStringFn name = reinterpret_cast<IdGetStringFn>(rebase(g_build->idGetString));
+        if (*reinterpret_cast<const uint32_t*>(c + kChallengeCollection) == 0xffffffffu) return false;
+        const char* e = name(c + kChallengeCollection, nullptr);
+        if (!e || !e[0]) return false;
+        strncpy_s(environment, size, e, _TRUNCATE);
+        if (*reinterpret_cast<const uint32_t*>(c + kChallengeDecoration) != 0xffffffffu) {
+            const char* d = name(c + kChallengeDecoration, nullptr);
+            if (d) strncpy_s(decoration, size, d, _TRUNCATE);
+        }
+        *own = *reinterpret_cast<const void* const*>(c + kChallengeMod);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The game's pack whose name ends in `tail` ("\Stadium\Mod\X.zip") and that is on disk: the
+// packs it found at start under Skins (CGameCtnApp::ScanDiskForSkins, the same objects a map
+// linking that file gets). Only read; null when it has none (a zip added while it runs).
+const void* findPack(const wchar_t* tail, size_t tailLength) {
+    __try {
+        const BYTE* manager = *reinterpret_cast<const BYTE* const*>(rebase(g_build->packManager));
+        if (!manager) return nullptr;
+        const uint32_t count = *reinterpret_cast<const uint32_t*>(manager + kPackManagerPacks);
+        const BYTE* const* packs = *reinterpret_cast<const BYTE* const* const*>(manager + kPackManagerPacks + 4);
+        if (!packs || count > 100000) return nullptr;
+        for (uint32_t i = 0; i < count; i++) {
+            const BYTE* pack = packs[i];
+            if (!pack || !*reinterpret_cast<const void* const*>(pack + kPackDescFile)) continue;
+            const FastStringInt* name = reinterpret_cast<const FastStringInt*>(pack + kPackDescName);
+            if (!name->text || name->size < tailLength) continue;
+            if (_wcsnicmp(name->text + (name->size - tailLength), tail, tailLength) == 0) return pack;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return nullptr;
+}
+
+std::wstring modTail(const char* environment, const std::wstring& file) {
+    std::wstring tail = L"\\";
+    for (const char* c = environment; *c; c++) tail += static_cast<wchar_t>(static_cast<unsigned char>(*c));
+    return tail + L"\\Mod\\" + file;
+}
+
+// "Skins\Stadium\Mod\X.zip" -> "X.zip" (UTF-8), for the log.
+std::string shortPackName(const wchar_t* name) {
+    const wchar_t* slash = wcsrchr(name, L'\\');
+    const wchar_t* start = slash ? slash + 1 : name;
+    return toUtf8(start, static_cast<int>(wcslen(start)));
+}
+
+void* chooseModPack(void* challenge, void* gamePack) {
+    char environment[64], decoration[64];
+    const void* own = nullptr;
+    if (!readModPackAsk(challenge, environment, decoration, sizeof(environment), &own)) return gamePack;
+    wchar_t ownName[512] = {}, gameName[512] = {};
+    if (own) packName(own, ownName, 512);
+    if (gamePack) packName(gamePack, gameName, 512);
+    ModPackAsk ask;
+    ask.environment = environment;
+    ask.decoration = decoration;
+    ask.mapMod = own ? ownName : nullptr;
+    ask.loadScreen = g_modScopeLoadScreen;
+    const ModPackAnswer answer = g_chooseModPack(ask);
+    const std::string instead = own ? " (instead of the map's " + shortPackName(ownName) + ")" : " (the map has none)";
+    const std::string game = gamePack ? shortPackName(gameName) : std::string("none");
+    void* result = gamePack;
+    std::string line = std::string(environment) + ": ";
+    if (answer.kind == ModPackAnswer::None) {
+        result = nullptr;
+        line += "none" + (own ? instead : std::string());
+    } else if (answer.kind == ModPackAnswer::Pack) {
+        const std::wstring tail = modTail(environment, answer.file);
+        const std::string file = toUtf8(answer.file.c_str(), static_cast<int>(answer.file.size()));
+        if (void* pack = const_cast<void*>(findPack(tail.c_str(), tail.size()))) {
+            result = pack;
+            line += file + instead;
+        } else {
+            line += file + " is not known to the game (added after it started? restart TrackMania), map's own: " + game;
+        }
+    } else {
+        line += "map's own: " + game;
+    }
+    if (!answer.note.empty()) line += "; " + answer.note;
+    // Once a map: the load screen asks the same just before.
+    if (!g_modScopeLoadScreen) {
+        TMVS_LOG("modpack: %s", line.c_str());
+        g_modPackStatus = line;
+    }
+    return result;
+}
+
+void* __fastcall modPackDescDetour(void* challenge, void* edx, const void* forcedMods) {
+    void* const pack = g_modPackDesc(challenge, edx, forcedMods);
+    if (!g_chooseModPack || g_modScopeDepth <= 0 || g_modScopeThread != GetCurrentThreadId()) return pack;
+    return chooseModPack(challenge, pack);
+}
+
+void __fastcall loadProgressDetour(void* self, void* edx, void* challenge) {
+    ModPackScope scope(true);
+    g_loadProgress(self, edx, challenge);
+}
+
 // SGameCtnIdentifier of the decoration at +0xc4: id, collection (the environment), author.
 void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMods) {
     g_loadingChallenge = self;
-    g_loadDecoration(self, edx, forcedMods);
+    {
+        ModPackScope scope(false);
+        g_loadDecoration(self, edx, forcedMods);
+    }
     g_loadingChallenge = nullptr;
     readMapComments(self);
     const void* collection = static_cast<const BYTE*>(self) + 0xc8;
@@ -1784,6 +1956,14 @@ bool install(const Callbacks& callbacks) {
     g_cacheUpToDate = reinterpret_cast<CacheFn>(inlineHook(kCacheUpToDateSite, reinterpret_cast<void*>(&cacheUpToDateDetour)));
     g_cacheSave = reinterpret_cast<CacheFn>(inlineHook(kCacheSaveSite, reinterpret_cast<void*>(&cacheSaveDetour)));
     g_baseRgb = reinterpret_cast<BaseRgbFn>(inlineHook(kBaseRgbSite, reinterpret_cast<void*>(&baseRgbDetour)));
+    // Environment mods: the answer and the load screen's scope together, or neither (the
+    // decoration's scope is the hook above).
+    if (g_loadDecoration && prologueMatches(kModPackDescSite) && prologueMatches(kLoadProgressSite) && readable(reinterpret_cast<const void*>(rebase(g_build->packManager)), 4)) {
+        g_modPackDesc = reinterpret_cast<ModPackDescFn>(inlineHook(kModPackDescSite, reinterpret_cast<void*>(&modPackDescDetour)));
+        g_loadProgress = reinterpret_cast<LoadProgressFn>(inlineHook(kLoadProgressSite, reinterpret_cast<void*>(&loadProgressDetour)));
+    } else {
+        TMVS_LOG("modpack: the game's mod code is not where expected: resource packs off");
+    }
     // The export's file: all six or none (a frame written without the open would go nowhere).
     {
         const struct {
@@ -1824,6 +2004,24 @@ bool install(const Callbacks& callbacks) {
 
 bool active() {
     return g_active;
+}
+
+void setModPackChooser(ModPackAnswer (*choose)(const ModPackAsk& ask)) {
+    g_chooseModPack = choose;
+}
+
+bool modPacksHooked() {
+    return g_modPackDesc != nullptr;
+}
+
+std::string modPackStatus() {
+    return g_modPackStatus;
+}
+
+bool modPackKnown(const char* environment, const std::wstring& file) {
+    if (!g_modPackDesc) return false;
+    const std::wstring tail = modTail(environment, file);
+    return findPack(tail.c_str(), tail.size()) != nullptr;
 }
 
 void setNightAtLoad(bool (*decide)(float dayTime)) {

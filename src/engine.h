@@ -266,5 +266,29 @@ bool videoFileHooked(); // false: another build, the game's AVI as always
 // False without the hook or when the game's memory doesn't look as expected.
 bool videoExport(VideoExport& out);
 
+// Environment mods ("resource packs", Skins\<Environment>\Mod\*.zip): which one a map loads
+// with. The game asks CGameCtnChallenge::GetModPackDesc at every map load (the load screen,
+// then the decoration and its textures); the mod answers only there, never writing the map
+// (its saved mod stays: the map's Chunk writes challenge +0x13c, which is never touched) nor the
+// game's forced mods (CGameCtnApp +0x310, which a hosting game sends to its clients).
+struct ModPackAsk {
+    const char* environment = ""; // "Stadium", "Speed", ...
+    const char* decoration = "";  // the map's decoration ("Day", "Sunset", "Night", ...; "" unknown)
+    const wchar_t* mapMod = nullptr; // the map's own mod (the game's name for it), null: none
+    bool loadScreen = false;      // the load screen's question (the decoration's comes right after)
+};
+struct ModPackAnswer {
+    enum Kind { MapOwn, None, Pack } kind = MapOwn;
+    std::wstring file;            // Pack: its file name in Skins\<environment>\Mod
+    std::string note;             // for the log line ("" none)
+};
+void setModPackChooser(ModPackAnswer (*choose)(const ModPackAsk& ask));
+bool modPacksHooked(); // false: another build, or the game's code not where expected
+// What the last map loaded with, as its log line said ("" before the first map).
+std::string modPackStatus();
+// Whether the game has Skins\<environment>\Mod\<file> among its packs (it finds them at start:
+// one added while it runs can't be used before the next start).
+bool modPackKnown(const char* environment, const std::wstring& file);
+
 } // namespace engine
 } // namespace tmshaders

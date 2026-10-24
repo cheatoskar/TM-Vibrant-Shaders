@@ -641,8 +641,9 @@ bool containsNoCase(const char* text, const char* query) {
 
 // --- Widgets -------------------------------------------------------------------
 
-// kVideo last: the page's number is saved (MenuPage), the bar shows it before Settings.
-enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPageCount };
+// New pages last: the page's number is saved (MenuPage); the bar shows Video and Resource packs
+// before Settings.
+enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPacks, kPageCount };
 
 const ImVec4 kAccent(1.00f, 0.62f, 0.22f, 1.0f);
 
@@ -1685,6 +1686,164 @@ bool drawPerformancePage(Settings& s) {
     return panelColumns(panels, 420.0f);
 }
 
+// --- Resource packs -----------------------------------------------------------------
+
+// One pack as a card, like a preset's: its picture (the mod's load screen) with its name on it,
+// a line about it underneath. Returns true when clicked.
+bool packCard(const std::string& title, const std::string& line, ImTextureID texture, int texW, int texH, const char* stand, bool active,
+              bool usable, float width) {
+    const float imageH = width * 9.0f / 16.0f;
+    const float pad = 8.0f * g_scale;
+    const float textH = ImGui::GetFontSize() * 2.0f + pad * 2.0f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 q(p.x + width, p.y + imageH + textH);
+    const bool clicked = ImGui::InvisibleButton("card", ImVec2(width, imageH + textH));
+    const bool hovered = ImGui::IsItemHovered();
+    const float rounding = 8.0f * g_scale;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(p, q, hovered ? IM_COL32(38, 40, 50, 255) : IM_COL32(26, 28, 35, 255), rounding);
+    const ImVec2 imageEnd(q.x, p.y + imageH);
+    if (texture && texW > 0 && texH > 0) {
+        // A load screen is stretched over the screen by the game (most are square): so here too.
+        // Only pictures wider than 16:9 or taller than square are cropped around the middle.
+        const float aspect = static_cast<float>(texW) / static_cast<float>(texH), wide = 16.0f / 9.0f;
+        ImVec2 uv0(0.0f, 0.0f), uv1(1.0f, 1.0f);
+        if (aspect > wide) {
+            uv0.x = (1.0f - wide / aspect) * 0.5f;
+            uv1.x = 1.0f - uv0.x;
+        } else if (aspect < 1.0f) {
+            uv0.y = (1.0f - aspect) * 0.5f;
+            uv1.y = 1.0f - uv0.y;
+        }
+        draw->AddImageRounded(texture, p, imageEnd, uv0, uv1, usable ? IM_COL32_WHITE : IM_COL32(255, 255, 255, 90), rounding,
+                              ImDrawFlags_RoundCornersTop);
+    } else {
+        draw->AddRectFilledMultiColor(ImVec2(p.x, p.y + rounding), imageEnd, IM_COL32(44, 48, 62, 255), IM_COL32(44, 48, 62, 255),
+                                      IM_COL32(22, 24, 31, 255), IM_COL32(22, 24, 31, 255));
+        draw->AddRectFilled(p, ImVec2(q.x, p.y + rounding + 1.0f), IM_COL32(44, 48, 62, 255), rounding, ImDrawFlags_RoundCornersTop);
+        const ImVec2 size = ImGui::CalcTextSize(stand);
+        draw->AddText(ImVec2(p.x + (width - size.x) * 0.5f, p.y + (imageH - size.y) * 0.45f), IM_COL32(255, 255, 255, 110), stand);
+    }
+    const float fade = imageH * 0.45f;
+    draw->AddRectFilledMultiColor(ImVec2(p.x, imageEnd.y - fade), imageEnd, IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 190),
+                                  IM_COL32(0, 0, 0, 190));
+    ImGui::PushFont(g_fontTitle);
+    const ImVec4 titleClip(p.x + pad, p.y, q.x - pad, imageEnd.y);
+    draw->AddText(g_fontTitle, g_fontTitle->FontSize, ImVec2(p.x + pad, imageEnd.y - ImGui::GetFontSize() - pad * 0.7f), IM_COL32_WHITE, title.c_str(),
+                  nullptr, 0.0f, &titleClip);
+    ImGui::PopFont();
+    if (active) {
+        const char* tag = "IN USE";
+        const ImVec2 size = ImGui::CalcTextSize(tag);
+        const ImVec2 a(p.x + pad, p.y + pad), b(a.x + size.x + 12.0f * g_scale, a.y + size.y + 4.0f * g_scale);
+        draw->AddRectFilled(a, b, colour(kAccent, 1.0f), (b.y - a.y) * 0.5f);
+        draw->AddText(ImVec2(a.x + 6.0f * g_scale, a.y + 2.0f * g_scale), IM_COL32(15, 12, 8, 255), tag);
+    }
+    const ImVec4 clip(p.x + pad, imageEnd.y + pad, q.x - pad, q.y - pad * 0.5f);
+    draw->AddText(nullptr, 0.0f, ImVec2(clip.x, clip.y), ImGui::GetColorU32(ImGuiCol_TextDisabled), line.c_str(), nullptr, width - pad * 2.0f, &clip);
+    if (active) {
+        draw->AddRect(p, q, colour(kAccent, 1.0f), rounding, 0, 2.0f * g_scale);
+    } else if (hovered) {
+        draw->AddRect(p, q, IM_COL32(255, 255, 255, 90), rounding, 0, 1.5f * g_scale);
+    }
+    return clicked;
+}
+
+// Resource packs: the game's environment mods on every map, one choice per environment (and per
+// map mood). The choice is used when a map loads; nothing of it goes into maps, replays or online.
+void drawPacks(Config& config) {
+    ResourcePacks* rp = g_host->resourcePacks;
+    pageTitle("Resource packs", "Texture mods (Skins\\<Environment>\\Mod) on every map. Click one to use it from the next map on.");
+    if (!rp->hooked()) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "This game build can't use them (tmvs.log says why).");
+    if (ImGui::Button("Refresh")) rp->refresh();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Looks for new packs. The game can use a new one after a restart.");
+    ImGui::SameLine(0.0f, 20.0f * g_scale);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Also replace a map's own mod");
+    ImGui::SameLine();
+    if (toggle("replace", &config.packReplaceMapMod)) config.markDirty();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Off: maps that bring their own mod keep it.");
+    const std::string status = rp->status();
+    ImGui::TextDisabled("Last map: %s", status.empty() ? "none loaded yet" : status.c_str());
+    ImGui::Spacing();
+
+    static const char* const kSlots[] = {"All moods", "Day", "Sunset", "Night"};
+    static std::map<std::string, int> s_slot; // per environment: the choice the cards set (-1 all moods)
+    const std::vector<ResourcePacks::Pack>& packs = rp->packs();
+    for (const std::string& env : rp->environments()) {
+        ImGui::PushID(env.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, kAccent);
+        ImGui::SeparatorText(env.c_str());
+        ImGui::PopStyleColor();
+        const Config::PackChoice* found = config.findPackChoice(env);
+        const Config::PackChoice choice = found ? *found : Config::PackChoice();
+        bool perMood = choice.perMood;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("One per map mood");
+        ImGui::SameLine();
+        if (toggle("permood", &perMood)) {
+            config.packChoice(env).perMood = perMood;
+            config.markDirty();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("A pack for day, sunset and night maps each. All moods: when the mood isn't known.");
+        int& slot = s_slot.emplace(env, -1).first->second;
+        if (!perMood) slot = -1;
+        if (perMood) {
+            for (int i = -1; i < static_cast<int>(Mood::Count); i++) {
+                ImGui::SameLine();
+                if (chip(kSlots[i + 1], slot == i)) slot = i;
+            }
+        }
+        ImGui::SameLine(0.0f, 20.0f * g_scale);
+        if (ImGui::SmallButton("Open folder")) rp->openFolder(env);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens Skins\\%s\\Mod. In fullscreen the game may minimise.", env.c_str());
+        const std::string& selected = slot < 0 ? choice.all : choice.mood[slot];
+
+        std::vector<size_t> mine;
+        for (size_t i = 0; i < packs.size(); i++) {
+            if (packs[i].environment == env) mine.push_back(i);
+        }
+        cardGrid(static_cast<int>(mine.size()) + 2, [&](int i, float width) {
+            std::string value, title, line;
+            ImTextureID texture{};
+            int tw = 0, th = 0;
+            bool usable = true;
+            if (i == 0) {
+                title = "Map's own";
+                line = "The mod the map brings, if any (the game's way).";
+            } else if (i == 1) {
+                value = "None";
+                title = "None";
+                line = "No mod: the game's own textures.";
+            } else {
+                const ResourcePacks::Pack& pack = packs[mine[i - 2]];
+                value = pack.file;
+                title = pack.name;
+                usable = pack.usable;
+                line = usable ? pack.detail : "Restart TrackMania to use it.";
+                texture = rp->preview(mine[i - 2], tw, th);
+            }
+            // With one per mood: which moods use it.
+            if (perMood) {
+                std::string uses;
+                for (int m = 0; m < static_cast<int>(Mood::Count); m++) {
+                    if (choice.mood[m] == value) uses += std::string(uses.empty() ? "" : ", ") + kSlots[m + 1];
+                }
+                if (!uses.empty()) line = uses + ". " + line;
+            }
+            ImGui::PushID(i);
+            if (packCard(title, line, texture, tw, th, i < 2 ? "" : "No picture", value == selected, usable, width)) {
+                Config::PackChoice& c = config.packChoice(env);
+                (slot < 0 ? c.all : c.mood[slot]) = value;
+                config.markDirty();
+            }
+            ImGui::PopID();
+        });
+        ImGui::PopID();
+        ImGui::Spacing();
+    }
+    ImGui::TextDisabled("Only your game shows the pack: maps, replays and the server never get it.");
+}
 
 // The replay editor's Shoot video: presets for what the video is for, the game's own dialog in a
 // few lines, then every setting. Only where the game can export (not TrackMania 2).
@@ -2177,16 +2336,17 @@ void drawHeader(Config& config, Settings& s) {
 }
 
 void drawNavigation(Config& config) {
-    static const char* const kPages[] = {"Shaders", "Customize", "Studio", "Maps", "Performance", "Settings", "About", "Video"};
+    static const char* const kPages[] = {"Shaders", "Customize", "Studio", "Maps", "Performance", "Settings", "About", "Video", "Resource packs"};
     static const char* const kHints[] = {"Browse and apply presets", "Main settings", "All settings", "Presets for day, sunset and night maps",
                                          "Frame rate and effect costs", "General options", "Version, updates, help",
-                                         "Shoot video: presets, quality, the camera's look"};
-    static const int kOrder[] = {kShaders, kCustomize, kStudio, kMaps, kPerformance, kVideo, kSettings, kAbout};
+                                         "Shoot video: presets, quality, the camera's look", "Texture mods on every map"};
+    static const int kOrder[] = {kShaders, kCustomize, kStudio, kMaps, kPerformance, kVideo, kPacks, kSettings, kAbout};
     const bool updateOut = update::latest().state == update::State::Available;
     const float h = 38.0f * g_scale;
     ImDrawList* draw = ImGui::GetWindowDrawList();
     for (const int i : kOrder) {
         if (i == kVideo && !videoPageShown()) continue;
+        if (i == kPacks && !g_host->resourcePacks) continue;
         const bool active = config.menuPage == i;
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float w = ImGui::GetContentRegionAvail().x;
@@ -2260,6 +2420,10 @@ void drawMenu() {
         case kSettings: look = drawSettings(config, s); break;
         case kAbout: drawAbout(config); break;
         case kVideo: look = videoPageShown() ? drawVideoPage(config, s) : drawSettings(config, s); break;
+        case kPacks:
+            if (g_host->resourcePacks) drawPacks(config);
+            else look = drawSettings(config, s);
+            break;
         default: drawShaders(config); break;
     }
     ImGui::PopItemWidth();

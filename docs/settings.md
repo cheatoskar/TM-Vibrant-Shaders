@@ -17,6 +17,7 @@ The menu opens over most of the screen's height and the left part of its width: 
 - **Studio:** every setting, see below.
 - **Maps:** the preset per map mood (day, sunset, night) and the [Author's Shader](#authors-shader).
 - **Performance:** auto quality, target FPS, effect quality, and what each effect costs on your GPU.
+- **Resource packs** (TrackMania Nations/United): the game's environment mods on every map, [below](#resource-packs).
 - **Video** (TrackMania Nations/United): the replay editor's *Shoot video*. Presets for what the file is for (*YouTube*: H.264 quality 80, grain halved; *Best*: H.264 quality 92, grain halved; *Editing*: H.264 quality 92, full grain; *Small*: HEVC 10-bit quality 70; *Discord*: H.264 at a fixed 8 Mbit/s; *HDR10*: HEVC 10-bit HDR10 quality 85; each of them picks the graphics card's encoder) and for the look (*Replay*: shutter 360, no crop; *Cinema*: shutter 180, lens depth of field, 2.39:1), a few lines on the game's own dialog (size, frame rate, the sound button, *High quality* with its samples: that is where the supersampling and the motion blur are switched on), and every *Video* setting below.
 - **Settings:** options that are not part of a preset: the *Hotkeys* ([below](#hotkeys)), *Preset per map type*, *Picked preset applies to all maps of this type* (off by default; on: picking a preset on a night map makes it the preset for all night maps, the same for day and sunset; off: only the Maps page sets them), *Author's Shaders*, live preview, full-screen menu, update check, the video export, *Effects* (motion blur only in replays, weather volume, TAA), *Game integration* (the same switches as in Studio: the game's MSAA, effects in replays, real night, game light sources, ...), and the folders.
 - **About:** the version, updates (with the new version's notes and a link to its release page), links to the project page and the issue tracker, the folder with your settings and `tmvs.log`, and the credits.
@@ -115,6 +116,18 @@ A colour look-up table changes every colour of the image in one go, the way film
 2. Pick one under *Look*. *Amount* mixes it with the image without it (1 = all of it).
 
 The look is applied last, after the preset's own colours, on the image as you see it (sRGB), and stays when you change presets. It is not part of presets or Author's Shaders: `settings.ini` keeps it in `[General]` (`Lut`, `LutAmount`). 1D LUTs and an input range other than 0..1 (`DOMAIN_MIN`/`DOMAIN_MAX`) aren't supported; `tmvs.log` says why a file didn't load.
+
+## Resource packs
+
+TrackMania Nations/United (not TrackMania 2). The game's own environment mods, zips of textures in `Documents\TrackMania\Skins\<Environment>\Mod` (`Stadium\Mod\DarkBlue.zip` and so on: a texture in the zip replaces the game's texture of the same name), normally only show on a map whose author linked one. The *Resource packs* page uses one on every map you load: races, replays, online, the editor.
+
+- Every pack is a card with its picture (the zip's `Image/LoadScreen.dds`, else a `preview.png`, `.jpg` or `.dds` in it). Click a card to use it for its environment, from the next map you load on. *Map's own* (the default) is the game's behaviour; *None* shows the game's own textures, also on maps that bring a mod.
+- **Also replace a map's own mod** (on): off, a map that brings its own mod keeps it (also with *None*); your pack then only shows on maps without one.
+- **One per map mood** (off): a pack for day, sunset and night maps each (the chips pick which one the cards set). The mood comes from the map's decoration (*Day*; *Sunrise* and *Sunset*; *Night*). When it is something else, *All moods* is used, and the log says so.
+- **Refresh** looks for new zips. The game itself only takes the packs that were there when it started: a zip added later shows *Restart TrackMania to use it*.
+- **Open folder** opens that environment's `Mod` folder.
+
+The pack is only in your game: the map, its saved file, replays and ghosts keep the map's own mod, and nothing is sent to the server. `tmvs.log` says at every map load what was used, for example `modpack: Stadium: DarkBlue.zip (instead of the map's Portal.zip)`, `modpack: Stadium: map's own: none` or `modpack: Stadium: none`. Not part of presets: `settings.ini` keeps it in `[ResourcePacks]` (`ReplaceMapMod`, default 1; per environment `Stadium` for all moods, `Stadium.PerMood`, `Stadium.Day`, `Stadium.Sunset`, `Stadium.Night`; empty = the map's own, `None`, or the zip's file name).
 
 ## All settings
 

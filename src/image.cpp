@@ -191,6 +191,14 @@ bool decodeJpeg(const void* data, size_t size, std::vector<uint32_t>& pixels, in
     return true;
 }
 
+bool inflateRaw(const void* data, size_t size, size_t expected, std::vector<unsigned char>& out) {
+    if (size > 0x7fffffff || expected > 0x7fffffff) return false;
+    out.resize(expected);
+    const int n = stbi_zlib_decode_noheader_buffer(reinterpret_cast<char*>(out.data()), static_cast<int>(expected),
+                                                   static_cast<const char*>(data), static_cast<int>(size));
+    return n == static_cast<int>(expected);
+}
+
 bool readJpeg(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height) {
     FILE* f = _wfopen(path.c_str(), L"rb");
     if (!f) return false;

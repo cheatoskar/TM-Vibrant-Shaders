@@ -130,6 +130,7 @@ add_library(tmvs_core STATIC
   src/weather.cpp
   src/image.cpp
   src/lut.cpp
+  src/modpack.cpp
   src/videoencoder.cpp
   src/nvenc.cpp
   src/loopback.cpp
@@ -244,6 +245,11 @@ target_compile_options(tmvs_aqtest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_sharetest tools/sharetest.cpp)
 target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)
 target_compile_options(tmvs_sharetest PRIVATE ${TMVS_OPTIONS})
+
+# Resource pack test: DDS decoder, zip reader, choice per mood; reads your packs' pictures (development tool).
+add_executable(tmvs_packtest tools/packtest.cpp)
+target_link_libraries(tmvs_packtest PRIVATE tmvs_core)
+target_compile_options(tmvs_packtest PRIVATE ${TMVS_OPTIONS})
 
 # Video export read-back test: the frames come out once each and in order, with repeats, flushes
 # and a device reset in between, on a plain D3D9 device (development tool).

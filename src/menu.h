@@ -22,7 +22,30 @@ struct PassTimings {
     virtual float total() const = 0;        // ms
 };
 
+// The Resource packs page's packs (TrackMania Nations/United: the environment mods in
+// Skins\<Environment>\Mod). The choices themselves are in Config (packChoices).
+struct ResourcePacks {
+    struct Pack {
+        std::string environment; // "Stadium"
+        std::string name;        // shown
+        std::string file;        // the choice saved for it (UTF-8)
+        std::string detail;      // a line about it ("4.0 MB")
+        bool usable = true;      // false: the game doesn't know it yet (added after it started)
+    };
+    virtual ~ResourcePacks() = default;
+    virtual const std::vector<Pack>& packs() = 0;
+    virtual std::vector<std::string> environments() = 0; // Stadium first
+    virtual void refresh() = 0;                           // the folders read again
+    // The pack's picture (0: none, or not loaded yet) and its size in pixels.
+    virtual ImTextureID preview(size_t index, int& width, int& height) = 0;
+    virtual void openFolder(const std::string& environment) = 0;
+    virtual std::string status() = 0; // what the last map loaded with ("" before the first)
+    virtual bool hooked() = 0;        // false: this game build can't
+};
+
 struct Host {
+    // The Resource packs page (null: no such page, TrackMania 2).
+    ResourcePacks* resourcePacks = nullptr;
     bool depthAvailable = true;
     bool engineHooks = true;
     bool sunKnown = false;

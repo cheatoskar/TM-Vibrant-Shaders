@@ -7,6 +7,7 @@
 #include "pipeline.h"
 #include "log.h"
 #include "lut.h"
+#include "modpack.h"
 #include "photo.h"
 #include "thumbnails.h"
 #include "update.h"
@@ -375,6 +376,64 @@ void init(IDirect3DDevice9* device) {
     g_initialized = true;
 }
 
+// The Resource packs page's packs: the Mod folders read when the page first shows and on
+// Refresh; their pictures are made on a thread (thumbnails::packPreview).
+struct GamePacks : menu::ResourcePacks {
+    IDirect3DDevice9* device = nullptr;
+    std::vector<modpack::Pack> found;
+    std::vector<Pack> shown;
+    bool scanned = false;
+
+    void ensure() {
+        if (!scanned) refresh();
+    }
+    const std::vector<Pack>& packs() override {
+        ensure();
+        return shown;
+    }
+    std::vector<std::string> environments() override {
+        ensure();
+        return modpack::environments(found);
+    }
+    void refresh() override {
+        scanned = true;
+        found = modpack::scan();
+        shown.clear();
+        for (const modpack::Pack& p : found) {
+            Pack s;
+            s.environment = p.environment;
+            s.name = p.name;
+            const int n = WideCharToMultiByte(CP_UTF8, 0, p.file.c_str(), static_cast<int>(p.file.size()), nullptr, 0, nullptr, nullptr);
+            s.file.assign(n > 0 ? n : 0, '\0');
+            if (n > 0) WideCharToMultiByte(CP_UTF8, 0, p.file.c_str(), static_cast<int>(p.file.size()), &s.file[0], n, nullptr, nullptr);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "%.1f MB%s", static_cast<double>(p.size) / (1024.0 * 1024.0), p.linked ? ", downloaded for a map" : "");
+            s.detail = detail;
+            s.usable = !engine::modPacksHooked() || engine::modPackKnown(p.environment.c_str(), p.file);
+            shown.push_back(s);
+        }
+        TMVS_LOG("modpack: %u packs in %ls", static_cast<unsigned>(found.size()), modpack::skinsFolder().c_str());
+    }
+    ImTextureID preview(size_t index, int& width, int& height) override {
+        width = height = 0;
+        if (index >= found.size()) return ImTextureID{};
+        IDirect3DTexture9* texture = thumbnails::packPreview(device, found[index].path, found[index].written, width, height);
+        return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(texture));
+    }
+    void openFolder(const std::string& environment) override {
+        int n = MultiByteToWideChar(CP_UTF8, 0, environment.c_str(), -1, nullptr, 0);
+        std::wstring env(n > 0 ? n - 1 : 0, L'\0');
+        if (n > 1) MultiByteToWideChar(CP_UTF8, 0, environment.c_str(), -1, &env[0], n);
+        const std::wstring folder = modpack::skinsFolder() + L"\\" + env + L"\\Mod";
+        CreateDirectoryW((modpack::skinsFolder() + L"\\" + env).c_str(), nullptr);
+        CreateDirectoryW(folder.c_str(), nullptr);
+        ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    std::string status() override { return engine::modPackStatus(); }
+    bool hooked() override { return engine::modPacksHooked(); }
+};
+GamePacks g_packs;
+
 } // namespace
 
 
@@ -481,6 +540,8 @@ void draw(IDirect3DDevice9* device) {
             if (!photo::active()) photo::toggle();
         };
         host.supports = [](const Field& f) { return strcmp(f.key, "ToneCurve") != 0; }; // ManiaPlanet only
+        g_packs.device = device;
+        host.resourcePacks = &g_packs;
         menu::draw(host);
     }
     if (*photoHint) {

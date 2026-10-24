@@ -234,6 +234,8 @@ Settings Config::lookForMood(Mood m) const {
 namespace {
 
 const wchar_t* const kMoodKeys[] = {L"PresetDay", L"PresetDusk", L"PresetNight"};
+// [ResourcePacks]: "<Environment>.Day" ... (the menu says sunset for Dusk).
+const wchar_t* const kPackMoodKeys[] = {L"Day", L"Sunset", L"Night"};
 
 std::wstring widen(const std::string& text) {
     if (text.empty()) return {};
@@ -1011,6 +1013,21 @@ bool Config::selectPreset(const std::string& name) {
     return true;
 }
 
+Config::PackChoice& Config::packChoice(const std::string& environment) {
+    for (auto& entry : packChoices) {
+        if (!_stricmp(entry.first.c_str(), environment.c_str())) return entry.second;
+    }
+    packChoices.emplace_back(environment, PackChoice());
+    return packChoices.back().second;
+}
+
+const Config::PackChoice* Config::findPackChoice(const std::string& environment) const {
+    for (const auto& entry : packChoices) {
+        if (!_stricmp(entry.first.c_str(), environment.c_str())) return &entry.second;
+    }
+    return nullptr;
+}
+
 void Config::resumeMoodPresets() {
     if (!manualPick) return;
     manualPick = false;
@@ -1717,6 +1734,31 @@ void Config::load() {
     lutAmount = 1.0f;
     if (GetPrivateProfileStringW(L"General", L"LutAmount", L"", text, 128, ini)) lutAmount = static_cast<float>(_wtof(text));
     lutAmount = lutAmount < 0.0f ? 0.0f : (lutAmount > 1.0f ? 1.0f : lutAmount);
+    // Resource packs: the keys are the environments found when they were chosen.
+    packReplaceMapMod = GetPrivateProfileIntW(L"ResourcePacks", L"ReplaceMapMod", 1, ini) != 0;
+    packChoices.clear();
+    {
+        std::vector<wchar_t> section(32768);
+        const DWORD n = GetPrivateProfileSectionW(L"ResourcePacks", section.data(), static_cast<DWORD>(section.size()), ini);
+        for (const wchar_t* line = section.data(); n && *line; line += wcslen(line) + 1) {
+            const wchar_t* eq = wcschr(line, L'=');
+            if (!eq) continue;
+            std::wstring key(line, eq), value(eq + 1);
+            if (key == L"ReplaceMapMod") continue;
+            const size_t dot = key.find(L'.');
+            PackChoice& choice = packChoice(narrow(key.substr(0, dot)));
+            const std::string chosen = narrow(value);
+            if (dot == std::wstring::npos) {
+                choice.all = chosen;
+            } else if (key.compare(dot + 1, std::wstring::npos, L"PerMood") == 0) {
+                choice.perMood = _wtoi(value.c_str()) != 0;
+            } else {
+                for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
+                    if (key.compare(dot + 1, std::wstring::npos, kPackMoodKeys[i]) == 0) choice.mood[i] = chosen;
+                }
+            }
+        }
+    }
     rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 0, ini) != 0;
     manualPick = GetPrivateProfileIntW(L"General", L"ManualPick", 0, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
@@ -1834,6 +1876,15 @@ void Config::save() {
     ini.set(L"General", L"LutAmount", photo);
     ini.set(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0");
     ini.set(L"General", L"ManualPick", manualPick ? L"1" : L"0");
+    if (!packChoices.empty() || !packReplaceMapMod) ini.set(L"ResourcePacks", L"ReplaceMapMod", packReplaceMapMod ? L"1" : L"0");
+    for (const auto& entry : packChoices) {
+        const std::wstring env = widen(entry.first);
+        ini.set(L"ResourcePacks", env.c_str(), widen(entry.second.all).c_str());
+        ini.set(L"ResourcePacks", (env + L".PerMood").c_str(), entry.second.perMood ? L"1" : L"0");
+        for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
+            ini.set(L"ResourcePacks", (env + L"." + kPackMoodKeys[i]).c_str(), widen(entry.second.mood[i]).c_str());
+        }
+    }
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);
     ini.set(L"General", L"MenuSections", sections);

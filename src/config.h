@@ -1,6 +1,7 @@
 #pragma once
 #include "settings.h"
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace tmshaders {
@@ -101,6 +102,19 @@ public:
     // and how much of it (0..1).
     std::string lutFile;
     float lutAmount = 1.0f;
+    // Resource packs (TrackMania Nations/United: the environment mods in
+    // Skins\<Environment>\Mod), one choice per environment, used at every map load: "" the
+    // map's own mod (the game's behaviour), "None", or a zip's file name. perMood: one choice
+    // per map mood (day, sunset, night) instead of `all`. Machine settings ([ResourcePacks]).
+    struct PackChoice {
+        std::string all;
+        std::string mood[static_cast<int>(Mood::Count)];
+        bool perMood = false;
+    };
+    std::vector<std::pair<std::string, PackChoice>> packChoices; // by environment ("Stadium")
+    bool packReplaceMapMod = true; // a chosen pack also replaces a map's own mod
+    PackChoice& packChoice(const std::string& environment);
+    const PackChoice* findPackChoice(const std::string& environment) const;
     // Picking a preset also makes it the one for this kind of map (day / sunset / night).
     bool rememberMoodPick = false;
     // The preset the menu points at: shown in the game until the pointer leaves (not saved).

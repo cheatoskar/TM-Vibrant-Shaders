@@ -14,6 +14,7 @@
 #include "keys.h"
 #include "log.h"
 #include "lut.h"
+#include "modpack.h"
 #include "overlay.h"
 #include "pipeline.h"
 #include "autoquality.h"
@@ -3702,6 +3703,30 @@ bool nightAtLoad(float dayTime) {
     return nightFor(dayTime, true);
 }
 
+// Resource packs, at map load (the load screen, then the decoration): the environment mod the
+// menu chose for this environment and mood. A map with its own mod keeps it unless "Also
+// replace a map's own mod" is on (also for None). Works with the effects off too: it is the
+// game's own texture swap.
+engine::ModPackAnswer modPackAnswer(const engine::ModPackAsk& ask) {
+    engine::ModPackAnswer answer;
+    const Config& config = Config::get();
+    const std::string choice = modpack::choiceFor(config, ask.environment, ask.decoration, answer.note);
+    if (choice.empty()) return answer;
+    if (ask.mapMod && !config.packReplaceMapMod) {
+        answer.note = (answer.note.empty() ? "" : answer.note + ", ") + "kept: \"Also replace a map's own mod\" is off";
+        return answer;
+    }
+    if (choice == modpack::kNone) {
+        answer.kind = engine::ModPackAnswer::None;
+        return answer;
+    }
+    answer.kind = engine::ModPackAnswer::Pack;
+    const int n = MultiByteToWideChar(CP_UTF8, 0, choice.c_str(), static_cast<int>(choice.size()), nullptr, 0);
+    answer.file.assign(n > 0 ? n : 0, L'\0');
+    if (n > 0) MultiByteToWideChar(CP_UTF8, 0, choice.c_str(), static_cast<int>(choice.size()), &answer.file[0], n);
+    return answer;
+}
+
 // EngineMoon, at map load: on a night map (its own night or lit at midnight) whose look has the
 // black hole, the game's own moon (its baked light and shadows, glints, the car) shines from the
 // black hole instead of from the side, or is off. Decided with the look of the map's mood, as
@@ -3791,6 +3816,7 @@ void bootOnce() {
     frames.flush = ownFlushAll;
     videofile::setFrameSource(frames);
     engine::setMoonAtLoad(moonAtLoad);
+    engine::setModPackChooser(modPackAnswer);
 
     hook::DeviceCallbacks deviceCallbacks;
     deviceCallbacks.adjustPresentParams = onAdjustPresentParams;
