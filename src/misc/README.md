@@ -95,14 +95,26 @@ Its vertices' box, turned into the world, must lie inside the map's grid (16 m o
 highest track cell plus 40 m: the sky, the clouds and the stadium around the grid stay out. Blocks are
 not asked for by identity: on A01 only about 2 % of the main path's draws and 12 % of the sorted
 passes' mapped to a block through `blockorder`'s corpus -> item chain (my first test), so that path was
-dropped. Each distinct draw is taken once per map, keyed by its buffers, index range, place (0.25 m)
-and turn (1/100): instances of a block share their buffers. It is queued with references to the game's
-vertex and index buffers, its declaration's POSITION and TEXCOORD0 and the texture on stage 0, and
-drawn at Present, before the overlay: at most 400 a frame, inside a saved and restored device state (a
-D3D9 state block plus the render and depth targets), into an A8R8G8B8 target of 1 pixel per metre with
-its own depth buffer (higher covers lower) and mipmaps. New meshes are measured (their vertices read for
-the box) at most 48 a frame, about 1 ms: the rest come again in the next frames. Once nothing new came for 5 s, only one draw in
-8 is looked at per frame (each one every 8 frames); something new and all are looked at again.
+dropped. Each placement is taken once per map, keyed by its buffers, index range, turn (1/20) and
+place in 4 m cells; a place near a cell's edge also finds the neighbouring cell's key on that side.
+(My retest: keyed by the place to 0.25 m, the key changed every frame: the place the constants give
+moves by up to about a metre, the camera's jitter in the projection, and 2500 meshes a second came as
+new forever.) Instances of a block share their buffers and differ by place. It is queued with
+references to the game's vertex and index buffers, its declaration's POSITION and TEXCOORD0 and the
+colour texture, and drawn at Present, before the overlay: at most 400 a frame, inside a saved and
+restored device state (a D3D9 state block plus the render and depth targets), into an A8R8G8B8 target
+of 1 pixel per metre with its own depth buffer (higher covers lower) and mipmaps. New meshes are
+measured (their vertices read for the box) at most 48 a frame, about 1 ms: the rest come again in the
+next frames. The build-up ends when nothing new came for 5 s, or after 20 s; then only one draw in 16 is
+looked at per frame and at most 5 new meshes a second are taken (something that moves would otherwise
+come as new forever; the log counts what the cap refused).
+
+The colour: the game's lightmapped blocks don't keep their colour texture on stage 0 (my retest: the
+map came out grey). The pixel shader's constant table names its samplers; the colour comes from the
+one named for it ("Diffuse", "Diff..."), else the first not named for light, normals, specular,
+reflections, clouds, masks or shadows. A luminance texture (L8, A8L8) tints the material's colour; no
+texture: the material's colour (grass green, dirt brown, water blue, the rest grey, from the engine's
+material class). The log names the samplers and the choice for the first eight materials of a map.
 
 The cost goes into `tmvs.log`: CPU per frame of drawing the minimap (`mapview::draw`, the redraws
 included) and of the checks in `onDrawIndexed`, GPU per frame of the redraws (D3D9 timestamp queries

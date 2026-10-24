@@ -32,6 +32,11 @@ void endInternal() {}
 namespace tmshaders {
 namespace engine {
 Material currentMaterial() { return Material::Other; }
+const void* currentShader() { return nullptr; }
+bool materialFile(const void*, wchar_t* out, size_t size) {
+    wcsncpy_s(out, size, L"TestMaterial.Shader.Gbx", _TRUNCATE);
+    return true;
+}
 } // namespace engine
 } // namespace tmshaders
 
@@ -66,6 +71,14 @@ Out main(float4 pos : POSITION, float3 normal : NORMAL, float2 tc : TEXCOORD0) {
     o.tc = tc;
     return o;
 }
+)";
+
+// The game's kind of pixel shader: the colour from a sampler named for it, not on stage 0 (a
+// lightmap there, as in the game's lightmapped blocks).
+const char* kGamePS = R"(
+sampler2D LightMap : register(s0);
+sampler2D MapDiffuse : register(s1);
+float4 main(float2 tc : TEXCOORD0) : COLOR0 { return tex2D(MapDiffuse, tc) * tex2D(LightMap, tc) * 2; }
 )";
 
 struct Vertex {
@@ -105,7 +118,7 @@ void finishGpu(IDirect3DDevice9* device) {
 // --bench: 3000 meshes of 512 triangles (a 16 x 16 grid of quads over a 32 m cell) at random places
 // and turns, as the game's draws of a big map, into a 1024 and a 4096 pixel picture: the CPU time of
 // the checks per draw (new, known, after the build-up), and of the redraws per frame with the GPU's.
-void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DVertexDeclaration9* decl, IDirect3DTexture9* texture,
+void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DPixelShader9* ps, IDirect3DVertexDeclaration9* decl, IDirect3DTexture9* texture,
            const float view[16], const float projection[16]) {
     constexpr int kGrid = 16, kMeshes = 3000;
     std::vector<Vertex> vertices;
@@ -161,7 +174,8 @@ void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DVertex
         device->SetStreamSource(0, vb, 0, sizeof(Vertex));
         device->SetIndices(ib);
         device->SetVertexShader(vs);
-        device->SetTexture(0, texture);
+        device->SetPixelShader(ps);
+        device->SetTexture(1, texture);
         const auto frameOfDraws = [&]() {
             double ms = 0.0;
             for (int i = 0; i < kMeshes; i++) {
@@ -177,7 +191,10 @@ void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DVertex
         // The build-up: each frame the game's 3000 draws (checks), then the redraws, until all are in.
         int frames = 0;
         double checkSum = 0.0, checkMax = 0.0, cpuSum = 0.0, cpuMax = 0.0, wallSum = 0.0, wallMax = 0.0;
-        while (topview::meshes() < kMeshes && frames < 400) {
+        int last = -1, still = 0;
+        while (topview::meshes() < kMeshes && frames < 400 && still < 20) {
+            still = topview::meshes() == last ? still + 1 : 0;
+            last = topview::meshes();
             device->BeginScene();
             const double checks = frameOfDraws();
             device->EndScene();
@@ -209,7 +226,7 @@ void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DVertex
                topview::meshes(), frames);
         printf("      build-up frames: checks of %d draws %.2f ms a frame (most %.2f); redraws CPU %.2f ms (most %.2f), CPU + GPU until done %.2f ms (most %.2f)\n",
                kMeshes, checkSum / std::max(frames, 1), checkMax, cpuSum / std::max(frames, 1), cpuMax, wallSum / std::max(frames, 1), wallMax);
-        printf("      after it: checks of %d known draws %.2f ms a frame while still looking at all, %.2f ms once settled (one in 8)\n", kMeshes, knownMs,
+        printf("      after it: checks of %d known draws %.2f ms a frame while still looking at all, %.2f ms once settled (one in 16)\n", kMeshes, knownMs,
                settledMs);
     }
     vb->Release();
@@ -265,9 +282,11 @@ int main(int argc, char** argv) {
     IDirect3DVertexDeclaration9* decl = nullptr;
     device->CreateVertexDeclaration(elements, &decl);
     IDirect3DVertexShader9* vs = gfx::compileVertexShader(device, kGameVS, "main", "GameVS");
+    IDirect3DPixelShader9* ps = gfx::compilePixelShader(device, kGamePS, "main", "GamePS");
     IDirect3DTexture9* red = solidTexture(device, D3DCOLOR_ARGB(255, 255, 0, 0));
     IDirect3DTexture9* green = solidTexture(device, D3DCOLOR_ARGB(255, 0, 255, 0));
-    if (!vb || !ib || !decl || !vs || !red || !green) {
+    IDirect3DTexture9* lightmap = solidTexture(device, D3DCOLOR_ARGB(255, 128, 128, 128));
+    if (!vb || !ib || !decl || !vs || !ps || !red || !green || !lightmap) {
         printf("setup failed\n");
         return 2;
     }
@@ -287,6 +306,8 @@ int main(int argc, char** argv) {
     device->SetStreamSource(0, vb, 0, sizeof(Vertex));
     device->SetIndices(ib);
     device->SetVertexShader(vs);
+    device->SetPixelShader(ps);
+    device->SetTexture(0, lightmap);
     device->SetRenderState(D3DRS_ZENABLE, TRUE);
     device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
     device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
@@ -301,13 +322,15 @@ int main(int argc, char** argv) {
             for (int c = 0; c < 4; c++) columns[c * 4 + r] = wvp[r * 4 + c];
         }
         device->SetVertexShaderConstantF(0, columns, 4);
-        device->SetTexture(0, texture);
+        device->SetTexture(1, texture);
         topview::onDraw(device, D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2, view, projection);
         device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2);
     };
     drawQuad(0.0f, 10.0f, 0.0f, red);
     drawQuad(16.0f, 20.0f, 16.0f, green);
     drawQuad(0.0f, 10.0f, 0.0f, red);     // the same draw at the same place again: taken once
+    drawQuad(0.6f, 10.4f, -0.7f, red);    // and again, moved by the camera's jitter (under a metre): taken once
+    drawQuad(15.3f, 20.8f, 16.9f, green);
     drawQuad(200.0f, 10.0f, 0.0f, red);   // outside the map's area: left out
     drawQuad(0.0f, 500.0f, 0.0f, red);    // above the highest track: left out
     device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
@@ -329,17 +352,17 @@ int main(int argc, char** argv) {
     IDirect3DVertexShader9* boundVS = nullptr;
     device->GetVertexShader(&boundVS);
     IDirect3DBaseTexture9* boundTexture = nullptr;
-    device->GetTexture(0, &boundTexture);
+    device->GetTexture(1, &boundTexture);
     check(cull == D3DCULL_CW, "a render state is given back");
     check(target == backBuffer, "the render target is given back");
     check(boundVS == vs, "the vertex shader is given back");
-    check(boundTexture == red, "the texture on stage 0 is given back");
+    check(boundTexture == red, "the texture on stage 1 is given back");
     gfx::release(target);
     gfx::release(boundVS);
     gfx::release(boundTexture);
     gfx::release(backBuffer);
 
-    check(topview::meshes() == 2, "two draws in the picture (one seen twice; one outside the area, one too high, one blended left out)");
+    check(topview::meshes() == 2, "two draws in the picture (each seen again, also moved by jitter; one outside the area, one too high, one blended left out)");
     IDirect3DTexture9* picture = topview::picture();
     check(picture != nullptr, "the picture exists");
     if (picture) {
@@ -375,7 +398,7 @@ int main(int argc, char** argv) {
         gfx::release(copy);
         gfx::release(level);
     }
-    if (benchmark) bench(device, vs, decl, green, view, projection);
+    if (benchmark) bench(device, vs, ps, decl, green, view, projection);
     topview::releaseDevice();
     printf(g_failed ? "%d check(s) failed\n" : "all passed\n", g_failed);
     return g_failed ? 1 : 0;

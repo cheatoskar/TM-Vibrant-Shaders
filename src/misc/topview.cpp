@@ -8,6 +8,10 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <string>
+#include <cwchar>
+#include <cctype>
+#include <cstdio>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
@@ -47,8 +51,10 @@ constexpr size_t kMaxKeys = 200000;
 constexpr float kLowest = -64.0f;       // m: the depth range of the picture (higher covers lower)
 constexpr float kHighest = 2048.0f;
 constexpr float kMargin = 16.0f;        // m a mesh may reach past the grid area
-constexpr unsigned kStride = 8;         // after the build-up: one draw in 8 looked at per frame
+constexpr unsigned kStride = 16;        // after the build-up: one draw in 16 looked at per frame
 constexpr unsigned kNewPerFrame = 48;  // new meshes measured per frame (their vertices are read: ~20 us each)
+constexpr float kCell = 4.0f;          // m: the place's rounding in the key (the camera's jitter moves it ~1 m)
+constexpr float kNewPerSecond = 5.0f;  // after the build-up: new meshes admitted per second at most
 constexpr DWORD kSettleMs = 5000;       // nothing new for this long: the build-up is over
 constexpr DWORD kReportMs = 60000;      // the cost line while the minimap is on
 
@@ -67,9 +73,13 @@ Out main(float4 pos : POSITION, float2 uv : TEXCOORD0) {
 
 const char* kTopPS = R"(
 sampler2D s_Texture : register(s0);
-float4 u_Params : register(c0); // x: a texture is bound, y: lowest height (m), z: 1 / height range
+float4 u_Params : register(c0); // x: 0 the tint alone, 1 a colour texture, 2 a grey texture times the tint;
+                                // y: lowest height (m), z: 1 / height range
+float4 u_Tint : register(c1);   // the material's colour (grass, dirt, water, the rest grey)
 float4 main(float2 uv : TEXCOORD0, float3 world : TEXCOORD1) : COLOR0 {
-    float3 base = u_Params.x > 0.5 ? tex2D(s_Texture, uv).rgb : float3(0.55, 0.55, 0.58);
+    float3 base = u_Tint.rgb;
+    if (u_Params.x > 1.5) base = u_Tint.rgb * (0.55 + 0.9 * tex2D(s_Texture, uv).r);
+    else if (u_Params.x > 0.5) base = tex2D(s_Texture, uv).rgb;
     float3 n = normalize(cross(ddx(world), ddy(world)));
     if (n.y < 0.0) n = -n;
     float light = 0.62 + 0.38 * saturate(dot(n, normalize(float3(0.35, 1.0, 0.25))));
@@ -96,6 +106,8 @@ struct Job {
     IDirect3DIndexBuffer9* ib = nullptr;
     IDirect3DBaseTexture9* texture = nullptr;
     bool texcoord = false;
+    int mode = 0;          // 0 the tint, 1 a colour texture, 2 a grey texture times the tint
+    float tint[4] = {0.55f, 0.55f, 0.58f, 1.0f};
     D3DPRIMITIVETYPE type = D3DPT_TRIANGLELIST;
     INT base = 0;
     UINT minIndex = 0, vertices = 0, start = 0, count = 0;
@@ -121,6 +133,10 @@ struct Sums {
     unsigned gpuFrames = 0;  // frames whose GPU time was read
     unsigned checked = 0;    // draws looked at past the quick checks
     int meshes = 0;          // drawn into the picture
+    unsigned added = 0;      // new meshes queued
+    unsigned capped = 0;     // new meshes refused by the cap after the build-up
+    unsigned colour = 0;     // queued with a colour texture
+    unsigned grey = 0;       // with a grey texture (tinted)
 };
 
 struct State {
@@ -151,6 +167,9 @@ struct State {
     DWORD firstNew = 0, lastNew = 0;
     bool settled = false;
     int buildLines = 0; // build-up lines this map (a camera that keeps finding more: at most 3)
+    float allowance = 0.0f; // after the build-up: new meshes that may still come (kNewPerSecond)
+    DWORD allowanceTick = 0;
+    int materialLines = 0;  // materials logged this map (which sampler gave the colour)
     Sums build, window;
     DWORD windowStart = 0;
     GpuTimer gpu[4];
@@ -158,6 +177,13 @@ struct State {
 State g;
 std::map<std::tuple<WORD, BYTE, WORD, BYTE, bool, bool>, IDirect3DVertexDeclaration9*> g_ownDecls;
 std::unordered_map<IDirect3DVertexDeclaration9*, DeclInfo> g_decls; // the game's (held) -> ours
+// Per pixel shader of the game (held): the sampler its colour comes from (-1: none known) and the
+// names of its samplers, from the constant table in its bytecode.
+struct ShaderSamplers {
+    int colour = -1;
+    std::string names;
+};
+std::unordered_map<IDirect3DPixelShader9*, ShaderSamplers> g_samplers;
 
 double now() {
     LARGE_INTEGER t, f;
@@ -292,6 +318,82 @@ bool insideMap(const Job& j, const float lo[3], const float hi[3]) {
            whi[1] > kLowest;
 }
 
+// The samplers in a pixel shader's constant table (shaders the game compiled from HLSL keep it): the
+// one named for the colour ("Diffuse", "Diff..."), else the first not named for light, normals,
+// specular, reflections, clouds, masks or shadows. -1: none.
+ShaderSamplers samplersOf(IDirect3DPixelShader9* ps) {
+    ShaderSamplers out;
+    UINT size = 0;
+    if (FAILED(ps->GetFunction(nullptr, &size)) || size < 8 || size > (1u << 20)) return out;
+    std::vector<DWORD> code(size / 4);
+    if (FAILED(ps->GetFunction(code.data(), &size))) return out;
+    int named = -1, plain = -1;
+    for (size_t i = 1; i < code.size();) {
+        const DWORD token = code[i];
+        if ((token & 0xFFFF) != 0xFFFE) break; // comments come right after the version token
+        const size_t length = (token >> 16) & 0x7FFF;
+        if (length >= 8 && i + 1 + length <= code.size() && code[i + 1] == 0x42415443 /* CTAB */) {
+            const unsigned char* table = reinterpret_cast<const unsigned char*>(&code[i + 2]);
+            const size_t bytes = (length - 1) * 4;
+            const DWORD count = *reinterpret_cast<const DWORD*>(table + 12), info = *reinterpret_cast<const DWORD*>(table + 16);
+            for (DWORD c = 0; c < count && info + (c + 1) * 20 <= bytes; c++) {
+                const unsigned char* e = table + info + c * 20;
+                const DWORD name = *reinterpret_cast<const DWORD*>(e);
+                const WORD set = *reinterpret_cast<const WORD*>(e + 4), reg = *reinterpret_cast<const WORD*>(e + 6);
+                if (set != 3 || name >= bytes) continue; // samplers only
+                std::string n;
+                for (size_t k = name; k < bytes && table[k] && n.size() < 40; k++) n += static_cast<char>(table[k]);
+                char entry[64];
+                snprintf(entry, sizeof(entry), "%ss%u %s", out.names.empty() ? "" : ", ", reg, n.c_str());
+                out.names += entry;
+                std::string lower = n;
+                for (char& ch : lower) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+                if (named < 0 && lower.find("diff") != std::string::npos) named = reg;
+                static const char* const kOther[] = {"light", "lm", "norm", "nrm", "spec", "cube", "env", "refl", "fresnel", "cloud", "mask", "shadow", "occ", "warp", "fog", "noise"};
+                bool other = false;
+                for (const char* w : kOther) other |= lower.find(w) != std::string::npos;
+                if (!other && (plain < 0 || reg < plain)) plain = reg;
+            }
+        }
+        i += 1 + length;
+    }
+    out.colour = named >= 0 ? named : plain;
+    return out;
+}
+
+// Formats that hold no colour (luminance, alpha): such a texture tints the material's colour.
+bool greyFormat(D3DFORMAT f) {
+    return f == D3DFMT_L8 || f == D3DFMT_A8L8 || f == D3DFMT_A4L4 || f == D3DFMT_L16 || f == D3DFMT_A8;
+}
+
+// The material's colour when no colour texture is known: grass green, dirt brown, water blue, else grey.
+void materialTint(float out[4]) {
+    switch (engine::currentMaterial()) {
+    case engine::Material::Grass: out[0] = 0.30f, out[1] = 0.46f, out[2] = 0.22f; break;
+    case engine::Material::Dirt: out[0] = 0.48f, out[1] = 0.35f, out[2] = 0.22f; break;
+    case engine::Material::Water: out[0] = 0.20f, out[1] = 0.36f, out[2] = 0.55f; break;
+    default: out[0] = 0.55f, out[1] = 0.55f, out[2] = 0.58f; break;
+    }
+    out[3] = 1.0f;
+}
+
+const char* formatName(D3DFORMAT f) {
+    switch (f) {
+    case D3DFMT_A8R8G8B8: return "A8R8G8B8";
+    case D3DFMT_X8R8G8B8: return "X8R8G8B8";
+    case D3DFMT_DXT1: return "DXT1";
+    case D3DFMT_DXT3: return "DXT3";
+    case D3DFMT_DXT5: return "DXT5";
+    case D3DFMT_L8: return "L8";
+    case D3DFMT_A8L8: return "A8L8";
+    case D3DFMT_A8: return "A8";
+    case D3DFMT_R5G6B5: return "R5G6B5";
+    case D3DFMT_A1R5G5B5: return "A1R5G5B5";
+    case D3DFMT_A4R4G4B4: return "A4R4G4B4";
+    default: return "other";
+    }
+}
+
 // A texture the picture may use: a plain 2D one, not a render target or depth texture (the game's
 // shadow buffer, reflections: their content changes every frame).
 bool usableTexture(IDirect3DBaseTexture9* t) {
@@ -332,6 +434,8 @@ void forget() {
     g.firstNew = g.lastNew = 0;
     g.settled = false;
     g.buildLines = 0;
+    g.materialLines = 0;
+    g.allowance = 0.0f;
     g.build = Sums();
 }
 
@@ -410,6 +514,10 @@ void add(Sums& to, const Sums& from) {
     to.renderMs += from.renderMs;
     to.checked += from.checked;
     to.meshes += from.meshes;
+    to.added += from.added;
+    to.capped += from.capped;
+    to.colour += from.colour;
+    to.grey += from.grey;
 }
 
 void logSums(const char* what, const Sums& s, double seconds) {
@@ -418,10 +526,13 @@ void logSums(const char* what, const Sums& s, double seconds) {
     if (s.gpuFrames) snprintf(gpu, sizeof(gpu), "%.3f ms a frame with redraws (%.1f ms in all)", s.gpuMs / s.gpuFrames, s.gpuMs);
     else if (!g.wanted) snprintf(gpu, sizeof(gpu), "none (Real look off)");
     else if (s.meshes == 0) snprintf(gpu, sizeof(gpu), "none (no redraws)");
+    const double share = s.added ? 100.0 * s.colour / s.added : 0.0, greyShare = s.added ? 100.0 * s.grey / s.added : 0.0;
     TMVS_LOG("misc: minimap cost, %s (%.0f s, %u frames, Real look %s): CPU %.3f ms a frame (drawing %.3f, of it redraws %.3f; checks of the "
-             "game's draws %.3f, %u looked at); GPU %s; %d meshes drawn into the picture; picture %d x %d px, %.1f MB of video memory",
+             "game's draws %.3f, %u looked at); GPU %s; %d meshes drawn into the picture, %u new (%.1f a second, %u refused by the cap); "
+             "%.0f %% with a colour texture, %.0f %% grey (tinted), the rest the material's colour; picture %d x %d px, %.1f MB of video memory",
              what, seconds, s.frames, g.wanted ? "on" : "off", (s.drawMs + s.checkMs) / frames, s.drawMs / frames, s.renderMs / frames,
-             s.checkMs / frames, s.checked, gpu, s.meshes, g.texture ? g.width : 0, g.texture ? g.height : 0, megabytes());
+             s.checkMs / frames, s.checked, gpu, s.meshes, s.added, seconds > 0.0 ? s.added / seconds : 0.0, s.capped, share, greyShare,
+             g.texture ? g.width : 0, g.texture ? g.height : 0, megabytes());
 }
 
 } // namespace
@@ -466,14 +577,15 @@ void clearRegion() {
 void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
             const float view[16], const float projection[16]) {
     if (!g.wanted || !g.region || g.failed || count == 0) return;
+    // After the build-up one draw in kStride is looked at per frame (a different one each frame); the
+    // others cost a counter (not timed: the clock would cost more than they do).
+    const unsigned index = g.drawIndex++;
+    if (g.settled && (index + g.frame) % kStride != 0) return;
     const double t0 = now();
     struct Timer {
         double from;
         ~Timer() { g.window.checkMs += now() - from; }
     } timer{t0};
-    // After the build-up one draw in kStride is looked at per frame (a different one each frame).
-    const unsigned index = g.drawIndex++;
-    if (g.settled && (index + g.frame) % kStride != 0) return;
     if (g.queue.size() >= kMaxQueue) return;
     const engine::Material material = engine::currentMaterial();
     if (material == engine::Material::Car || material == engine::Material::Glass) return; // cars, ghosts, windows
@@ -520,20 +632,47 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         releaseJob(j);
         return;
     }
-    // The key: the buffers, the index range, the place (0.25 m) and the turn (1/100).
-    uint64_t key = mix(mix(14695981039346656037ull, reinterpret_cast<uintptr_t>(j.vb[0])), reinterpret_cast<uintptr_t>(j.ib));
-    key = mix(key, (static_cast<uint64_t>(start) << 32) | count);
-    key = mix(key, (static_cast<uint64_t>(static_cast<uint32_t>(base)) << 32) | minIndex);
-    for (int k = 0; k < 3; k++) key = mix(key, static_cast<uint64_t>(rounded(j.world[3][k], 0.25f)));
+    // The key: the buffers, the index range, the turn (1/20) and the place in 4 m cells. The place
+    // the constants give moves by up to about a metre from frame to frame (the camera's jitter in the
+    // projection, float noise far away): a place near a cell's edge also finds the key of the
+    // neighbouring cell on that side, so each placement is taken once.
+    uint64_t mesh = mix(mix(14695981039346656037ull, reinterpret_cast<uintptr_t>(j.vb[0])), reinterpret_cast<uintptr_t>(j.ib));
+    mesh = mix(mesh, (static_cast<uint64_t>(start) << 32) | count);
+    mesh = mix(mesh, (static_cast<uint64_t>(static_cast<uint32_t>(base)) << 32) | minIndex);
     for (int r = 0; r < 3; r++) {
-        for (int k = 0; k < 3; k++) key = mix(key, static_cast<uint64_t>(rounded(j.world[r][k], 0.01f)));
+        for (int k = 0; k < 3; k++) mesh = mix(mesh, static_cast<uint64_t>(rounded(j.world[r][k], 0.05f)));
     }
-    // New meshes are measured a few dozen a frame (reading their vertices is the costly part): the
-    // rest come again in the next frames, so a map's start doesn't stutter.
-    if (g.keys.count(key) || g.keys.size() >= kMaxKeys || g.newThisFrame >= kNewPerFrame) {
-        if (!g.keys.count(key) && g.newThisFrame >= kNewPerFrame) g.lastNew = GetTickCount(); // more to come: not settled
+    int64_t cell[3], side[3];
+    for (int k = 0; k < 3; k++) {
+        const float c = j.world[3][k] / kCell;
+        cell[k] = static_cast<int64_t>(floorf(c));
+        side[k] = c - static_cast<float>(cell[k]) < 0.5f ? cell[k] - 1 : cell[k] + 1;
+    }
+    const auto keyAt = [&](int64_t x, int64_t y, int64_t z) { return mix(mix(mix(mesh, static_cast<uint64_t>(x)), static_cast<uint64_t>(y)), static_cast<uint64_t>(z)); };
+    const uint64_t key = keyAt(cell[0], cell[1], cell[2]);
+    bool known = false;
+    for (int n = 0; n < 8 && !known; n++) {
+        known = g.keys.count(keyAt((n & 1) ? side[0] : cell[0], (n & 2) ? side[1] : cell[1], (n & 4) ? side[2] : cell[2])) != 0;
+    }
+    if (known || g.keys.size() >= kMaxKeys) {
         releaseJob(j);
         return;
+    }
+    // New meshes are measured a few dozen a frame (reading their vertices is the costly part): the
+    // rest come again in the next frames, so a map's start doesn't stutter. After the build-up at most
+    // kNewPerSecond (something that moves would otherwise come as new forever).
+    if (g.newThisFrame >= kNewPerFrame) {
+        if (!g.settled) g.lastNew = GetTickCount(); // more to come
+        releaseJob(j);
+        return;
+    }
+    if (g.settled) {
+        if (g.allowance < 1.0f) {
+            g.window.capped++;
+            releaseJob(j);
+            return;
+        }
+        g.allowance -= 1.0f;
     }
     g.newThisFrame++;
     g.keys.insert(key); // looked at once, kept or not
@@ -542,13 +681,55 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         releaseJob(j);
         return;
     }
-    device->GetTexture(0, &j.texture);
-    if (j.texture && !usableTexture(j.texture)) gfx::release(j.texture);
+    // Its colour: the texture of the sampler the game's pixel shader takes its colour from; a grey
+    // one (luminance) tints the material's colour; none: the material's colour alone.
+    materialTint(j.tint);
+    int stage = -1;
+    std::string names = "(no pixel shader)";
+    IDirect3DPixelShader9* ps = nullptr;
+    device->GetPixelShader(&ps);
+    if (ps) {
+        auto it = g_samplers.find(ps);
+        if (it == g_samplers.end()) {
+            if (g_samplers.size() >= 1024) {
+                for (auto& e : g_samplers) e.first->Release();
+                g_samplers.clear();
+            }
+            ps->AddRef();
+            it = g_samplers.emplace(ps, samplersOf(ps)).first;
+        }
+        stage = it->second.colour;
+        names = it->second.names.empty() ? "(no names)" : it->second.names;
+        ps->Release();
+    }
+    D3DSURFACE_DESC desc{};
+    if (stage >= 0 && j.texcoord) {
+        device->GetTexture(static_cast<DWORD>(stage), &j.texture);
+        if (j.texture && !usableTexture(j.texture)) gfx::release(j.texture);
+        if (j.texture) {
+            static_cast<IDirect3DTexture9*>(j.texture)->GetLevelDesc(0, &desc);
+            j.mode = greyFormat(desc.Format) ? 2 : 1;
+        }
+    }
+    (j.mode == 1 ? g.window.colour : g.window.grey) += j.mode != 0 ? 1 : 0;
+    g.window.added++;
+    // Which sampler gave the colour, for the first materials of a map (the next game test shows it).
+    if (g.materialLines < 8) {
+        g.materialLines++;
+        wchar_t file[160] = L"(unnamed)";
+        engine::materialFile(engine::currentShader(), file, 160);
+        const wchar_t* fileName = wcsrchr(file, L'\\');
+        char from[16] = "no sampler";
+        if (stage >= 0) snprintf(from, sizeof(from), "s%d", stage);
+        TMVS_LOG("misc: minimap: material %ls: samplers %s; colour from %s: %s %ux%u%s", fileName ? fileName + 1 : file, names.c_str(), from,
+                 j.texture ? formatName(desc.Format) : "no texture", desc.Width, desc.Height, j.mode == 2 ? " (grey, tinted)" : "");
+    }
     g.lowestSeen = std::min(g.lowestSeen, j.world[3][1]);
     g.queue.push_back(j);
-    g.lastNew = GetTickCount();
-    if (!g.firstNew) g.firstNew = g.lastNew;
-    if (g.settled) g.settled = false; // something new came: the build-up goes on (all draws looked at)
+    if (!g.settled) {
+        g.lastNew = GetTickCount();
+        if (!g.firstNew) g.firstNew = g.lastNew;
+    }
 }
 
 void render(IDirect3DDevice9* device) {
@@ -651,9 +832,9 @@ void render(IDirect3DDevice9* device) {
             for (int s = 0; s < j.streams; s++) device->SetStreamSource(s, j.vb[s], j.offset[s], j.stride[s]);
             device->SetIndices(j.ib);
             device->SetTexture(0, j.texture);
-            const float params[4] = {j.texture && j.texcoord ? 1.0f : 0.0f, g.ground, 1.0f / 120.0f, 0.0f};
+            const float params[8] = {static_cast<float>(j.texture ? j.mode : 0), g.ground, 1.0f / 120.0f, 0.0f, j.tint[0], j.tint[1], j.tint[2], 1.0f};
             device->SetVertexShaderConstantF(0, &columns[0][0], 8);
-            device->SetPixelShaderConstantF(0, params, 1);
+            device->SetPixelShaderConstantF(0, params, 2);
             device->DrawIndexedPrimitive(j.type, j.base, j.minIndex, j.vertices, j.start, j.count);
             releaseJob(j);
             g.drawn++;
@@ -694,11 +875,18 @@ void noteFrame(double drawMs) {
     if (g.wanted && !g.settled && g.firstNew) {
         add(g.build, g.window); // the build-up's share of this frame (window sums are per frame here)
     }
-    if (g.wanted && !g.settled && g.firstNew && g.queue.empty() && (tick - g.lastNew > kSettleMs || (tick - g.firstNew > 30000 && g.buildLines == 0))) {
+    // The build-up ends when nothing new came for kSettleMs, or after 20 s whatever comes (something
+    // that keeps moving); from then on only one draw in kStride is looked at and new meshes are capped.
+    if (g.wanted && !g.settled && g.firstNew && g.queue.empty() && (tick - g.lastNew > kSettleMs || tick - g.firstNew > 20000)) {
         g.settled = true;
+        g.allowanceTick = tick;
         if (g.buildLines++ < 3) {
-            logSums(tick - g.lastNew > kSettleMs ? "the build-up" : "the build-up so far (still growing)", g.build, (tick - g.firstNew) / 1000.0);
+            logSums(tick - g.lastNew > kSettleMs ? "the build-up" : "the build-up (ended after 20 s, still finding more)", g.build, (tick - g.firstNew) / 1000.0);
         }
+    }
+    if (g.settled) {
+        g.allowance = std::min(g.allowance + (tick - g.allowanceTick) / 1000.0f * kNewPerSecond, 2.0f * kNewPerSecond);
+        g.allowanceTick = tick;
     }
     // The running sums: one line every kReportMs while the minimap is on.
     static Sums s_running;
@@ -725,6 +913,8 @@ void releaseDevice() {
     forget();
     releaseTargets();
     forgetDecls();
+    for (auto& e : g_samplers) e.first->Release();
+    g_samplers.clear();
     for (auto& e : g_ownDecls) gfx::release(e.second);
     g_ownDecls.clear();
     gfx::release(g.vs);
