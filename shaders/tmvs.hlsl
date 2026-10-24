@@ -2739,11 +2739,12 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
     float ao = lerp(1.0, occ.r, u_Light.x);
     float sunVis = occ.g;
     float shadow = 1.0;
+    // The sky's colour at the brightness of white (shadows and ambient occlusion take it on).
+    const float3 skyTint = u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3);
     if (u_SunView.w > 0.5) {
         float ndl = saturate(dot(nLight, u_SunView.xyz));
         shadow = lerp(1.0, sunVis, u_Light.z * saturate(ndl * 4.0));
         // In shadow: lose direct light and take on the sky's colour.
-        float3 skyTint = u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3);
         float shadowed = (1.0 - shadow);
         c *= lerp(1.0, 0.32, shadowed);
         c *= lerp(float3(1, 1, 1), skyTint, u_SkyColor.w * saturate(shadowed + (1.0 - ndl) * 0.35));
@@ -2757,7 +2758,7 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
     }
     c *= ao;
     // Ambient occlusion also tints toward the sky colour (bounce from the sky dome).
-    c *= lerp(u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3), float3(1, 1, 1), lerp(1.0, ao, 0.5 * u_SkyColor.w));
+    c *= lerp(skyTint, float3(1, 1, 1), lerp(1.0, ao, 0.5 * u_SkyColor.w));
 
     // Neon light spilling onto nearby surfaces (screen-space, blurred light buffer).
     if (u_Light2.x > 0.0) {
@@ -2775,7 +2776,7 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
         // direction above). The full slope (up to 0.13, 0.5 % of the screen) moved every pixel
         // of the half-res image by its own amount: the banners and stands came out torn into
         // strips and smeared, with the sky showing through between them.
-        float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.04 * (1.0 - water * u_Water2.x * 0.75);
+        float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * (0.04 - water * u_Water2.x * 0.03);
         float4 ssr = tex2Dlod(s8, float4(uv + distort, 0, 0));
         // Rough wet asphalt and the polished dry track blur the reflection (5 taps): no
         // speckles from the half-res ray hits. Puddles and water stay sharp.
