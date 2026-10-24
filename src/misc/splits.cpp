@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <thread>
 
@@ -23,8 +24,10 @@ namespace misc {
 namespace splits {
 namespace {
 
-constexpr size_t kRunningRows = 6; // checkpoints listed while driving (the newest)
-constexpr size_t kMaxRows = 30;    // in the table after the finish
+constexpr int kVisibleRows = 5;    // checkpoint rows in view (the rest scroll)
+constexpr size_t kMaxRows = 200;   // rows kept in the table
+constexpr float kFontScale = 0.9f; // the panels' text
+constexpr float kBigScale = 1.5f;  // the delta
 
 struct ReplayFile {
     std::wstring path;
@@ -61,6 +64,9 @@ struct State {
     // Your best run on this map (its file): times and speeds at each checkpoint.
     std::vector<int> best;
     std::vector<float> bestSpeeds;
+    // Your best time of each sector from everything of yours on this map: your best run, every finished
+    // run, your replays in Tracks\Replays (its file's third line, so it outlives the session).
+    std::vector<int> bestSectors;
     // The map's record (TMX) and a replay file you chose: two slots, each with a line for the page.
     Replay record, file;
     std::wstring filePath;
@@ -101,6 +107,18 @@ std::mutex g_listLock;
 std::vector<ReplayFile> g_list;
 std::atomic<bool> g_scanning{false};
 bool g_scanned = false;
+
+// Your replays of the map loaded: their sectors, read on a thread once per map after the scan.
+struct SectorsJob {
+    std::string uid;
+    std::vector<int> sectors; // the best of each sector
+    int files = 0;
+    bool ready = false;
+};
+std::mutex g_jobLock;
+SectorsJob g_job;
+std::atomic<bool> g_jobRunning{false};
+std::string g_jobUid; // the map the job ran (or runs) for
 
 double now() {
     LARGE_INTEGER t, f;
@@ -160,20 +178,23 @@ std::wstring bestFile(const std::string& uid) {
     return dataFolder(L"splits") + L"\\" + name + L".txt";
 }
 
-// The file: the times (ms) on the first line, the speeds (km/h x 10, -1 unknown) on the second.
+// The file: your best run's times (ms) on the first line, its speeds (km/h x 10, -1 unknown) on the
+// second, your best time of each sector (ms, from all your runs and replays) on the third.
 void loadBest() {
     g.best.clear();
     g.bestSpeeds.clear();
+    g.bestSectors.clear();
     if (g.uid.empty()) return;
     FILE* f = _wfopen(bestFile(g.uid).c_str(), L"r");
     if (!f) return;
     char line[16384];
-    for (int row = 0; row < 2 && fgets(line, sizeof(line), f); row++) {
+    for (int row = 0; row < 3 && fgets(line, sizeof(line), f); row++) {
         const char* p = line;
         char* end = nullptr;
-        for (long v = strtol(p, &end, 10); end != p && g.best.size() < 4096; v = strtol(p, &end, 10)) {
+        for (long v = strtol(p, &end, 10); end != p && g.best.size() < 4096 && g.bestSectors.size() < 4096; v = strtol(p, &end, 10)) {
             if (row == 0) g.best.push_back(static_cast<int>(v));
-            else g.bestSpeeds.push_back(v < 0 ? -1.0f : static_cast<float>(v) / 36.0f);
+            else if (row == 1) g.bestSpeeds.push_back(v < 0 ? -1.0f : static_cast<float>(v) / 36.0f);
+            else g.bestSectors.push_back(static_cast<int>(v));
             p = end;
         }
     }
@@ -187,6 +208,8 @@ void saveBest() {
     for (size_t i = 0; i < g.best.size(); i++) fprintf(f, "%s%d", i ? " " : "", g.best[i]);
     fprintf(f, "\n");
     for (size_t i = 0; i < g.bestSpeeds.size(); i++) fprintf(f, "%s%d", i ? " " : "", g.bestSpeeds[i] < 0.0f ? -1 : static_cast<int>(g.bestSpeeds[i] * 36.0f + 0.5f));
+    fprintf(f, "\n");
+    for (size_t i = 0; i < g.bestSectors.size(); i++) fprintf(f, "%s%d", i ? " " : "", g.bestSectors[i]);
     fprintf(f, "\n");
     fclose(f);
 }
@@ -280,6 +303,90 @@ Reference reference() {
     }
 }
 
+std::vector<int> sectorsOf(const std::vector<int>& times);
+
+// Your best sectors take any faster one from `sectors` (a run or replay of this map with as many
+// checkpoints; another count is another layout and is left out). Saved when one got faster.
+void mergeSectors(const std::vector<int>& sectors, const char* from) {
+    if (sectors.empty() || g.uid.empty()) return;
+    bool better = false;
+    if (g.bestSectors.size() != sectors.size()) {
+        // Another count: taken only while there is none yet or it matches your best run's.
+        if (!g.bestSectors.empty() && (g.best.empty() || g.best.size() != sectors.size())) return;
+        g.bestSectors = sectors;
+        better = true;
+    } else {
+        for (size_t i = 0; i < sectors.size(); i++) {
+            if (sectors[i] > 0 && sectors[i] < g.bestSectors[i]) {
+                g.bestSectors[i] = sectors[i];
+                better = true;
+            }
+        }
+    }
+    if (better) {
+        saveBest();
+        int sum = 0;
+        for (int v : g.bestSectors) sum += v;
+        TMVS_LOG("misc: split times: your best sectors now add up to %d ms (from %s)", sum, from);
+    }
+}
+
+// Reads your replays of this map (not the downloaded records) on a thread: the best of each sector
+// among those with the most common checkpoint count. Yours: driven by a name found in the game's
+// Autosaves folder (only your own runs land there), so someone else's replay you saved does not
+// count as yours; without any autosave, every replay of the map counts.
+void startSectorsJob() {
+    if (g_jobRunning || g_scanning || !g_scanned || g.uid.empty() || g_jobUid == g.uid) return;
+    g_jobUid = g.uid;
+    const std::wstring downloads = dataFolder(L"Replays");
+    std::vector<std::wstring> paths;
+    {
+        std::lock_guard<std::mutex> lock(g_listLock);
+        std::vector<std::string> mine;
+        for (const ReplayFile& f : g_list) {
+            if (f.path.find(L"\\Autosaves\\") != std::wstring::npos && !f.driver.empty() && std::find(mine.begin(), mine.end(), f.driver) == mine.end()) {
+                mine.push_back(f.driver);
+            }
+        }
+        for (const ReplayFile& f : g_list) {
+            if (f.uid != g.uid || f.path.compare(0, downloads.size(), downloads) == 0) continue;
+            if (!mine.empty() && std::find(mine.begin(), mine.end(), f.driver) == mine.end()) continue;
+            paths.push_back(f.path);
+        }
+    }
+    if (paths.empty()) return;
+    g_jobRunning = true;
+    std::thread([paths, uid = g.uid] {
+        std::vector<std::vector<int>> all;
+        for (const std::wstring& path : paths) {
+            Replay r;
+            std::string error;
+            if (readReplay(path, r, error) && r.mapUid == uid) all.push_back(sectorsOf(r.checkpoints));
+        }
+        size_t common = 0, most = 0;
+        for (const std::vector<int>& a : all) {
+            size_t n = 0;
+            for (const std::vector<int>& b : all) n += a.size() == b.size() ? 1 : 0;
+            if (n > most) {
+                most = n;
+                common = a.size();
+            }
+        }
+        SectorsJob job;
+        job.uid = uid;
+        for (const std::vector<int>& a : all) {
+            if (a.size() != common) continue;
+            job.files++;
+            if (job.sectors.empty()) job.sectors = a;
+            for (size_t i = 0; i < a.size(); i++) job.sectors[i] = std::min(job.sectors[i], a[i]);
+        }
+        job.ready = true;
+        std::lock_guard<std::mutex> lock(g_jobLock);
+        g_job = job;
+        g_jobRunning = false;
+    }).detach();
+}
+
 void newRun() {
     g.run = Run();
     g.run.respawnsAtStart = engine::respawns();
@@ -305,6 +412,7 @@ void newMap(const void* map) {
     g.sectorTimes.clear();
     g.lastFinished = Run();
     loadBest();
+    mergeSectors(sectorsOf(g.best), "your best run");
     // The record downloaded before for this map comes back by itself (no request).
     const std::wstring cached = tmx::cached(g.uid);
     if (!cached.empty()) {
@@ -351,14 +459,9 @@ int median(std::vector<int> v) {
     return v.size() % 2 ? v[v.size() / 2] : (v[v.size() / 2 - 1] + v[v.size() / 2]) / 2;
 }
 
-// Your best time for each sector: this session's finished runs and your best run.
-std::vector<int> bestSectors() {
-    std::vector<int> best = sectorsOf(g.best);
-    for (const std::vector<int>& run : g.sectorTimes) {
-        if (best.empty()) best = run;
-        for (size_t i = 0; i < run.size() && i < best.size(); i++) best[i] = std::min(best[i], run[i]);
-    }
-    return best;
+// Your best time for each sector (all sources, see mergeSectors).
+const std::vector<int>& bestSectors() {
+    return g.bestSectors;
 }
 
 } // namespace
@@ -373,6 +476,23 @@ void update() {
         if (t.state == tmx::State::Done && t.uid == g.uid && !t.file.empty() && t.file != g.triedRecord) {
             g.triedRecord = t.file;
             loadReplay(t.file, true);
+        }
+    }
+    // Your replays of this map: their sectors count for your best sectors (once per map).
+    if (settings().splits && !g.uid.empty()) {
+        if (!g_scanned) startScan();
+        startSectorsJob();
+        SectorsJob job;
+        {
+            std::lock_guard<std::mutex> lock(g_jobLock);
+            if (g_job.ready && g_job.uid == g.uid) {
+                job = g_job;
+                g_job.ready = false;
+            }
+        }
+        if (job.ready && !job.sectors.empty()) {
+            TMVS_LOG("misc: split times: %d of your replays of this map read for their sectors", job.files);
+            mergeSectors(job.sectors, "your replays");
         }
     }
     const double clock = now();
@@ -435,6 +555,7 @@ void update() {
         g.finishedIsBest = better;
         g.finishes.push_back(rt.time);
         g.sectorTimes.push_back(sectorsOf(times));
+        mergeSectors(g.sectorTimes.back(), "this run");
         g.lastFinished = run;
         if (better && !g.uid.empty()) {
             g.best = times;
@@ -467,61 +588,121 @@ bool wanted() {
 
 namespace {
 
+// Attached under the minimap, the split times take its width; a new width (the panels' edges) then
+// goes to the minimap, so the column keeps one width. Otherwise they have their own.
+bool widthFromMap() {
+    ImVec2 a, b;
+    return settings().splitAttached && mapview::rect(a, b);
+}
+
+void setWidth(float pixels) {
+    Settings& s = settings();
+    const float k = screenScale();
+    if (widthFromMap()) s.mapSize = std::clamp(pixels / k, 120.0f, 800.0f);
+    else s.splitWidth = std::clamp(pixels / k, 160.0f, 800.0f);
+}
+
+// A window let go of moved but kept its size: dragged away (it detaches). A changed size is a resize
+// (an edge on the left moves the window too) and keeps it attached.
+bool draggedAway(ImVec2 before, ImVec2 placed, ImVec2 size, float width) {
+    return fabsf(size.x - width) <= 0.5f && (fabsf(placed.x - before.x) > 0.5f || fabsf(placed.y - before.y) > 0.5f);
+}
+
 void drawSplitPanel(const Frame& frame, ImVec2& shownPos, ImVec2& shownSize) {
     Settings& s = settings();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
-    const float k = screenScale(), width = s.splitWidth * k, margin = 16.0f * k, gap = 8.0f * k;
+    const float k = screenScale(), margin = 16.0f * k;
+    // Attached: right under the minimap with its width, or at the top right without it.
     ImVec2 mapPos, mapSize;
+    float width = s.splitWidth * k;
     ImVec2 pos(display.x - width - margin, margin);
-    if (mapview::rect(mapPos, mapSize)) pos = ImVec2(mapPos.x + mapSize.x - width, mapPos.y + mapSize.y + gap);
-    if (s.splitX >= 0.0f) pos = ImVec2(s.splitX, s.splitY);
+    if (s.splitAttached && mapview::rect(mapPos, mapSize)) {
+        width = mapSize.x;
+        pos = ImVec2(mapPos.x, mapPos.y + mapSize.y);
+    }
+    if (!s.splitAttached) {
+        if (s.splitX < 0.0f) { // just unticked on the page: it stays where it is
+            s.splitX = pos.x;
+            s.splitY = pos.y;
+        }
+        pos = ImVec2(s.splitX, s.splitY);
+    }
+    // A fixed height: the reference line, the delta line, the sector clock and the table's header
+    // (their height measured in the frame before, with the menu open and closed), then kVisibleRows
+    // checkpoint rows that scroll (the newest at the bottom). Nothing in it changes the window's size.
+    const PanelStyle panelStyle;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float r = textScale(), font = ImGui::GetFont()->FontSize * kFontScale * r;
+    const float rowHeight = font + style.CellPadding.y * 2.0f, rowsHeight = kVisibleRows * rowHeight + 1.0f;
+    const float frameHeight = font + style.FramePadding.y * 2.0f;
+    static float s_top[2] = {};
+    float& top = s_top[frame.menuOpen ? 1 : 0];
+    if (top <= 0.0f) top = style.WindowPadding.y + 6.0f * rowHeight; // a guess for the first frame
+    const float height = top + rowsHeight + style.WindowPadding.y;
     static WindowPlace s_place;
-    s_place.before(frame, pos, ImVec2(width, 0.0f));
+    s_place.lockHeight = true;
+    s_place.before(frame, pos, ImVec2(width, height));
     ImGui::SetNextWindowBgAlpha(0.6f);
     ImGui::Begin("Split times##misc", nullptr, windowFlags(frame, true));
     ImVec2 p, size;
     if (s_place.after(frame, p, size)) {
-        s.splitX = p.x;
-        s.splitY = p.y;
-        s.splitWidth = std::clamp(size.x / k, 160.0f, 800.0f);
+        if (draggedAway(pos, p, size, width)) s.splitAttached = false; // it stays where it was put
+        else setWidth(size.x);
+        if (!s.splitAttached) {
+            s.splitX = p.x;
+            s.splitY = p.y;
+        }
         settingsChanged();
     }
     windowChrome(frame, "Split times", true);
-    ImGui::SetWindowFontScale(0.9f);
+    ImGui::SetWindowFontScale(kFontScale * textScale());
     const Reference ref = g.run.finished ? g.finishedReference : reference();
     const engine::RaceTimes& rt = g.times;
+    const Run& run = g.run;
     char text[64], speedText[32];
-    // What it is compared with.
+    // 1. What it is compared with (and this run's respawns).
     if (ref.times.empty()) {
-        ImGui::TextDisabled("No reference yet%s%s", ref.note.empty() ? "" : ": ", ref.note.c_str());
+        ImGui::TextDisabled("No reference%s%s", ref.note.empty() ? "" : ": ", ref.note.c_str());
     } else {
         timeText(text, sizeof(text), ref.times.back());
         ImGui::TextDisabled("vs %s %s%s%s", ref.label, text, ref.note.empty() ? "" : " - ", ref.note.c_str());
     }
-    const Run& run = g.run;
+    if (run.respawns > 0) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("  Respawns: %d", run.respawns);
+    }
+    // 2. The finish, or the last checkpoint's delta (big), until the run restarts.
+    ImGui::SetWindowFontScale(kBigScale * textScale());
     if (run.finished) {
         timeText(text, sizeof(text), run.cps.back().time);
-        ImGui::Text("Finish %s%s", text, g.finishedIsBest ? "  (best)" : "");
+        ImGui::TextUnformatted(text);
         if (ref.times.size() >= run.cps.size() && !ref.times.empty()) {
             const int total = run.cps.back().time - ref.times[run.cps.size() - 1];
             deltaText(text, sizeof(text), total);
             ImGui::SameLine();
             ImGui::TextColored(deltaColour(total), "%s", text);
         }
-    } else if (g.haveDelta) {
-        // The last checkpoint's delta, big, until the next one or a restart.
-        deltaText(text, sizeof(text), g.delta);
-        ImGui::SetWindowFontScale(1.5f);
-        ImGui::TextColored(deltaColour(g.delta), "%s", text);
-        ImGui::SetWindowFontScale(0.9f);
-        ImGui::SameLine();
-        if (g.haveSpeedDelta) {
-            ImGui::TextColored(speedColour(g.speedDelta), "%+.0f km/h", g.speedDelta);
+        if (g.finishedIsBest) {
+            ImGui::SetWindowFontScale(kFontScale * textScale());
             ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "best");
         }
+    } else if (g.haveDelta) {
+        deltaText(text, sizeof(text), g.delta);
+        ImGui::TextColored(deltaColour(g.delta), "%s", text);
+        ImGui::SetWindowFontScale(kFontScale * textScale());
+        if (g.haveSpeedDelta) {
+            ImGui::SameLine();
+            ImGui::TextColored(speedColour(g.speedDelta), "%+.0f km/h", g.speedDelta);
+        }
+        ImGui::SameLine();
         ImGui::TextDisabled("CP %d", g.deltaIndex + 1);
+    } else {
+        ImGui::TextDisabled(" ");
     }
-    // The sector clock: time since the last checkpoint against the reference's sector.
+    ImGui::SetWindowFontScale(kFontScale * textScale());
+    // 3. The sector clock: time since the last checkpoint against the reference's sector (an empty
+    //    line without one, so the height stays).
     const size_t passed = run.cps.size();
     if (s.splitBar && g.timesValid && rt.started && !rt.finished && passed < ref.times.size()) {
         const int start = passed ? run.cps[passed - 1].time : 0, refSector = ref.times[passed] - (passed ? ref.times[passed - 1] : 0);
@@ -529,144 +710,243 @@ void drawSplitPanel(const Frame& frame, ImVec2& shownPos, ImVec2& shownSize) {
         const float fraction = refSector > 0 ? static_cast<float>(elapsed) / static_cast<float>(refSector) : 0.0f;
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram, fraction <= 1.0f ? ImVec4(0.30f, 0.70f, 1.0f, 0.9f) : ImVec4(1.0f, 0.35f, 0.30f, 0.9f));
         snprintf(text, sizeof(text), "%.1f / %.1f s", elapsed / 1000.0f, refSector / 1000.0f);
-        ImGui::ProgressBar(std::min(fraction, 1.0f), ImVec2(-1.0f, 0.0f), text);
+        ImGui::ProgressBar(std::min(fraction, 1.0f), ImVec2(-1.0f, frameHeight), text);
         ImGui::PopStyleColor();
+    } else {
+        ImGui::Dummy(ImVec2(0.0f, frameHeight));
     }
-    // This run's checkpoints (the newest while driving, all after the finish).
-    if (!run.cps.empty() && ImGui::BeginTable("cps", 4, ImGuiTableFlags_SizingStretchProp)) {
-        const size_t first = run.finished ? 0 : (run.cps.size() > kRunningRows ? run.cps.size() - kRunningRows : 0);
-        const size_t last = std::min(run.cps.size(), first + kMaxRows);
-        for (size_t i = first; i < last; i++) {
-            const Checkpoint& cp = run.cps[i];
-            ImGui::TableNextRow();
+    // 4. This run's checkpoints under a header that stays, kVisibleRows in view, scrolled to the newest
+    //    when one is added (the wheel scrolls them while the menu is open). After the finish: each
+    //    sector, its time, your best time of it and the reference's.
+    //    The header is a table of its own above a child region with the rows (same column weights, no
+    //    scrollbar so the widths match); the child takes no mouse with the menu closed, so it never
+    //    keeps a click from the game.
+    static size_t s_rows = 0;
+    static const float kWeights[] = {0.8f, 1.2f, 1.2f, 1.2f};
+    static const char* const kRunning[] = {"CP", "Time", "vs ref", "km/h"};
+    static const char* const kRunningTips[] = {"Checkpoint", "Race time at the checkpoint", "Behind (red, plus) or ahead (blue, minus) of the reference",
+                                               "Your speed at the checkpoint and the difference to the reference's"};
+    static const char* const kFinished[] = {"Sector", "Time", "Best", "Ref"};
+    static const char* const kFinishedTips[] = {"From one checkpoint to the next", "Your time in this sector, red or blue against the reference",
+                                                "Your best time in this sector ever, blue where it beats the reference", "The reference's time in this sector"};
+    const char* const* names = run.finished ? kFinished : kRunning;
+    const char* const* tips = run.finished ? kFinishedTips : kRunningTips;
+    if (ImGui::BeginTable("head", 4, ImGuiTableFlags_SizingStretchProp)) {
+        for (int c = 0; c < 4; c++) ImGui::TableSetupColumn(names[c], ImGuiTableColumnFlags_WidthStretch, kWeights[c]);
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        for (int c = 0; c < 4; c++) {
             ImGui::TableNextColumn();
-            if (run.finished && i + 1 == run.cps.size()) ImGui::TextDisabled("Fin");
-            else ImGui::TextDisabled("%zu", i + 1);
-            ImGui::TableNextColumn();
-            timeText(text, sizeof(text), run.finished ? cp.time - (i ? run.cps[i - 1].time : 0) : cp.time);
-            ImGui::TextUnformatted(text);
-            ImGui::TableNextColumn();
-            if (i < ref.times.size()) {
-                const int d = run.finished ? (cp.time - (i ? run.cps[i - 1].time : 0)) - (ref.times[i] - (i ? ref.times[i - 1] : 0)) : cp.time - ref.times[i];
-                deltaText(text, sizeof(text), d);
-                ImGui::TextColored(deltaColour(d), "%s", text);
-            }
-            ImGui::TableNextColumn();
-            if (cp.speed >= 0.0f) {
-                if (i < ref.speeds.size() && ref.speeds[i] >= 0.0f) {
-                    const float d = (cp.speed - ref.speeds[i]) * 3.6f;
-                    snprintf(speedText, sizeof(speedText), "%.0f %+.0f", cp.speed * 3.6f, d);
-                    ImGui::TextColored(speedColour(d), "%s", speedText);
-                } else {
-                    ImGui::TextDisabled("%.0f", cp.speed * 3.6f);
-                }
-            }
+            ImGui::TextDisabled("%s", names[c]);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tips[c]);
         }
         ImGui::EndTable();
-        if (run.finished) ImGui::TextDisabled("Sector times; km/h at each checkpoint");
     }
-    if (run.respawns > 0 && !run.finished) ImGui::TextDisabled("%d respawn%s", run.respawns, run.respawns == 1 ? "" : "s");
+    top = ImGui::GetCursorPosY();
+    ImGui::BeginChild("rows", ImVec2(0.0f, rowsHeight), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | (frame.menuOpen ? 0 : ImGuiWindowFlags_NoInputs));
+    ImGui::SetWindowFontScale(kFontScale * textScale());
+    if (ImGui::BeginTable("cps", 4, ImGuiTableFlags_SizingStretchProp)) {
+        for (int c = 0; c < 4; c++) ImGui::TableSetupColumn(names[c], ImGuiTableColumnFlags_WidthStretch, kWeights[c]);
+        const std::vector<int> refSectors = sectorsOf(ref.times);
+        const std::vector<int>& mine = bestSectors();
+        const size_t last = std::min(run.cps.size(), kMaxRows);
+        for (size_t i = 0; i < last; i++) {
+            const Checkpoint& cp = run.cps[i];
+            const int sector = cp.time - (i ? run.cps[i - 1].time : 0);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (run.finished && i + 1 == run.cps.size()) ImGui::TextDisabled("Finish");
+            else ImGui::TextDisabled("%zu", i + 1);
+            if (run.finished) {
+                ImGui::TableNextColumn();
+                timeText(text, sizeof(text), sector);
+                if (i < refSectors.size()) ImGui::TextColored(deltaColour(sector - refSectors[i]), "%s", text);
+                else ImGui::TextUnformatted(text);
+                ImGui::TableNextColumn();
+                if (i < mine.size()) {
+                    timeText(text, sizeof(text), mine[i]);
+                    if (i < refSectors.size() && mine[i] < refSectors[i]) ImGui::TextColored(deltaColour(-1), "%s", text);
+                    else ImGui::TextUnformatted(text);
+                }
+                ImGui::TableNextColumn();
+                if (i < refSectors.size()) {
+                    timeText(text, sizeof(text), refSectors[i]);
+                    ImGui::TextDisabled("%s", text);
+                }
+            } else {
+                ImGui::TableNextColumn();
+                timeText(text, sizeof(text), cp.time);
+                ImGui::TextUnformatted(text);
+                ImGui::TableNextColumn();
+                if (i < ref.times.size()) {
+                    const int d = cp.time - ref.times[i];
+                    deltaText(text, sizeof(text), d);
+                    ImGui::TextColored(deltaColour(d), "%s", text);
+                }
+                ImGui::TableNextColumn();
+                if (cp.speed >= 0.0f) {
+                    if (i < ref.speeds.size() && ref.speeds[i] >= 0.0f) {
+                        const float d = (cp.speed - ref.speeds[i]) * 3.6f;
+                        snprintf(speedText, sizeof(speedText), "%.0f %+.0f", cp.speed * 3.6f, d);
+                        ImGui::TextColored(speedColour(d), "%s", speedText);
+                    } else {
+                        ImGui::TextDisabled("%.0f", cp.speed * 3.6f);
+                    }
+                }
+            }
+            if (i + 1 == last && last != s_rows) ImGui::SetScrollHereY(1.0f); // a new row: show it
+        }
+        ImGui::EndTable();
+    }
+    s_rows = std::min(run.cps.size(), kMaxRows);
+    ImGui::EndChild();
     ImGui::SetWindowFontScale(1.0f);
     shownPos = ImGui::GetWindowPos();
     shownSize = ImGui::GetWindowSize();
-    s_place.end();
     ImGui::End();
 }
 
-void drawSessionPanel(const Frame& frame, ImVec2 under) {
+void drawSessionPanel(const Frame& frame, ImVec2 under, float width) {
     Settings& s = settings();
-    const float k = screenScale(), width = s.splitWidth * k, gap = 8.0f * k;
-    ImVec2 pos = s.sessionX >= 0.0f ? ImVec2(s.sessionX, s.sessionY) : ImVec2(under.x, under.y + gap);
+    const float k = screenScale();
+    // Attached right under the split times with their width (moving or resizing them takes it
+    // along); dragged away, it stays where it was put.
+    if (!s.sessionAttached && s.sessionX < 0.0f) {
+        s.sessionX = under.x;
+        s.sessionY = under.y;
+    }
+    const ImVec2 pos = s.sessionAttached ? under : ImVec2(s.sessionX, s.sessionY);
+    const PanelStyle panelStyle;
     static WindowPlace s_place;
     s_place.before(frame, pos, ImVec2(width, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.6f);
     ImGui::Begin("Session##misc", nullptr, windowFlags(frame, true));
     ImVec2 p, size;
     if (s_place.after(frame, p, size)) {
-        s.sessionX = p.x;
-        s.sessionY = p.y;
-        s.splitWidth = std::clamp(size.x / k, 160.0f, 800.0f);
+        if (draggedAway(pos, p, size, width)) s.sessionAttached = false;
+        else setWidth(size.x);
+        if (!s.sessionAttached) {
+            s.sessionX = p.x;
+            s.sessionY = p.y;
+        }
         settingsChanged();
     }
     windowChrome(frame, "Session", true);
-    ImGui::SetWindowFontScale(0.9f);
-    char a[32], b[32], c[32];
-    ImGui::Text("%d attempt%s, %zu finished", g.attempts, g.attempts == 1 ? "" : "s", g.finishes.size());
-    if (!g.finishes.empty()) {
-        timeText(a, sizeof(a), *std::min_element(g.finishes.begin(), g.finishes.end()));
-        timeText(b, sizeof(b), median(g.finishes));
-        timeText(c, sizeof(c), g.finishes.back());
-        ImGui::Text("Best %s  Median %s  Last %s", a, b, c);
-        if (g.finishes.size() >= 2) {
-            std::vector<float> values;
-            for (int v : g.finishes) values.push_back(static_cast<float>(v));
-            const auto [lo, hi] = std::minmax_element(values.begin(), values.end());
-            ImGui::PlotLines("##times", values.data(), static_cast<int>(values.size()), 0, nullptr, *lo - 100.0f, *hi + 100.0f, ImVec2(-1.0f, 28.0f * k));
-        }
+    ImGui::SetWindowFontScale(kFontScale * textScale());
+    char a[32], b[64];
+    // Labelled lines: what it is on the left (with a tooltip), the number on the right.
+    const auto row = [](const char* label, const char* tip, const char* value, const ImVec4* colour) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextDisabled("%s", label);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        ImGui::TableNextColumn();
+        if (colour) ImGui::TextColored(*colour, "%s", value);
+        else ImGui::TextUnformatted(value);
+    };
+    // Your best sectors (all your runs and replays of this map) and the reference's.
+    const std::vector<int>& mine = bestSectors();
+    const Reference ref = reference();
+    const std::vector<int> refSectors = sectorsOf(ref.times);
+    int theoretical = 0, combined = 0, beaten = 0;
+    for (int v : mine) theoretical += v;
+    // (Against your own best run there is nothing to combine: its sectors are already among yours.)
+    const bool comparable = !mine.empty() && mine.size() == refSectors.size() && strcmp(ref.label, "best") != 0;
+    for (size_t i = 0; comparable && i < mine.size(); i++) {
+        combined += std::min(mine[i], refSectors[i]);
+        beaten += mine[i] < refSectors[i] ? 1 : 0;
     }
-    // The theoretical best: your best time of every sector, added up.
-    const std::vector<int> best = bestSectors();
-    if (!best.empty()) {
-        int sum = 0;
-        for (int v : best) sum += v;
-        timeText(a, sizeof(a), sum);
-        if (!g.best.empty()) {
-            deltaText(b, sizeof(b), sum - g.best.back());
-            ImGui::Text("Theoretical best %s (%s)", a, b);
-        } else {
-            ImGui::Text("Theoretical best %s", a);
+    if (ImGui::BeginTable("numbers", 2, ImGuiTableFlags_SizingStretchProp)) {
+        snprintf(a, sizeof(a), "%d", g.attempts);
+        row("Attempts", "Runs started on this map in this session", a, nullptr);
+        snprintf(a, sizeof(a), "%zu", g.finishes.size());
+        row("Finished", "Runs that reached the finish in this session", a, nullptr);
+        if (!g.finishes.empty()) {
+            timeText(a, sizeof(a), *std::min_element(g.finishes.begin(), g.finishes.end()));
+            row("Best", "Your fastest finish in this session", a, nullptr);
+            timeText(a, sizeof(a), median(g.finishes));
+            row("Median", "The middle of your finish times in this session", a, nullptr);
+            timeText(a, sizeof(a), g.finishes.back());
+            row("Last", "Your last finish time", a, nullptr);
         }
-    }
-    // Consistency: how much your sector times spread over this session's finished runs.
-    if (g.sectorTimes.size() >= 2) {
-        double spread = 0.0;
-        int sectors = 0;
-        for (size_t i = 0; i < g.sectorTimes[0].size(); i++) {
-            double sum = 0.0, square = 0.0;
-            int n = 0;
-            for (const std::vector<int>& run : g.sectorTimes) {
-                if (i >= run.size()) continue;
-                sum += run[i];
-                square += static_cast<double>(run[i]) * run[i];
-                n++;
+        snprintf(a, sizeof(a), "%d", g.lastFinished.cps.empty() ? g.run.respawns : g.lastFinished.respawns);
+        row("Respawns", "Respawns in your last finished run (or in this one before a finish)", a, nullptr);
+        if (g.sectorTimes.size() >= 2) {
+            // How much your sector times vary over this session's finished runs.
+            double spread = 0.0;
+            int sectors = 0;
+            for (size_t i = 0; i < g.sectorTimes[0].size(); i++) {
+                double sum = 0.0, square = 0.0;
+                int n = 0;
+                for (const std::vector<int>& run : g.sectorTimes) {
+                    if (i >= run.size()) continue;
+                    sum += run[i];
+                    square += static_cast<double>(run[i]) * run[i];
+                    n++;
+                }
+                if (n < 2) continue;
+                const double mean = sum / n;
+                spread += sqrt(std::max(0.0, square / n - mean * mean));
+                sectors++;
             }
-            if (n < 2) continue;
-            const double mean = sum / n;
-            spread += sqrt(std::max(0.0, square / n - mean * mean));
-            sectors++;
+            if (sectors) {
+                snprintf(a, sizeof(a), "%.3f s", spread / sectors / 1000.0);
+                row("Spread", "How much your time in a sector varies between runs, on average", a, nullptr);
+            }
         }
-        if (sectors) ImGui::Text("Spread %.3f s per sector", spread / sectors / 1000.0);
+        if (!mine.empty()) {
+            timeText(a, sizeof(a), theoretical);
+            row("Your theoretical best", "Your best sectors added up: the time you could reach.", a, nullptr);
+        }
+        if (comparable) {
+            timeText(a, sizeof(a), combined);
+            snprintf(b, sizeof(b), "%s (%d of %zu yours)", a, beaten, mine.size());
+            const ImVec4 blue = deltaColour(-1);
+            row("Best combined", "Per sector the faster of yours and the reference's, added up. Yours: sectors where you beat the reference.", b,
+                beaten ? &blue : nullptr);
+        }
+        ImGui::EndTable();
     }
-    // The last finished run: each sector's top and average speed, and the time lost against your best
-    // time of that sector.
+    if (g.finishes.size() >= 2) {
+        std::vector<float> values;
+        for (int v : g.finishes) values.push_back(static_cast<float>(v));
+        const auto [lo, hi] = std::minmax_element(values.begin(), values.end());
+        ImGui::PlotLines("##times", values.data(), static_cast<int>(values.size()), 0, nullptr, *lo - 100.0f, *hi + 100.0f, ImVec2(-1.0f, 28.0f * k));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Your finish times in this session, oldest on the left (lower is faster)");
+    }
+    // The last finished run, sector by sector.
     const Run& run = g.lastFinished;
     if (!run.cps.empty()) {
-        ImGui::TextDisabled("Last run: %d respawn%s", run.respawns, run.respawns == 1 ? "" : "s");
-        if (ImGui::BeginTable("sectors", 4, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextDisabled("#");
-            ImGui::TableNextColumn();
-            ImGui::TextDisabled("Top");
-            ImGui::TableNextColumn();
-            ImGui::TextDisabled("Avg");
-            ImGui::TableNextColumn();
-            ImGui::TextDisabled("Lost");
+        ImGui::TextDisabled("Last run, sector by sector");
+        if (ImGui::BeginTable("sectors", 5, ImGuiTableFlags_SizingStretchProp)) {
+            static const char* const kNames[] = {"Sector", "Time", "vs best", "Top km/h", "Avg km/h"};
+            static const char* const kTips[] = {"From one checkpoint to the next", "Your time in this sector",
+                                                "Against your best time in this sector (plus: slower)", "Your top speed in this sector",
+                                                "Your average speed in this sector"};
+            ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+            for (int c = 0; c < 5; c++) {
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", kNames[c]);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kTips[c]);
+            }
             for (size_t i = 0; i < run.cps.size() && i < kMaxRows; i++) {
+                const int sector = run.cps[i].time - (i ? run.cps[i - 1].time : 0);
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextDisabled("%zu", i + 1);
+                if (i + 1 == run.cps.size()) ImGui::TextDisabled("Finish");
+                else ImGui::TextDisabled("%zu", i + 1);
                 ImGui::TableNextColumn();
+                timeText(a, sizeof(a), sector);
+                ImGui::TextUnformatted(a);
+                ImGui::TableNextColumn();
+                if (i < mine.size()) {
+                    deltaText(a, sizeof(a), sector - mine[i]);
+                    ImGui::TextColored(deltaColour(sector - mine[i]), "%s", a);
+                }
                 const SectorSpeed sp = i < run.sectors.size() ? run.sectors[i] : SectorSpeed();
+                ImGui::TableNextColumn();
                 if (sp.seconds > 0.0f) ImGui::Text("%.0f", sp.top * 3.6f);
                 ImGui::TableNextColumn();
                 if (sp.seconds > 0.0f) ImGui::Text("%.0f", sp.sum / sp.seconds * 3.6f);
-                ImGui::TableNextColumn();
-                if (i < best.size()) {
-                    const int mine = run.cps[i].time - (i ? run.cps[i - 1].time : 0);
-                    deltaText(a, sizeof(a), mine - best[i]);
-                    ImGui::TextColored(deltaColour(mine - best[i]), "%s", a);
-                }
             }
             ImGui::EndTable();
         }
@@ -681,7 +961,7 @@ void drawSessionPanel(const Frame& frame, ImVec2 under) {
 void draw(const Frame& frame) {
     ImVec2 pos, size;
     drawSplitPanel(frame, pos, size);
-    if (settings().session && (g.attempts > 0 || !g.finishes.empty())) drawSessionPanel(frame, ImVec2(pos.x, pos.y + size.y));
+    if (settings().session && (g.attempts > 0 || !g.finishes.empty())) drawSessionPanel(frame, ImVec2(pos.x, pos.y + size.y), size.x);
 }
 
 void drawPage() {
@@ -734,6 +1014,7 @@ void drawPage() {
         ImGui::SameLine();
         if (!g_scanning && ImGui::SmallButton("Reload")) {
             g_scanned = false;
+            g_jobUid.clear(); // your replays' sectors are read again too
             startScan();
         }
         if (!mine.empty() && ImGui::BeginListBox("##replays", ImVec2(-1.0f, std::min<float>(static_cast<float>(mine.size()), 6.0f) *
