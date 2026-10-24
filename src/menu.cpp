@@ -253,6 +253,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("ReflectionBlur")) return s.reflections > 0.0f;
     if (is("WaterFarReflections")) return s.cleanWater && s.waterSurfaces > 0.0f;
     if (is("WaterClarity")) return s.waterSurfaces > 0.0f;
+    if (is("CarHeadlightRange") || is("CarHeadlightBeam")) return s.carHeadlights > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it
     // The video export: what the chosen format and encoder use (the game's AVI: none of it).
@@ -388,6 +389,8 @@ const char* tooltipFor(const char* key) {
         {"HighlightBoost", "How strongly lamps and bright spots glow."},
         {"BorderGlow", "Glow of the neon strips along the road. Needs Game light sources."},
         {"CarHeadlights", "Two spotlights on the front of your car that light the road and show as beams in haze. 1 is full, 0 is off. Works in races and replays."},
+        {"CarHeadlightRange", "How far the headlights reach."},
+        {"CarHeadlightBeam", "How strongly the light cone shows in the air."},
         {"LampGlare", "Soft glare around lamps. 0 is off. Needs Game light sources."},
         {"LampHaze", "Lamps glow in the haze around them, more with more haze. 1 is full, 0 is off. Needs Game light sources."},
         {"LampSkyHalos", "Lamp halos also shine over the sky at night. Needs Game light sources."},
@@ -1695,15 +1698,16 @@ bool drawPerformancePage(Settings& s) {
 // --- Resource packs -----------------------------------------------------------------
 
 // One pack as a card, like a preset's: its picture (the mod's load screen) with its name on it,
-// a line about it underneath. Returns true when clicked.
+// a line about it underneath. Returns true when clicked. With `action` a small button sits on the
+// picture's corner (a click on it sets `*actionClicked`, not the card's).
 bool packCard(const std::string& title, const std::string& line, ImTextureID texture, int texW, int texH, const char* stand, bool active,
-              bool usable, float width) {
+              bool usable, float width, const char* action = nullptr, bool* actionClicked = nullptr) {
     const float imageH = width * 9.0f / 16.0f;
     const float pad = 8.0f * g_scale;
     const float textH = ImGui::GetFontSize() * 2.0f + pad * 2.0f;
     const ImVec2 p = ImGui::GetCursorScreenPos();
     const ImVec2 q(p.x + width, p.y + imageH + textH);
-    const bool clicked = ImGui::InvisibleButton("card", ImVec2(width, imageH + textH));
+    bool clicked = ImGui::InvisibleButton("card", ImVec2(width, imageH + textH));
     const bool hovered = ImGui::IsItemHovered();
     const float rounding = 8.0f * g_scale;
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -1745,6 +1749,18 @@ bool packCard(const std::string& title, const std::string& line, ImTextureID tex
         draw->AddRectFilled(a, b, colour(kAccent, 1.0f), (b.y - a.y) * 0.5f);
         draw->AddText(ImVec2(a.x + 6.0f * g_scale, a.y + 2.0f * g_scale), IM_COL32(15, 12, 8, 255), tag);
     }
+    if (action) {
+        const ImVec2 size = ImGui::CalcTextSize(action);
+        const ImVec2 b(q.x - pad, p.y + pad + size.y + 8.0f * g_scale), a(b.x - size.x - 20.0f * g_scale, p.y + pad);
+        const bool over = hovered && ImGui::IsMouseHoveringRect(a, b);
+        draw->AddRectFilled(a, b, over ? colour(kAccent, 1.0f) : IM_COL32(15, 12, 8, 235), (b.y - a.y) * 0.5f);
+        draw->AddRect(a, b, colour(kAccent, 1.0f), (b.y - a.y) * 0.5f, 0, 1.5f * g_scale);
+        draw->AddText(ImVec2(a.x + 10.0f * g_scale, a.y + 4.0f * g_scale), over ? IM_COL32(15, 12, 8, 255) : IM_COL32_WHITE, action);
+        if (over && clicked) {
+            clicked = false;
+            if (actionClicked) *actionClicked = true;
+        }
+    }
     const ImVec4 clip(p.x + pad, imageEnd.y + pad, q.x - pad, q.y - pad * 0.5f);
     draw->AddText(nullptr, 0.0f, ImVec2(clip.x, clip.y), ImGui::GetColorU32(ImGuiCol_TextDisabled), line.c_str(), nullptr, width - pad * 2.0f, &clip);
     if (active) {
@@ -1772,11 +1788,14 @@ void drawPacks(Config& config) {
     const std::string status = rp->status();
     ImGui::TextDisabled("Last map: %s", status.empty() ? "none loaded yet" : status.c_str());
     // The loaded map: switch its textures now instead of at the next map.
-    static std::string s_applied;
+    static std::string s_applied, s_appliedEnv;
     const ResourcePacks::Live live = rp->live();
     if (live.possible) {
         ImGui::BeginDisabled(!live.differs);
-        if (ImGui::Button("Apply now")) s_applied = rp->applyNow();
+        if (ImGui::Button("Apply now")) {
+            s_appliedEnv = live.environment;
+            s_applied = rp->applyNow();
+        }
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Switches the textures on this map.");
@@ -1788,7 +1807,6 @@ void drawPacks(Config& config) {
             ImGui::TextDisabled("Shown: %s.", live.shown.c_str());
         }
     }
-    if (!s_applied.empty()) ImGui::TextDisabled("%s", s_applied.c_str());
     ImGui::Spacing();
 
     static const char* const kSlots[] = {"All moods", "Day", "Sunset", "Night"};
@@ -1839,6 +1857,9 @@ void drawPacks(Config& config) {
                 value = "None";
                 title = "None";
                 line = "The game's textures.";
+                texture = picture("Realistic"); // the preset closest to the game's own look
+                tw = 16;
+                th = 9;
             } else {
                 const ResourcePacks::Pack& pack = packs[mine[i - 2]];
                 value = pack.file;
@@ -1855,11 +1876,21 @@ void drawPacks(Config& config) {
                 }
                 if (!uses.empty()) line = uses + ". " + line;
             }
+            // The chosen card: an Apply button when the loaded map shows something else, afterwards how it went.
+            const bool chosen = value == selected;
+            const bool offer = chosen && live.possible && live.differs && live.environment == env;
+            if (chosen && !offer && !s_applied.empty() && s_appliedEnv == env) line = s_applied;
+            bool apply = false;
             ImGui::PushID(i);
-            if (packCard(title, line, texture, tw, th, i < 2 ? "" : "No picture", value == selected, usable, width)) {
+            if (packCard(title, line, texture, tw, th, i < 2 ? "" : "No picture", chosen, usable, width, offer ? "Apply" : nullptr, &apply)) {
                 Config::PackChoice& c = config.packChoice(env);
                 (slot < 0 ? c.all : c.mood[slot]) = value;
                 config.markDirty();
+                s_applied.clear();
+            }
+            if (apply) {
+                s_appliedEnv = env;
+                s_applied = rp->applyNow();
             }
             ImGui::PopID();
         });
