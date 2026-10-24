@@ -1764,7 +1764,7 @@ float2 rippleSlope(float2 xz, float t) {
 float2 waveSlope(float2 xz, float t, float footprint) {
     float2 g = 0;
     float2 d0 = float2(0.8, 0.6), d1 = float2(-0.4, 0.92), d2 = float2(0.97, -0.24), d3 = float2(-0.7, -0.7);
-    float px = 2.0 * footprint;
+    float px = 3.0 * footprint; // no wave under 3 pixels of this: it only aliases
     g += d0 * cos(dot(d0, xz) * 0.9 + t * 1.3) * 0.05 * saturate(7.0 / px - 1.0);
     g += d1 * cos(dot(d1, xz) * 1.7 + t * 1.9) * 0.035 * saturate(3.7 / px - 1.0);
     g += d2 * cos(dot(d2, xz) * 3.1 + t * 2.6) * 0.025 * saturate(2.0 / px - 1.0);
@@ -4455,10 +4455,14 @@ float causticLines(float2 p, float t) {
     return pow(saturate(v * 0.3333), 3.0);
 }
 
-float3 poolFloor(float2 xz) {
-    float v = 0.55 * noise2(xz * 0.9) + 0.3 * noise2(xz * 3.1 + 7.3) + 0.15 * noise2(xz * 11.0 + 2.1);
+// `footprint` = a pixel's length on the surface (m): each octave fades out once its cells are
+// under about 3 pixels (the 4 and 9 cm octaves aliased into fine streaks along the view from
+// 20 m on), to the octave's mean.
+float3 poolFloor(float2 xz, float footprint) {
+    float f1 = saturate(1.0 - footprint * 11.0 * 0.5), f2 = saturate(1.0 - footprint * 23.0 * 0.5);
+    float v = 0.55 * noise2(xz * 0.9) + 0.3 * noise2(xz * 3.1 + 7.3) + 0.15 * lerp(0.5, noise2(xz * 11.0 + 2.1), f1);
     float3 sand = lerp(float3(0.46, 0.40, 0.30), float3(0.70, 0.63, 0.48), v);
-    return sand * (0.8 + 0.4 * noise2(xz * 23.0));
+    return sand * (0.8 + 0.4 * lerp(0.5, noise2(xz * 23.0), f2));
 }
 
 float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
@@ -4476,7 +4480,14 @@ float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float3 cam = cameraWorld();
     float3 world = worldPosition(viewPosition(uv, nd.w));
     float level;
-    float onPlane = waterLevelMatch(world, level);
+    waterLevelMatch(world, level);
+    // The materials already say this is water, so the plane test only has to keep out what
+    // stands at its edge (the ground is 1 m higher). It has to allow for the depth's steps:
+    // with the plain tolerance (15 - 40 cm) rows of pixels failed it by a few centimetres,
+    // and the game's grey water showed through them as pale streaks (20 - 150 m from a camera
+    // high above the pool; the reflection pass allows a pixel the same way).
+    float allow = 0.5 + nd.w / (abs(u_Proj.y) * u_Screen.y) * 1.5;
+    float onPlane = 1.0 - smoothstep(allow * 0.7, allow, abs(world.y - level));
     float blend = saturate(clarity * 2.0) * onPlane;
     [branch] if (blend <= 0.0 || rd.y > -0.01) return src;
     float3 surf = waterSurface(rd, level, world);
@@ -4505,7 +4516,10 @@ float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 
     // Through the surface: refracted by the waves (the same slope the lighting gives them).
     float footprint = nd.w / (abs(u_Proj.y) * 0.5 * u_Screen.y * max(abs(rd.y), 0.05));
-    float2 slope = waveSlope(surf.xz, t, footprint) * (1.0 - distant);
+    // The bottom seen through the waves wobbles by decimetres: at a few centimetres a pixel that
+    // is a pattern of wavy bands (the sand moves with every wave), so the refraction fades with
+    // the pixel size (gone at 12 cm, 40 m away from a camera 25 m up) and with distance.
+    float2 slope = waveSlope(surf.xz, t, footprint) * (1.0 - distant) * (1.0 - saturate((footprint - 0.03) / 0.09));
     float3 refracted = refract(rd, normalize(float3(-slope.x * 0.8, 1.0, -slope.y * 0.8)), 0.752);
     float cosT = max(-refracted.y, 0.25);
     float2 floorXZ = surf.xz + refracted.xz * (depth / cosT);
@@ -4516,7 +4530,7 @@ float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float lit = clamp(luma(toLinear(src.rgb)), 0.02, 1.2);
     float3 bottom = float3(0.42, 0.37, 0.28);
     [branch] if (distant < 1.0) {
-        bottom = lerp(poolFloor(floorXZ), bottom, distant);
+        bottom = lerp(poolFloor(floorXZ, footprint), bottom, distant);
         bottom *= 1.0 + causticLines(floorXZ, t) * 1.6 * u_SunWorld.w * exp(-0.18 * depth) * (1.0 - distant);
     }
     float3 deep = float3(0.015, 0.13, 0.16);
