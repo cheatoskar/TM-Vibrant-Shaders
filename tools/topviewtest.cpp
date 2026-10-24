@@ -7,7 +7,6 @@
 // is given back (development tool; it can't say which of the game's draws are blocks or which
 // texture stage holds a block's colour: that needs the game).
 #include "misc/internal.h"
-#include "blockorder.h"
 #include "engine.h"
 #include "gfx.h"
 #include <windows.h>
@@ -16,6 +15,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <array>
+#include <algorithm>
+#include <vector>
 
 // casters.cpp lives in the plugin; these are the only parts of hook.cpp it needs.
 namespace tmshaders {
@@ -26,11 +28,7 @@ void endInternal() {}
 } // namespace hook
 } // namespace tmshaders
 
-// What the engine side would say: the block being drawn, the material.
-uintptr_t g_item = 0;
-namespace blockorder {
-uintptr_t currentDrawItem() { return g_item; }
-} // namespace blockorder
+// What the engine side would say: the material being drawn.
 namespace tmshaders {
 namespace engine {
 Material currentMaterial() { return Material::Other; }
@@ -86,9 +84,136 @@ IDirect3DTexture9* solidTexture(IDirect3DDevice9* device, D3DCOLOR colour) {
     return t;
 }
 
+
+double milliseconds() {
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    return static_cast<double>(t.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart);
+}
+
+// Waits until the GPU has done everything submitted so far.
+void finishGpu(IDirect3DDevice9* device) {
+    IDirect3DQuery9* event = nullptr;
+    if (FAILED(device->CreateQuery(D3DQUERYTYPE_EVENT, &event))) return;
+    event->Issue(D3DISSUE_END);
+    while (event->GetData(nullptr, 0, D3DGETDATA_FLUSH) == S_FALSE) {
+    }
+    event->Release();
+}
+
+// --bench: 3000 meshes of 512 triangles (a 16 x 16 grid of quads over a 32 m cell) at random places
+// and turns, as the game's draws of a big map, into a 1024 and a 4096 pixel picture: the CPU time of
+// the checks per draw (new, known, after the build-up), and of the redraws per frame with the GPU's.
+void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DVertexDeclaration9* decl, IDirect3DTexture9* texture,
+           const float view[16], const float projection[16]) {
+    constexpr int kGrid = 16, kMeshes = 3000;
+    std::vector<Vertex> vertices;
+    std::vector<WORD> indices;
+    for (int z = 0; z <= kGrid; z++) {
+        for (int x = 0; x <= kGrid; x++) {
+            const float fx = x * 2.0f, fz = z * 2.0f;
+            vertices.push_back({fx, 0.3f * sinf(fx * 0.5f) * cosf(fz * 0.4f), fz, 0, 1, 0, fx / 8.0f, fz / 8.0f});
+        }
+    }
+    for (int z = 0; z < kGrid; z++) {
+        for (int x = 0; x < kGrid; x++) {
+            const WORD a = static_cast<WORD>(z * (kGrid + 1) + x), b = static_cast<WORD>(a + 1), c = static_cast<WORD>(a + kGrid + 1), d = static_cast<WORD>(c + 1);
+            const WORD quad[6] = {a, b, d, a, d, c};
+            indices.insert(indices.end(), quad, quad + 6);
+        }
+    }
+    IDirect3DVertexBuffer9* vb = nullptr;
+    IDirect3DIndexBuffer9* ib = nullptr;
+    device->CreateVertexBuffer(static_cast<UINT>(vertices.size() * sizeof(Vertex)), 0, 0, D3DPOOL_MANAGED, &vb, nullptr);
+    device->CreateIndexBuffer(static_cast<UINT>(indices.size() * sizeof(WORD)), 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &ib, nullptr);
+    void* p = nullptr;
+    vb->Lock(0, 0, &p, 0);
+    memcpy(p, vertices.data(), vertices.size() * sizeof(Vertex));
+    vb->Unlock();
+    ib->Lock(0, 0, &p, 0);
+    memcpy(p, indices.data(), indices.size() * sizeof(WORD));
+    ib->Unlock();
+    const UINT nv = static_cast<UINT>(vertices.size()), triangles = static_cast<UINT>(indices.size() / 3);
+    for (int cells : {32, 128}) {
+        const float side = cells * 32.0f;
+        topview::setRegion(reinterpret_cast<const void*>(static_cast<uintptr_t>(0x5000 + cells)), 0.0f, 0.0f, side, side, 200.0f, cells, cells);
+        unsigned seed = 12345;
+        const auto random = [&seed]() {
+            seed = seed * 1664525u + 1013904223u;
+            return static_cast<float>(seed >> 8) / 16777216.0f;
+        };
+        std::vector<std::array<float, 16>> columns(kMeshes);
+        for (int i = 0; i < kMeshes; i++) {
+            const float x = random() * (side - 48.0f) + 8.0f, z = random() * (side - 48.0f) + 8.0f, y = 8.0f + random() * 80.0f;
+            const int turn = static_cast<int>(random() * 4.0f) & 3;
+            const float c = turn == 0 ? 1.0f : turn == 2 ? -1.0f : 0.0f, s = turn == 1 ? 1.0f : turn == 3 ? -1.0f : 0.0f;
+            const float world[16] = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, x + 16.0f, y, z + 16.0f, 1};
+            float wv[16], wvp[16];
+            mul(world, view, wv);
+            mul(wv, projection, wvp);
+            for (int r = 0; r < 4; r++) {
+                for (int k = 0; k < 4; k++) columns[i][k * 4 + r] = wvp[r * 4 + k];
+            }
+        }
+        device->BeginScene();
+        device->SetVertexDeclaration(decl);
+        device->SetStreamSource(0, vb, 0, sizeof(Vertex));
+        device->SetIndices(ib);
+        device->SetVertexShader(vs);
+        device->SetTexture(0, texture);
+        const auto frameOfDraws = [&]() {
+            double ms = 0.0;
+            for (int i = 0; i < kMeshes; i++) {
+                device->SetVertexShaderConstantF(0, columns[i].data(), 4);
+                const double t0 = milliseconds();
+                topview::onDraw(device, D3DPT_TRIANGLELIST, 0, 0, nv, 0, triangles, view, projection);
+                ms += milliseconds() - t0;
+            }
+            return ms;
+        };
+        const double newMs = frameOfDraws();
+        device->EndScene();
+        finishGpu(device);
+        int frames = 0;
+        double cpuSum = 0.0, cpuMax = 0.0, wallSum = 0.0, wallMax = 0.0;
+        while (topview::meshes() < kMeshes && frames < 100) {
+            const double t0 = milliseconds();
+            topview::render(device);
+            const double t1 = milliseconds();
+            finishGpu(device);
+            const double t2 = milliseconds();
+            frames++;
+            cpuSum += t1 - t0;
+            cpuMax = std::max(cpuMax, t1 - t0);
+            wallSum += t2 - t0;
+            wallMax = std::max(wallMax, t2 - t0);
+        }
+        device->BeginScene();
+        const double knownMs = frameOfDraws();
+        device->EndScene();
+        // After the build-up (nothing new for 5 s): one draw in 8 looked at per frame.
+        Sleep(5200);
+        topview::noteFrame(0.0);
+        topview::render(device);
+        device->BeginScene();
+        const double settledMs = frameOfDraws();
+        device->EndScene();
+        printf("bench %d x %d px, %d meshes of %u triangles: %d meshes drawn in %d frames\n", cells * 32, cells * 32, kMeshes, triangles,
+               topview::meshes(), frames);
+        printf("      redraw frames: CPU %.2f ms a frame (most %.2f), CPU + GPU until done %.2f ms a frame (most %.2f)\n", cpuSum / std::max(frames, 1),
+               cpuMax, wallSum / std::max(frames, 1), wallMax);
+        printf("      checks of %d draws a frame: new %.2f ms (%.2f us a draw), known %.2f ms, after the build-up %.2f ms\n", kMeshes, newMs,
+               newMs * 1000.0 / kMeshes, knownMs, settledMs);
+    }
+    vb->Release();
+    ib->Release();
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const bool benchmark = argc > 1 && !strcmp(argv[1], "--bench");
     WNDCLASSW wc{};
     wc.lpfnWndProc = DefWindowProcW;
     wc.hInstance = GetModuleHandleW(nullptr);
@@ -149,7 +274,7 @@ int main() {
     const float projection[16] = {s, 0, 0, 0, 0, s, 0, 0, 0, 0, f / (f - n), 1, 0, 0, -n * f / (f - n), 0};
 
     topview::setWanted(true);
-    topview::setRegion(reinterpret_cast<const void*>(0x1234), 0.0f, 0.0f, 64.0f, 64.0f, 2, 2); // 64 x 64 px
+    topview::setRegion(reinterpret_cast<const void*>(0x1234), 0.0f, 0.0f, 64.0f, 64.0f, 100.0f, 2, 2); // 64 x 64 px, up to 100 m
 
     device->BeginScene();
     device->SetVertexDeclaration(decl);
@@ -161,7 +286,7 @@ int main() {
     device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
     device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
-    const auto drawQuad = [&](uintptr_t item, float x, float y, float z, IDirect3DTexture9* texture) {
+    const auto drawQuad = [&](float x, float y, float z, IDirect3DTexture9* texture) {
         const float world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1};
         float wv[16], wvp[16], columns[16];
         mul(world, view, wv);
@@ -171,15 +296,17 @@ int main() {
         }
         device->SetVertexShaderConstantF(0, columns, 4);
         device->SetTexture(0, texture);
-        g_item = item;
         topview::onDraw(device, D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2, view, projection);
         device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2);
     };
-    drawQuad(0x1000, 0.0f, 10.0f, 0.0f, red);
-    drawQuad(0x2000, 16.0f, 20.0f, 16.0f, green);
-    drawQuad(0x1000, 0.0f, 10.0f, 0.0f, red); // the same block's draw again: taken once
-    g_item = 0;
-    topview::onDraw(device, D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2, view, projection); // not a block: left out
+    drawQuad(0.0f, 10.0f, 0.0f, red);
+    drawQuad(16.0f, 20.0f, 16.0f, green);
+    drawQuad(0.0f, 10.0f, 0.0f, red);     // the same draw at the same place again: taken once
+    drawQuad(200.0f, 10.0f, 0.0f, red);   // outside the map's area: left out
+    drawQuad(0.0f, 500.0f, 0.0f, red);    // above the highest track: left out
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    drawQuad(30.0f, 30.0f, 30.0f, red);   // blended: left out
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     device->EndScene();
 
     // The state render() must give back.
@@ -206,7 +333,7 @@ int main() {
     gfx::release(boundTexture);
     gfx::release(backBuffer);
 
-    check(topview::meshes() == 2, "two draws in the picture (one block's draw seen twice, one draw not a block's)");
+    check(topview::meshes() == 2, "two draws in the picture (one seen twice; one outside the area, one too high, one blended left out)");
     IDirect3DTexture9* picture = topview::picture();
     check(picture != nullptr, "the picture exists");
     if (picture) {
@@ -242,6 +369,7 @@ int main() {
         gfx::release(copy);
         gfx::release(level);
     }
+    if (benchmark) bench(device, vs, decl, green, view, projection);
     topview::releaseDevice();
     printf(g_failed ? "%d check(s) failed\n" : "all passed\n", g_failed);
     return g_failed ? 1 : 0;

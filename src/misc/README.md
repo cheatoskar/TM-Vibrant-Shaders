@@ -5,7 +5,7 @@ the menu's *Misc* page, each off until the player switches it on:
 
 | Tool | What it shows | Where its data comes from |
 |---|---|---|
-| Minimap (`mapview.cpp`, `topview.cpp`) | The track's shape seen from above and the car the camera follows; with *Real look* the blocks' meshes from above with their textures; *Auto zoom* by the car's speed | The map's block list in the game's memory (read only), `engine::carPose`, `engine::carSpeed`; for *Real look* the game's own draws of the map's blocks (`blockorder::currentDrawItem` tells them from the rest, `casters::drawWorld` gives their place), drawn again into a texture at Present |
+| Minimap (`mapview.cpp`, `topview.cpp`) | The track's shape seen from above and the car the camera follows; with *Real look* the blocks' meshes from above with their textures; *Auto zoom* by the car's speed | The map's block list in the game's memory (read only), `engine::carPose`, `engine::carSpeed`; for *Real look* the game's own solid draws inside the map's grid (`casters::drawWorld` gives their place), drawn again into a texture at Present |
 | Split times (`splits.cpp`) | At each checkpoint, in the moment the game registers it: the time and the car's speed against a reference (the map's record, the ghost you race against, your best run, a replay file); a sector clock; a fixed height with five scrolling checkpoint rows; after the finish each sector against your best and the reference; the Session panel (attempts, best / median / last, respawns, spread, your theoretical best from all your runs and replays of the map, the best combined with the reference, the last run's sectors) | The race's own checkpoint times (`engine::raceTimes`), its opponent ghosts' checkpoint times (`engine::raceGhostTimes`), the car's speed (`engine::carSpeed`), all read only; your best run and best sectors in `Documents\TrackMania\TMVS\splits`; your own replays of the map (driver names from `Tracks\Replays\Autosaves`); a replay's checkpoint times and speed at them (`replay.cpp`) from a local file or TMX (`tmx.cpp`) |
 | Finish effects (`confetti.cpp`) | Confetti at the finish, fireworks for a new best run | The finish the split times see |
 
@@ -21,9 +21,9 @@ point.
    kind only (road, circuit, platform and the like as track; grass, dirt, water as ground; the rest
    dimmed). A checkpoint, start, finish, booster or engine-off block is drawn exactly like any road or
    platform: `mapview.cpp` never reads a block info's waypoint field (+0x11c) and has no colour or
-   marker for any of them (`kindOf`). *Real look* (`topview.cpp`) takes every draw of a block of the
-   map alike, with the same shader for all: it never asks which block a draw is, only that it is one
-   (`blockorder::currentDrawItem`), so a checkpoint gate is its plain geometry, as in the editor.
+   marker for any of them (`kindOf`). *Real look* (`topview.cpp`) takes every solid draw inside the
+   map's grid alike, with the same shader for all: it never asks which block a draw belongs to, so a
+   checkpoint gate is its plain geometry, as in the editor.
    *Real look* off (`MinimapTextured=0`) leaves the squares. Nothing is drawn in the 3D world at all (no
    beams, rays or markers): every tool is a 2D ImGui window over the finished image.
 2. **Split times appear only when the game registers a checkpoint.** `splits::update` reacts to the
@@ -87,16 +87,27 @@ reads it. The engine's readers (`engine::raceTimes`, `currentMapUid`, `idText`, 
 
 `topview.cpp` draws the map's blocks again from straight above, from the game's own draws: no mesh is
 read from the files. In `plugin.cpp`'s `onDrawIndexed` (the game's state bound, before its draw) every
-indexed draw of the main camera goes to `misc::sceneDraw`. A draw counts when `blockorder` maps it to a
-block of the open map (corpus -> item -> block; my log: about 60 % of the sorted passes' draws are
-blocks') or when it is the grass material's (the ground), and when it is opaque (depth written, no
-blending, no alpha test). Its place is the game's mesh -> clip constant (GbxVisualPrCamera) with the
-camera undone (`casters::drawWorld`, the long shadows' recovery). It is queued with references to the
-game's vertex and index buffers, its declaration's POSITION and TEXCOORD0 and the texture on stage 0,
-once per block item and index range, and drawn at Present, before the overlay: at most 400 a frame,
-inside a saved and restored device state (a D3D9 state block plus the render and depth targets), into
-an A8R8G8B8 target of 1 pixel per metre with its own depth buffer (higher covers lower) and mipmaps.
-A block whose draws brought nothing new for 30 frames is skipped with one lookup from then on.
+indexed draw of the main camera goes to `misc::sceneDraw`. A draw counts when it is opaque (depth and
+colour written, no blending, no alpha test), from the managed pool (the game's static meshes), not a
+car's or glass material, and has a world matrix in the game's constants: its place is the mesh -> clip
+constant (GbxVisualPrCamera) with the camera undone (`casters::drawWorld`, the long shadows' recovery).
+Its vertices' box, turned into the world, must lie inside the map's grid (16 m of margin) and below the
+highest track cell plus 40 m: the sky, the clouds and the stadium around the grid stay out. Blocks are
+not asked for by identity: on A01 only about 2 % of the main path's draws and 12 % of the sorted
+passes' mapped to a block through `blockorder`'s corpus -> item chain (my first test), so that path was
+dropped. Each distinct draw is taken once per map, keyed by its buffers, index range, place (0.25 m)
+and turn (1/100): instances of a block share their buffers. It is queued with references to the game's
+vertex and index buffers, its declaration's POSITION and TEXCOORD0 and the texture on stage 0, and
+drawn at Present, before the overlay: at most 400 a frame, inside a saved and restored device state (a
+D3D9 state block plus the render and depth targets), into an A8R8G8B8 target of 1 pixel per metre with
+its own depth buffer (higher covers lower) and mipmaps. Once nothing new came for 5 s, only one draw in
+8 is looked at per frame (each one every 8 frames); something new and all are looked at again.
+
+The cost goes into `tmvs.log`: CPU per frame of drawing the minimap (`mapview::draw`, the redraws
+included) and of the checks in `onDrawIndexed`, GPU per frame of the redraws (D3D9 timestamp queries
+around them; the minimap's own two textured quads in ImGui's drawing are not timed), the meshes and the
+video memory; once per map after the build-up and every 60 s. `tmvs_topviewtest --bench` measures the
+same on 3000 meshes of 512 triangles at 1024 and 4096 pixels.
 
 What `tools/topviewtest.cpp` proves on a real D3D9 device: a draw made like the game's lands at its
 place (row 0 at the area's z0, the edges on the right pixels), with its texture, the higher over the
