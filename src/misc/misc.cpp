@@ -3,9 +3,10 @@
 #include "inifile.h"
 #include "log.h"
 #include "menu.h"
-#include "imgui.h"
 #include <windows.h>
 #include <algorithm>
+#include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cwchar>
 
@@ -28,7 +29,7 @@ int iniInt(const wchar_t* ini, const wchar_t* key, int fallback, int lo, int hi)
 
 void setFloat(IniFile& ini, const wchar_t* key, float value) {
     wchar_t text[32];
-    swprintf(text, 32, L"%.3g", value);
+    swprintf(text, 32, L"%.4g", value);
     ini.set(kSection, key, text);
 }
 
@@ -36,6 +37,16 @@ void setInt(IniFile& ini, const wchar_t* key, int value) {
     wchar_t text[16];
     swprintf(text, 16, L"%d", value);
     ini.set(kSection, key, text);
+}
+
+// The height of a window that follows its content (WindowPlace::autoHeight).
+void contentHeightOnly(ImGuiSizeCallbackData* data) {
+    const WindowPlace* place = static_cast<const WindowPlace*>(data->UserData);
+    if (place->contentHeight > 0.0f) data->DesiredSize.y = place->contentHeight;
+}
+
+bool apart(ImVec2 a, ImVec2 b) {
+    return fabsf(a.x - b.x) > 0.5f || fabsf(a.y - b.y) > 0.5f;
 }
 
 } // namespace
@@ -46,6 +57,82 @@ Settings& settings() {
 
 void settingsChanged() {
     Config::get().markDirty();
+}
+
+float screenScale() {
+    const float h = ImGui::GetIO().DisplaySize.y;
+    return h > 100.0f ? h / 1440.0f : 1.0f;
+}
+
+void WindowPlace::before(const Frame& frame, ImVec2 pos, ImVec2 size) {
+    autoHeight = size.y <= 0.0f;
+    // Kept on the screen (another resolution, a window dragged away).
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    pos.x = std::clamp(pos.x, 0.0f, std::max(0.0f, display.x - 40.0f));
+    pos.y = std::clamp(pos.y, 0.0f, std::max(0.0f, display.y - 40.0f));
+    // Placed from the settings: with the menu closed, when it opens, and when they changed (the
+    // page's size slider): the window's own size never overrides a setting the slider just made.
+    const bool changed = apart(pos, applied) || fabsf(size.x - appliedSize.x) > 0.5f || (!autoHeight && fabsf(size.y - appliedSize.y) > 0.5f);
+    if (!frame.menuOpen || !wasOpen || changed) {
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(size.x, autoHeight ? std::max(contentHeight, 1.0f) : size.y), ImGuiCond_Always);
+        applied = pos;
+        appliedSize = size;
+    }
+    if (autoHeight) ImGui::SetNextWindowSizeConstraints(ImVec2(80.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX), contentHeightOnly, this);
+    wasOpen = frame.menuOpen;
+}
+
+bool WindowPlace::after(const Frame& frame, ImVec2& pos, ImVec2& size) {
+    if (!frame.menuOpen || ImGui::IsMouseDown(ImGuiMouseButton_Left)) return false;
+    pos = ImGui::GetWindowPos();
+    size = ImGui::GetWindowSize();
+    const bool resized = fabsf(size.x - appliedSize.x) > 0.5f || (!autoHeight && fabsf(size.y - appliedSize.y) > 0.5f);
+    if (!apart(pos, applied) && !resized) return false;
+    applied = pos;
+    appliedSize = ImVec2(size.x, autoHeight ? appliedSize.y : size.y);
+    return true;
+}
+
+void WindowPlace::end() {
+    if (autoHeight) contentHeight = ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + ImGui::GetStyle().WindowPadding.y;
+}
+
+int windowFlags(const Frame& frame, bool resizable) {
+    int flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoCollapse |
+                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    if (!frame.menuOpen) flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
+    else if (!resizable) flags |= ImGuiWindowFlags_NoResize;
+    return flags;
+}
+
+float windowChrome(const Frame& frame, const char* title, bool resizable) {
+    if (!frame.menuOpen) return 0.0f;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    const float h = ImGui::GetTextLineHeight() + 4.0f;
+    const ImU32 strip = IM_COL32(255, 160, 60, 70), line = IM_COL32(255, 210, 160, 230);
+    draw->AddRectFilled(wp, ImVec2(wp.x + ws.x, wp.y + h), strip, ImGui::GetStyle().WindowRounding, ImDrawFlags_RoundCornersTop);
+    // The move symbol: a cross with four arrow heads.
+    const float c = h * 0.5f, r = h * 0.32f, a = h * 0.12f;
+    const ImVec2 m(wp.x + 6.0f + r, wp.y + c);
+    draw->AddLine(ImVec2(m.x - r, m.y), ImVec2(m.x + r, m.y), line, 1.5f);
+    draw->AddLine(ImVec2(m.x, m.y - r), ImVec2(m.x, m.y + r), line, 1.5f);
+    draw->AddTriangleFilled(ImVec2(m.x - r - a, m.y), ImVec2(m.x - r + a, m.y - a), ImVec2(m.x - r + a, m.y + a), line);
+    draw->AddTriangleFilled(ImVec2(m.x + r + a, m.y), ImVec2(m.x + r - a, m.y - a), ImVec2(m.x + r - a, m.y + a), line);
+    draw->AddTriangleFilled(ImVec2(m.x, m.y - r - a), ImVec2(m.x - a, m.y - r + a), ImVec2(m.x + a, m.y - r + a), line);
+    draw->AddTriangleFilled(ImVec2(m.x, m.y + r + a), ImVec2(m.x - a, m.y + r - a), ImVec2(m.x + a, m.y + r - a), line);
+    draw->AddText(ImVec2(m.x + r + 8.0f, wp.y + 2.0f), line, title);
+    if (resizable) {
+        // The grip: three diagonal lines in the lower right corner.
+        const ImVec2 e(wp.x + ws.x - 3.0f, wp.y + ws.y - 3.0f);
+        for (int k = 1; k <= 3; k++) {
+            const float d = k * 4.0f;
+            draw->AddLine(ImVec2(e.x - d, e.y), ImVec2(e.x, e.y - d), line, 1.5f);
+        }
+    }
+    ImGui::Dummy(ImVec2(0.0f, h - ImGui::GetStyle().WindowPadding.y));
+    return h;
 }
 
 std::wstring dataFolder(const wchar_t* sub) {
@@ -75,18 +162,23 @@ void boot() {
     s.minimap = iniInt(ini, L"Minimap", 0, 0, 1) != 0;
     s.mapX = iniFloat(ini, L"MinimapX", -1.0f, -1.0f, 16384.0f);
     s.mapY = iniFloat(ini, L"MinimapY", -1.0f, -1.0f, 16384.0f);
-    s.mapSize = iniFloat(ini, L"MinimapSize", 260.0f, 120.0f, 1200.0f);
+    s.mapSize = iniFloat(ini, L"MinimapSize", 260.0f, 120.0f, 800.0f);
     s.mapOpacity = iniFloat(ini, L"MinimapOpacity", 0.85f, 0.2f, 1.0f);
     s.mapZoom = iniFloat(ini, L"MinimapZoom", 1.0f, 1.0f, 8.0f);
     s.mapRotate = iniInt(ini, L"MinimapRotate", 0, 0, 1) != 0;
     s.splits = iniInt(ini, L"SplitTimes", 0, 0, 1) != 0;
     s.splitX = iniFloat(ini, L"SplitTimesX", -1.0f, -1.0f, 16384.0f);
     s.splitY = iniFloat(ini, L"SplitTimesY", -1.0f, -1.0f, 16384.0f);
-    s.splitReference = iniInt(ini, L"SplitReference", 0, 0, 1);
+    s.splitWidth = iniFloat(ini, L"SplitTimesWidth", 260.0f, 160.0f, 800.0f);
+    s.splitCompare = iniInt(ini, L"SplitCompare", kCompareBest, 0, 3);
     s.splitBar = iniInt(ini, L"SplitBar", 1, 0, 1) != 0;
+    s.session = iniInt(ini, L"SessionPanel", 1, 0, 1) != 0;
+    s.sessionX = iniFloat(ini, L"SessionX", -1.0f, -1.0f, 16384.0f);
+    s.sessionY = iniFloat(ini, L"SessionY", -1.0f, -1.0f, 16384.0f);
     s.finishEffect = iniInt(ini, L"FinishEffect", 0, 0, 2);
     Config::get().saveExtra = &save;
-    TMVS_LOG("misc: minimap %s, split times %s, finish effect %d", s.minimap ? "on" : "off", s.splits ? "on" : "off", s.finishEffect);
+    TMVS_LOG("misc: minimap %s, split times %s (compare with %d), finish effect %d", s.minimap ? "on" : "off", s.splits ? "on" : "off",
+             s.splitCompare, s.finishEffect);
 }
 
 void save(IniFile& ini) {
@@ -101,47 +193,60 @@ void save(IniFile& ini) {
     setInt(ini, L"SplitTimes", s.splits ? 1 : 0);
     setFloat(ini, L"SplitTimesX", s.splitX);
     setFloat(ini, L"SplitTimesY", s.splitY);
-    setInt(ini, L"SplitReference", s.splitReference);
+    setFloat(ini, L"SplitTimesWidth", s.splitWidth);
+    setInt(ini, L"SplitCompare", s.splitCompare);
     setInt(ini, L"SplitBar", s.splitBar ? 1 : 0);
+    setInt(ini, L"SessionPanel", s.session ? 1 : 0);
+    setFloat(ini, L"SessionX", s.sessionX);
+    setFloat(ini, L"SessionY", s.sessionY);
     setInt(ini, L"FinishEffect", s.finishEffect);
 }
 
 void drawPage() {
     Settings& s = g_settings;
     bool changed = false;
-    ImGui::TextWrapped("Small tools for driving. They only show the track's shape and your times: no checkpoint or trigger "
-                       "positions, no ghost's path. Move and resize their windows while this menu is open.");
+    ImGui::TextWrapped("Only the track's shape and your times: no checkpoint positions, no ghost paths. "
+                       "Drag and resize the windows while this menu is open.");
     ImGui::Spacing();
 
     ImGui::SeparatorText("Minimap");
-    changed |= ImGui::Checkbox("Show the minimap", &s.minimap);
+    changed |= ImGui::Checkbox("Minimap", &s.minimap);
     if (s.minimap) {
         changed |= ImGui::SliderFloat("Size", &s.mapSize, 120.0f, 800.0f, "%.0f px");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("At 1440p; smaller screens scale it down.");
         changed |= ImGui::SliderFloat("Opacity", &s.mapOpacity, 0.2f, 1.0f, "%.2f");
         changed |= ImGui::SliderFloat("Zoom", &s.mapZoom, 1.0f, 8.0f, "%.1fx");
-        changed |= ImGui::Checkbox("Turn with the car (heading up)", &s.mapRotate);
+        changed |= ImGui::Checkbox("Rotate with car", &s.mapRotate);
+        if (ImGui::Button("Reset position##map")) {
+            s.mapX = s.mapY = -1.0f;
+            changed = true;
+        }
         mapview::drawPageInfo();
     }
 
     ImGui::SeparatorText("Split times");
-    changed |= ImGui::Checkbox("Show split times", &s.splits);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("At each checkpoint, when the game registers it: your time against your best run or a replay.\n"
-                          "After the finish: the time won or lost in each sector.");
-    }
+    changed |= ImGui::Checkbox("Split times", &s.splits);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Your time at each checkpoint against a reference, and each sector after the finish.");
     if (s.splits) {
-        changed |= ImGui::Checkbox("Sector clock under the delta", &s.splitBar);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("How much of the reference's time for this sector has passed (red once over it).");
+        changed |= ImGui::SliderFloat("Width", &s.splitWidth, 160.0f, 800.0f, "%.0f px");
+        changed |= ImGui::Checkbox("Sector clock", &s.splitBar);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Time in the current sector against the reference's sector time.");
+        changed |= ImGui::Checkbox("Session panel", &s.session);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Attempts, best, median and last times, theoretical best, sector speeds.");
+        if (ImGui::Button("Reset position##splits")) {
+            s.splitX = s.splitY = s.sessionX = s.sessionY = -1.0f;
+            changed = true;
+        }
         splits::drawPage();
     }
 
     ImGui::SeparatorText("Finish effects");
     static const char* const kEffects[] = {"Off", "Subtle", "Big"};
-    changed |= ImGui::Combo("At the finish", &s.finishEffect, kEffects, 3);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Confetti when you cross the finish, fireworks too for a new best run.\nNever in photos or the video export.");
+    changed |= ImGui::Combo("Finish effect", &s.finishEffect, kEffects, 3);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Confetti at the finish, fireworks for a new best. Never in photos or videos.");
     if (s.finishEffect > 0) {
         ImGui::SameLine();
-        if (ImGui::Button("Try it")) confetti::start(s.finishEffect == 2, true);
+        if (ImGui::Button("Test")) confetti::start(s.finishEffect == 2, true);
     }
     if (changed) settingsChanged();
 }

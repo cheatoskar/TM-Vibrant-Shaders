@@ -1,6 +1,6 @@
 // Replay reader test: the LZO1X decompressor on made-up streams, then real replays (the files
 // given, or the .Replay.Gbx in Documents\TrackMania\Tracks\Replays): the header's map UID and the
-// ghost's race and checkpoint times (never falling, the last one the race time).
+// ghost's race and checkpoint times (never falling, the last one the race time) and its speeds.
 //   tmvs_replaytest [file.Replay.Gbx ...]
 #include "misc/replay.h"
 #include <windows.h>
@@ -64,7 +64,7 @@ bool readAll(const std::wstring& path, std::vector<unsigned char>& data) {
     return ok;
 }
 
-int g_files = 0, g_parsed = 0;
+int g_files = 0, g_parsed = 0, g_withSpeeds = 0;
 
 void testFile(const std::wstring& path, bool verbose) {
     g_files++;
@@ -85,15 +85,27 @@ void testFile(const std::wstring& path, bool verbose) {
     bool rising = true;
     for (size_t i = 1; i < full.checkpoints.size(); i++) rising = rising && full.checkpoints[i] >= full.checkpoints[i - 1]; // two in one tick: equal
     const bool lastIsTime = full.checkpoints.back() == full.raceTime;
-    if (verbose || !rising || !lastIsTime) {
+    // The speeds (from the samples): under 1000 km/h, covering the race, a speed at every checkpoint.
+    float top = 0.0f;
+    for (float v : full.speeds) top = v > top ? v : top;
+    const float covered = full.speeds.empty() ? 0.0f : static_cast<float>(full.speeds.size() - 1) * full.samplePeriod;
+    const bool speeds = !full.speeds.empty() && top < 280.0f && covered + 2000.0f >= full.raceTime * 0.8f && speedAt(full, full.checkpoints[0]) >= 0.0f;
+    if (!full.speeds.empty()) g_withSpeeds++;
+    if (verbose || !rising || !lastIsTime || (!full.speeds.empty() && !speeds)) {
         std::string cps;
-        for (size_t i = 0; i < full.checkpoints.size() && i < 6; i++) cps += (i ? " " : "") + std::to_string(full.checkpoints[i]);
-        printf("  %-60s  map %s, %d ms, %zu CPs (%s%s)%s%s\n", name, full.mapUid.c_str(), full.raceTime,
-               full.checkpoints.size(), cps.c_str(), full.checkpoints.size() > 6 ? " ..." : "", rising ? "" : " [FALLING]",
-               lastIsTime ? "" : " [LAST CP != TIME]");
+        for (size_t i = 0; i < full.checkpoints.size() && i < 6; i++) {
+            char one[48];
+            snprintf(one, sizeof(one), "%s%d@%.0f", i ? " " : "", full.checkpoints[i], speedAt(full, full.checkpoints[i]) * 3.6f);
+            cps += one;
+        }
+        printf("  %-60s  map %s, %d ms, %zu CPs (ms@km/h %s%s), %zu speeds / %d ms, top %.0f km/h%s%s%s\n", name, full.mapUid.c_str(),
+               full.raceTime, full.checkpoints.size(), cps.c_str(), full.checkpoints.size() > 6 ? " ..." : "", full.speeds.size(),
+               full.samplePeriod, top * 3.6f, rising ? "" : " [FALLING]", lastIsTime ? "" : " [LAST CP != TIME]",
+               full.speeds.empty() || speeds ? "" : " [SPEEDS NOT AS EXPECTED]");
     }
     check(rising, "checkpoint times never fall");
     check(lastIsTime, "last checkpoint is the race time");
+    check(full.speeds.empty() || speeds, "the ghost's speeds are plausible");
 }
 
 void scanFolder(const std::wstring& folder, int depth, int& budget) {
@@ -132,7 +144,7 @@ int wmain(int argc, wchar_t** argv) {
             scanFolder(std::wstring(docs) + L"\\TrackMania\\Tracks\\Replays", 2, budget);
         }
     }
-    printf("%d replays, %d read with their times; %d checks failed\n", g_files, g_parsed, g_failed);
+    printf("%d replays, %d read with their times, %d with the ghost's speeds; %d checks failed\n", g_files, g_parsed, g_withSpeeds, g_failed);
     // A file that can't be read is reported above, not a failure (old formats, corrupt files);
     // most must read.
     return g_failed == 0 && (g_files == 0 || g_parsed * 10 >= g_files * 8) ? 0 : 1;

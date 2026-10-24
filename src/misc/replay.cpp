@@ -1,5 +1,7 @@
 #include "misc/replay.h"
+#include "image.h"
 #include <windows.h>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -12,6 +14,7 @@ constexpr uint32_t kHeaderReplay = 0x03093000;    // version, map ident (UID, en
 constexpr uint32_t kHeaderXml = 0x03093001;       // the replay's XML (<challenge uid=...>)
 constexpr uint32_t kGhostRaceTime = 0x03092005;   // u32 race time (ms)
 constexpr uint32_t kGhostCheckpoints = 0x0309200B; // u32 count, count x (u32 time, u32 stunt score)
+constexpr uint32_t kGhostSamples = 0x0303F005;    // u32 size, u32 compressed size, zlib data
 constexpr uint32_t kSkip = 0x534B4950;            // "PIKS": a skippable chunk (its size follows)
 constexpr size_t kMaxBody = 64u << 20;            // a replay with an embedded map is a few MB at most
 
@@ -171,7 +174,93 @@ bool findSkippable(const std::vector<unsigned char>& body, uint32_t id, size_t& 
     return false;
 }
 
+// The ghost's record (CGameGhost's samples, inflated): u32 class (0x0A02B000 the car), u32 skip
+// list 2, u32, u32 period (ms), u32, then the samples' bytes (u32 size + data), u32 count, the first
+// sample's offset and either one size for all or -1 and each size. Every sample starts with the
+// car's position (three floats). Only the speed between neighbours is kept.
+bool readSpeeds(const std::vector<unsigned char>& data, Replay& out) {
+    Reader r(data.data(), data.size());
+    const uint32_t classId = r.u32();
+    if (!r.ok || classId == 0xFFFFFFFFu) return false;
+    r.u32();
+    r.u32();
+    const uint32_t period = r.u32();
+    r.u32();
+    const uint32_t stateSize = r.u32();
+    if (!r.has(stateSize) || period == 0 || period > 1000) return false;
+    const size_t stateAt = r.at;
+    r.skip(stateSize);
+    const uint32_t count = r.u32();
+    uint32_t first = 0;
+    int32_t each = 0;
+    std::vector<uint32_t> sizes;
+    if (count > 0) first = r.u32();
+    if (count > 1) {
+        each = static_cast<int32_t>(r.u32());
+        if (each == -1) {
+            for (uint32_t i = 0; i + 1 < count && r.ok; i++) sizes.push_back(r.u32());
+        }
+    }
+    if (!r.ok || count < 2 || count > 200000 || each == 0) return false;
+    std::vector<float> position; // x, y, z of each sample, dropped at the end
+    position.reserve(static_cast<size_t>(count) * 3);
+    size_t offset = first;
+    for (uint32_t i = 0; i < count && offset + 12 <= stateSize; i++) {
+        float p[3];
+        memcpy(p, data.data() + stateAt + offset, 12);
+        if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]) || fabsf(p[0]) > 1e5f || fabsf(p[1]) > 1e5f || fabsf(p[2]) > 1e5f) break;
+        position.insert(position.end(), p, p + 3);
+        offset += each == -1 ? (i < sizes.size() ? sizes[i] : 0) : static_cast<size_t>(each);
+    }
+    const size_t n = position.size() / 3;
+    if (n < 2) return false;
+    const float dt = static_cast<float>(period) / 1000.0f;
+    out.samplePeriod = static_cast<int>(period);
+    // Each step's speed; a respawn jumps the car (thousands of km/h for one step): such steps don't
+    // count, a sample takes the steps on both sides that do (none: the speed before it).
+    std::vector<float> step(n - 1);
+    for (size_t i = 0; i + 1 < n; i++) {
+        const float* pa = &position[i * 3];
+        const float* pb = &position[(i + 1) * 3];
+        step[i] = sqrtf((pb[0] - pa[0]) * (pb[0] - pa[0]) + (pb[1] - pa[1]) * (pb[1] - pa[1]) + (pb[2] - pa[2]) * (pb[2] - pa[2])) / dt;
+    }
+    constexpr float kTooFast = 280.0f; // m/s, 1000 km/h
+    out.speeds.assign(n, 0.0f);
+    for (size_t i = 0; i < n; i++) {
+        float sum = 0.0f;
+        int valid = 0;
+        if (i > 0 && step[i - 1] < kTooFast) sum += step[i - 1], valid++;
+        if (i + 1 < n && step[i] < kTooFast) sum += step[i], valid++;
+        out.speeds[i] = valid ? sum / valid : (i > 0 ? out.speeds[i - 1] : 0.0f);
+    }
+    return true;
+}
+
+// CGameGhost 0x0303F005 (skippable or not): u32 size, u32 compressed size, zlib (0x78 ..).
+void findSpeeds(const std::vector<unsigned char>& body, Replay& out) {
+    for (size_t i = 0; i + 16 <= body.size(); i++) {
+        if (at32(body, i) != kGhostSamples) continue;
+        size_t at = i + 4;
+        if (at32(body, at) == kSkip) at += 8;
+        if (at + 10 > body.size()) continue;
+        const uint32_t size = at32(body, at), packed = at32(body, at + 4);
+        at += 8;
+        if (size == 0 || size > (32u << 20) || packed < 3 || packed > body.size() - at || body[at] != 0x78) continue;
+        std::vector<unsigned char> data;
+        if (image::inflateRaw(body.data() + at + 2, packed - 2, size, data) && readSpeeds(data, out)) return;
+    }
+}
+
 } // namespace
+
+float speedAt(const Replay& replay, int ms) {
+    if (replay.samplePeriod <= 0 || replay.speeds.empty() || ms < 0) return -1.0f;
+    const float f = static_cast<float>(ms) / static_cast<float>(replay.samplePeriod);
+    const size_t i = static_cast<size_t>(f);
+    if (i + 1 >= replay.speeds.size()) return i < replay.speeds.size() + 2 ? replay.speeds.back() : -1.0f;
+    const float t = f - static_cast<float>(i);
+    return replay.speeds[i] * (1.0f - t) + replay.speeds[i + 1] * t;
+}
 
 bool parseReplay(const std::vector<unsigned char>& file, bool body, Replay& out, std::string& error) {
     out = Replay();
@@ -241,6 +330,7 @@ bool parseReplay(const std::vector<unsigned char>& file, bool body, Replay& out,
         error = "no checkpoint times in the replay";
         return false;
     }
+    findSpeeds(data, out); // optional: without it no speed comparison
     return true;
 }
 
