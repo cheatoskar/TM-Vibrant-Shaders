@@ -66,6 +66,8 @@ struct GameBuild {
     // cache key CGameCtnArticle::s_LoadedArticles_DecoSkin / _DecoIdent.
     uintptr_t articleFromIdent, packElem, bitmapPackAvailable;
     uintptr_t globalCatalog, decoSkin, decoIdent;
+    // ??_7CGameCtnMediaTracker@@6B@: the replay editor, told from the app's editor pointer (+0x414).
+    uintptr_t mediaTrackerVTable;
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -80,7 +82,8 @@ constexpr GameBuild kBuilds[] = {
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20, 0, 0, 0x00ac1e72, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
      0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70, 0x00d54250,
-     0x005a0db0, 0x0043d360, 0x00845f00, 0x00d69674, 0x00d69e48, 0x00d69e94},
+     0x005a0db0, 0x0043d360, 0x00845f00, 0x00d69674, 0x00d69e48, 0x00d69e94,
+     0x00b78bd4},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
@@ -88,7 +91,8 @@ constexpr GameBuild kBuilds[] = {
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720, 0, 0, 0x00ac1872, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
      0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70, 0x00d558b0,
-     0x005a0f90, 0x0043d3e0, 0x00846020, 0x00d6acd4, 0x00d6b4a8, 0x00d6b4f4},
+     0x005a0f90, 0x0043d3e0, 0x00846020, 0x00d6acd4, 0x00d6b4a8, 0x00d6b4f4,
+     0x00b78bcc},
 };
 const GameBuild* g_build = nullptr;
 
@@ -190,6 +194,9 @@ constexpr InlineSite kReadInputSite = {kReadInput, {0x57, 0x8b, 0x7c, 0x24, 0x08
 // show or hide, and the clips' draw rect goes to the whole screen (hidden) or back to the tracker's
 // own rectangle (+0xe0, shown): hidden, the 3D view fills the screen. +0xdc keeps the wish. The game's own
 // F10 key in the editor is another action (CGameCtnEditor::SetStatus(0x13)), not this.
+// The app (CTrackMania) holds its editor at +0x414 (CTrackMania::SetEditor, the same in both builds); in the
+// replay editor that is the CGameCtnMediaTracker (told by its vtable).
+constexpr size_t kAppEditorPointer = 0x414;
 constexpr InlineSite kMediaInterfaceSite = {kMediaInterface, {0x8b, 0x44, 0x24, 0x04, 0x83, 0xec, 0x20}, 7, -1, "CGameCtnMediaTracker::SetVisibleInterface"};
 constexpr InlineSite kInterfaceSetSite = {kInterfaceSet, {0x8b, 0x44, 0x24, 0x04, 0x3b, 0x41, 0x20}, 7, -1, "CGamePlaygroundInterface::InterfaceVisibleInternalSet"};
 constexpr InlineSite kLensFlareSite = {kLensFlare, {0x83, 0xec, 0x48, 0x53, 0x55}, 5, -1, "CVisionViewport::LensFlareAdd"};
@@ -476,6 +483,7 @@ bool g_shaderCensus = false;           // log every material once (dev: finding 
 using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
 LensFlareFn g_lensFlare = nullptr;
 bool g_hideSunFlare = false;           // a night sky replaces the sun: its halo fades out
+volatile bool g_carDrawNow = false;    // inside a car's own colour draw (a Vehicles shader), Hide car on
 volatile bool g_hideCars = false;      // photo mode's Hide car: the cars' draws are skipped (shader level, like the horizon)
 volatile bool g_hideGameSky = false;   // a night sky replaces the game's: its painted horizon isn't drawn
 using LoadSceneFn = void(__fastcall*)(void*, void*);
@@ -551,7 +559,8 @@ using MediaInterfaceFn = void(__fastcall*)(void*, void*, int);
 InterfaceSetFn g_interfaceSet = nullptr;
 void* g_interface = nullptr;     // the playground interface that last set its visibility
 MediaInterfaceFn g_mediaInterface = nullptr;
-void* g_mediaTracker = nullptr;  // the MediaTracker that last set its interface (null: none open)
+void* g_mediaTracker = nullptr;  // the MediaTracker last used (set by its interface call or read from the app's editor)
+void* g_mediaApplied = nullptr;  // the one photo mode has hidden (null: none)
 int g_mediaWanted = 1;           // what the game wants for it
 bool g_hideEditor = false;       // photo mode: the editor's panels stay hidden, the 3D view fills the screen
 int g_interfaceWanted = 1;       // what the game wants for it
@@ -1281,8 +1290,11 @@ uintptr_t delayedItem(const void* delayed) {
     }
 }
 
-bool skipCarDraw(const void* shader, uintptr_t item) {
-    if (!g_hideCars) return false;
+// 0 = draw, 1 = skip here (a draw of a known car item under another shader), 2 = a car's own colour draw:
+// it goes on to the device hook (carDrawNow), which skips it and learns the draw's vertex buffer, so the
+// passes that draw the same mesh under other shaders (shadows, depth) are found there.
+int skipCarDraw(const void* shader, uintptr_t item) {
+    if (!g_hideCars) return 0;
     if (g_vehicleItemsMap != g_mapLoads) {
         g_vehicleItems.clear();
         g_vehicleItemsMap = g_mapLoads;
@@ -1295,9 +1307,9 @@ bool skipCarDraw(const void* shader, uintptr_t item) {
                 TMVS_LOG("engine: hide car: %u item(s) of the cars known", static_cast<unsigned>(g_vehicleItems.size()));
             }
         }
-        return true;
+        return 2;
     }
-    return item && g_vehicleItems.count(item) != 0;
+    return item && g_vehicleItems.count(item) != 0 ? 1 : 0;
 }
 
 void __fastcall drawShaderDetour(void* self, void* edx, void* shader, void* corpus, void* tree, void* visual) {
@@ -1306,7 +1318,12 @@ void __fastcall drawShaderDetour(void* self, void* edx, void* shader, void* corp
     if (g_shaderCensus) censusShader(shader);
     // The block this draw belongs to gives the device wrapper its depth bias rank (blockorder.h).
     const int previousRank = blockorder::beginDraw(corpus, false);
-    if (!(g_hideGameSky && isPaintedHorizon(shader)) && !skipCarDraw(shader, g_hideCars ? corpusItem(corpus) : 0)) g_drawShader(self, edx, shader, corpus, tree, visual);
+    const int car = g_hideCars ? skipCarDraw(shader, corpusItem(corpus)) : 0;
+    if (!(g_hideGameSky && isPaintedHorizon(shader)) && car != 1) {
+        g_carDrawNow = car == 2;
+        g_drawShader(self, edx, shader, corpus, tree, visual);
+        g_carDrawNow = false;
+    }
     blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
@@ -1316,7 +1333,12 @@ void __fastcall drawPassDetour(void* self, void* edx, void* delayed) {
     g_currentShader = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedRenderShader);
     if (g_shaderCensus) censusShader(g_currentShader);
     const int previousRank = blockorder::beginDraw(delayed, true);
-    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader)) && !skipCarDraw(g_currentShader, g_hideCars ? delayedItem(delayed) : 0)) g_drawPass(self, edx, delayed);
+    const int car = g_hideCars ? skipCarDraw(g_currentShader, delayedItem(delayed)) : 0;
+    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader)) && car != 1) {
+        g_carDrawNow = car == 2;
+        g_drawPass(self, edx, delayed);
+        g_carDrawNow = false;
+    }
     blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
@@ -1382,17 +1404,45 @@ void applyInterfaceVisibility() {
 void __fastcall mediaInterfaceDetour(void* self, void* edx, int visible) {
     g_mediaTracker = self;
     g_mediaWanted = visible;
+    if (g_hideEditor) g_mediaApplied = self;
     g_mediaInterface(self, edx, g_hideEditor ? 0 : visible);
 }
 
-// Applies photo mode's wish to the open MediaTracker at once (the game only calls the setter when
-// its own state changes).
-void applyEditorVisibility() {
-    if (!g_mediaInterface || !g_mediaTracker) return;
+// The open replay editor: the app's editor when it is a MediaTracker (its vtable), null otherwise. Not
+// depending on the game having called the interface setter before.
+void* currentMediaTracker() {
+    if (!g_build || !g_app) return nullptr;
     __try {
-        g_mediaInterface(g_mediaTracker, nullptr, g_hideEditor ? 0 : g_mediaWanted);
+        const BYTE* app = static_cast<const BYTE*>(g_app);
+        if (!readable(app + kAppEditorPointer, sizeof(void*))) return nullptr;
+        void* editor = *reinterpret_cast<void* const*>(app + kAppEditorPointer);
+        if (!editor || !readable(editor, 0xe0 + sizeof(int))) return nullptr;
+        return *reinterpret_cast<const uintptr_t*>(editor) == rebase(g_build->mediaTrackerVTable) ? editor : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+// Calls the game's own SetVisibleInterface on the open MediaTracker now (photo mode hides it, or gives
+// it back what the game wanted): the game only calls it when its own state changes, which may be never
+// while photo mode is on.
+void applyEditorVisibility() {
+    if (!g_mediaInterface) return;
+    void* tracker = currentMediaTracker();
+    if (!tracker) tracker = g_mediaTracker;
+    if (!tracker) return;
+    __try {
+        if (tracker != g_mediaTracker) {
+            g_mediaTracker = tracker;
+            g_mediaWanted = *reinterpret_cast<const int*>(static_cast<const BYTE*>(tracker) + 0xdc); // its wish (+0xdc)
+        }
+        const int visible = g_hideEditor ? 0 : g_mediaWanted;
+        g_mediaInterface(tracker, nullptr, visible);
+        g_mediaApplied = g_hideEditor ? tracker : nullptr;
+        TMVS_LOG("engine: the replay editor's interface %s (photo mode): SetVisibleInterface(%d) on %p", g_hideEditor ? "hidden" : "given back", visible, tracker);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_mediaTracker = nullptr;
+        g_mediaApplied = nullptr;
     }
 }
 
@@ -1484,6 +1534,7 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     // weather, time of day and forced midnight of the map just loaded (its load came first).
     g_freeCam = nullptr;
     g_mediaTracker = nullptr; // freed with its editor
+    g_mediaApplied = nullptr;
     g_racePlayer = nullptr;
     g_race = nullptr;
     g_clipPlayer = nullptr;
@@ -2370,6 +2421,15 @@ bool install(const Callbacks& callbacks) {
     g_readInput = reinterpret_cast<ReadInputFn>(inlineHook(kReadInputSite, reinterpret_cast<void*>(&readInputDetour)));
     g_interfaceSet = reinterpret_cast<InterfaceSetFn>(inlineHook(kInterfaceSetSite, reinterpret_cast<void*>(&interfaceSetDetour)));
     g_mediaInterface = reinterpret_cast<MediaInterfaceFn>(inlineHook(kMediaInterfaceSite, reinterpret_cast<void*>(&mediaInterfaceDetour)));
+    if (g_mediaInterface) {
+        TMVS_LOG("engine: the replay editor's interface hook installed (Hide editor)");
+    } else {
+        const BYTE* code = reinterpret_cast<const BYTE*>(rebase(g_build->sites[kMediaInterface]));
+        BYTE bytes[8] = {};
+        if (readable(code, 8)) memcpy(bytes, code, 8);
+        TMVS_LOG("engine: the replay editor's interface hook does not match this executable (bytes %02x %02x %02x %02x %02x %02x %02x %02x): Hide editor off",
+                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]);
+    }
     g_loadScene = reinterpret_cast<LoadSceneFn>(inlineHook(kLoadSceneSite, reinterpret_cast<void*>(&loadSceneDetour)));
     g_clipTriggers = reinterpret_cast<ClipTriggersFn>(inlineHook(kClipTriggersSite, reinterpret_cast<void*>(&clipTriggersDetour)));
     g_jumpTime = reinterpret_cast<JumpTimeFn>(inlineHook(kJumpTimeSite, reinterpret_cast<void*>(&jumpTimeDetour)));
@@ -3226,16 +3286,30 @@ void setProjectionZoom(float zoom) {
     g_zoom = zoom < 1.0f ? 1.0f : zoom;
 }
 
+bool hidingCars() {
+    return g_hideCars;
+}
+
+bool carDrawNow() {
+    return g_carDrawNow;
+}
+
 void hideCars(bool hide) {
     if (hide != g_hideCars) TMVS_LOG("engine: the cars' draws %s", hide ? "skipped (photo mode)" : "back");
     g_hideCars = hide;
 }
 
 void hideEditor(bool hide) {
-    if (hide == g_hideEditor) return;
-    g_hideEditor = hide;
-    if (g_mediaTracker) TMVS_LOG("engine: the replay editor's panels %s (photo mode)", hide ? "hidden" : "back");
-    applyEditorVisibility();
+    if (hide != g_hideEditor) {
+        g_hideEditor = hide;
+        applyEditorVisibility();
+        return;
+    }
+    // Every frame while hidden: an editor opened (or replaced) since is hidden too.
+    if (hide && g_mediaInterface) {
+        void* tracker = currentMediaTracker();
+        if (tracker && tracker != g_mediaApplied) applyEditorVisibility();
+    }
 }
 
 void hideOverlay(bool hide) {

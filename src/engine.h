@@ -94,6 +94,10 @@ void setProjectionZoom(float zoom);
 // switch (CGamePlaygroundInterface), so menus and the 3D view are drawn as always.
 // Photo mode's Hide car: the game's draws of the cars (not their smoke or tyre marks) are skipped.
 void hideCars(bool hide);
+// Hide car is on / the game is inside a car's own colour draw (the device hook skips it and learns
+// its vertex buffer, so the passes that draw the same mesh under other shaders are found).
+bool hidingCars();
+bool carDrawNow();
 // Photo mode's Hide editor: the replay editor's (MediaTracker's) panels stay hidden, by the game's own
 // interface switch (its Tab key), and its 3D view fills the screen; back with photo mode. Without the hook or
 // an open editor nothing happens.
