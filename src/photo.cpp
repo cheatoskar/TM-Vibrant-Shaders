@@ -246,6 +246,7 @@ void beginFrame() {
     }
     engine::hideOverlay(g_active && config.photoHideHud);
     engine::hideCars(g_active && config.photoHideCar);
+    engine::hideEditor(g_active && config.photoHideEditor);
     engine::fullViewDistance(g_active);
     engine::setProjectionZoom(g_active ? g_zoom : 1.0f);
 

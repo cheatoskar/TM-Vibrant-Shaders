@@ -27,7 +27,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kBaseRgb, kModPackDesc, kLoadProgress, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kBaseRgb, kModPackDesc, kLoadProgress, kMediaInterface, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -76,16 +76,16 @@ constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
      {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0,
-      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0, 0x005abea0, 0x0072aab0},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20, 0, 0, 0x00ac1e72}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0, 0x005abea0, 0x0072aab0, 0x00664040},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20, 0, 0, 0x00ac1e72, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
      0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70, 0x00d54250,
      0x005a0db0, 0x0043d360, 0x00845f00, 0x00d69674, 0x00d69e48, 0x00d69e94},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
-      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0, 0x005ac030, 0x0072a970},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720, 0, 0, 0x00ac1872}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0, 0x005ac030, 0x0072a970, 0x00664070},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720, 0, 0, 0x00ac1872, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
      0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70, 0x00d558b0,
      0x005a0f90, 0x0043d3e0, 0x00846020, 0x00d6acd4, 0x00d6b4a8, 0x00d6b4f4},
@@ -185,6 +185,12 @@ constexpr InlineSite kReadInputSite = {kReadInput, {0x57, 0x8b, 0x7c, 0x24, 0x08
 // The game's own switch for the race / replay interface (HUD): the playground interface
 // shows or hides its 2D scene (CScene2d::SetVisibleInterface). Called with the visibility the
 // game wants; the photo mode answers 0 there.
+// The replay editor (MediaTracker): CGameCtnMediaTracker::SetVisibleInterface(visible), what its Tab key
+// (ButSwitchInterface, from OnInputEvent) calls: the editor's 2D panels (+0xc4, CScene2d::SetVisibleInterface)
+// show or hide, and the clips' draw rect goes to the whole screen (hidden) or back to the tracker's
+// own rectangle (+0xe0, shown): hidden, the 3D view fills the screen. +0xdc keeps the wish. The game's own
+// F10 key in the editor is another action (CGameCtnEditor::SetStatus(0x13)), not this.
+constexpr InlineSite kMediaInterfaceSite = {kMediaInterface, {0x8b, 0x44, 0x24, 0x04, 0x83, 0xec, 0x20}, 7, -1, "CGameCtnMediaTracker::SetVisibleInterface"};
 constexpr InlineSite kInterfaceSetSite = {kInterfaceSet, {0x8b, 0x44, 0x24, 0x04, 0x3b, 0x41, 0x20}, 7, -1, "CGamePlaygroundInterface::InterfaceVisibleInternalSet"};
 constexpr InlineSite kLensFlareSite = {kLensFlare, {0x83, 0xec, 0x48, 0x53, 0x55}, 5, -1, "CVisionViewport::LensFlareAdd"};
 // Map load (also from CGameCtnDecoration::Init): the decoration jumps its day-time animation
@@ -541,8 +547,13 @@ using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
 ReadInputFn g_readInput = nullptr;
 volatile bool g_swallowEscape = false; // the menu or photo mode took this Esc press
 using InterfaceSetFn = void(__fastcall*)(void*, void*, int);
+using MediaInterfaceFn = void(__fastcall*)(void*, void*, int);
 InterfaceSetFn g_interfaceSet = nullptr;
 void* g_interface = nullptr;     // the playground interface that last set its visibility
+MediaInterfaceFn g_mediaInterface = nullptr;
+void* g_mediaTracker = nullptr;  // the MediaTracker that last set its interface (null: none open)
+int g_mediaWanted = 1;           // what the game wants for it
+bool g_hideEditor = false;       // photo mode: the editor's panels stay hidden, the 3D view fills the screen
 int g_interfaceWanted = 1;       // what the game wants for it
 LONG g_interfaceLoads = -1;      // the map it belongs to (gone with the next one)
 void* g_freeCam = nullptr;       // the free camera last switched on (null: off)
@@ -1368,6 +1379,23 @@ void applyInterfaceVisibility() {
     }
 }
 
+void __fastcall mediaInterfaceDetour(void* self, void* edx, int visible) {
+    g_mediaTracker = self;
+    g_mediaWanted = visible;
+    g_mediaInterface(self, edx, g_hideEditor ? 0 : visible);
+}
+
+// Applies photo mode's wish to the open MediaTracker at once (the game only calls the setter when
+// its own state changes).
+void applyEditorVisibility() {
+    if (!g_mediaInterface || !g_mediaTracker) return;
+    __try {
+        g_mediaInterface(g_mediaTracker, nullptr, g_hideEditor ? 0 : g_mediaWanted);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_mediaTracker = nullptr;
+    }
+}
+
 void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
     InterlockedIncrement(&g_respawns);
     g_respawn(self, edx, player, flag);
@@ -1455,6 +1483,7 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     // Another map (or none: back to the menu): the objects of the last one go with it. Not the
     // weather, time of day and forced midnight of the map just loaded (its load came first).
     g_freeCam = nullptr;
+    g_mediaTracker = nullptr; // freed with its editor
     g_racePlayer = nullptr;
     g_race = nullptr;
     g_clipPlayer = nullptr;
@@ -2340,6 +2369,7 @@ bool install(const Callbacks& callbacks) {
     g_lensFlare = reinterpret_cast<LensFlareFn>(inlineHook(kLensFlareSite, reinterpret_cast<void*>(&lensFlareDetour)));
     g_readInput = reinterpret_cast<ReadInputFn>(inlineHook(kReadInputSite, reinterpret_cast<void*>(&readInputDetour)));
     g_interfaceSet = reinterpret_cast<InterfaceSetFn>(inlineHook(kInterfaceSetSite, reinterpret_cast<void*>(&interfaceSetDetour)));
+    g_mediaInterface = reinterpret_cast<MediaInterfaceFn>(inlineHook(kMediaInterfaceSite, reinterpret_cast<void*>(&mediaInterfaceDetour)));
     g_loadScene = reinterpret_cast<LoadSceneFn>(inlineHook(kLoadSceneSite, reinterpret_cast<void*>(&loadSceneDetour)));
     g_clipTriggers = reinterpret_cast<ClipTriggersFn>(inlineHook(kClipTriggersSite, reinterpret_cast<void*>(&clipTriggersDetour)));
     g_jumpTime = reinterpret_cast<JumpTimeFn>(inlineHook(kJumpTimeSite, reinterpret_cast<void*>(&jumpTimeDetour)));
@@ -3199,6 +3229,13 @@ void setProjectionZoom(float zoom) {
 void hideCars(bool hide) {
     if (hide != g_hideCars) TMVS_LOG("engine: the cars' draws %s", hide ? "skipped (photo mode)" : "back");
     g_hideCars = hide;
+}
+
+void hideEditor(bool hide) {
+    if (hide == g_hideEditor) return;
+    g_hideEditor = hide;
+    if (g_mediaTracker) TMVS_LOG("engine: the replay editor's panels %s (photo mode)", hide ? "hidden" : "back");
+    applyEditorVisibility();
 }
 
 void hideOverlay(bool hide) {

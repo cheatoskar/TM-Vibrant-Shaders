@@ -6,6 +6,7 @@ A new video export for *Shoot video* in the replay editor (TrackMania Nations/Un
 
 **New**
 - **Photo mode in the replay editor's MediaTracker** (TrackMania Nations/United): the focus click lands where you click in the small 3D view (it was mapped to the whole screen), the screenshot of an F12 capture is of the view only, and clicks on the editor's panels stay the game's.
+- **Hide editor in photo mode** (*Hide editor*, off; TrackMania Nations/United): the replay editor's panels hidden with the game's own interface switch (its `Tab` key), the 3D view filling the screen.
 - **A compact photo panel** (TrackMania Nations/United; exposure, aperture, zoom, vignette, grain, focus, hide car / HUD), `Ctrl+F6` hides it for a clean view.
 - **Hide car in photo mode** (*Hide car*, off; TrackMania Nations/United): the cars (body, glass, lights) are left out of the picture and the photos.
 - **Pages in windows**: every menu page (Shaders, Customize, Studio, Maps, Performance, Video, Resource packs, Settings, About) can be popped out into a window of its own with the symbol on its tab. Move, resize, minimize or close it (the page goes back to the tab bar), keep it on screen over the game when the menu is closed, set its opacity. Places and states are saved and come back after a restart (`[Windows]` in `settings.ini`). Also in the TrackMania 2 build.

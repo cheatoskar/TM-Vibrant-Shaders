@@ -2085,13 +2085,15 @@ bool drawSettings(Config& config, Settings& s) {
         if (!strcmp(f.category, "Game integration")) game.push_back({f.key, nullptr});
     }
     panels.push_back(settingsPanel("Game integration", s, game));
-    panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) + (g_host->photoHideCar ? 1.0f : 0.0f), [&config] {
+    panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) + (g_host->photoHideCar ? 2.0f : 0.0f), [&config] {
                           const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
                           switchRow("Auto photo mode", &config.photoAuto,
                                     ("Photo mode starts with the free camera (cam 7): no HUD, full quality.\n" + photoKey +
                                      " toggles it anywhere.").c_str());
                           switchRow("Hide HUD", &config.photoHideHud, "Off: the HUD stays visible in photo mode. Photos never include it.");
+                          if (g_host->photoHideCar)
+                              switchRow("Hide editor", &config.photoHideEditor, "In the replay editor (MediaTracker): photo mode hides the editor's panels, as its Tab key does, and the 3D view fills the screen. They are back when photo mode ends.");
                           if (g_host->photoHideCar)
                               switchRow("Hide car", &config.photoHideCar, "Hides cars and their shadows in photo mode and photos. Smoke and tyre marks stay.");
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());

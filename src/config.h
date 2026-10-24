@@ -108,6 +108,7 @@ public:
     // of a hi-res photo (2..4, ~0.84x the screen each), depth of field on the clicked point.
     bool photoAuto = true;
     bool photoHideHud = true;
+    bool photoHideEditor = false; // photo mode hides the replay editor's panels (TMNF)
     bool photoHideCar = false; // photo mode leaves the cars out (TMNF)
     int photoTiles = 2;
     float photoDof = 0.5f;

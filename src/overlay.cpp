@@ -225,6 +225,8 @@ void drawPhotoPanel() {
     if (ImGui::Button("Clear focus")) photo::clearFocus();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to automatic focus. Middle click in the picture sets it.");
     if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
+    if (ImGui::Checkbox("Hide editor", &config.photoHideEditor)) config.markDirty();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The replay editor's panels (the game's Tab key); the 3D view fills the screen.");
     if (ImGui::Checkbox("Hide HUD", &config.photoHideHud)) config.markDirty();
     ImGui::End();
 }
