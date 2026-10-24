@@ -68,6 +68,9 @@ struct GameBuild {
     uintptr_t globalCatalog, decoSkin, decoIdent;
     // ??_7CGameCtnMediaTracker@@6B@: the replay editor, told from the app's editor pointer (+0x414).
     uintptr_t mediaTrackerVTable;
+    // CHmsItem::SetCountShadowTexCasted(uchar, int) and SetShadowFakeEnable(int): the game's own setters of an
+    // item's shadow (what CTrackMania::VehicleSetVisibility calls to take a hidden car's shadow away).
+    uintptr_t itemSetShadowTex, itemSetShadowFake;
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -83,7 +86,8 @@ constexpr GameBuild kBuilds[] = {
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
      0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70, 0x00d54250,
      0x005a0db0, 0x0043d360, 0x00845f00, 0x00d69674, 0x00d69e48, 0x00d69e94,
-     0x00b78bd4},
+     0x00b78bd4,
+     0x0053d7b0, 0x0053b760},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
@@ -92,7 +96,8 @@ constexpr GameBuild kBuilds[] = {
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
      0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70, 0x00d558b0,
      0x005a0f90, 0x0043d3e0, 0x00846020, 0x00d6acd4, 0x00d6b4a8, 0x00d6b4f4,
-     0x00b78bcc},
+     0x00b78bcc,
+     0x0053d5e0, 0x0053b5d0},
 };
 const GameBuild* g_build = nullptr;
 
@@ -3294,9 +3299,64 @@ bool carDrawNow() {
     return g_carDrawNow;
 }
 
+// The car's shadow. A hidden car's shadow is not a draw of its mesh (the log of a hidden car showed no
+// such draw): the game gives an item a shadow texture count (CHmsItem +0x18, low byte, with bit 23) and a
+// fake shadow (bit 27), and CTrackMania::VehicleSetVisibility takes both away from the car it hides with
+// the item's own setters. The same setters on the cars' items (the ones their colour draws came from),
+// the words kept and put back with them; looked at every frame while hiding, since the game sets them
+// again when it shows a car (a camera change). The items go with the map: nothing is called on them after.
+std::unordered_map<uintptr_t, uint32_t> g_shadowSaved;
+LONG g_shadowSavedMap = -1, g_shadowSavedCloses = -1;
+constexpr size_t kItemShadowWord = 0x18;
+using ItemShadowTexFn = void(__fastcall*)(void*, void*, unsigned char, int);
+using ItemShadowFakeFn = void(__fastcall*)(void*, void*, int);
+
+void carShadowsSet(uintptr_t item, uint32_t word) {
+    __try {
+        reinterpret_cast<ItemShadowTexFn>(rebase(g_build->itemSetShadowTex))(reinterpret_cast<void*>(item), nullptr, static_cast<unsigned char>(word & 0xff), (word >> 23) & 1);
+        reinterpret_cast<ItemShadowFakeFn>(rebase(g_build->itemSetShadowFake))(reinterpret_cast<void*>(item), nullptr, (word >> 27) & 1);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void carShadows(bool hide) {
+    if (!g_build) return;
+    const bool gone = g_shadowSavedMap != g_mapLoads || g_shadowSavedCloses != g_mapCloses;
+    if (gone) {
+        g_shadowSaved.clear(); // the items were freed with their map: not touched
+        g_shadowSavedMap = g_mapLoads;
+        g_shadowSavedCloses = g_mapCloses;
+    }
+    if (!hide) {
+        for (const auto& kept : g_shadowSaved) carShadowsSet(kept.first, kept.second);
+        if (!g_shadowSaved.empty()) TMVS_LOG("engine: hide car: the cars' shadows back (%u item(s))", static_cast<unsigned>(g_shadowSaved.size()));
+        g_shadowSaved.clear();
+        return;
+    }
+    if (g_vehicleItemsMap != g_mapLoads) return; // none learned on this map yet
+    for (const uintptr_t item : g_vehicleItems) {
+        uint32_t word = 0;
+        __try {
+            word = *reinterpret_cast<const uint32_t*>(item + kItemShadowWord);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            continue;
+        }
+        if (!(word & 0xff) && !((word >> 23) & 1) && !((word >> 27) & 1)) continue; // no shadow now
+        g_shadowSaved.emplace(item, word); // the first word seen is the game's (not ours, which has none)
+        carShadowsSet(item, word & ~0x88000ffu);
+        static int s_lines = 0;
+        if (s_lines < 10) {
+            s_lines++;
+            TMVS_LOG("engine: hide car: shadow of item %p switched off (shadow textures %u, flag %u, fake shadow %u)", reinterpret_cast<void*>(item), word & 0xff,
+                     (word >> 23) & 1, (word >> 27) & 1);
+        }
+    }
+}
+
 void hideCars(bool hide) {
     if (hide != g_hideCars) TMVS_LOG("engine: the cars' draws %s", hide ? "skipped (photo mode)" : "back");
     g_hideCars = hide;
+    carShadows(hide);
 }
 
 void hideEditor(bool hide) {
