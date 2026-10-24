@@ -2056,13 +2056,16 @@ bool drawSettings(Config& config, Settings& s) {
         if (!strcmp(f.category, "Game integration")) game.push_back({f.key, nullptr});
     }
     panels.push_back(settingsPanel("Game integration", s, game));
-    panels.push_back({"Photo mode", g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f, [&config] {
+    panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) + (g_host->photoFreeze ? 1.0f : 0.0f), [&config] {
                           const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
                           switchRow("Auto photo mode", &config.photoAuto,
                                     ("Photo mode turns on by itself with the free camera (cam 7): no HUD, full quality, far-reaching effects.\n" + photoKey +
                                      " turns it on or off anywhere.").c_str());
                           switchRow("Hide HUD", &config.photoHideHud, "Off: the game's HUD stays on screen in photo mode (photos never have it).");
+                          if (g_host->photoFreeze)
+                              switchRow("Pause the game", &config.photoFreeze,
+                                        "In photo mode the game itself pauses (as its own menu does), but only where no timed run is live: after the finish line and in the editor's test. Never online, never in a live run, and replays keep their own pause.");
                           ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
                           char factor[48];
                           snprintf(factor, sizeof(factor), "%d x %d tiles = %.1fx", config.photoTiles, config.photoTiles, config.photoTiles * 0.84f);

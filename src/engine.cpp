@@ -66,6 +66,11 @@ struct GameBuild {
     // cache key CGameCtnArticle::s_LoadedArticles_DecoSkin / _DecoIdent.
     uintptr_t articleFromIdent, packElem, bitmapPackAvailable;
     uintptr_t globalCatalog, decoSkin, decoIdent;
+    // Photo mode's freeze: the game's own pause, as CTrackMania::OnMenuDisplayed does it for its
+    // in-game menu (see freezeRace): CMwCmdBufferCore::StartSimulation(int, int, float) and
+    // StopSimulation(), CTrackManiaSwitcher::Pause() and Resume(), CGameNetwork::IsConnected(),
+    // CGameRace::GetLocalPlayerInfo() const.
+    uintptr_t startSimulation, stopSimulation, switcherPause, switcherResume, networkIsConnected, localPlayerInfo;
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -80,7 +85,8 @@ constexpr GameBuild kBuilds[] = {
      {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20, 0, 0, 0x00ac1e72}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
      0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70, 0x00d54250,
-     0x005a0db0, 0x0043d360, 0x00845f00, 0x00d69674, 0x00d69e48, 0x00d69e94},
+     0x005a0db0, 0x0043d360, 0x00845f00, 0x00d69674, 0x00d69e48, 0x00d69e94,
+     0x00923040, 0x009229d0, 0x00479490, 0x004794e0, 0x005b1970, 0x005ddb50},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
@@ -88,7 +94,8 @@ constexpr GameBuild kBuilds[] = {
      {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720, 0, 0, 0x00ac1872}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
      0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70, 0x00d558b0,
-     0x005a0f90, 0x0043d3e0, 0x00846020, 0x00d6acd4, 0x00d6b4a8, 0x00d6b4f4},
+     0x005a0f90, 0x0043d3e0, 0x00846020, 0x00d6acd4, 0x00d6b4a8, 0x00d6b4f4,
+     0x00923080, 0x00922a10, 0x004792e0, 0x00479330, 0x005b1b30, 0x005ddc20},
 };
 const GameBuild* g_build = nullptr;
 
@@ -2187,6 +2194,77 @@ void __fastcall shadowsSetDetour(void* self, void* edx, int mode) {
     g_shadowsSet(self, edx, g_forcedShadows >= 0 ? g_forcedShadows : mode);
 }
 
+// Photo mode's freeze. The game pauses a solo race for its in-game menu in CTrackMania::
+// OnMenuDisplayed (and resumes in OnMenuHiden), the same in both builds (the function matched
+// over its whole length when ported to TMUF):
+//   app +0x410 the CTrackManiaSwitcher (+0x14 its mode: 0 none, 1 editor, 2 race, 3 end-of-race
+//   replay; +0x18 the mode before), app +0x414 the editor, app +0x454 the playground (the race),
+//   app +0x12c the CGameNetwork. Not paused while the network is connected (IsConnected), in
+//   mode 0 or 3, or when the simulation is already stopped (core +0x34 is 0):
+//   CMwCmdBufferCore::StopSimulation() (the core's clock to speed 0, +0x34 = 0), then
+//   CTrackManiaSwitcher::Pause() (the race's own Pause: +0x4c = 1, its input map and sounds).
+//   Resume: CTrackManiaSwitcher::Resume() and StartSimulation(0, 1, 1.0).
+// Mine never touches a field: the game's functions in the game's order, nothing else.
+// The race's local player's info (CGameRace::GetLocalPlayerInfo, the function behind the
+// race clock) has the finish at +0x33c (CTrackManiaRace::OnFinishLine sets it to 1; the race
+// time reads the final time at +0x2b0 once it is set).
+constexpr size_t kAppSwitcher = 0x410, kAppEditor = 0x414, kAppNetwork = 0x12c, kAppPlayground = 0x454;
+constexpr size_t kSwitcherMode = 0x14, kSwitcherPrevious = 0x18;
+constexpr size_t kCoreRunning = 0x34;
+constexpr size_t kPlayerFinished = 0x33c;
+constexpr int kSwitcherRace = 2, kSwitcherEditor = 1;
+using ThisFn = void(__fastcall*)(void*, void*);
+using ThisIntFn = int(__fastcall*)(void*, void*);
+using StartSimFn = void(__fastcall*)(void*, void*, int, int, float);
+void* g_frozenPlayground = nullptr; // the race the freeze paused (null: not frozen by us)
+
+// The game's objects for the freeze, all read under SEH by the callers.
+struct FreezeObjects {
+    const BYTE* app = nullptr;
+    const BYTE* switcher = nullptr;
+    const BYTE* playground = nullptr;
+    BYTE* core = nullptr;
+};
+
+bool freezeObjects(FreezeObjects& o) {
+    if (!g_build || !g_app) return false;
+    o.app = static_cast<const BYTE*>(g_app);
+    const BYTE* const* core = reinterpret_cast<const BYTE* const*>(rebase(g_build->coreCmdBuffer));
+    if (!readable(core, sizeof(void*)) || !*core || !readable(*core, kCoreRunning + sizeof(int))) return false;
+    o.core = const_cast<BYTE*>(*core);
+    if (!readable(o.app + kAppSwitcher, sizeof(void*)) || !readable(o.app + kAppPlayground, sizeof(void*))) return false;
+    o.switcher = *reinterpret_cast<const BYTE* const*>(o.app + kAppSwitcher);
+    o.playground = *reinterpret_cast<const BYTE* const*>(o.app + kAppPlayground);
+    return o.switcher && readable(o.switcher, kSwitcherPrevious + sizeof(int));
+}
+
+// Why the race may be frozen, or null when it must not: 0 = no network, a race (mode 2), and the
+// run is over (the local player finished), or it is the editor's test (the mode before was the
+// editor, the editor is still there).
+// Every unknown (unreadable, no network object) answers "not allowed".
+const char* freezeReason() {
+    FreezeObjects o;
+    if (!freezeObjects(o)) return nullptr;
+    __try {
+        if (!readable(o.app + kAppNetwork, sizeof(void*))) return nullptr;
+        void* network = *reinterpret_cast<void* const*>(o.app + kAppNetwork);
+        if (!network) return nullptr;
+        // Online, or a network object that can't tell: never.
+        if (reinterpret_cast<ThisIntFn>(rebase(g_build->networkIsConnected))(network, nullptr) != 0) return nullptr;
+        if (*reinterpret_cast<const int*>(o.switcher + kSwitcherMode) != kSwitcherRace || !o.playground) return nullptr;
+        if (*reinterpret_cast<const int*>(o.switcher + kSwitcherPrevious) == kSwitcherEditor && readable(o.app + kAppEditor, sizeof(void*)) &&
+            *reinterpret_cast<void* const*>(o.app + kAppEditor))
+            return "editor test";
+        void* info = reinterpret_cast<void*(__fastcall*)(const void*, void*)>(rebase(g_build->localPlayerInfo))(o.playground, nullptr);
+        if (info && readable(static_cast<const BYTE*>(info) + kPlayerFinished, sizeof(int)) &&
+            *reinterpret_cast<const int*>(static_cast<const BYTE*>(info) + kPlayerFinished) != 0)
+            return "run over";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 void forceShadows(int mode) {
@@ -3108,5 +3186,52 @@ bool videoExport(VideoExport& out) {
     return true;
 }
 
+const char* freezeAllowed() {
+    return freezeReason();
+}
+
+bool freezeRace() {
+    if (g_frozenPlayground) return true;
+    if (!freezeReason()) return false;
+    FreezeObjects o;
+    if (!freezeObjects(o)) return false;
+    __try {
+        // Someone else (the game's own menu) stopped the clock already: not ours to resume.
+        if (*reinterpret_cast<const int*>(o.core + kCoreRunning) == 0) return false;
+        reinterpret_cast<ThisFn>(rebase(g_build->stopSimulation))(o.core, nullptr);
+        reinterpret_cast<ThisFn>(rebase(g_build->switcherPause))(const_cast<BYTE*>(o.switcher), nullptr);
+        g_frozenPlayground = const_cast<BYTE*>(o.playground);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_frozenPlayground = nullptr;
+        return false;
+    }
+    TMVS_LOG("engine: photo freeze on (the game's own pause)");
+    return true;
+}
+
+void unfreezeRace() {
+    if (!g_frozenPlayground) return;
+    FreezeObjects o;
+    const bool ok = freezeObjects(o);
+    void* const was = g_frozenPlayground;
+    g_frozenPlayground = nullptr;
+    if (ok) {
+        __try {
+            // The race is still the one we paused: the game's own resume (the race's, its input
+            // map). Another one or none (back to the menu, the end-of-race replay): only the
+            // clock, which would otherwise stay at speed 0 for the menus and the replay.
+            if (o.playground == was && *reinterpret_cast<const int*>(o.switcher + kSwitcherMode) == kSwitcherRace)
+                reinterpret_cast<ThisFn>(rebase(g_build->switcherResume))(const_cast<BYTE*>(o.switcher), nullptr);
+            if (*reinterpret_cast<const int*>(o.core + kCoreRunning) == 0)
+                reinterpret_cast<StartSimFn>(rebase(g_build->startSimulation))(o.core, nullptr, 0, 1, 1.0f);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    TMVS_LOG("engine: photo freeze off%s", ok ? "" : " (the game's objects are gone)");
+}
+
+bool raceFrozen() {
+    return g_frozenPlayground != nullptr;
+}
 } // namespace engine
 } // namespace tmshaders

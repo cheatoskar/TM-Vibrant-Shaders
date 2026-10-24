@@ -80,6 +80,8 @@ struct Host {
     // The compare split switch's second line: what photos and the game's side get (null: TMNF's).
     const char* splitNote = nullptr;
     std::function<void()> photoOn;
+    // TrackMania Nations/United: photo mode can pause a finished race (the *Pause the game* switch).
+    bool photoFreeze = false;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
     // Whether shaders can be reloaded (TMNF only). The hotkeys themselves are in keys.h.
