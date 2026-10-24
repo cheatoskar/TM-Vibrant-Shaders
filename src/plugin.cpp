@@ -3199,8 +3199,13 @@ void overlapBiasDone(IDirect3DDevice9* device) {
 // are left out here and their vertex buffer, offset, base and index range remembered; any other draw of the
 // same mesh (its shadow in the game's shadow map, a depth pass) matches and is left out too. The log says
 // under which shader the first of those came. Forgotten with the map.
+bool g_hideCarDiag = false; // the 1.5 s listing of the draws is running
+
 bool onSkipDraw(IDirect3DDevice9* device, INT base, UINT start, UINT count) {
-    if (!engine::hidingCars()) return false;
+    if (!engine::hidingCars()) {
+        g_hideCarDiag = false;
+        return false;
+    }
     static std::set<std::tuple<uintptr_t, UINT, UINT, INT, UINT, UINT>> s_meshes;
     static int s_map = -1;
     if (s_map != engine::mapLoads()) {
@@ -3208,6 +3213,37 @@ bool onSkipDraw(IDirect3DDevice9* device, INT base, UINT start, UINT count) {
         s_meshes.clear();
     }
     const bool own = engine::carDrawNow();
+    // The first 1.5 s of each Hide car: every distinct shader file with its render target's size, so the log
+    // names a draw that is the car's shadow (60 lines at most).
+    {
+        static DWORD s_since = 0;
+        static int s_lines = 0;
+        static std::set<std::pair<std::wstring, unsigned>> s_seen;
+        if (!g_hideCarDiag) {
+            g_hideCarDiag = true;
+            s_since = GetTickCount();
+            s_seen.clear();
+        }
+        if (s_lines < 60 && GetTickCount() - s_since < 1500) {
+            wchar_t file[512] = {};
+            if (!engine::materialFile(engine::currentShader(), file, 512)) wcscpy_s(file, L"(no shader file)");
+            unsigned size = 0;
+            {
+                hook::InternalScope internal;
+                IDirect3DSurface9* target = nullptr;
+                if (SUCCEEDED(device->GetRenderTarget(0, &target)) && target) {
+                    D3DSURFACE_DESC desc{};
+                    target->GetDesc(&desc);
+                    size = desc.Width << 16 | desc.Height;
+                    target->Release();
+                }
+            }
+            if (s_seen.insert({file, size}).second) {
+                s_lines++;
+                TMVS_LOG("engine: hide car: draw under %ls into %ux%u (%u primitives%s)", file, size >> 16, size & 0xffff, count, own ? ", the car's own" : "");
+            }
+        }
+    }
     if (!own && s_meshes.empty()) return false;
     IDirect3DVertexBuffer9* vb = nullptr;
     UINT offset = 0, stride = 0;

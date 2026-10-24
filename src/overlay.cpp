@@ -213,6 +213,17 @@ void drawPhotoPanel() {
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
     ImGui::TextDisabled("Photo   %s hides this", keys::name(keys::get(keys::Action::PhotoPanel)).c_str());
     ImGui::PushItemWidth(170.0f * s);
+    // With the effects off photo mode shows the game's own image (lens and sharpening only): the look has no say.
+    const bool effects = config.settings.enabled;
+    if (!effects) {
+        ImGui::TextDisabled("Effects are off");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Turn on")) {
+            config.settings.enabled = true;
+            config.markDirty();
+        }
+    }
+    ImGui::BeginDisabled(!effects);
     if (ImGui::SliderFloat("Exposure", &config.settings.exposure, -2.0f, 2.0f, "%+.1f EV")) {
         config.markDirty();
         menu::lookEdited(config, config.settings);
@@ -230,6 +241,7 @@ void drawPhotoPanel() {
         menu::lookEdited(config, config.settings);
     }
     if (!config.lutFile.empty() && ImGui::SliderFloat("Look strength", &config.lutAmount, 0.0f, 1.0f, "%.2f")) config.markDirty();
+    ImGui::EndDisabled();
     ImGui::PopItemWidth();
     if (ImGui::Button("Clear focus")) photo::clearFocus();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to automatic focus. Middle click in the picture sets it.");
