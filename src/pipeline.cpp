@@ -3,6 +3,7 @@
 #include "log.h"
 #include "config.h"
 #include "noise.h"
+#include "waterfx.h"
 #include "tmvs_bytecode.h"
 #include "smaa/AreaTex.h"
 #include "smaa/SearchTex.h"
@@ -29,6 +30,7 @@ const char* const kEntryPoints[] = {
     "PS_SmaaEdges", "PS_SmaaWeights", "PS_SmaaBlend",
     "PS_SpillSourceNeon", "PS_NeonGlow", "PS_NeonAdd", "PS_NeonTemporal",
     "PS_Accumulate", "PS_AccumResolve", "PS_ExportLuma", "PS_ExportChroma",
+    "PS_ClearWater", "PS_WaterSplash",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -181,6 +183,7 @@ void Pipeline::release() {
     gfx::release(m_splashVS);
     gfx::release(m_sprayVS);
     gfx::release(m_snowVS);
+    gfx::release(m_waterVS);
     gfx::release(m_rainDecl);
     gfx::release(m_trailVS);
     gfx::release(m_trailDecl);
@@ -331,6 +334,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     m_depthCopy.destroy();
     m_clouds.destroy();
     m_reflect.destroy();
+    m_clearWater.destroy();
     for (auto& t : m_spill) t.destroy();
     m_spillSource.destroy();
     m_neon.destroy();
@@ -373,6 +377,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     for (auto& t : m_lightGrid) t.destroy();
     gfx::release(m_heightDepth);
     gfx::release(m_cloudNoise);
+    gfx::release(m_waterAtlas);
     gfx::release(m_lut);
     gfx::release(m_smaaArea);
     gfx::release(m_smaaSearch);
@@ -1651,6 +1656,174 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     return o;
 }
 
+// Water splash (WaterSplash): what the car throws up in water. Drawn per kind (c_WKind.x) from
+// the same quads, kinds 0-1 and 5-6 as camera-facing billboards, 2-4 as quads lying on the water.
+//   0 droplets of an entry's fountain, 1 its mist, 2 a ring spreading over the surface (c_WKind.w:
+//   which of three), 3 its foam, 4 the wake's foam, 5 the bow's droplets, 6 the dripping when the
+//   car comes out. Events are the entries still young (the newest four); the wake, the bow and the
+//   drips follow the engine's car (c_Car*) and run on the effects' clock (c_Cam.w).
+float4 c_WLevel : register(c27); // water height (world y), the setting (0..1), wake (0..1: the car is in the water), drips (0..1)
+float4 c_WEv[8] : register(c28); // per entry [2e] where (world xyz), seconds since (< 0 none); [2e+1] its velocity (m/s), strength (0..1)
+float4 c_WKind  : register(c36); // x kind, y which entry, z seconds since the car left the water (< 0 none), w which ring
+struct VSOutW { float4 pos : POSITION; float4 data : TEXCOORD0; float4 data2 : TEXCOORD1; };
+
+VSOutW waterHidden() {
+    VSOutW o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    o.data2 = 0;
+    return o;
+}
+
+// A camera-facing quad at world point p, `size` m from its middle to its edge.
+VSOutW waterBillboard(float3 p, float2 corner, float size, float age, float kind, float opacity, float2 rnd) {
+    VSOutW o = waterHidden();
+    float3 view = toView(p);
+    if (view.z < 0.5 || opacity <= 0.0) return o;
+    float2 c = float2(corner.x, corner.y * 2.0 - 1.0);
+    o.pos = toClip(view + float3(c, 0.0) * size);
+    o.data = float4(c, view.z, age);
+    o.data2 = float4(kind, opacity, rnd);
+    return o;
+}
+
+// A quad lying on the water around `centre`, `size` m from its middle to its edge, turned by `turn`.
+VSOutW waterFlat(float3 centre, float2 corner, float size, float turn, float age, float kind, float opacity, float2 rnd) {
+    VSOutW o = waterHidden();
+    if (opacity <= 0.0) return o;
+    float2 c = float2(corner.x, corner.y * 2.0 - 1.0);
+    float cs = cos(turn), sn = sin(turn);
+    float3 view = toView(centre + float3(c.x * cs - c.y * sn, 0.0, c.x * sn + c.y * cs) * size);
+    if (view.z < 0.5) return o;
+    o.pos = toClip(view);
+    o.data = float4(c, view.z, age);
+    o.data2 = float4(kind, opacity, rnd);
+    return o;
+}
+
+// The car's horizontal axes and speed, for the wake and the drips.
+void waterCar(out float3 fwdH, out float3 rightH, out float3 velH, out float speed) {
+    fwdH = normalize(float3(c_CarFwd.x, 0.0, c_CarFwd.z) + 1e-5);
+    rightH = float3(fwdH.z, 0.0, -fwdH.x);
+    velH = float3(c_CarVel.x, 0.0, c_CarVel.z);
+    speed = length(velH);
+}
+
+VSOutW waterVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
+    int kind = (int)(c_WKind.x + 0.5);
+    float level = c_WLevel.x;
+    // The setting thins every kind out (and the shader fades it by the same amount).
+    if (kind != 2 && frac(seed.w * 7.31 + seed.z * 3.7) > saturate(c_WLevel.y * 1.5)) return waterHidden();
+    if (kind <= 3) {
+        int e = (int)(c_WKind.y + 0.5);
+        float4 where = c_WEv[e * 2], motion = c_WEv[e * 2 + 1];
+        float age = where.w, strength = motion.w;
+        if (age < 0.0 || strength <= 0.0) return waterHidden();
+        float4 sd = frac(seed + e * 0.3819 + float4(0.1, 0.7, 0.3, 0.9));
+        float3 vh = float3(motion.x, 0.0, motion.z);
+        float phi = sd.x * 6.2831853;
+        float3 radial = float3(cos(phi), 0.0, sin(phi));
+        float lean = dot(radial, normalize(vh + 1e-4)) * 0.5 + 0.5; // 1: the way the car went
+        float3 spot = float3(where.x, level, where.z);
+        if (kind == 0) {
+            // The fountain: a crown of drops out and up, more of them in the car's direction, carried on by its speed.
+            float t = age - sd.w * 0.12;
+            if (t < 0.0) return waterHidden();
+            float up = (2.0 + 6.5 * sd.y * sd.y) * (0.35 + 0.65 * strength) * (0.6 + 0.4 * lean);
+            float out2 = (0.8 + 3.2 * sd.z) * (0.3 + 0.7 * strength);
+            float3 v = radial * out2 + float3(0.0, up, 0.0) + vh * (0.15 + 0.35 * lean * sd.z);
+            float3 p = spot + radial * 0.5 + v * t;
+            p.y -= 4.9 * t * t;
+            if (p.y < level) return waterHidden(); // back in the water
+            float size = (0.035 + 0.075 * sd.w) * (0.7 + 0.5 * strength);
+            return waterBillboard(p, corner, size, t, 0.0, 1.0, 0.0);
+        }
+        if (kind == 1) {
+            // The mist: puffs that rise, spread and thin out.
+            float life = 1.7;
+            float t = age - sd.w * 0.2;
+            if (t < 0.0 || t > life) return waterHidden();
+            float k = t / life;
+            float drag = (1.0 - exp(-2.0 * t)) * 0.5;
+            float3 p = spot + radial * 0.4 + (radial * (1.0 + 2.5 * sd.z) + float3(0.0, 1.5 + 3.5 * sd.y, 0.0)) * (0.4 + 0.6 * strength) * drag + vh * 0.25 * t;
+            float size = lerp(0.4, 2.0, sqrt(k)) * (0.6 + 0.8 * sd.x) * (0.6 + 0.6 * strength);
+            return waterBillboard(p, corner, size, k, 1.0, strength * (1.0 - k) * (1.0 - k) * smoothstep(0.0, 0.1, k), 0.0);
+        }
+        if (kind == 2) {
+            // Three rings, a fifth of a second apart, the first the largest and brightest.
+            float ring = c_WKind.w;
+            float t = age - ring * 0.2;
+            float life = 2.4;
+            if (t < 0.0 || t > life) return waterHidden();
+            float k = t / life;
+            float radius = 0.7 + t * (2.2 + 3.5 * strength);
+            float opacity = strength * pow(1.0 - k, 1.5) * smoothstep(0.0, 0.06, k) * (1.0 - ring * 0.25);
+            return waterFlat(spot + float3(0.0, 0.03, 0.0), corner, radius / 0.86, 0.0, k, 2.0, opacity, frac(sd.zw + ring * 0.37));
+        }
+        // The foam: patches thrown out around the spot, drifting apart and fraying over a few seconds.
+        float life = 4.0;
+        float t = age - 0.05 - sd.w * 0.15;
+        if (t < 0.0 || t > life) return waterHidden();
+        float k = t / life;
+        float reach = (0.4 + 2.2 * sd.y) * (0.5 + 0.8 * strength);
+        float3 centre = spot + radial * reach * (0.55 + 0.45 * saturate(t * 1.2)) + vh * 0.1 * t + float3(0.0, 0.02, 0.0);
+        float size = (0.5 + 0.9 * sd.z) * (0.6 + 0.6 * strength) * (0.8 + 0.4 * k);
+        float opacity = strength * smoothstep(0.0, 0.08, k) * pow(1.0 - k, 1.2) * 0.9;
+        return waterFlat(centre, corner, size, sd.w * 6.2831853, k, 3.0, opacity, sd.xy);
+    }
+    // The car in the water: the wake, the bow's droplets, the drips. Needs the engine's car.
+    if (c_Car.w < 0.5) return waterHidden();
+    float3 fwdH, rightH, velH;
+    float speed;
+    waterCar(fwdH, rightH, velH, speed);
+    float4 sd = frac(seed + float4(0.45, 0.15, 0.85, 0.55));
+    float wake = c_WLevel.z;
+    float3 bow = c_Car.xyz + fwdH * (c_CarFwd.w + 0.3);
+    bow.y = level;
+    float halfTrack = c_CarUp.w;
+    float side = sd.x < 0.5 ? -1.0 : 1.0;
+    if (kind == 4) {
+        if (wake <= 0.0 || speed < 1.5) return waterHidden();
+        float life = 3.0;
+        float age = frac(c_Cam.w / life * (0.85 + 0.3 * sd.w) + sd.z);
+        float t = age * life;
+        // From the bow in a V (a third of it from the rear, behind the car's middle), at rest on the water.
+        bool rear = sd.y < 0.3;
+        float3 origin = rear ? float3(c_Car.x, level, c_Car.z) + fwdH * c_CarRight.w : bow;
+        float spread = rear ? (sd.x - 0.5) * halfTrack * 2.0 * (1.0 + t) : side * (halfTrack * 0.8 + t * 0.45 * (0.5 + speed / 25.0));
+        float3 centre = origin - velH * t + rightH * spread + float3(0.0, 0.02, 0.0);
+        float size = lerp(0.45, 1.3, sqrt(age)) * (0.7 + 0.6 * sd.z);
+        float opacity = wake * saturate((speed - 1.5) / 6.0) * pow(1.0 - age, 1.5) * smoothstep(0.0, 0.08, age) * 0.8;
+        return waterFlat(centre, corner, size, sd.w * 6.2831853, age, 4.0, opacity, sd.xy);
+    }
+    if (kind == 5) {
+        // The bow wave: droplets leaving the front of the car, to the sides, up and with it.
+        if (wake <= 0.0 || speed < 3.0) return waterHidden();
+        float life = 0.7;
+        float age = frac(c_Cam.w / life * (0.85 + 0.3 * sd.w) + sd.z);
+        float t = age * life;
+        float f = saturate(speed / 18.0);
+        float3 v = rightH * side * (1.0 + 3.0 * sd.y) * f + float3(0.0, (1.5 + 3.5 * sd.x) * f, 0.0) + velH * 0.4;
+        float3 p = bow - velH * t + rightH * side * halfTrack * 0.8 + v * t;
+        p.y -= 4.9 * t * t;
+        if (p.y < level) return waterHidden();
+        float size = 0.03 + 0.04 * sd.w;
+        return waterBillboard(p, corner, size, age, 0.0, wake * saturate((speed - 3.0) / 8.0) * (1.0 - age * 0.5), 0.0);
+    }
+    // 6: drips off the car's underside and sides after it left the water, for three seconds, fewer and fewer.
+    float since = c_WKind.z;
+    if (since < 0.0 || c_WLevel.w <= 0.0) return waterHidden();
+    float released = 2.5 * sd.z * sd.z;
+    float age = since - released;
+    if (age < 0.0 || age > 1.5) return waterHidden();
+    float3 local = c_CarFwd.xyz * lerp(c_CarRight.w, c_CarFwd.w, sd.x) + c_CarRight.xyz * (sd.y - 0.5) * 2.2 * halfTrack + c_CarUp.xyz * (-0.1 + 0.6 * sd.w);
+    float3 p = c_Car.xyz + local - c_CarVel.xyz * age * 0.5;
+    p.y -= 4.9 * age * age;
+    float3 road = c_Car.xyz + c_CarUp.xyz * c_CarVel.w;
+    if (p.y < road.y) return waterHidden();
+    return waterBillboard(p, corner, 0.025 + 0.025 * sd.w, age, 0.0, c_WLevel.w * (1.0 - age / 1.5) * (1.0 - since / 3.2), 0.0);
+}
+
 // Neon trail: quad k joins point k and k + 1 of the ring buffer, widened towards the camera.
 float4 c_Trail  : register(c16); // points written, next index, now (s), fade after (s, 0 = never)
 float4 c_Trail2 : register(c17); // sideways offset (m), half width (m), 0, 0
@@ -1828,7 +2001,7 @@ void Pipeline::runtimeShaders(std::vector<gfx::ShaderSource>& out) {
     out.push_back({trailSource(), "trailVS", "vs_3_0", "TrailVS"});
     out.push_back({kSolidPS, "main", "ps_3_0", "Solid"});
     out.push_back({kPalettePS, "main", "ps_3_0", "MaterialPalette"});
-    for (const char* entry : {"dropVS", "splashVS", "sprayVS", "snowVS"}) out.push_back({kRainVS, entry, "vs_3_0", "RainVS"});
+    for (const char* entry : {"dropVS", "splashVS", "sprayVS", "snowVS", "waterVS"}) out.push_back({kRainVS, entry, "vs_3_0", "RainVS"});
 }
 
 bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
@@ -2218,6 +2391,8 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
         m_splashVS = blend ? gfx::compileVertexShader(device, kRainVS, "splashVS", "RainVS") : nullptr;
         m_sprayVS = blend ? gfx::compileVertexShader(device, kRainVS, "sprayVS", "RainVS") : nullptr;
         m_snowVS = blend ? gfx::compileVertexShader(device, kRainVS, "snowVS", "RainVS") : nullptr;
+        // Optional: without it the rain stays and only the water splash is off.
+        m_waterVS = blend ? gfx::compileVertexShader(device, kRainVS, "waterVS", "RainVS") : nullptr;
         const D3DVERTEXELEMENT9 elements[] = {
             {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
             {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
@@ -2275,6 +2450,245 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
     return ok;
 }
 
+// --- Water: the pictures, the car against the surface, the splash ----------------------------------
+
+bool Pipeline::ensureWaterAtlas(IDirect3DDevice9* device) {
+    if (m_waterAtlas) return true;
+    static bool s_failed = false; // one try per session: a failure is the device's, not worth a retry every frame
+    if (s_failed) return false;
+    std::string report;
+    const std::vector<uint32_t> texels = waterfx::buildAtlas(log::dataDir() + L"\\textures\\water", &report);
+    const UINT n = waterfx::kAtlasSize;
+    IDirect3DTexture9* staging = nullptr;
+    if (FAILED(device->CreateTexture(n, n, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &staging, nullptr))) {
+        s_failed = true;
+        return false;
+    }
+    D3DLOCKED_RECT rect{};
+    if (SUCCEEDED(staging->LockRect(0, &rect, nullptr, 0))) {
+        for (UINT y = 0; y < n; y++) memcpy(static_cast<BYTE*>(rect.pBits) + static_cast<size_t>(y) * rect.Pitch, &texels[static_cast<size_t>(y) * n], n * 4);
+        staging->UnlockRect(0);
+    }
+    const bool ok = SUCCEEDED(device->CreateTexture(n, n, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_waterAtlas, nullptr)) &&
+                    SUCCEEDED(device->UpdateTexture(staging, m_waterAtlas));
+    staging->Release();
+    if (!ok) {
+        gfx::release(m_waterAtlas);
+        s_failed = true;
+        return false;
+    }
+    TMVS_LOG("water: pictures: %s", report.c_str());
+    return true;
+}
+
+// The height of the water surface nearest `y`: the Stadium water blocks' (one height), the sea the
+// engine reports or the measured one. False: none is known.
+bool Pipeline::waterLevelOf(const Inputs& in, float y, float& level) const {
+    const bool measured = in.water[2] >= 0.0f && in.water[2] < 0.5f && m_seaKnown;
+    float levels[2];
+    int n = 0;
+    if (measured) {
+        levels[n++] = m_seaLevel;
+    } else if (in.water[2] > 0.5f) {
+        if (in.water[0] > -1e29f) levels[n++] = in.water[0];
+        if (in.water[1] > -1e29f && in.water[1] != in.water[0]) levels[n++] = in.water[1];
+    }
+    if (n == 0) return false;
+    level = levels[0];
+    for (int i = 1; i < n; i++) {
+        if (fabsf(levels[i] - y) < fabsf(level - y)) level = levels[i];
+    }
+    return true;
+}
+
+namespace {
+// How big the splash is for a car this fast, coming in this steeply: a car that skims in flat
+// throws up less than one that drops in.
+float entryStrength(float speed, float sinAngle) {
+    const float fast = fminf(fmaxf((speed - 2.0f) / 30.0f, 0.0f), 1.0f);
+    return powf(fast, 0.8f) * (0.45f + 0.55f * fminf(sinAngle * 2.2f, 1.0f));
+}
+} // namespace
+
+// The car's tyres against the surface, once per frame on the effects' clock: going under starts a
+// splash (where, how fast, how steeply), staying under keeps the wake, coming out starts the drips.
+// A jump of the car (respawn, replay cut) is none of these.
+void Pipeline::updateWater(const Inputs& in, const Settings& s, float dt) {
+    if (dt <= 1e-4f) return;
+    const float* w = in.carWheels;
+    const float bottom = in.carPosePosition[1] + in.carPoseUp[1] * w[3]; // where the tyres touch
+    float level = 0.0f;
+    m_waterLevelKnown = s.waterSplash > 0.0f && in.carPoseKnown && waterLevelOf(in, bottom, level);
+    if (!m_waterLevelKnown) {
+        m_waterValid = m_waterIn = false;
+        m_waterWake = m_waterInFor = 0.0f;
+        return;
+    }
+    m_waterLevelY = level;
+    const float depth = level - bottom;
+    const float* p = in.carPosePosition;
+    const float moved = sqrtf((p[0] - m_waterPrev[0]) * (p[0] - m_waterPrev[0]) + (p[1] - m_waterPrev[1]) * (p[1] - m_waterPrev[1]) +
+                              (p[2] - m_waterPrev[2]) * (p[2] - m_waterPrev[2]));
+    if (!m_waterValid || moved > 150.0f * dt + 1.0f) {
+        m_waterIn = depth > 0.05f;
+        m_waterInFor = 0.0f;
+        if (!m_waterIn) m_waterWake = 0.0f;
+    } else if (!m_waterIn && depth > 0.05f) {
+        // Where it crossed the surface, between the last frame and this one.
+        const float before = level - m_waterPrevBottom;
+        const float f = fminf(fmaxf((0.0f - before) / (depth - before), 0.0f), 1.0f);
+        float v[3];
+        for (int j = 0; j < 3; j++) v[j] = (p[j] - m_waterPrev[j]) / dt;
+        const float speed = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        const float horizontal = sqrtf(v[0] * v[0] + v[2] * v[2]);
+        if (speed > 2.0f) {
+            WaterEntry& e = m_waterEntries[m_waterNext++ & 3];
+            for (int j = 0; j < 3; j++) {
+                e.position[j] = m_waterPrev[j] + (p[j] - m_waterPrev[j]) * f;
+                e.velocity[j] = v[j];
+            }
+            e.position[1] = level;
+            const float sinAngle = fmaxf(-v[1], 0.0f) / speed;
+            e.strength = entryStrength(speed, sinAngle);
+            e.time = in.time;
+            if (in.time - m_waterLogTime >= 1.0f || in.time < m_waterLogTime) {
+                m_waterLogTime = in.time;
+                TMVS_LOG("water: splash at %.0f m/s, %.0f deg entry (strength %.2f)", speed, atan2f(fmaxf(-v[1], 0.0f), horizontal) * 57.29578f, e.strength);
+            }
+        }
+        m_waterIn = true;
+        m_waterInFor = 0.0f;
+    } else if (m_waterIn && depth < -0.05f) {
+        m_waterIn = false;
+        m_waterExitTime = in.time;
+        m_waterDrip = fminf(m_waterInFor / 0.5f, 1.0f);
+    }
+    if (m_waterIn) m_waterInFor += dt;
+    const float target = m_waterIn ? fminf(depth / 0.35f, 1.0f) : 0.0f;
+    m_waterWake += (target - m_waterWake) * fminf(dt * 6.0f, 1.0f);
+    memcpy(m_waterPrev, p, sizeof(m_waterPrev));
+    m_waterPrevBottom = bottom;
+    m_waterValid = true;
+}
+
+// What the car throws up in the water, over the finished image (inside drawRain: its camera and
+// car constants are set, its quads and textures bound). Costs nothing while no entry is young
+// and the car is not in the water.
+void Pipeline::drawWater(IDirect3DDevice9* device, const Inputs& in, const Settings& s) {
+    float entries[4][2][4];
+    for (auto& e : entries) for (auto& r : e) r[0] = r[1] = r[2] = r[3] = 0.0f;
+    float level = m_waterLevelY;
+    float wake = m_waterWake, drip = m_waterDrip;
+    float dripSince = in.time - m_waterExitTime;
+    bool any = false;
+    for (int i = 0; i < 4; i++) {
+        const WaterEntry& e = m_waterEntries[i];
+        const float age = in.time - e.time;
+        const bool young = age >= 0.0f && age < 6.0f && e.strength > 0.0f;
+        any = any || young;
+        for (int j = 0; j < 3; j++) {
+            entries[i][0][j] = e.position[j];
+            entries[i][1][j] = e.velocity[j];
+        }
+        entries[i][0][3] = young ? age : -1.0f;
+        entries[i][1][3] = e.strength;
+    }
+    bool car = in.carPoseKnown && m_waterLevelKnown;
+    if (in.splashTest[0] >= 0.0f && in.splashTest[3] > 0.5f) {
+        // A car that isn't there, on the water below the middle of the screen (see Inputs::splashTest).
+        const float* V = in.view;
+        float camera[3];
+        for (int j = 0; j < 3; j++) camera[j] = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
+        float fx = V[2], fz = V[10];
+        const float fl = sqrtf(fx * fx + fz * fz);
+        fx = fl > 1e-4f ? fx / fl : 0.0f;
+        fz = fl > 1e-4f ? fz / fl : 1.0f;
+        level = 0.0f;
+        waterLevelOf(in, in.water[0], level);
+        const int mode = static_cast<int>(in.splashTest[3] + 0.5f);
+        const float t = in.splashTest[0], speed = in.splashTest[1];
+        const float angle = in.splashTest[2] * 0.0174533f;
+        // Where the ray through the lower middle of the screen (0.8 of the way down) meets the water (else 12 m ahead).
+        const float* P = in.projection;
+        const float rx = (0.0f - P[8]) / P[0], ry = (-0.62f - P[9]) / P[5];
+        float ray[3];
+        for (int j = 0; j < 3; j++) ray[j] = rx * V[j * 4 + 0] + ry * V[j * 4 + 1] + V[j * 4 + 2];
+        const float reach = ray[1] < -0.02f ? (level - camera[1]) / ray[1] : 12.0f;
+        const float along = fminf(fmaxf(reach, 4.0f), 40.0f);
+        const float spot[3] = {camera[0] + ray[0] * along, level, camera[2] + ray[2] * along};
+        const float run = mode == 2 ? speed * t : 0.0f; // the car has driven on since it came in
+        WaterEntry e;
+        e.position[0] = spot[0] - fx * run;
+        e.position[1] = level;
+        e.position[2] = spot[2] - fz * run;
+        e.velocity[0] = fx * speed * cosf(angle);
+        e.velocity[1] = -speed * sinf(angle);
+        e.velocity[2] = fz * speed * cosf(angle);
+        e.strength = mode <= 2 ? entryStrength(speed, sinf(angle)) : 0.0f;
+        for (int j = 0; j < 3; j++) {
+            entries[0][0][j] = e.position[j];
+            entries[0][1][j] = e.velocity[j];
+        }
+        entries[0][0][3] = mode <= 2 ? t : -1.0f;
+        entries[0][1][3] = e.strength;
+        for (int i = 1; i < 4; i++) entries[i][0][3] = -1.0f;
+        any = mode <= 2;
+        wake = mode == 2 ? 1.0f : 0.0f;
+        drip = mode == 3 ? 1.0f : 0.0f;
+        dripSince = mode == 3 ? t : -1.0f;
+        car = true;
+        const float* w = in.carWheels;
+        const float height = mode == 3 ? 0.9f : -0.25f; // out of the water, up on the shore, or in it
+        const float pose[5][4] = {
+            {spot[0], level + height - w[3], spot[2], 1.0f},
+            {fx, 0.0f, fz, w[0]},
+            {fz, 0.0f, -fx, w[1]},
+            {0.0f, 1.0f, 0.0f, w[2]},
+            {fx * speed, 0.0f, fz * speed, w[3]},
+        };
+        device->SetVertexShaderConstantF(22, &pose[0][0], 5);
+    }
+    if (dripSince < 0.0f || dripSince > 3.2f) {
+        dripSince = -1.0f;
+        drip = 0.0f;
+    }
+    const bool driving = car && (wake > 0.01f || dripSince >= 0.0f);
+    if (!any && !driving) return;
+
+    const float constants[4] = {level, s.waterSplash, wake, drip};
+    device->SetVertexShaderConstantF(27, constants, 1);
+    device->SetVertexShaderConstantF(28, &entries[0][0][0], 8);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    device->SetVertexShader(m_waterVS);
+    device->SetPixelShader(m_shaders[kWaterSplash]);
+    passConstants(device, 0.4f + 0.6f * s.waterSplash, 0.0f);
+    bind(device, 5, m_waterAtlas, true);
+    device->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+    device->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+    auto draw = [&](float kind, float entry, float ring, UINT quads) {
+        const float k[4] = {kind, entry, dripSince, ring};
+        device->SetVertexShaderConstantF(36, k, 1);
+        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, quads * 4, 0, quads * 2);
+    };
+    for (int i = 0; i < 4; i++) {
+        if (entries[i][0][3] < 0.0f) continue;
+        draw(0.0f, static_cast<float>(i), 0.0f, 420); // the fountain
+        draw(1.0f, static_cast<float>(i), 0.0f, 90);  // its mist
+        for (int ring = 0; ring < 3; ring++) draw(2.0f, static_cast<float>(i), static_cast<float>(ring), 1);
+        draw(3.0f, static_cast<float>(i), 0.0f, 14);  // its foam
+    }
+    if (wake > 0.01f && car) {
+        draw(4.0f, 0.0f, 0.0f, 160); // the wake
+        draw(5.0f, 0.0f, 0.0f, 120); // the bow wave
+    }
+    if (dripSince >= 0.0f && car) draw(6.0f, 0.0f, 0.0f, 120);
+    device->SetTexture(5, nullptr);
+    profileMark(kWaterSplash);
+}
+
 void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt, bool advance, bool splashes,
                         IDirect3DSurface9* target) {
     const float* V = in.view;
@@ -2309,6 +2723,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         }
         memcpy(m_carPrev, in.carPosePosition, sizeof(m_carPrev));
         m_carPrevValid = in.carPoseKnown;
+        updateWater(in, s, dt);
     }
     const float wind[2] = {2.5f + s.wind * 5.0f, 1.0f + s.wind * 2.0f};
     const float fall = 9.0f;
@@ -2496,6 +2911,8 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         }
         profileMark(kSnowFlake);
     }
+
+    if (s.waterSplash > 0.0f && m_waterVS && ensureWaterAtlas(device)) drawWater(device, in, s);
 
     device->SetStreamSource(0, nullptr, 0, 0);
     device->SetIndices(nullptr);
@@ -3032,6 +3449,23 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         m_spillValid = false;
     }
 
+    // 3d. WaterClarity: the game's image with clear water on the water's pixels (PS_ClearWater), the
+    // lighting starts from it. Only with the game's materials (they tell the water) and its height.
+    IDirect3DTexture9* lightingColour = in.hdr ? in.hdr : in.color;
+    if (materials && s.waterClarity > 0.0f && s.waterSurfaces > 0.0f && waterKnown && ensureWaterAtlas(device) &&
+        (m_clearWater.valid() || m_clearWater.create(device, m_hdr.width, m_hdr.height, D3DFMT_A16B16G16R16F))) {
+        bind(device, 0, lightingColour, false);
+        bind(device, 1, m_nd.texture, false);
+        bind(device, 5, m_waterAtlas, true);
+        device->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+        device->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+        bind(device, 13, m_materialTexture, false);
+        passConstants(device, s.waterClarity, 0.0f);
+        runPass(device, kClearWater, m_clearWater);
+        device->SetTexture(5, nullptr);
+        lightingColour = m_clearWater.texture;
+    }
+
     // 4. Lighting composite.
     bind(device, 0, in.color, false);
     bind(device, 1, m_nd.texture, false);
@@ -3046,6 +3480,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
     bind(device, 13, materials ? m_materialTexture : nullptr, false);
     if (in.hdr) bind(device, 0, in.hdr, false); // GameHdr: light above 1.0 (the guesses in there clamp it)
+    if (lightingColour != (in.hdr ? in.hdr : in.color)) bind(device, 0, lightingColour, false); // WaterClarity
     // EngineLights: light sources from the game, not guessed (s14 = what its additive draws added).
     if (engineLights && in.added) bind(device, 14, in.added, false);
     // GameLight: the light the game's shaders lit each surface with (s15): the night sky spares
@@ -3466,7 +3901,10 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     // Rain particles go on top of the finished image: TAA would erase thin, fast drops as
     // flicker, and keeping them out of its history avoids trails.
-    if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && post && ensureRain(device))
+    // The water splash needs the water's height (Stadium, TMUF sea) and the engine's car (or the test's).
+    const bool splashing = s.waterSplash > 0.0f && (in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown)) &&
+                           (in.carPoseKnown || in.splashTest[0] >= 0.0f);
+    if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f || splashing) && post && ensureRain(device))
         drawRain(device, in, s, postDt, postTemporal, heightMap && m_heightValid, output);
     if (upscale) upscaleOutput(device, in, s, screen);
     profileEnd();

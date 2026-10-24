@@ -16,6 +16,10 @@
 //     --clip                  ... while a clip of the map plays (driving off, clipInRace on)
 //     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
 //                             view, 0.1 s apart (neon trail test)
+//     --splash <t[,speed,angle,mode]>  water test (with --blocks or --water): a car that isn't there
+//                             enters the water 12 m ahead of the camera, t seconds ago (speed m/s, entry
+//                             angle degrees, mode 1 the splash, 2 driving through the water, 3 dripping
+//                             after it came out; default 24, 40, 1)
 //     --carpose <deg>         spray test: the engine's car pose where the depth finder sees the
 //                             car, turned by deg from the camera's level forward (sliding), moving
 //                             with --drive
@@ -412,6 +416,7 @@ int main(int argc, char** argv) {
     // sliding sideways), moving with the camera's --drive.
     float carPoseYaw = 0.0f;
     bool carPoseSet = false;
+    float splash[4] = {-1.0f, 24.0f, 40.0f, 1.0f}; // --splash: a car that isn't there enters the water (Inputs::splashTest)
     const char* compare = nullptr;       // --compare: the preset on the split's other side
     float splitAt = 0.5f;
     const char* labels = nullptr;        // --labels "left|right": the names in a photo of the split
@@ -483,6 +488,8 @@ int main(int argc, char** argv) {
             labels = argv[++i];
         } else if (!strcmp(argv[i], "--car") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &carAt[0], &carAt[1]);
+        } else if (!strcmp(argv[i], "--splash") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f,%f,%f", &splash[0], &splash[1], &splash[2], &splash[3]);
         } else if (!strcmp(argv[i], "--carpose") && i + 1 < argc) {
             carPoseYaw = static_cast<float>(atof(argv[++i]));
             carPoseSet = true;
@@ -787,6 +794,7 @@ int main(int argc, char** argv) {
             in.sunColorKnown = cap.sunColor[3] > 0.5f;
         }
         in.moonReplaced = moonReplaced;
+        memcpy(in.splashTest, splash, sizeof(splash));
         if (g_casterDepth >= 0.0f) in.casterMap = previewCasters;
         // The previous frame's camera, moved by job.move (world space): view translation
         // t' = t - move * R.

@@ -29,6 +29,8 @@ void drawSplitLabels(unsigned char* pixels, int width, int height, int bytesPerP
 // JPEG -> 0xFFRRGGBB pixels, rows top-down.
 bool decodeJpeg(const void* data, size_t size, std::vector<uint32_t>& pixels, int& width, int& height);
 bool readJpeg(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height);
+// Any picture stb reads (PNG, JPEG, TGA, BMP) -> 0xAARRGGBB pixels, rows top-down. False: no such file or unreadable.
+bool readRgba(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height);
 
 // The mod's icon (packaging/icons/icon_a_64.png, embedded by thumbnails/thumbnails.rc) for the
 // menu's header: size x size 0xAARRGGBB pixels, area-averaged from the embedded PNG, rows

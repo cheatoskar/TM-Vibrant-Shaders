@@ -202,6 +202,26 @@ bool readJpeg(const std::wstring& path, std::vector<uint32_t>& pixels, int& widt
     return !data.empty() && decodeJpeg(data.data(), data.size(), pixels, width, height);
 }
 
+bool readRgba(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height) {
+    FILE* f = _wfopen(path.c_str(), L"rb");
+    if (!f) return false;
+    std::vector<unsigned char> data;
+    unsigned char buffer[16384];
+    size_t n;
+    while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0 && data.size() < (64u << 20)) data.insert(data.end(), buffer, buffer + n);
+    fclose(f);
+    int channels = 0;
+    unsigned char* rgba = data.empty() ? nullptr : stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &width, &height, &channels, 4);
+    if (!rgba) return false;
+    pixels.resize(static_cast<size_t>(width) * height);
+    for (size_t i = 0; i < pixels.size(); i++) {
+        const unsigned char* p = rgba + i * 4;
+        pixels[i] = (static_cast<uint32_t>(p[3]) << 24) | (static_cast<uint32_t>(p[0]) << 16) | (static_cast<uint32_t>(p[1]) << 8) | p[2];
+    }
+    stbi_image_free(rgba);
+    return true;
+}
+
 bool menuIcon(int size, std::vector<uint32_t>& pixels) {
     if (size <= 0 || size > 512) return false;
     static const int s_anchor = 0; // any address inside this module (the mod's DLL)

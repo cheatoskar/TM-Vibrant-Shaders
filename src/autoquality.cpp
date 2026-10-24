@@ -42,7 +42,7 @@ constexpr Knob kKnobTable[AutoQuality::kKnobs] = {
     {"GI", {"GI", "GITemporal"}, 1.0f},
     {"fewer samples", {"OcclusionShadow", "Clouds", "Volumetric", "GI"}, 0.3f},
     {"long shadows", {"OcclusionShadow", "HeightSplat", "HeightMerge"}, 0.4f, {"LightGridInit", "LightGridSweep", "Casters"}},
-    {"reflections, grass detail", {"Reflect"}, 1.0f},
+    {"reflections, grass detail, water", {"Reflect", "ClearWater", "WaterSplash"}, 1.0f},
     {"volumetric clouds", {"Clouds"}, 1.0f},
     {"TAA", {"TAA"}, 1.0f},
     {"edge smoothing", {"FXAA", "SmaaEdges", "SmaaWeights", "SmaaBlend"}, 1.0f},
@@ -59,7 +59,7 @@ void applyKnob(int knob, Settings& s) {
         case 1: s.globalIllumination = 0.0f; break;
         case 2: if (s.quality > 1) s.quality = 1; break;
         case 3: s.longShadows = 0.0f; break;
-        case 4: s.reflections = 0.0f; s.grassDetail = 0.0f; break;
+        case 4: s.reflections = 0.0f; s.grassDetail = 0.0f; s.waterClarity = 0.0f; s.waterSplash = 0.0f; break;
         case 5: s.volumetricClouds = 0.0f; break;
         case 6: s.taa = false; break;
         case 7: s.fxaa = false; break;
@@ -79,7 +79,7 @@ bool matters(int knob, const Settings& s) {
         case 1: return s.globalIllumination > 0.0f;
         case 2: return s.quality > 1;
         case 3: return s.longShadows > 0.0f;
-        case 4: return s.reflections > 0.0f || s.grassDetail > 0.0f;
+        case 4: return s.reflections > 0.0f || s.grassDetail > 0.0f || s.waterClarity > 0.0f || s.waterSplash > 0.0f;
         case 5: return s.volumetricClouds > 0.0f;
         case 6: return s.taa;
         case 7: return s.fxaa;

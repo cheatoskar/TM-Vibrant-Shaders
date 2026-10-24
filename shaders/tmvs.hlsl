@@ -4287,6 +4287,150 @@ float4 PS_RainSplash(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
 }
 
 // ---------------------------------------------------------------------------------
+// Water splash (WaterSplash): droplets, mist, rings, foam and the car's wake, geometry from
+// waterVS (pipeline.cpp), blended over the finished image: premultiplied, so alpha 0 adds.
+//   s0 = full normal/depth, s1 = scene colour (sRGB), s2 = sky average (1x1), s3 = neon light,
+//   s4 = adapted exposure (1x1), s5 = the water pictures (waterfx.h: r droplet, g foam,
+//   b and a the ripple's slope), u_Pass0.x = amount
+//   data.xy = position in the quad (-1..1), data.z = view z, data.w = age (0..1)
+//   data2.x = kind (0 droplet, 1 mist, 2 ring, 3 foam, 4 wake), data2.y = opacity, data2.zw = random
+// ---------------------------------------------------------------------------------
+float4 PS_WaterSplash(float4 data : TEXCOORD0, float4 data2 : TEXCOORD1, float2 vpos : VPOS) : COLOR0 {
+    float2 uv = (vpos + 0.5) * u_Screen.zw;
+    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - (data.z * 0.985 - 0.05));
+    float kind = data2.x;
+    float2 q = data.xy;
+    float r = length(q);
+    float3 light = rainLight(uv);
+    float amount = data2.y * u_Pass0.x;
+    if (kind < 0.5) {
+        // A droplet: a lens that mirrors the sky, with a bright spot.
+        clip(1.0 - r);
+        float d = tex2Dlod(s5, float4(q * 0.5 + 0.5, 0, 0)).r;
+        float a = d * amount;
+        return float4(light * a * 1.5 + a * 0.05, a * 0.4);
+    }
+    if (kind < 1.5) {
+        // Mist: soft puffs that thin out as they spread.
+        float puff = saturate(1.0 - r * r);
+        float a = puff * puff * amount * 0.22;
+        return float4(light * a * 1.1, a * 0.6);
+    }
+    if (kind < 2.5) {
+        // A ring on the surface: a ridge that spreads and flattens, its far side catching the sky, its near
+        // side dark, and a lip of foam on it. The ripple picture bends it so it is no perfect circle.
+        float2 w = tex2Dlod(s5, float4(frac(q * 0.8 + data2.zw), 0, 0)).ba * 2.0 - 1.0;
+        float rr = r + dot(w, q / max(r, 1e-3)) * 0.035;
+        float width = 0.07 + 0.1 * data.w;
+        float band = exp(-pow((rr - 0.86) / width, 2.0));
+        float side = 0.5 + 0.5 * dot(normalize(q + 1e-4), float2(0.0, -1.0)); // the far side lights up
+        float foam = tex2Dlod(s5, float4(frac(q * 1.3 + data2.zw), 0, 0)).g;
+        float a = band * amount * smoothstep(0.0, 0.25, r);
+        float3 colour = light * (0.45 + 1.1 * side) + light * foam * 0.8;
+        return float4(colour * a * 0.7, a * 0.5);
+    }
+    // Foam (3) and the wake (4): a lace picture that frays away as it ages, soft at its edge.
+    float f = tex2Dlod(s5, float4(frac(q * 0.5 + data2.zw), 0, 0)).g;
+    float edge = smoothstep(1.0, 0.45, r);
+    float erode = data.w * (kind < 3.5 ? 0.7 : 0.55);
+    float cover = smoothstep(erode, erode + 0.3, f * edge * 1.25);
+    float a = cover * amount;
+    float3 colour = light * 1.35 + 0.02;
+    return float4(colour * a, a);
+}
+
+// ---------------------------------------------------------------------------------
+// Clear water (WaterClarity). The game draws its water as an opaque grey texture: nothing
+// of the bottom, no depth. This pass runs before the lighting and puts a model of clear water
+// into the game's image on the water's pixels (the lighting then shades it like the rest and
+// adds the reflection with its Fresnel). What it knows is the surface (the exact plane, the
+// waves) and what stands at its edges; the bottom's depth is not in the depth buffer, so it
+// is guessed from the distance to the nearest edge: a ring of taps around the point on the
+// surface sees the land, a wall or a pier above the water's level, and shallows and foam
+// follow from them. Beer-Lambert: light that goes down and comes back up through `depth`
+// metres keeps exp(-k depth) of each colour, red going first.
+//   s0 = the game's image (sRGB, as the lighting reads it), s1 = full normal/depth, s13 = materials
+//   u_Pass0.x = clarity
+// ---------------------------------------------------------------------------------
+float causticLines(float2 p, float t) {
+    float2 q = p;
+    float v = 0.0;
+    [unroll] for (int i = 0; i < 3; i++) {
+        q += 0.55 * float2(sin(q.y * 1.7 + t * 0.8 + i * 1.9), cos(q.x * 1.4 - t * 0.7 + i * 2.7));
+        v += 1.0 - abs(sin(q.x * 1.3 + q.y * 0.9 + i));
+    }
+    return pow(saturate(v * 0.3333), 3.0);
+}
+
+float3 poolFloor(float2 xz) {
+    float v = 0.55 * noise2(xz * 0.9) + 0.3 * noise2(xz * 3.1 + 7.3) + 0.15 * noise2(xz * 11.0 + 2.1);
+    float3 sand = lerp(float3(0.46, 0.40, 0.30), float3(0.70, 0.63, 0.48), v);
+    return sand * (0.8 + 0.4 * noise2(xz * 23.0));
+}
+
+float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float4 src = tex2Dlod(s0, float4(uv, 0, 0));
+    [branch] if (tex2Dlod(s13, float4(uv, 0, 0)).b < 0.5 || u_Water.z < 0.5) return src;
+    float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
+    float clarity = u_Pass0.x;
+    float reach = saturate((350.0 - nd.w) / 120.0);
+    float3 rd = viewToWorldDir(normalize(viewPosition(uv, 1.0)));
+    float3 cam = cameraWorld();
+    float3 world = worldPosition(viewPosition(uv, nd.w));
+    float level;
+    float onPlane = waterLevelMatch(world, level);
+    float blend = saturate(clarity * 2.0) * reach * onPlane;
+    [branch] if (blend <= 0.0 || rd.y > -0.01) return src;
+    float3 surf = waterSurface(rd, level, world);
+    float t = u_Proj2.z;
+
+    // The edges: three rings of six taps (0.9, 2.4 and 5.5 m around the point), each tap asks what the
+    // camera sees there: something above the water's level but under 5 m is land, a wall or a pier.
+    float turn = ign(vpos) * 1.0471976;
+    float3 hit = 0;
+    [unroll] for (int ring = 0; ring < 3; ring++) {
+        float radius = ring == 0 ? 0.9 : (ring == 1 ? 2.4 : 5.5);
+        float count = 0.0;
+        [loop] for (int k = 0; k < 6; k++) {
+            float a = turn + (k + ring * 0.5) * 1.0471976;
+            float3 qv = worldToViewDir(surf + float3(cos(a), 0.0, sin(a)) * radius - cam);
+            if (qv.z < 0.3) continue;
+            float2 quv = projectToUV(qv);
+            if (any(quv < 0.003) || any(quv > 0.997)) continue;
+            float zq = tex2Dlod(s1, float4(quv, 0, 0)).w;
+            float yq = worldPosition(viewPosition(quv, zq)).y;
+            count += (zq < SKY_Z && yq > level + 0.3 && yq < level + 5.0) ? 1.0 : 0.0;
+        }
+        hit[ring] = saturate(count / 3.0); // half the ring on land counts as all of it
+    }
+    float depth = 2.6 * (1.0 - 0.92 * hit.x) * (1.0 - 0.7 * hit.y) * (1.0 - 0.4 * hit.z) + 0.05;
+
+    // Through the surface: refracted by the waves (the same slope the lighting gives them).
+    float footprint = nd.w / (abs(u_Proj.y) * 0.5 * u_Screen.y * max(abs(rd.y), 0.05));
+    float2 slope = waveSlope(surf.xz, t, footprint);
+    float3 refracted = refract(rd, normalize(float3(-slope.x * 0.8, 1.0, -slope.y * 0.8)), 0.752);
+    float cosT = max(-refracted.y, 0.25);
+    float2 floorXZ = surf.xz + refracted.xz * (depth / cosT);
+    float3 k = float3(0.30, 0.06, 0.04) * lerp(1.5, 0.4, clarity);
+    float3 through = exp(-k * 2.0 * depth / cosT);
+
+    // The light on the water is what the game lit its surface with (shadows of the stands stay).
+    float lit = clamp(luma(toLinear(src.rgb)), 0.02, 1.2);
+    float3 bottom = poolFloor(floorXZ);
+    bottom *= 1.0 + causticLines(floorXZ, t) * 1.6 * u_SunWorld.w * exp(-0.18 * depth);
+    float3 deep = float3(0.015, 0.13, 0.16);
+    float3 colour = (bottom * through * 1.5 + deep * (1.0 - through.g) * 2.4) * lit * 1.5;
+
+    // Foam where the water meets an edge, and a faint lacy band further out.
+    float lace = tex2Dlod(s5, float4(frac(surf.xz * 0.45 + float2(t * 0.011, -t * 0.007)), 0, 0)).g;
+    float foam = saturate(hit.x * (0.55 + 0.7 * lace) + hit.y * 0.25 * lace * lace);
+    colour = lerp(colour, float3(0.9, 0.95, 1.0) * lit * 1.7, foam * 0.8);
+
+    float3 water = toSRGB(lerp(toLinear(src.rgb), colour, blend));
+    return float4(water, src.a);
+}
+
+// ---------------------------------------------------------------------------------
 // Video export (the mod's own frames). Every sample of a video frame (the game's supersamples
 // and the sub-frames of its motion blur) is lit as usual and its HDR image added into a float
 // sum; the frame's last sample grades the average once. Averaging before the tone curve is

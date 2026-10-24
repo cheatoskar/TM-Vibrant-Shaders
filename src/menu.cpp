@@ -76,7 +76,8 @@ void drawPerformance() {
         {"Neon light", {"Spill*", nullptr, nullptr}},
         {"Lamp glare and haze", {"Lamp*", nullptr, nullptr}},
         {"Lighting, grass, weather, fog", {"Lighting*", nullptr, nullptr}},
-        {"Rain and snow particles", {"RainDrop", "RainSplash", "SnowFlake"}},
+        {"Rain and snow particles", {"RainDrop", "RainSplash", "SnowFlake", "WaterSplash"}},
+        {"Clear water", {"ClearWater", nullptr, nullptr}},
         {"Depth of field, motion blur", {"Focus", "DofBlur", "Cinematic"}},
         {"Light shafts", {"RayMask", "RayBlur", nullptr}},
         {"Bloom", {"BloomDown", "BloomUp", nullptr}},
@@ -251,6 +252,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("LensDrops")) return s.rain > 0.0f || s.snow > 0.0f;
     if (is("ReflectionBlur")) return s.reflections > 0.0f;
     if (is("WaterFarReflections")) return s.cleanWater && s.waterSurfaces > 0.0f;
+    if (is("WaterClarity")) return s.waterSurfaces > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it
     // The video export: what the chosen format and encoder use (the game's AVI: none of it).
@@ -397,6 +399,8 @@ const char* tooltipFor(const char* key) {
         {"WeatherShelter", "No rain or snow under roofs and bridges."},
         {"WeatherSound", "Volume of rain and thunder."},
         {"WaterSurfaces", "Reflections on pools and the sea."},
+        {"WaterClarity", "Pools and the sea look clear: you see the bottom, deeper water turns blue-green, foam sits where the water meets the edge. 0 is the game's own murky water."},
+        {"WaterSplash", "The car throws up spray, ripples and foam where it enters water, a bow wave while it drives through, and drips when it leaves. 0 is off."},
         {"Reflections", "Reflections on the dry track. Above 1 it turns into a mirror."},
         {"Spray", "Spray from the car's tyres on wet roads and snow."},
         {"CinematicOnlyInReplays", "Motion blur and depth of field only in replays and video export."},
@@ -1377,6 +1381,8 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"Spray", "Car spray"},
                                     {"WeatherSound", "Weather volume"},
                                     {"WaterSurfaces", "Water"},
+                                    {"WaterClarity", "Water clarity"},
+                                    {"WaterSplash", "Water splash"},
                                     {"Reflections", "Reflections"},
                                     {"ReflectionBlur", "Reflection blur"}}));
     panels.push_back(settingsPanel("Neon trail", s,
