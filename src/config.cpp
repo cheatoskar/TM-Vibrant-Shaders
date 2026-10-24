@@ -161,6 +161,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("CasterAlphaTest", "Fence shadows", "Game integration", Bool, casterAlphaTest, 0.0f, 1.0f),
         TMVS_FIELD("CleanWater", "Clean water", "Game integration", Bool, cleanWater, 0.0f, 1.0f),
         TMVS_FIELD("WaterFarReflections", "Far water reflections", "Game integration", Bool, waterFarReflections, 0.0f, 1.0f),
+        TMVS_FIELD("OverlapFix", "Overlapping blocks: last placed on top", "Game integration", Bool, overlapFix, 0.0f, 1.0f),
         TMVS_FIELD("ReadableGameDepth", "Effects in replays", "Game integration", Bool, readableGameDepth, 0.0f, 1.0f),
         TMVS_FIELD("ShadeMenuBars", "Replay menu shading", "Game integration", Bool, shadeMenuBars, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameFX", "Turn off game FX", "Game integration", Bool, disableGameFx, 0.0f, 1.0f),
@@ -276,7 +277,7 @@ bool isSystemField(const Field& f) {
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
            !strncmp(f.key, "Video", 5) || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
-           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "GameGBuffer") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "OverlapFix") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
            !strcmp(f.key, "FsrSharpness");
 }
@@ -1255,6 +1256,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepClean = s.cleanHighlights;
     const bool keepCleanWater = s.cleanWater;
     const bool keepWaterFar = s.waterFarReflections;
+    const bool keepOverlapFix = s.overlapFix;
     const bool keepGBuffer = s.gameGBuffer;
     const bool keepGameLight = s.gameLight;
     const bool keepMenuBars = s.shadeMenuBars;
@@ -1293,6 +1295,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.cleanHighlights = keepClean;
     s.cleanWater = keepCleanWater;
     s.waterFarReflections = keepWaterFar;
+    s.overlapFix = keepOverlapFix;
     s.gameGBuffer = keepGBuffer;
     s.gameLight = keepGameLight;
     s.shadeMenuBars = keepMenuBars;
@@ -1736,6 +1739,7 @@ void Config::load() {
     settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
     settings.cleanWater = GetPrivateProfileIntW(L"Settings", L"CleanWater", 1, ini) != 0;
     settings.waterFarReflections = GetPrivateProfileIntW(L"Settings", L"WaterFarReflections", 1, ini) != 0;
+    settings.overlapFix = GetPrivateProfileIntW(L"Settings", L"OverlapFix", 1, ini) != 0;
     settings.gameGBuffer = GetPrivateProfileIntW(L"Settings", L"GameGBuffer", 0, ini) != 0;
     settings.gameLight = GetPrivateProfileIntW(L"Settings", L"GameLight", 0, ini) != 0;
     settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;

@@ -35,7 +35,7 @@ static bool isMachine(const Field& f) {
                                            "VideoBitrate", "VideoQuality", "Video10Bit", "VideoEncoder", "VideoFfmpegPreset", "VideoOwnFrames",
                                            "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
                                            "TAAJitter", "GameNight", "EngineMoon", "GameSkyClouds", "CleanHighlights",
-                                           "GameHdr", "EngineLights", "CasterShadows", "CasterAlphaTest", "CleanWater", "WaterFarReflections", "GameGBuffer", "GameLight", "ShadeMenuBars",
+                                           "GameHdr", "EngineLights", "CasterShadows", "CasterAlphaTest", "CleanWater", "WaterFarReflections", "OverlapFix", "GameGBuffer", "GameLight", "ShadeMenuBars",
                                            "RenderScale", "FsrSharpness"};
     for (const char* key : kMachine) {
         if (!strcmp(key, f.key)) return true;

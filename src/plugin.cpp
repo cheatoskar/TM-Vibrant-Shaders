@@ -17,6 +17,7 @@
 #include "overlay.h"
 #include "pipeline.h"
 #include "autoquality.h"
+#include "blockorder.h"
 #include "photo.h"
 #include "planeread.h"
 #include "thumbnails.h"
@@ -57,6 +58,7 @@ struct DevOptions {
     float captureAt = 0.0f;      // start writing .tmcap captures (0 = off)
     float captureInterval = 2.0f;
     int captureCount = 1;
+    bool fakeBlockRank = false;  // "FakeBlockRank=1": OverlapFix takes a rank from the vertex buffer's address (0..7) instead of blockorder, to test the bias without the engine side
     float exitAt = 0.0f;         // terminate the game (0 = off)
     float hardExitAt = 0.0f;     // terminate even if no gameplay camera appeared (absolute time)
     // "Keys=4:13,7:a13,9:min,12:restore": post VK 13 at 4 s, Alt+Enter at 7 s, minimize / restore.
@@ -95,6 +97,7 @@ struct SceneState {
     int mainRenders = 0;  // main camera renders this frame (shaded or not)
     int otherRenders = 0; // other cameras into a target of the video's size this frame (export only)
 } g_scene;
+float g_depthUlp = 1.0f / 16777216.0f; // step of the main camera's depth buffer (OverlapFix), set at its begin
 
 bool g_captureRequested = false;
 bool g_capturePending = false; // F12 pressed, taken when the writer is free (g_captureRequested)
@@ -569,6 +572,7 @@ void loadDevOptions() {
     g_dev.captureInterval = iniFloat(ini, L"CaptureInterval", 2.0f);
     g_dev.captureCount = GetPrivateProfileIntW(L"dev", L"CaptureCount", 1, ini);
     g_dev.exitAt = iniFloat(ini, L"ExitAt", 0.0f);
+    g_dev.fakeBlockRank = GetPrivateProfileIntW(L"dev", L"FakeBlockRank", 0, ini) != 0;
     g_dev.hardExitAt = iniFloat(ini, L"HardExitAt", 0.0f);
     wchar_t buffer[MAX_PATH] = {};
     GetPrivateProfileStringW(L"dev", L"ShaderDir", L"", buffer, MAX_PATH, ini);
@@ -1905,7 +1909,10 @@ void onDrawAdded(IDirect3DDevice9* device) {
     g_hdrAddedBound = true;
 }
 
+void overlapBiasDone(IDirect3DDevice9* device);
+
 void onDrawDone(IDirect3DDevice9* device) {
+    overlapBiasDone(device);
     screenDrawDone(device); // RenderScale: the game's vertex state back after a draw in screen pixels
     if (!g_hdrAddedBound) return;
     hook::InternalScope internal;
@@ -2928,6 +2935,14 @@ void onCameraBegin(void* camera) {
                              g_scene.engineProjection[14] != 0.0f;
         g_scene.mainRenders++;
         engine::setMainCamera(camera);
+        {
+            // The step of its depth buffer (OverlapFix): 2^-16 for 16 bits, else 2^-24 (D24, INTZ becomes D24S8).
+            IDirect3DSurface9* ds = nullptr;
+            D3DSURFACE_DESC dsDesc{};
+            if (SUCCEEDED(g_device->GetDepthStencilSurface(&ds)) && ds) ds->GetDesc(&dsDesc);
+            if (ds) ds->Release();
+            g_depthUlp = dsDesc.Format == D3DFMT_D16 || dsDesc.Format == D3DFMT_D15S1 ? 1.0f / 65536.0f : 1.0f / 16777216.0f;
+        }
         // Material masks: nothing left from the last frame where nothing is drawn (the sky).
         if (materialsWanted()) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
         g_idFrame = g_captureRequested && materialsWanted();
@@ -3071,9 +3086,101 @@ void onDraw(IDirect3DDevice9* device) {
     else untagStencil(device);
 }
 
+// OverlapFix: TMUnlimiter maps put blocks inside each other, and two blocks with a face in the
+// same plane z-fight (stripes that flicker with the camera). blockorder gives each block draw a
+// rank among the blocks overlapping at its spot (1..7, placed later = higher); that draw gets a
+// small depth bias toward the camera, rank times one step, so the block placed last wins.
+//
+// Where: the game's own opaque draws of the main camera (depth test and depth writes on, no
+// blending). Not the shadow and reflection cameras (not the main camera, the shadows of a block
+// come from its geometry anyway), not the mod's passes (hook::InternalScope: casters.cpp, the
+// light passes, ImGui never reach these callbacks), not blended draws (glass, glows).
+//
+// The bias is in depth units (0..1) added to the depth the draw writes, so the step is a number
+// of depth buffer steps (ULP) at every distance. Two coplanar faces differ by about 1 to 2 ULP
+// (each rasterises the plane from its own vertices); one rank step is 4 ULP: 2.4e-7 on a 24 bit
+// buffer. In metres that is z^2 * (far - near) / (far * near) * ULP: with near 0.5 m, 0.12 mm per
+// step at 10 m, 1.2 cm at 100 m, 12 cm at 1 km, which is where the buffer itself resolves 12 cm
+// anyway. The seven steps together (28 ULP) stay below 1 mm at 10 m and 8 cm at 100 m: well
+// under a road's decals and the car's gap above the road, and further away the buffer cannot
+// tell such gaps apart either. The slope term (0.25 of the depth change over a pixel, per rank)
+// covers the interpolation error of tilted faces, which grows with the slope; at most 1.75
+// pixels' worth of depth, far less than a block's thickness. LESS and LESSEQUAL both work.
+// Sign: negative = toward the camera. The previous values are put back after the draw.
+bool g_overlapBiasActive = false;
+DWORD g_overlapSavedBias = 0, g_overlapSavedSlope = 0;
+
+constexpr float kOverlapUlpPerRank = 4.0f;
+constexpr float kOverlapSlopePerRank = 0.25f;
+
+DWORD floatBits(float v) {
+    DWORD bits;
+    memcpy(&bits, &v, sizeof(bits));
+    return bits;
+}
+
+float bitsFloat(DWORD bits) {
+    float v;
+    memcpy(&v, &bits, sizeof(v));
+    return v;
+}
+
+bool overlapBiasSupported(IDirect3DDevice9* device) {
+    static int s_state = -1; // -1 not asked yet, 0 no, 1 yes
+    if (s_state < 0) {
+        D3DCAPS9 caps{};
+        const bool ok = SUCCEEDED(device->GetDeviceCaps(&caps)) && (caps.RasterCaps & D3DPRASTERCAPS_DEPTHBIAS) &&
+                        (caps.RasterCaps & D3DPRASTERCAPS_SLOPESCALEDEPTHBIAS);
+        s_state = ok ? 1 : 0;
+        if (!ok) TMVS_LOG("overlap fix: the graphics card has no depth bias, OverlapFix stays off");
+    }
+    return s_state == 1;
+}
+
+int overlapRank(IDirect3DDevice9* device) {
+    if (!g_dev.fakeBlockRank) return blockorder::currentDrawRank();
+    IDirect3DVertexBuffer9* vb = nullptr;
+    UINT offset = 0, stride = 0;
+    device->GetStreamSource(0, &vb, &offset, &stride);
+    if (!vb) return 0;
+    const int rank = static_cast<int>((reinterpret_cast<uintptr_t>(vb) >> 4) & 7);
+    vb->Release();
+    return rank;
+}
+
+void overlapBiasBegin(IDirect3DDevice9* device) {
+    const Settings& s = Config::get().settings;
+    if (!g_scene.inMainCamera || !s.overlapFix || !s.enabled) return;
+    const int rank = overlapRank(device);
+    if (rank <= 0) return;
+    if (!overlapBiasSupported(device)) return;
+    DWORD z = FALSE, zwrite = FALSE, blend = FALSE;
+    device->GetRenderState(D3DRS_ZENABLE, &z);
+    device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+    if (!z || !zwrite || blend) return;
+    device->GetRenderState(D3DRS_DEPTHBIAS, &g_overlapSavedBias);
+    device->GetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, &g_overlapSavedSlope);
+    const int r = rank > 7 ? 7 : rank;
+    // On top of what the game set itself (its decals may use a bias of their own).
+    hook::InternalScope internal;
+    device->SetRenderState(D3DRS_DEPTHBIAS, floatBits(bitsFloat(g_overlapSavedBias) - r * kOverlapUlpPerRank * g_depthUlp));
+    device->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, floatBits(bitsFloat(g_overlapSavedSlope) - r * kOverlapSlopePerRank));
+    g_overlapBiasActive = true;
+}
+
+void overlapBiasDone(IDirect3DDevice9* device) {
+    if (!g_overlapBiasActive) return;
+    g_overlapBiasActive = false;
+    hook::InternalScope internal;
+    device->SetRenderState(D3DRS_DEPTHBIAS, g_overlapSavedBias);
+    device->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, g_overlapSavedSlope);
+}
+
 // CasterShadows: the main camera's opaque draws of static materials go to casters.cpp (which
 // keeps the meshes that stay put). Not the car (it moves), glass or water (light passes).
 void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count) {
+    overlapBiasBegin(device); // blocks are indexed draws; restored in onDrawDone
     if (!g_castersOn || !g_scene.inMainCamera || !g_scene.haveView || !g_scene.haveProjection) return;
     if (!casters::takeTurn()) return; // most draws of a big map wait for a later frame
     DWORD z = FALSE, zwrite = FALSE, blend = FALSE, alphaTest = FALSE, colorWrite = 0;

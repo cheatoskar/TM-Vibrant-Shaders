@@ -36,6 +36,7 @@ struct Settings {
     bool casterAlphaTest = true;   // CasterShadows also keeps alpha-tested meshes (fences, grids) and draws them with the game's alpha test: lattice shadows; off = they cast none
     bool shadeMenuBars = true;     // replay menu: the rows under its bars show the shaded image (mirrored); off = black (never leftovers of earlier frames)
     bool cleanWater = true;        // the game's water mirrors only what it can see, unblurred (no blotches of the ramps over it); off = as before
+    bool overlapFix = true;        // TMUnlimiter maps: of blocks overlapping at the same height the one placed last wins (a depth bias in plugin.cpp), no flickering stripes
     bool waterFarReflections = true; // with CleanWater: the water's reflection is traced to the screen's edge (stands, masts and gates across a pool), not 40-120 m; off = as up to 1.4.0-preview
     bool gameGBuffer = false;      // the game's material shaders also write their normal (gbufpatch.cpp): AO, shadows, reflections and light on the real normal (needs GameHdr; patched from the start)
     bool gameLight = false;        // ... and the light they lit each surface with (COLOR2): under a night sky the darkening and tint step back where the game's lamps light a surface, by that light, not by the image (needs GameHdr and EngineLights; patched from the start)
