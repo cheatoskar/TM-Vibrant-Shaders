@@ -260,7 +260,7 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("VideoEncoder") || is("VideoBitrate") || is("VideoAspect") || is("VideoOwnFrames")) return mp4;
     if (is("VideoFfmpegPreset")) return mp4 && s.videoEncoder == 1;
     if (is("VideoShutter") || is("VideoLensDof") || is("VideoGrain")) return mp4 && s.videoOwnFrames;
-    if (is("VideoHdr")) return s.videoCodec >= 2 && s.video10Bit && s.videoOwnFrames;
+    if (is("VideoHdr")) return mp4; // the Dynamic range dropdown (with Blend samples in HDR)
     if (is("VideoHdrPeak") || is("VideoHdrWhite")) return s.videoCodec >= 2 && s.video10Bit && s.videoOwnFrames && s.videoHdr;
     if (is("TargetFPS")) return s.autoQuality;
     if (is("FsrSharpness")) return s.renderScale < 0.99f;
@@ -412,7 +412,9 @@ const char* tooltipFor(const char* key) {
         {"VideoLensDof", "Depth of field from the samples themselves: the camera moves over a lens between them, like a real one (true bokeh, no halos at edges). Needs 16 or more samples per frame (high quality 4x4 and up in Shoot video); with fewer, the usual blur."},
         {"VideoGrain", "How much of the look's film grain goes into the video (1 = as on screen). Grain is noise to the encoder and costs many of its bits: 0.5 keeps the feel, 0 gives the smallest file."},
         {"VideoAspect", "Crops the video to a wider picture, from the middle of the frame. The file holds only the picture (no black bars to encode); players and YouTube add the bars. Pick a larger size in Shoot video for the width you want."},
-        {"VideoHdr", "HDR10: lamps, the sun and glows keep their brightness above white instead of being pressed under it. Needs HEVC or AV1 in 10 bits and Blend samples in HDR. Only an HDR screen shows it as meant; YouTube makes an SDR copy for the rest. The screen during the export shows it cut to white."},
+        {"VideoHdr", "SDR (classic): the game blends the samples itself, as before 1.4.2.\n"
+                     "SDR (HDR blend): the mod blends them before the colours are finished. Lights leave clean streaks, no colour bands. Recommended.\n"
+                     "HDR10: for HDR screens, lights stay brighter than white. Switches to HEVC in 10 bits. YouTube makes a normal copy for other screens."},
         {"VideoHdrPeak", "The brightest light in nits: where the tone curve ends and what the file tells the screen. 1000 suits most HDR monitors and YouTube."},
         {"VideoHdrWhite", "How bright the game's white (the normal picture's white) is on an HDR screen, in nits. 203 is the broadcast reference. If the video looks darker than the game next to it, raise it towards Windows' SDR brightness (often 250-300); higher leaves less room above it for lights."},
 
@@ -524,7 +526,7 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
     }
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth() - ImGui::GetFrameHeight() - 4.0f);
     bool hovered = false;
-    switch (f.kind) {
+    switch (!strcmp(f.key, "VideoHdr") ? Field::Int : f.kind) {
         case Field::Bool:
             // A switch, like the rest of the menu.
             changed |= toggle("##on", reinterpret_cast<bool*>(base + f.offset));
@@ -536,7 +538,20 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             break;
         case Field::Int: {
             int* value = reinterpret_cast<int*>(base + f.offset);
-            if (!strcmp(f.key, "Quality")) {
+            if (!strcmp(f.key, "VideoHdr")) {
+                // One dropdown for two switches (Blend samples in HDR, HDR10 video): which picture the file gets.
+                static const char* kRanges[] = {"SDR (classic)", "SDR (HDR blend)", "HDR10"};
+                int choice = !s.videoOwnFrames ? 0 : (s.videoHdr && s.videoCodec >= 2 && s.video10Bit) ? 2 : 1;
+                if (ImGui::Combo(label, &choice, kRanges, IM_ARRAYSIZE(kRanges))) {
+                    s.videoOwnFrames = choice > 0;
+                    s.videoHdr = choice == 2;
+                    if (choice == 2) {
+                        if (s.videoCodec < 2) s.videoCodec = 2; // HDR10 needs HEVC or AV1
+                        s.video10Bit = true;
+                    }
+                    changed = true;
+                }
+            } else if (!strcmp(f.key, "Quality")) {
                 static const char* kQualities[] = {"Low (fast)", "Medium", "High"};
                 changed |= ImGui::Combo(label, value, kQualities, IM_ARRAYSIZE(kQualities));
             } else if (!strcmp(f.key, "SkyMode")) {
@@ -599,7 +614,7 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
                                           !strcmp(f.key, "TargetFPS") ? "%.0f" : "%.2f");
             break;
     }
-    if (f.kind != Field::Bool) hovered = ImGui::IsItemHovered();
+    if (f.kind != Field::Bool || !strcmp(f.key, "VideoHdr")) hovered = ImGui::IsItemHovered();
     if (hovered) {
         if (const char* tip = tooltipFor(f.key)) showTip(tip);
     }
@@ -1740,7 +1755,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoEncoder = 0;
      },
      [](const Settings& s) { return s.videoCodec == 1 && s.videoBitrate > 7.9f && s.videoBitrate < 8.1f; }},
-    {"HDR10", "HEVC in 10 bits with HDR10 at quality 85: lights above white stay bright on an HDR screen. Turns on Blend samples in HDR.",
+    {"HDR10", "HEVC in 10 bits with HDR10 at quality 85: lights above white stay bright on an HDR screen.",
      [](Settings& s) {
          s.videoCodec = 2;
          s.videoQuality = 85;
@@ -1793,21 +1808,18 @@ bool drawVideoPage(Config& config, Settings& s) {
                           videoPresetRow(config, s, kVideoLooks, sizeof(kVideoLooks) / sizeof(kVideoLooks[0]));
                           return false;
                       }});
-    panels.push_back({"In the game's Shoot video dialog", 9.0f, [] {
-                          ImGui::TextWrapped("Size: 1440p or 4K for YouTube (it gives those more bitrate), 1080p for a chat. Frame rate: 60.");
-                          ImGui::TextWrapped("High quality: on, with 4 samples (4 x 4 = 16 a frame): smooth edges, the lens depth of field, and with "
-                                             "its Motion blur real motion blur. More samples take longer; at 60 fps more than 4 don't make the "
-                                             "motion blur finer (the game's clock runs in milliseconds).");
-                          ImGui::TextWrapped("Sound: turn on its sound button (off by default). After the frames the game plays the clip once more "
-                                             "in real time and records the game's own sound; keep it running until that is done.");
+    panels.push_back({"In the game's dialog", 4.0f, [] {
+                          ImGui::BulletText("Size 1440p or 4K, 60 fps");
+                          ImGui::BulletText("High quality on, 4 samples");
+                          ImGui::BulletText("Sound on (the clip plays once more for it)");
                           return false;
                       }});
     panels.push_back(settingsPanel("Format", s,
-                                   {{"VideoCodec", nullptr}, {"VideoQuality", nullptr}, {"Video10Bit", nullptr}, {"VideoBitrate", nullptr},
-                                    {"VideoEncoder", nullptr}, {"VideoFfmpegPreset", nullptr}, {"VideoHdr", nullptr}, {"VideoHdrPeak", nullptr},
+                                   {{"VideoCodec", nullptr}, {"VideoHdr", "Dynamic range"}, {"VideoQuality", nullptr}, {"Video10Bit", nullptr},
+                                    {"VideoBitrate", nullptr}, {"VideoEncoder", nullptr}, {"VideoFfmpegPreset", nullptr}, {"VideoHdrPeak", nullptr},
                                     {"VideoHdrWhite", nullptr}}));
     panels.push_back(settingsPanel("Rendering", s,
-                                   {{"VideoExportBest", nullptr}, {"VideoOwnFrames", nullptr}, {"VideoShutter", nullptr}, {"VideoLensDof", nullptr},
+                                   {{"VideoExportBest", nullptr}, {"VideoShutter", nullptr}, {"VideoLensDof", nullptr},
                                     {"VideoGrain", nullptr}, {"VideoAspect", nullptr}}));
     return panelColumns(panels, 380.0f);
 }
