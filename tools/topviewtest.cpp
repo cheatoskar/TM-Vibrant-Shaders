@@ -28,14 +28,19 @@ void endInternal() {}
 } // namespace hook
 } // namespace tmshaders
 
-// What the engine side would say: the material being drawn.
+// What the engine side would say: the material being drawn, and its colour map.
+IDirect3DBaseTexture9* g_testDiffuse = nullptr;
 namespace tmshaders {
 namespace engine {
 Material currentMaterial() { return Material::Other; }
-const void* currentShader() { return nullptr; }
+const void* currentShader() { static int s_shader; return &s_shader; } // inside a game shader call
 bool materialFile(const void*, wchar_t* out, size_t size) {
     wcsncpy_s(out, size, L"TestMaterial.Shader.Gbx", _TRUNCATE);
     return true;
+}
+IDirect3DBaseTexture9* materialDiffuse(const void*, wchar_t* file, size_t size) {
+    wcsncpy_s(file, size, L"TestD", _TRUNCATE);
+    return g_testDiffuse;
 }
 } // namespace engine
 } // namespace tmshaders
@@ -313,7 +318,8 @@ int main(int argc, char** argv) {
     device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
     device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
-    const auto drawQuad = [&](float x, float y, float z, IDirect3DTexture9* texture) {
+    const auto drawQuad = [&](float x, float y, float z, IDirect3DTexture9* texture, IDirect3DTexture9* diffuse = nullptr) {
+        g_testDiffuse = diffuse ? diffuse : texture;
         const float world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1};
         float wv[16], wvp[16], columns[16];
         mul(world, view, wv);
@@ -326,6 +332,12 @@ int main(int argc, char** argv) {
         topview::onDraw(device, D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2, view, projection);
         device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, 4, 0, 2);
     };
+    // A first pass of A without textures (as a depth or shadow pass): left out. A pass with only the
+    // lightmap bound: grey from it. Then the pass with A's own colour map: drawn again over it.
+    device->SetTexture(0, nullptr);
+    drawQuad(0.0f, 10.0f, 0.0f, nullptr, red);
+    device->SetTexture(0, lightmap);
+    drawQuad(0.0f, 10.0f, 0.0f, nullptr, red);
     drawQuad(0.0f, 10.0f, 0.0f, red);
     drawQuad(16.0f, 20.0f, 16.0f, green);
     drawQuad(0.0f, 10.0f, 0.0f, red);     // the same draw at the same place again: taken once
@@ -362,7 +374,7 @@ int main(int argc, char** argv) {
     gfx::release(boundTexture);
     gfx::release(backBuffer);
 
-    check(topview::meshes() == 2, "two draws in the picture (each seen again, also moved by jitter; one outside the area, one too high, one blended left out)");
+    check(topview::meshes() == 3, "three draws in the picture: A with the lightmap, A again with its colour map, B (A without textures left out; each seen again, also moved by jitter; one outside the area, one too high, one blended left out)");
     IDirect3DTexture9* picture = topview::picture();
     check(picture != nullptr, "the picture exists");
     if (picture) {
