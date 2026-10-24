@@ -209,6 +209,27 @@ constexpr size_t kPlayerTriggered = 0x48;
 // is not in the scene. The vehicle's vtable slot 32 is GetInterpolatedLocation(sector): with
 // no sector, the location of its first corpus, the one it is drawn with (between physics steps).
 constexpr size_t kPlayerMobil = 0x28;
+// The race's clock and checkpoint times (the Misc page's split times; Ghidra, TMNF names, the same
+// offsets in TMUF: GetCurrentStandardTime, OnCheckpoint, InternalOnCheckpoint and the
+// CTrackManiaPlayerInfo accessors ported over 256 bytes). CGameRace::MediaClipCheckInGameTriggers'
+// `this` is the CTrackManiaRace itself (single inheritance: CTrackManiaRace's override calls it with
+// its own this). The race's clock is +0x274 (ms); +0xf4 set: the times count from the lap's start.
+// The player's CTrackManiaPlayerInfo is at +0x1c (it points back at the player at +0x238): the
+// run's start +0x2ac (lap start +0x2b8), finished +0x33c with the final time at +0x2b0 (+0x2bc),
+// checkpoints passed this run +0x334, and the race time at each checkpoint (SetTimeAndScoreAtCheckpoint:
+// a CFastArray at +0x2f8, {time, score} each, time -1 = not yet).
+constexpr size_t kRaceClock = 0x274;
+constexpr size_t kRaceLapTimes = 0xf4;
+constexpr size_t kPlayerInfo = 0x1c;
+constexpr size_t kInfoPlayer = 0x238;
+constexpr size_t kInfoStart = 0x2ac, kInfoLapStart = 0x2b8;
+constexpr size_t kInfoFinalTime = 0x2b0, kInfoLapFinalTime = 0x2bc;
+constexpr size_t kInfoFinished = 0x33c;
+constexpr size_t kInfoPassed = 0x334;
+constexpr size_t kInfoCheckpoints = 0x2f8;
+// The map's identifier (CGameCtnChallenge::GenerateUid writes the UID's CMwId here; the
+// environment at +0xe0 and the author at +0xe4 follow).
+constexpr size_t kChallengeUid = 0xdc;
 constexpr size_t kGameMobilScene = 0x14;
 constexpr size_t kGameMobilSceneId = 0x1c;
 constexpr int kInterpolatedLocationSlot = 32;
@@ -483,6 +504,7 @@ ClipTriggersFn g_clipTriggers = nullptr;
 using RaceTriggersFn = void(__fastcall*)(void*, void*, void*, void*);
 RaceTriggersFn g_raceTriggers = nullptr;
 void* g_racePlayer = nullptr;                  // the player the race checked last (its car)
+void* g_race = nullptr;                        // the race that checked it (CTrackManiaRace, the Misc page's split times)
 DWORD g_racePlayerTick = 0;                    // when (a player of a race that ended is gone)
 void* g_clipPlayer = nullptr;                  // the clip player whose tracks ran last (replay editor, export)
 unsigned g_clipPlayerFrame = 0;                // in which frame (g_engineFrames)
@@ -1380,6 +1402,7 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     // weather, time of day and forced midnight of the map just loaded (its load came first).
     g_freeCam = nullptr;
     g_racePlayer = nullptr;
+    g_race = nullptr;
     g_clipPlayer = nullptr;
     if (!challenge || challenge != g_sceneChallenge) {
         reportNightJumps();
@@ -1864,6 +1887,7 @@ void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
 void __fastcall raceTriggersDetour(void* self, void* edx, void* player, void* group) {
     // Called every frame of a race with the local (or watched) player: the neon trail's car.
     g_racePlayer = player;
+    g_race = self;
     g_racePlayerTick = GetTickCount();
     g_raceTriggers(self, edx, player, group);
 }
@@ -2897,6 +2921,73 @@ bool carPose(CarPose& pose) {
 
 int mapCloses() {
     return static_cast<int>(g_mapCloses);
+}
+
+const void* currentMap() {
+    return currentChallenge();
+}
+
+namespace {
+// CMwId::GetString into `text` (inside __try: no objects to unwind here).
+void idTextInto(const void* id, char* text, size_t size) {
+    __try {
+        if (*static_cast<const uint32_t*>(id) == 0xffffffffu) return;
+        const char* name = reinterpret_cast<IdGetStringFn>(rebase(g_build->idGetString))(id, nullptr);
+        for (size_t i = 0; name && i + 1 < size && name[i]; i++) text[i] = name[i];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        text[0] = 0;
+    }
+}
+} // namespace
+
+std::string idText(const void* id) {
+    if (!g_build || !id) return std::string();
+    char text[128] = {};
+    idTextInto(id, text, sizeof(text));
+    return text;
+}
+
+std::string currentMapUid() {
+    const BYTE* challenge = static_cast<const BYTE*>(currentChallenge());
+    return challenge ? idText(challenge + kChallengeUid) : std::string();
+}
+
+bool raceTimes(RaceTimes& out) {
+    out = RaceTimes();
+    // A few seconds after the race last checked its player: after the finish it soon stops, and
+    // the finish's time is read in that moment (setChallengeDetour forgets the race with its map).
+    if (!g_build || !g_race || !g_racePlayer || GetTickCount() - g_racePlayerTick > 5000) return false;
+    __try {
+        const BYTE* race = static_cast<const BYTE*>(g_race);
+        const BYTE* info = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(g_racePlayer) + kPlayerInfo);
+        if (!info || *reinterpret_cast<void* const*>(info + kInfoPlayer) != g_racePlayer) {
+            static bool s_logged = false;
+            if (!s_logged) {
+                s_logged = true;
+                TMVS_LOG("engine: race times: the player's info (%p) doesn't point back at the player: no split times", info);
+            }
+            return false;
+        }
+        const bool lap = *reinterpret_cast<const DWORD*>(race + kRaceLapTimes) != 0;
+        const DWORD start = *reinterpret_cast<const DWORD*>(info + (lap ? kInfoLapStart : kInfoStart));
+        out.finished = *reinterpret_cast<const DWORD*>(info + kInfoFinished) != 0;
+        out.started = start != 0 || out.finished;
+        if (out.finished) out.time = *reinterpret_cast<const int*>(info + (lap ? kInfoLapFinalTime : kInfoFinalTime));
+        else if (start != 0) out.time = static_cast<int>(*reinterpret_cast<const DWORD*>(race + kRaceClock) - start);
+        out.passed = *reinterpret_cast<const int*>(info + kInfoPassed);
+        const DWORD count = *reinterpret_cast<const DWORD*>(info + kInfoCheckpoints);
+        const DWORD* entries = *reinterpret_cast<const DWORD* const*>(info + kInfoCheckpoints + 4);
+        if (count > static_cast<DWORD>(RaceTimes::kMax) || (count && !entries)) return false;
+        out.count = static_cast<int>(count);
+        for (DWORD i = 0; i < count; i++) out.times[i] = static_cast<int>(entries[i * 2]);
+        out.race = g_race;
+        // Not the HUD's numbers (another build): no race as far as we know.
+        if (out.time < 0 || out.time > 24 * 3600 * 1000 || out.passed < 0 || out.passed > 100000) return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out = RaceTimes();
+        return false;
+    }
+    return true;
 }
 
 bool mapOpen() {

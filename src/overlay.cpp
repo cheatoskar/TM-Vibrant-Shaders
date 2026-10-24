@@ -7,6 +7,7 @@
 #include "pipeline.h"
 #include "log.h"
 #include "lut.h"
+#include "misc/misc.h"
 #include "modpack.h"
 #include "photo.h"
 #include "thumbnails.h"
@@ -182,12 +183,15 @@ int mouseButton(UINT msg, WPARAM wparam, bool& up) {
 // A press we swallowed: its release is swallowed too, and only then (a release the game never
 // saw the press of is harmless, a press it saw whose release is eaten is a stuck button).
 bool g_swallowedButton[5] = {};
+// Detached menu windows kept on screen with the menu closed (menu::pinnedWindows): their mouse is
+// handled like the compare split's bar.
+bool g_pinned = false;
 
 // The mouse for the split's bar with the menu closed: moves always (hover), presses only over it
 // (or while ImGui holds one: its release), so the game keeps every other click and its mouse
 // capture (the backend takes and releases the capture with each press).
 bool splitBarMouse(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (!(g_splitBar || g_photoPanel) || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
+    if (!(g_splitBar || g_photoPanel || g_pinned) || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
     ImGuiIO& io = ImGui::GetIO();
     const bool held = io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2];
     if (msg != WM_MOUSEMOVE && !io.WantCaptureMouse && !held) return false;
@@ -517,6 +521,24 @@ void drawSplitBar() {
                        photo::splitSwapped(), photo::splitLightNote());
 }
 
+// The mod's name and version at the top right of the game's menus and login screen (no map open),
+// as TrackMania 2's build greets with its version. Never in a race, a replay, the editor, the video
+// export or photos (those have a map open, or hideTools).
+bool statusLineWanted() {
+    return engine::active() && !engine::mapOpen() && !photo::active() && !g_status.hideTools;
+}
+
+void drawStatusLine() {
+    const float scale = menu::scale();
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 12.0f * scale, 8.0f * scale), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.35f);
+    ImGui::Begin("##statusLine", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::TextDisabled("TM Vibrant Shaders %s", TM_SHADERS_VERSION_A);
+    ImGui::End();
+}
+
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
     if (!g_initialized) init(device);
@@ -537,9 +559,20 @@ void draw(IDirect3DDevice9* device) {
     }
     const bool menu = Config::get().showOverlay;
     const char* photoHint = photo::status();
+    misc::Frame tools;
+    tools.device = device;
+    tools.menuOpen = menu;
+    tools.hide = g_status.hideTools || photo::active();
+    const bool toolsWanted = misc::wantsOverlay(tools); // once a frame: it also follows the race
+    const bool statusLine = statusLineWanted();
+    // Detached windows: never in a hi-res photo's tiles or the video export's frames.
+    engine::VideoExport exporting;
+    const bool capturing = photo::tiling() || engine::videoExport(exporting);
+    const bool pinned = !capturing && menu::pinnedWindows();
+    g_pinned = pinned && !menu;
     if (!menu) {
         Config::get().previewPreset.clear();
-        if (!*photoHint) {
+        if (!*photoHint && !pinned && !toolsWanted && !statusLine) {
             g_splitBar = false;
             g_photoPanel = false;
             publishMouseOwner(false);
@@ -553,9 +586,11 @@ void draw(IDirect3DDevice9* device) {
     ImGui_ImplWin32_NewFrame();
     // Draw ImGui's cursor over the menu or the split's bar (the game hides the OS cursor), the game's elsewhere.
     // Only while we own the mouse: with both mods' menus open only one pointer is drawn.
-    ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
+    ImGui::GetIO().MouseDrawCursor = (menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
-    if (menu) {
+    if (statusLine) drawStatusLine();
+    if (toolsWanted) misc::drawOverlay(tools); // before the menu: it stays on top
+    if (menu || pinned) {
         // The pipeline's GPU timings for the Performance page.
         struct Timings : menu::PassTimings {
             const Pipeline* p;
@@ -592,6 +627,8 @@ void draw(IDirect3DDevice9* device) {
         host.supports = [](const Field& f) { return strcmp(f.key, "ToneCurve") != 0; }; // ManiaPlanet only
         g_packs.device = device;
         host.resourcePacks = &g_packs;
+        if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
+        host.hideDetached = capturing;
         menu::draw(host);
     }
     if (*photoHint) {
@@ -613,14 +650,17 @@ void draw(IDirect3DDevice9* device) {
     if (g_photoPanel) drawPhotoPanel();
     ImGui::EndFrame();
     // Does one of our windows want the mouse (hovered or held)? Then the other mod stays out of it.
-    publishMouseOwner((menu || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse);
+    publishMouseOwner((menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse);
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
         {
             CleanFixedFunction clean(device); // given back to the game at the end of this block
             ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
         }
-        if (ImGui::GetDrawData()->TotalVtxCount > 0) SetPropW(g_hwnd, kTopOverlay, selfHandle()); // drawn last: on top
+        // Drawn last: on top. Only windows that take the mouse count (the Misc page's windows and the
+        // status line ignore it with the menu closed: the other mod keeps its place then).
+        if (ImGui::GetDrawData()->TotalVtxCount > 0 && (menu || pinned || g_splitBar)) SetPropW(g_hwnd, kTopOverlay, selfHandle());
+        else if (!menu && !pinned && !g_splitBar) removeTop();
         device->EndScene();
     }
 }

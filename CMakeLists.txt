@@ -183,6 +183,20 @@ add_library(tm_vibrant_shaders SHARED
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
 )
 target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm shell32 winhttp)
+
+# The Misc page's tools (src/misc, see its README.md): the minimap, split times against your best and
+# a replay, finish effects. OFF removes them all: no page, no overlays, no downloads.
+option(TMVS_MISC_TOOLS "Build the Misc page (minimap, split times, finish effects)" ON)
+if(TMVS_MISC_TOOLS)
+  target_sources(tm_vibrant_shaders PRIVATE
+    src/misc/misc.cpp
+    src/misc/mapview.cpp
+    src/misc/splits.cpp
+    src/misc/replay.cpp
+    src/misc/tmx.cpp
+    src/misc/confetti.cpp)
+  target_compile_definitions(tm_vibrant_shaders PRIVATE TMVS_MISC_TOOLS=1)
+endif()
 target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR})
 target_compile_options(tm_vibrant_shaders PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
 
@@ -252,6 +266,12 @@ target_compile_options(tmvs_sharetest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_packtest tools/packtest.cpp)
 target_link_libraries(tmvs_packtest PRIVATE tmvs_core)
 target_compile_options(tmvs_packtest PRIVATE ${TMVS_OPTIONS})
+
+# Replay reader test: LZO1X, the GBX header and the ghost's checkpoint times, on your replays in
+# Documents\TrackMania\Tracks\Replays (development tool; the Misc page's split times read them).
+add_executable(tmvs_replaytest tools/replaytest.cpp src/misc/replay.cpp)
+target_link_libraries(tmvs_replaytest PRIVATE tmvs_core shell32)
+target_compile_options(tmvs_replaytest PRIVATE ${TMVS_OPTIONS})
 
 # Video export read-back test: the frames come out once each and in order, with repeats, flushes
 # and a device reset in between, on a plain D3D9 device (development tool).

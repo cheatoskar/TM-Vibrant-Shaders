@@ -53,6 +53,9 @@ struct ResourcePacks {
 struct Host {
     // The Resource packs page (null: no such page, TrackMania 2).
     ResourcePacks* resourcePacks = nullptr;
+    // The Misc page: minimap, split times, finish effects (null: no such page, TrackMania 2 or a build
+    // without TMVS_MISC_TOOLS). Draws the page's content.
+    std::function<void()> miscPage;
     bool depthAvailable = true;
     bool engineHooks = true;
     bool sunKnown = false;
@@ -82,6 +85,8 @@ struct Host {
     std::function<void()> photoOn;
     // TrackMania Nations/United: photo mode can leave the cars out (the *Hide car* switch).
     bool photoHideCar = false;
+    // A photo, a capture or the video export is running: no detached windows this frame.
+    bool hideDetached = false;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
     // Whether shaders can be reloaded (TMNF only). The hotkeys themselves are in keys.h.
@@ -102,7 +107,13 @@ struct Host {
 // Colours, sizes and fonts (after ImGui::CreateContext, before the renderer backend).
 void setupStyle(HWND window);
 float scale();
+// The menu's windows: the menu itself when it is open, and the pages the player pulled out of it
+// into windows of their own (those with "Keep open when the menu closes" also while it is closed).
+// Host::hideDetached: a photo or a capture is being taken, no detached windows.
 void draw(const Host& host);
+// A detached window wants to stay on screen with the menu closed: the host must keep calling draw
+// and let the mouse reach it the way it does for the compare split's bar.
+bool pinnedWindows();
 // A setting's explanation for its tooltip (null: none), for the host's own panel too.
 const char* tooltip(const char* key);
 // Set when the user asks for a shader reload from the menu; cleared by the call.

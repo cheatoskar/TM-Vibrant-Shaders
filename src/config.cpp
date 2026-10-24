@@ -1721,6 +1721,28 @@ void Config::load() {
     // Until 1.3 the menu had a simple and an advanced view: advanced opens the studio.
     const int advanced = GetPrivateProfileIntW(L"General", L"AdvancedMenu", 0, ini) != 0 ? 2 : 0;
     menuPage = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuPage", advanced, ini));
+    // [Windows]: Page=detached,minimized,keepOpen,x,y,w,h,opacity
+    menuWindows.clear();
+    {
+        std::vector<wchar_t> section(32768);
+        GetPrivateProfileSectionW(L"Windows", section.data(), static_cast<DWORD>(section.size()), ini);
+        for (const wchar_t* line = section.data(); *line; line += wcslen(line) + 1) {
+            const wchar_t* eq = wcschr(line, L'=');
+            if (!eq || eq == line) continue;
+            MenuWindow w;
+            int det = 0, min = 0, keep = 0, opacity = 100;
+            float x = 0, y = 0, width = 0, height = 0;
+            if (swscanf(eq + 1, L"%d,%d,%d,%f,%f,%f,%f,%d", &det, &min, &keep, &x, &y, &width, &height, &opacity) != 8) continue;
+            w.detached = det != 0;
+            w.minimized = min != 0;
+            w.keepOpen = keep != 0;
+            w.x = x, w.y = y, w.w = width, w.h = height;
+            w.opacity = opacity < 30 ? 30 : (opacity > 100 ? 100 : opacity);
+            std::string key;
+            for (const wchar_t* c = line; c < eq; c++) key += static_cast<char>(towlower(*c) & 0x7f);
+            menuWindows[key] = w;
+        }
+    }
     hoverPreview = GetPrivateProfileIntW(L"General", L"HoverPreview", 1, ini) != 0;
     menuFull = GetPrivateProfileIntW(L"General", L"MenuFull", 0, ini) != 0;
     checkUpdates = GetPrivateProfileIntW(L"General", L"CheckForUpdates", 1, ini) != 0;
@@ -1863,6 +1885,13 @@ void Config::save() {
     wchar_t page[16];
     swprintf(page, 16, L"%d", menuPage);
     ini.set(L"General", L"MenuPage", page);
+    for (const auto& entry : menuWindows) {
+        const MenuWindow& w = entry.second;
+        wchar_t value[160];
+        swprintf(value, 160, L"%d,%d,%d,%.0f,%.0f,%.0f,%.0f,%d", w.detached ? 1 : 0, w.minimized ? 1 : 0, w.keepOpen ? 1 : 0, w.x, w.y, w.w, w.h,
+                 w.opacity);
+        ini.set(L"Windows", widen(entry.first).c_str(), value);
+    }
     ini.set(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0");
     ini.set(L"General", L"MenuFull", menuFull ? L"1" : L"0");
     ini.set(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0");
@@ -1900,6 +1929,7 @@ void Config::save() {
     ini.set(L"General", L"LastMood", value);
     writeFields(own, ini, L"Settings", true);
     keys::save(ini);
+    if (saveExtra) saveExtra(ini);
     if (ini.save(m_path)) {
         m_dirty = false;
         return;

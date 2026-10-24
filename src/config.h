@@ -1,10 +1,12 @@
 #pragma once
 #include "settings.h"
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace tmshaders {
+class IniFile;
 
 enum class Preset : int {
     Vibrant = 0,     // Sildur's Vibrant style: saturated, warm sun, strong shafts
@@ -87,6 +89,16 @@ public:
     bool showOverlay = false;
     // F8 menu: the page (0 shaders, 1 customize, 2 studio, 3 maps, 4 performance).
     int menuPage = 0;
+    // F8 menu: a page in a window of its own ([Windows] in settings.ini), by the page's key
+    // ("maps"). Positions and sizes are at menu scale 1 (the menu multiplies by its scale).
+    struct MenuWindow {
+        bool detached = false;
+        bool minimized = false;
+        bool keepOpen = false; // stays on screen when the menu is closed
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f; // w = 0: not placed yet
+        int opacity = 100;                           // percent, 30..100
+    };
+    std::map<std::string, MenuWindow> menuWindows;
     int menuSections = 0;      // F8 menu: one bit per open section (all collapsed at first)
     bool hoverPreview = true;  // F8 menu: pointing at a preset shows it in the game
     bool menuFull = false;     // F8 menu over the whole screen (else the game stays in view on the right)
@@ -116,6 +128,8 @@ public:
     bool packReplaceMapMod = true; // a chosen pack also replaces a map's own mod
     PackChoice& packChoice(const std::string& environment);
     const PackChoice* findPackChoice(const std::string& environment) const;
+    // Another part's own section of settings.ini, written with the rest (the Misc page's [Misc]).
+    void (*saveExtra)(IniFile& ini) = nullptr;
     // Picking a preset also makes it the one for this kind of map (day / sunset / night).
     bool rememberMoodPick = false;
     // The preset the menu points at: shown in the game until the pointer leaves (not saved).
