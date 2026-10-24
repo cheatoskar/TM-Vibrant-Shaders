@@ -1,5 +1,4 @@
 #include "misc/internal.h"
-#include "blockorder.h"
 #include "casters.h"
 #include "engine.h"
 #include "gfx.h"
@@ -15,22 +14,26 @@
 #include <unordered_set>
 #include <vector>
 
-// The minimap's picture from above ("Real look"): the meshes the game draws for the map's blocks,
-// drawn again once each into a texture seen straight from above, with their own texture and a
-// plain light from above. Every block gets the same treatment: nothing is told apart by what it
-// does (no waypoint field is read; a checkpoint gate is its geometry like in the editor).
+// The minimap's picture from above ("Real look"): the meshes the game draws for the map, drawn again
+// once each into a texture seen straight from above, with their own texture and a plain light from
+// above. Every mesh gets the same treatment: nothing is told apart by what it does (no block is
+// named, no waypoint field is read; a checkpoint gate is its geometry like in the editor).
 //
-// Which draws: indexed draws of the main camera that blockorder.cpp maps to a block of the open map
-// (corpus -> item -> block), plus the grass material's (the ground), opaque (depth written, no
-// blending, no alpha test). Each distinct one (item, buffers, index range) once per map. Where:
-// the world matrix from the game's own constants (casters::drawWorld, the same recovery the long
-// shadows use). With what: the game's vertex and index buffers, its declaration's POSITION and
-// TEXCOORD0, the texture in sampler 0. The draws are queued with references to all of that and
-// drawn at Present (before the overlay), at most kPerFrame a frame, inside a saved and restored
-// device state: never inside one of the game's passes.
+// Which draws: every indexed draw of the main camera that is opaque (depth and colour written, no
+// blending, no alpha test), from the managed pool (the game's static meshes), not a car's or glass,
+// with a world matrix in the game's constants (casters::drawWorld, the recovery the long shadows
+// use), whose mesh lies inside the map's grid area and below the highest track plus a margin: the
+// sky, the clouds and the stadium around the grid stay out. Blocks are not asked for by identity:
+// the game's corpus for a draw is a block's in only a few percent of the draws (my log on A01).
+// Each distinct draw (buffers, index range, place and turn rounded) once per map; instances of a
+// block share their buffers and differ by place. With what: the game's vertex and index buffers,
+// its declaration's POSITION and TEXCOORD0, the texture in sampler 0. The draws are queued with
+// references to all of that and drawn at Present (before the overlay), at most kPerFrame a frame,
+// inside a saved and restored device state: never inside one of the game's passes.
 //
-// Blocks the game hasn't drawn yet stay the plain squares of mapview.cpp under the picture; they
-// fill in as the camera sees them.
+// Meshes the game hasn't drawn yet stay the plain squares of mapview.cpp under the picture; they
+// fill in as the camera sees them. Once nothing new came for a while, only one draw in kStride is
+// looked at per frame (each one every kStride frames), so the checks cost little after the build-up.
 namespace tmshaders {
 namespace misc {
 namespace topview {
@@ -43,7 +46,11 @@ constexpr UINT kPerFrame = 400;         // drawn into the picture per frame
 constexpr size_t kMaxKeys = 200000;
 constexpr float kLowest = -64.0f;       // m: the depth range of the picture (higher covers lower)
 constexpr float kHighest = 2048.0f;
-constexpr int kQuietFrames = 30;        // frames an item's draws brought nothing new: it is done
+constexpr float kMargin = 16.0f;        // m a mesh may reach past the grid area
+constexpr unsigned kStride = 8;         // after the build-up: one draw in 8 looked at per frame
+constexpr unsigned kNewPerFrame = 48;  // new meshes measured per frame (their vertices are read: ~20 us each)
+constexpr DWORD kSettleMs = 5000;       // nothing new for this long: the build-up is over
+constexpr DWORD kReportMs = 60000;      // the cost line while the minimap is on
 
 const char* kTopVS = R"(
 float4x4 u_MeshToMap : register(c0);   // mesh -> the picture's clip space (row vectors, columns)
@@ -77,6 +84,7 @@ struct DeclInfo {
     IDirect3DVertexDeclaration9* own = nullptr; // null: no usable position
     WORD streams[2] = {0, 0};
     int streamCount = 0;
+    WORD positionOffset = 0;
     bool texcoord = false;
 };
 
@@ -94,21 +102,37 @@ struct Job {
     float world[4][3] = {};
 };
 
-struct ItemState {
-    unsigned frame = 0;
-    bool fresh = false; // a new draw of it this frame
-    int quiet = 0;
+// GPU time of the redraws: timestamps around each frame's batch, read a few frames later.
+struct GpuTimer {
+    IDirect3DQuery9* disjoint = nullptr;
+    IDirect3DQuery9* frequency = nullptr;
+    IDirect3DQuery9* begin = nullptr;
+    IDirect3DQuery9* end = nullptr;
+    bool pending = false;
+};
+
+// Time sums over a stretch (the build-up, or the last report).
+struct Sums {
+    unsigned frames = 0;     // frames with the minimap drawn
+    double drawMs = 0.0;     // CPU: the minimap's drawing (mapview::draw, the redraws included)
+    double checkMs = 0.0;    // CPU: the per-draw checks (onDraw)
+    double renderMs = 0.0;   // CPU: the redraws alone (part of drawMs)
+    double gpuMs = 0.0;      // GPU: the redraws
+    unsigned gpuFrames = 0;  // frames whose GPU time was read
+    unsigned checked = 0;    // draws looked at past the quick checks
+    int meshes = 0;          // drawn into the picture
 };
 
 struct State {
     bool wanted = false;
     const void* map = nullptr;
     bool region = false;
-    float x0 = 0, z0 = 0, x1 = 1, z1 = 1;
+    float x0 = 0, z0 = 0, x1 = 1, z1 = 1, top = kHighest;
     int width = 0, height = 0;
     IDirect3DTexture9* texture = nullptr;
     IDirect3DSurface9* surface = nullptr;
     IDirect3DSurface9* depth = nullptr;
+    bool mipmaps = false;
     bool cleared = false;
     IDirect3DStateBlock9* saved = nullptr;
     IDirect3DVertexShader9* vs = nullptr;
@@ -116,28 +140,39 @@ struct State {
     bool failed = false; // resources could not be made: the squares stay
     std::vector<Job> queue;
     std::unordered_set<uint64_t> keys;
-    std::unordered_map<uintptr_t, ItemState> items;
-    std::unordered_set<uintptr_t> doneItems;
-    unsigned frame = 1; // render() counts them (0: an item not seen yet)
+    unsigned frame = 1;
+    unsigned drawIndex = 0; // the main camera's indexed draws this frame (the stride)
+    unsigned newThisFrame = 0; // new meshes measured this frame (kNewPerFrame)
     int drawn = 0;
     // The height shading's base: the lowest mesh seen before the first drawing (the ground).
     float lowestSeen = 1e9f, ground = 0.0f;
     bool groundFixed = false;
-    // The log: once per map, after the queue was empty for a while.
-    double worstMs = 0.0, totalMs = 0.0;
-    double lookMs = 0.0; // onDraw's time on the draws it looked at (past the quick checks)
-    unsigned looked = 0;
-    int framesDrawn = 0;
-    DWORD lastWork = 0;
-    bool logged = false;
+    // The build-up: from the first mesh queued until nothing new came for kSettleMs.
+    DWORD firstNew = 0, lastNew = 0;
+    bool settled = false;
+    int buildLines = 0; // build-up lines this map (a camera that keeps finding more: at most 3)
+    Sums build, window;
+    DWORD windowStart = 0;
+    GpuTimer gpu[4];
 };
 State g;
 std::map<std::tuple<WORD, BYTE, WORD, BYTE, bool, bool>, IDirect3DVertexDeclaration9*> g_ownDecls;
 std::unordered_map<IDirect3DVertexDeclaration9*, DeclInfo> g_decls; // the game's (held) -> ours
 
+double now() {
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    return static_cast<double>(t.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart);
+}
+
 uint64_t mix(uint64_t h, uint64_t v) {
     h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
     return h * 0xff51afd7ed558ccdull;
+}
+
+int64_t rounded(float v, float step) {
+    return static_cast<int64_t>(floorf(v / step + 0.5f));
 }
 
 void releaseJob(Job& j) {
@@ -177,6 +212,7 @@ DeclInfo declInfo(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
         const bool twoStreams = texcoord && texcoord->Stream != position->Stream;
         info.streams[0] = position->Stream;
         info.streamCount = 1;
+        info.positionOffset = position->Offset;
         if (twoStreams) {
             info.streams[1] = texcoord->Stream;
             info.streamCount = 2;
@@ -200,6 +236,62 @@ DeclInfo declInfo(IDirect3DDevice9* device, IDirect3DVertexDeclaration9* decl) {
     return info;
 }
 
+bool managed(IDirect3DVertexBuffer9* vb) {
+    D3DVERTEXBUFFER_DESC d{};
+    return SUCCEEDED(vb->GetDesc(&d)) && d.Pool == D3DPOOL_MANAGED && !(d.Usage & D3DUSAGE_DYNAMIC);
+}
+
+bool managed(IDirect3DIndexBuffer9* ib) {
+    D3DINDEXBUFFER_DESC d{};
+    return SUCCEEDED(ib->GetDesc(&d)) && d.Pool == D3DPOOL_MANAGED && !(d.Usage & D3DUSAGE_DYNAMIC);
+}
+
+// The mesh's own bounds from its vertices (the managed pool keeps a copy in system memory: reading
+// it doesn't touch the GPU). False: not readable, or nonsense.
+bool meshBounds(const Job& j, WORD positionOffset, float lo[3], float hi[3]) {
+    const long long first = static_cast<long long>(j.base) + j.minIndex;
+    if (first < 0 || j.vertices == 0 || j.stride[0] < positionOffset + 12u) return false;
+    void* data = nullptr;
+    const UINT from = j.offset[0] + static_cast<UINT>(first) * j.stride[0];
+    if (FAILED(j.vb[0]->Lock(from, j.vertices * j.stride[0], &data, D3DLOCK_READONLY | D3DLOCK_NOSYSLOCK)) || !data) return false;
+    for (int k = 0; k < 3; k++) {
+        lo[k] = 1e30f;
+        hi[k] = -1e30f;
+    }
+    bool ok = true;
+    __try {
+        const unsigned char* v = static_cast<const unsigned char*>(data) + positionOffset;
+        for (UINT i = 0; i < j.vertices; i++, v += j.stride[0]) {
+            const float* p = reinterpret_cast<const float*>(v);
+            for (int k = 0; k < 3; k++) {
+                lo[k] = fminf(lo[k], p[k]);
+                hi[k] = fmaxf(hi[k], p[k]);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    j.vb[0]->Unlock();
+    for (int k = 0; k < 3 && ok; k++) ok = std::isfinite(lo[k]) && std::isfinite(hi[k]) && hi[k] >= lo[k];
+    return ok;
+}
+
+// Inside the map's area: the mesh's world box within the grid (plus a margin) and below the highest
+// track plus a margin. The sky, the clouds and the stadium around the grid are not.
+bool insideMap(const Job& j, const float lo[3], const float hi[3]) {
+    float wlo[3] = {1e30f, 1e30f, 1e30f}, whi[3] = {-1e30f, -1e30f, -1e30f};
+    for (int c = 0; c < 8; c++) {
+        const float p[3] = {(c & 1) ? hi[0] : lo[0], (c & 2) ? hi[1] : lo[1], (c & 4) ? hi[2] : lo[2]};
+        for (int k = 0; k < 3; k++) {
+            const float w = p[0] * j.world[0][k] + p[1] * j.world[1][k] + p[2] * j.world[2][k] + j.world[3][k];
+            wlo[k] = std::min(wlo[k], w);
+            whi[k] = std::max(whi[k], w);
+        }
+    }
+    return wlo[0] >= g.x0 - kMargin && whi[0] <= g.x1 + kMargin && wlo[2] >= g.z0 - kMargin && whi[2] <= g.z1 + kMargin && whi[1] <= g.top &&
+           whi[1] > kLowest;
+}
+
 // A texture the picture may use: a plain 2D one, not a render target or depth texture (the game's
 // shadow buffer, reflections: their content changes every frame).
 bool usableTexture(IDirect3DBaseTexture9* t) {
@@ -209,11 +301,22 @@ bool usableTexture(IDirect3DBaseTexture9* t) {
     return !(d.Usage & (D3DUSAGE_RENDERTARGET | D3DUSAGE_DEPTHSTENCIL));
 }
 
+void releaseGpuTimers() {
+    for (GpuTimer& t : g.gpu) {
+        gfx::release(t.disjoint);
+        gfx::release(t.frequency);
+        gfx::release(t.begin);
+        gfx::release(t.end);
+        t.pending = false;
+    }
+}
+
 void releaseTargets() {
     gfx::release(g.surface);
     gfx::release(g.texture);
     gfx::release(g.depth);
     gfx::release(g.saved);
+    releaseGpuTimers();
     g.cleared = false;
 }
 
@@ -222,16 +325,21 @@ void releaseTargets() {
 void forget() {
     clearQueue();
     g.keys.clear();
-    g.items.clear();
-    g.doneItems.clear();
     g.cleared = false;
     g.drawn = 0;
     g.lowestSeen = 1e9f;
     g.groundFixed = false;
-    g.worstMs = g.totalMs = g.lookMs = 0.0;
-    g.looked = 0;
-    g.framesDrawn = 0;
-    g.logged = false;
+    g.firstNew = g.lastNew = 0;
+    g.settled = false;
+    g.buildLines = 0;
+    g.build = Sums();
+}
+
+// Video memory of the picture: the colour target with its mipmaps and the depth buffer.
+double megabytes() {
+    if (!g.texture) return 0.0;
+    const double pixels = static_cast<double>(g.width) * g.height;
+    return (pixels * 4.0 * (g.mipmaps ? 4.0 / 3.0 : 1.0) + pixels * 4.0) / (1024.0 * 1024.0);
 }
 
 bool ensureResources(IDirect3DDevice9* device) {
@@ -240,8 +348,9 @@ bool ensureResources(IDirect3DDevice9* device) {
     if (!g.ps) g.ps = gfx::compilePixelShader(device, kTopPS, "main", "MinimapTopPS");
     if (!g.texture) {
         // With mipmaps made by the card: the whole map in a small window doesn't shimmer.
-        if (FAILED(device->CreateTexture(g.width, g.height, 0, D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT,
-                                         &g.texture, nullptr))) {
+        g.mipmaps = SUCCEEDED(device->CreateTexture(g.width, g.height, 0, D3DUSAGE_RENDERTARGET | D3DUSAGE_AUTOGENMIPMAP, D3DFMT_A8R8G8B8,
+                                                    D3DPOOL_DEFAULT, &g.texture, nullptr)) && g.texture;
+        if (!g.mipmaps) {
             g.texture = nullptr;
             device->CreateTexture(g.width, g.height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &g.texture, nullptr);
         }
@@ -258,14 +367,61 @@ bool ensureResources(IDirect3DDevice9* device) {
         g.failed = true;
         return false;
     }
+    // The GPU timers (none on a card without timestamp queries: the log says "n/a").
+    for (GpuTimer& t : g.gpu) {
+        if (t.end) continue;
+        if (FAILED(device->CreateQuery(D3DQUERYTYPE_TIMESTAMPDISJOINT, &t.disjoint)) || FAILED(device->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &t.frequency)) ||
+            FAILED(device->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &t.begin)) || FAILED(device->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &t.end))) {
+            gfx::release(t.disjoint);
+            gfx::release(t.frequency);
+            gfx::release(t.begin);
+            gfx::release(t.end);
+        }
+    }
     return true;
 }
 
-double now() {
-    LARGE_INTEGER t, f;
-    QueryPerformanceCounter(&t);
-    QueryPerformanceFrequency(&f);
-    return static_cast<double>(t.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart);
+// The redraws' GPU times that have come in (never waits).
+void collectGpu() {
+    for (GpuTimer& t : g.gpu) {
+        if (!t.pending) continue;
+        BOOL disjoint = FALSE;
+        UINT64 frequency = 0, begin = 0, end = 0;
+        if (t.disjoint->GetData(&disjoint, sizeof(disjoint), 0) != S_OK || t.frequency->GetData(&frequency, sizeof(frequency), 0) != S_OK ||
+            t.begin->GetData(&begin, sizeof(begin), 0) != S_OK || t.end->GetData(&end, sizeof(end), 0) != S_OK) {
+            continue;
+        }
+        t.pending = false;
+        if (disjoint || frequency == 0 || end < begin) continue;
+        const double ms = static_cast<double>(end - begin) * 1000.0 / static_cast<double>(frequency);
+        g.window.gpuMs += ms;
+        g.window.gpuFrames++;
+        if (!g.settled) {
+            g.build.gpuMs += ms;
+            g.build.gpuFrames++;
+        }
+    }
+}
+
+void add(Sums& to, const Sums& from) {
+    to.frames += from.frames;
+    to.drawMs += from.drawMs;
+    to.checkMs += from.checkMs;
+    to.renderMs += from.renderMs;
+    to.checked += from.checked;
+    to.meshes += from.meshes;
+}
+
+void logSums(const char* what, const Sums& s, double seconds) {
+    const double frames = std::max(1u, s.frames);
+    char gpu[64] = "n/a (no timestamp queries)";
+    if (s.gpuFrames) snprintf(gpu, sizeof(gpu), "%.3f ms a frame with redraws (%.1f ms in all)", s.gpuMs / s.gpuFrames, s.gpuMs);
+    else if (!g.wanted) snprintf(gpu, sizeof(gpu), "none (Real look off)");
+    else if (s.meshes == 0) snprintf(gpu, sizeof(gpu), "none (no redraws)");
+    TMVS_LOG("misc: minimap cost, %s (%.0f s, %u frames, Real look %s): CPU %.3f ms a frame (drawing %.3f, of it redraws %.3f; checks of the "
+             "game's draws %.3f, %u looked at); GPU %s; %d meshes drawn into the picture; picture %d x %d px, %.1f MB of video memory",
+             what, seconds, s.frames, g.wanted ? "on" : "off", (s.drawMs + s.checkMs) / frames, s.drawMs / frames, s.renderMs / frames,
+             s.checkMs / frames, s.checked, gpu, s.meshes, g.texture ? g.width : 0, g.texture ? g.height : 0, megabytes());
 }
 
 } // namespace
@@ -278,14 +434,14 @@ void setWanted(bool wanted) {
     g.wanted = wanted;
 }
 
-void setRegion(const void* map, float x0, float z0, float x1, float z1, int cellsX, int cellsZ) {
+void setRegion(const void* map, float x0, float z0, float x1, float z1, float top, int cellsX, int cellsZ) {
     int width = cellsX * kPixelsPerCell, height = cellsZ * kPixelsPerCell;
     const int largest = std::max(width, height);
     if (largest > kMaxSize) {
         width = std::max(1, width * kMaxSize / largest);
         height = std::max(1, height * kMaxSize / largest);
     }
-    const bool same = g.region && map == g.map && x0 == g.x0 && z0 == g.z0 && x1 == g.x1 && z1 == g.z1;
+    const bool same = g.region && map == g.map && x0 == g.x0 && z0 == g.z0 && x1 == g.x1 && z1 == g.z1 && top == g.top;
     if (same) return;
     forget();
     if (width != g.width || height != g.height) releaseTargets();
@@ -295,6 +451,7 @@ void setRegion(const void* map, float x0, float z0, float x1, float z1, int cell
     g.z0 = z0;
     g.x1 = x1;
     g.z1 = z1;
+    g.top = top;
     g.width = width;
     g.height = height;
     g.failed = false;
@@ -308,32 +465,18 @@ void clearRegion() {
 
 void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
             const float view[16], const float projection[16]) {
-    if (!g.wanted || !g.region || g.failed || count == 0 || g.queue.size() >= kMaxQueue) return;
-    uintptr_t item = blockorder::currentDrawItem();
-    if (item) {
-        if (g.doneItems.count(item)) return; // every draw of this block is in the picture
-        ItemState& s = g.items[item];
-        if (s.frame != g.frame) {
-            // A new frame for this block: nothing new the last time it was drawn -> one quiet frame more.
-            if (s.frame != 0) s.quiet = s.fresh ? 0 : s.quiet + 1;
-            s.frame = g.frame;
-            s.fresh = false;
-            if (s.quiet >= kQuietFrames) {
-                g.doneItems.insert(item);
-                g.items.erase(item);
-                return;
-            }
-        }
-    } else if (engine::currentMaterial() != engine::Material::Grass) {
-        return; // not a block of the map (the car, the stadium around it, the sky) and not the ground
-    }
+    if (!g.wanted || !g.region || g.failed || count == 0) return;
+    const double t0 = now();
     struct Timer {
-        double from = now();
-        ~Timer() {
-            g.lookMs += now() - from;
-            g.looked++;
-        }
-    } timer;
+        double from;
+        ~Timer() { g.window.checkMs += now() - from; }
+    } timer{t0};
+    // After the build-up one draw in kStride is looked at per frame (a different one each frame).
+    const unsigned index = g.drawIndex++;
+    if (g.settled && (index + g.frame) % kStride != 0) return;
+    if (g.queue.size() >= kMaxQueue) return;
+    const engine::Material material = engine::currentMaterial();
+    if (material == engine::Material::Car || material == engine::Material::Glass) return; // cars, ghosts, windows
     DWORD z = FALSE, zwrite = FALSE, blend = FALSE, alphaTest = FALSE, colorWrite = 0;
     device->GetRenderState(D3DRS_ZENABLE, &z);
     device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
@@ -341,6 +484,7 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     device->GetRenderState(D3DRS_ALPHATESTENABLE, &alphaTest);
     device->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
     if (!z || !zwrite || blend || alphaTest || !colorWrite) return;
+    g.window.checked++;
     IDirect3DVertexDeclaration9* decl = nullptr;
     device->GetVertexDeclaration(&decl);
     if (!decl) return;
@@ -349,6 +493,12 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     if (!info.own) return;
     Job j;
     j.decl = info.own;
+    j.type = type;
+    j.base = base;
+    j.minIndex = minIndex;
+    j.vertices = vertices; // meshBounds reads this range
+    j.start = start;
+    j.count = count;
     j.streams = info.streamCount;
     j.texcoord = info.texcoord;
     bool ok = true;
@@ -359,55 +509,53 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         if (!j.vb[i] || freq != 1 || j.stride[i] == 0) ok = false;
     }
     device->GetIndices(&j.ib);
-    if (!ok || !j.ib) {
+    // The game's static meshes only (the managed pool): what is rebuilt every frame (particles,
+    // the HUD's 3D parts) is left out.
+    if (!ok || !j.ib || !managed(j.vb[0]) || !managed(j.ib)) {
         releaseJob(j);
         return;
     }
-    uint64_t key = mix(mix(mix(mix(14695981039346656037ull, item), reinterpret_cast<uintptr_t>(j.vb[0])), reinterpret_cast<uintptr_t>(j.ib)),
-                       (static_cast<uint64_t>(start) << 32) | count);
-    key = mix(key, (static_cast<uint64_t>(static_cast<uint32_t>(base)) << 32) | minIndex);
-    if (g.keys.count(key) || g.keys.size() >= kMaxKeys) {
-        releaseJob(j);
-        return;
-    }
-    g.keys.insert(key);
-    if (item) g.items[item].fresh = true;
-    // Its place: from the game's constants. Not this camera's, or outside the map's area: left out.
+    // Its place: from the game's constants. Not this camera's: left out.
     if (!casters::drawWorld(device, view, projection, j.world)) {
         releaseJob(j);
         return;
     }
-    const float wx = j.world[3][0], wz = j.world[3][2];
-    const float marginX = (g.x1 - g.x0) * 0.25f, marginZ = (g.z1 - g.z0) * 0.25f;
-    if (wx < g.x0 - marginX || wx > g.x1 + marginX || wz < g.z0 - marginZ || wz > g.z1 + marginZ) {
+    // The key: the buffers, the index range, the place (0.25 m) and the turn (1/100).
+    uint64_t key = mix(mix(14695981039346656037ull, reinterpret_cast<uintptr_t>(j.vb[0])), reinterpret_cast<uintptr_t>(j.ib));
+    key = mix(key, (static_cast<uint64_t>(start) << 32) | count);
+    key = mix(key, (static_cast<uint64_t>(static_cast<uint32_t>(base)) << 32) | minIndex);
+    for (int k = 0; k < 3; k++) key = mix(key, static_cast<uint64_t>(rounded(j.world[3][k], 0.25f)));
+    for (int r = 0; r < 3; r++) {
+        for (int k = 0; k < 3; k++) key = mix(key, static_cast<uint64_t>(rounded(j.world[r][k], 0.01f)));
+    }
+    // New meshes are measured a few dozen a frame (reading their vertices is the costly part): the
+    // rest come again in the next frames, so a map's start doesn't stutter.
+    if (g.keys.count(key) || g.keys.size() >= kMaxKeys || g.newThisFrame >= kNewPerFrame) {
+        if (!g.keys.count(key) && g.newThisFrame >= kNewPerFrame) g.lastNew = GetTickCount(); // more to come: not settled
+        releaseJob(j);
+        return;
+    }
+    g.newThisFrame++;
+    g.keys.insert(key); // looked at once, kept or not
+    float lo[3], hi[3];
+    if (!meshBounds(j, info.positionOffset, lo, hi) || !insideMap(j, lo, hi)) {
         releaseJob(j);
         return;
     }
     device->GetTexture(0, &j.texture);
     if (j.texture && !usableTexture(j.texture)) gfx::release(j.texture);
     g.lowestSeen = std::min(g.lowestSeen, j.world[3][1]);
-    j.type = type;
-    j.base = base;
-    j.minIndex = minIndex;
-    j.vertices = vertices;
-    j.start = start;
-    j.count = count;
     g.queue.push_back(j);
+    g.lastNew = GetTickCount();
+    if (!g.firstNew) g.firstNew = g.lastNew;
+    if (g.settled) g.settled = false; // something new came: the build-up goes on (all draws looked at)
 }
 
 void render(IDirect3DDevice9* device) {
     g.frame++;
-    if (!g.wanted || !g.region || !device) return;
-    if (g.queue.empty()) {
-        // The log, once per map: what went into the picture and what it cost.
-        if (!g.logged && g.drawn > 0 && GetTickCount() - g.lastWork > 5000) {
-            g.logged = true;
-            TMVS_LOG("misc: minimap: %d block meshes drawn into the map (%d x %d px) over %d frames, at most %.2f ms a frame, %.1f ms in all; "
-                     "%u of the game's draws looked at for it, %.1f ms in all",
-                     g.drawn, g.width, g.height, g.framesDrawn, g.worstMs, g.totalMs, g.looked, g.lookMs);
-        }
-        return;
-    }
+    g.drawIndex = 0;
+    g.newThisFrame = 0;
+    if (!g.wanted || !g.region || !device || g.queue.empty()) return;
     if (!ensureResources(device)) {
         clearQueue();
         return;
@@ -422,7 +570,18 @@ void render(IDirect3DDevice9* device) {
     IDirect3DSurface9* depth = nullptr;
     for (DWORD i = 0; i < 4; i++) device->GetRenderTarget(i, &targets[i]);
     device->GetDepthStencilSurface(&depth);
+    GpuTimer* timer = nullptr;
+    for (GpuTimer& t : g.gpu) {
+        if (t.end && !t.pending) {
+            timer = &t;
+            break;
+        }
+    }
     if (SUCCEEDED(device->BeginScene())) {
+        if (timer) {
+            timer->disjoint->Issue(D3DISSUE_BEGIN);
+            timer->begin->Issue(D3DISSUE_END);
+        }
         device->SetRenderTarget(0, g.surface);
         for (DWORD i = 1; i < 4; i++) device->SetRenderTarget(i, nullptr);
         device->SetDepthStencilSurface(g.depth);
@@ -498,14 +657,21 @@ void render(IDirect3DDevice9* device) {
             device->DrawIndexedPrimitive(j.type, j.base, j.minIndex, j.vertices, j.start, j.count);
             releaseJob(j);
             g.drawn++;
+            g.window.meshes++;
         }
         g.queue.erase(g.queue.begin(), g.queue.begin() + static_cast<std::ptrdiff_t>(i));
         device->SetTexture(0, nullptr);
         device->SetIndices(nullptr);
         device->SetStreamSource(0, nullptr, 0, 0);
         device->SetStreamSource(1, nullptr, 0, 0);
+        if (timer) {
+            timer->end->Issue(D3DISSUE_END);
+            timer->disjoint->Issue(D3DISSUE_END);
+            timer->frequency->Issue(D3DISSUE_END);
+            timer->pending = true;
+        }
         device->EndScene();
-        g.texture->GenerateMipSubLevels();
+        if (g.mipmaps) g.texture->GenerateMipSubLevels();
     }
     for (DWORD i = 0; i < 4; i++) {
         device->SetRenderTarget(i, targets[i]);
@@ -514,11 +680,37 @@ void render(IDirect3DDevice9* device) {
     device->SetDepthStencilSurface(depth);
     gfx::release(depth);
     g.saved->Apply();
-    const double ms = now() - t0;
-    g.worstMs = std::max(g.worstMs, ms);
-    g.totalMs += ms;
-    g.framesDrawn++;
-    g.lastWork = GetTickCount();
+    g.window.renderMs += now() - t0;
+}
+
+void noteFrame(double drawMs) {
+    g.window.frames++;
+    g.window.drawMs += drawMs;
+    collectGpu();
+    const DWORD tick = GetTickCount();
+    if (!g.windowStart) g.windowStart = tick;
+    // The build-up: from the first mesh queued until nothing new came for kSettleMs and the queue is
+    // drawn (or 30 s at most). One line, then only one draw in kStride is looked at per frame.
+    if (g.wanted && !g.settled && g.firstNew) {
+        add(g.build, g.window); // the build-up's share of this frame (window sums are per frame here)
+    }
+    if (g.wanted && !g.settled && g.firstNew && g.queue.empty() && (tick - g.lastNew > kSettleMs || (tick - g.firstNew > 30000 && g.buildLines == 0))) {
+        g.settled = true;
+        if (g.buildLines++ < 3) {
+            logSums(tick - g.lastNew > kSettleMs ? "the build-up" : "the build-up so far (still growing)", g.build, (tick - g.firstNew) / 1000.0);
+        }
+    }
+    // The running sums: one line every kReportMs while the minimap is on.
+    static Sums s_running;
+    add(s_running, g.window);
+    s_running.gpuMs += g.window.gpuMs;
+    s_running.gpuFrames += g.window.gpuFrames;
+    g.window = Sums();
+    if (tick - g.windowStart >= kReportMs) {
+        logSums("the last 60 s", s_running, (tick - g.windowStart) / 1000.0);
+        s_running = Sums();
+        g.windowStart = tick;
+    }
 }
 
 IDirect3DTexture9* picture() {

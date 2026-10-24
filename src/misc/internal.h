@@ -76,8 +76,9 @@ float windowChrome(const Frame& frame, const char* title, bool resizable);
 namespace topview {
 // Once a frame: the picture is wanted (minimap on, Real look on, a Stadium map). Off: let go.
 void setWanted(bool wanted);
-// The map's area (world metres, x and z) and its size in grid cells; a new area starts over.
-void setRegion(const void* map, float x0, float z0, float x1, float z1, int cellsX, int cellsZ);
+// The map's area (world metres, x and z), the highest a mesh may reach (m), and its size in grid
+// cells; a new area starts over.
+void setRegion(const void* map, float x0, float z0, float x1, float z1, float top, int cellsX, int cellsZ);
 void clearRegion();
 // misc::sceneDraw: one draw of the main camera.
 void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
@@ -87,6 +88,9 @@ void render(IDirect3DDevice9* device);
 // The picture over the map's area (row 0 at z0), null while nothing is in it.
 IDirect3DTexture9* picture();
 int meshes();
+// Once a frame the minimap is drawn: its CPU time (mapview::draw, the redraws included), for the
+// cost lines in the log (also with Real look off).
+void noteFrame(double drawMs);
 void releaseDevice();
 void precompile(); // its shaders, on a thread at startup
 } // namespace topview

@@ -41,6 +41,7 @@ constexpr uint32_t kMaxUnits = 128;
 constexpr int kMaxGrid = 256;      // cells per side at most (Stadium has 32)
 constexpr int kPixelsPerCell = 8;
 constexpr float kCellSize = 32.0f; // m (Stadium)
+constexpr float kCellHeight = 8.0f; // m (Stadium)
 constexpr DWORD kPollMs = 500;
 
 enum Kind : uint8_t { kEmpty = 0, kOther = 1, kGround = 2, kTrack = 3 };
@@ -68,6 +69,9 @@ struct Picture {
     bool read = false;
     int minX = 0, minZ = 0, sizeX = 0, sizeZ = 0;
     int blocks = 0, cells = 0, unreadable = 0;
+    // The track's own cells (road, platform and the like), for the zoom: x0, z0, x1, z1 inclusive.
+    bool track = false;
+    int trackX0 = 0, trackZ0 = 0, trackX1 = 0, trackZ1 = 0;
     std::vector<uint32_t> pixels; // ARGB, row r = cell z minZ + r / kPixelsPerCell
     int width = 0, height = 0;
     bool upload = false;
@@ -135,6 +139,7 @@ void build(const void* map, uint32_t count, uintptr_t data) {
     p.pixels.clear();
     p.width = p.height = 0;
     p.blocks = p.cells = p.unreadable = 0;
+    p.track = false;
     p.carChecked = false;
     if (!data || count == 0 || count > kMaxBlocks) {
         topview::clearRegion();
@@ -167,6 +172,15 @@ void build(const void* map, uint32_t count, uintptr_t data) {
                 c.top = std::max(c.top, y);
                 minY = std::min(minY, y);
                 maxY = std::max(maxY, y);
+                if (!p.track) {
+                    p.track = true;
+                    p.trackX0 = p.trackX1 = x;
+                    p.trackZ0 = p.trackZ1 = z;
+                }
+                p.trackX0 = std::min(p.trackX0, x);
+                p.trackX1 = std::max(p.trackX1, x);
+                p.trackZ0 = std::min(p.trackZ0, z);
+                p.trackZ1 = std::max(p.trackZ1, z);
             }
             minX = std::min(minX, x);
             maxX = std::max(maxX, x);
@@ -185,7 +199,10 @@ void build(const void* map, uint32_t count, uintptr_t data) {
     p.sizeZ = maxZ - minZ + 1;
     p.cells = static_cast<int>(columns.size());
     // The picture from above covers the same area (the same map keeps what it has).
-    topview::setRegion(map, minX * kCellSize, minZ * kCellSize, (maxX + 1) * kCellSize, (maxZ + 1) * kCellSize, p.sizeX, p.sizeZ);
+    // Up to the highest track cell's top (8 m a grid unit) and some more: the stadium's roofs and
+    // lights above it stay out.
+    const float top = maxY == INT32_MIN ? 2048.0f : (maxY + 1) * kCellHeight + 40.0f;
+    topview::setRegion(map, minX * kCellSize, minZ * kCellSize, (maxX + 1) * kCellSize, (maxZ + 1) * kCellSize, top, p.sizeX, p.sizeZ);
     p.width = p.sizeX * kPixelsPerCell;
     p.height = p.sizeZ * kPixelsPerCell;
     p.pixels.assign(static_cast<size_t>(p.width) * p.height, 0);
@@ -282,21 +299,36 @@ void mipFilterOff(const ImDrawList*, const ImDrawCmd*) {
 
 // The auto zoom: how many metres the view spans, eased. About 150 m standing still, 600 m at
 // 500 km/h, divided by the Zoom slider. The speed is smoothed and small changes (under 10 km/h)
-// leave the target alone, so the view doesn't pump.
+// leave the target alone, so the view doesn't pump. An unknown speed (kmh < 0) changes nothing:
+// the span keeps easing towards the last target, never towards a standstill it didn't see.
 struct AutoZoom {
     float speed = 0.0f;  // smoothed, km/h
     float target = 0.0f; // km/h the span is aimed at
     float span = 0.0f;   // m across
     float update(float kmh, float zoom, float dt) {
-        const float ease = 1.0f - expf(-dt / 0.6f);
-        speed += (kmh - speed) * ease;
-        if (fabsf(speed - target) > 10.0f) target = speed;
+        if (kmh >= 0.0f) {
+            const float ease = 1.0f - expf(-dt / 0.6f);
+            speed += (kmh - speed) * ease;
+            if (fabsf(speed - target) > 10.0f) target = speed;
+        }
         const float goal = (150.0f + 450.0f * std::clamp(target / 500.0f, 0.0f, 1.0f)) / std::max(zoom, 0.1f);
         span = span <= 0.0f ? goal : span + (goal - span) * (1.0f - expf(-dt / 1.2f));
         return span;
     }
 };
 AutoZoom g_zoom;
+
+// The last view of the auto zoom (centre, span, heading). Kept while the car is briefly unknown (a
+// reset, the countdown) and frozen from the finish until the next run starts (the race clock goes
+// back or the run is no longer finished); only a new map starts over.
+struct View {
+    const void* map = nullptr;
+    bool valid = false;
+    bool frozen = false;
+    float cx = 0.0f, cz = 0.0f, span = 0.0f, fx = 0.0f, fz = 1.0f;
+    int lastTime = 0;
+};
+View g_view;
 
 // Once per map: is the car's cell (at the start) one of the block cells? If not, the grid's scale
 // or origin here is wrong (the log tells; my reading is 32 m cells from world 0).
@@ -339,7 +371,23 @@ void drawPageInfo() {
     if (p.read && p.cells > 0 && settings().mapTextured) ImGui::TextDisabled("Real look: %d meshes drawn", topview::meshes());
 }
 
+double milliseconds() {
+    LARGE_INTEGER t, f;
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    return static_cast<double>(t.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart);
+}
+
+void drawWindow(const Frame& frame);
+
 void draw(const Frame& frame) {
+    // Its CPU time goes into the log's cost lines (topview::noteFrame).
+    const double t0 = milliseconds();
+    drawWindow(frame);
+    topview::noteFrame(milliseconds() - t0);
+}
+
+void drawWindow(const Frame& frame) {
     poll();
     upload(frame.device);
     if (settings().mapTextured) topview::render(frame.device);
@@ -384,30 +432,63 @@ void draw(const Frame& frame) {
         // left-handed space); with "turn with the car", the car's heading up.
         const float worldX0 = p.minX * kCellSize, worldZ0 = p.minZ * kCellSize;
         const float worldX1 = worldX0 + p.sizeX * kCellSize, worldZ1 = worldZ0 + p.sizeZ * kCellSize;
-        const float extent = std::max(worldX1 - worldX0, worldZ1 - worldZ0);
-        // Auto zoom: around the car, the span from its speed. Off (or no car): the whole map.
-        const bool follow = car && s.mapAutoZoom;
-        float speed = 0.0f;
-        if (follow && !engine::carSpeed(speed)) speed = 0.0f;
-        const float span = follow ? g_zoom.update(speed * 3.6f, s.mapZoom, std::min(ImGui::GetIO().DeltaTime, 0.1f)) : extent;
-        if (!follow) g_zoom = AutoZoom();
-        float cx = follow ? pose.position[0] : (worldX0 + worldX1) * 0.5f;
-        float cz = follow ? pose.position[2] : (worldZ0 + worldZ1) * 0.5f;
-        const float k = view / span;
-        float fx = 0.0f, fz = 1.0f;
-        if (s.mapRotate && follow) {
-            const float l = sqrtf(pose.forward[0] * pose.forward[0] + pose.forward[2] * pose.forward[2]);
-            if (l > 1e-3f) {
-                fx = pose.forward[0] / l;
-                fz = pose.forward[2] / l;
+        // The track's box (its road, platform and the like, not the whole grid): the whole-track view
+        // frames it with 15 % room, and the auto zoom never shows more than that.
+        const float trackX0 = p.track ? p.trackX0 * kCellSize : worldX0, trackX1 = p.track ? (p.trackX1 + 1) * kCellSize : worldX1;
+        const float trackZ0 = p.track ? p.trackZ0 * kCellSize : worldZ0, trackZ1 = p.track ? (p.trackZ1 + 1) * kCellSize : worldZ1;
+        const float whole = std::max(trackX1 - trackX0, trackZ1 - trackZ0) * 1.15f;
+        // Auto zoom: around the car, the span from its speed, at most the whole track. A track that
+        // fits in about 1.3 times the standing-still view is shown whole instead (centred, north up).
+        // Off (or no car): the whole track.
+        const float standing = 150.0f / std::max(s.mapZoom, 0.1f);
+        const bool autoZoom = s.mapAutoZoom && whole > standing * 1.3f;
+        if (g_view.map != p.map) {
+            g_view = View();
+            g_view.map = p.map;
+            g_zoom = AutoZoom();
+        }
+        // The finish freezes the view until the next run starts.
+        engine::RaceTimes rt;
+        if (engine::raceTimes(rt)) {
+            if (rt.finished && rt.started) g_view.frozen = true;
+            else if (g_view.frozen && (!rt.finished || rt.time + 500 < g_view.lastTime)) g_view.frozen = false;
+            g_view.lastTime = rt.time;
+        }
+        // The whole track (Auto zoom off, a small track, or nothing known yet).
+        float cx = (trackX0 + trackX1) * 0.5f, cz = (trackZ0 + trackZ1) * 0.5f, span = whole, fx = 0.0f, fz = 1.0f;
+        if (autoZoom && car && !g_view.frozen) {
+            float speed = -1.0f;
+            if (engine::carSpeed(speed)) speed *= 3.6f;
+            else speed = -1.0f; // unknown: the zoom holds
+            span = std::min(g_zoom.update(speed, s.mapZoom, std::min(ImGui::GetIO().DeltaTime, 0.1f)), whole);
+            cx = pose.position[0];
+            cz = pose.position[2];
+            if (s.mapRotate) {
+                const float l = sqrtf(pose.forward[0] * pose.forward[0] + pose.forward[2] * pose.forward[2]);
+                if (l > 1e-3f) {
+                    fx = pose.forward[0] / l;
+                    fz = pose.forward[2] / l;
+                }
+                // Turning with the car: the view's centre a sixth of the span ahead, so the car sits a
+                // third from the bottom, looking ahead.
+                cx += fx * span / 6.0f;
+                cz += fz * span / 6.0f;
             }
+            g_view.valid = true;
+            g_view.cx = cx;
+            g_view.cz = cz;
+            g_view.span = span;
+            g_view.fx = fx;
+            g_view.fz = fz;
+        } else if (autoZoom && g_view.valid) {
+            // The car briefly unknown (a reset, the countdown) or the run finished: the last view.
+            cx = g_view.cx;
+            cz = g_view.cz;
+            span = g_view.span;
+            fx = g_view.fx;
+            fz = g_view.fz;
         }
-        // Turning with the car: the view's centre a sixth of the span ahead, so the car sits a third
-        // from the bottom, looking ahead.
-        if (s.mapRotate && follow) {
-            cx += fx * span / 6.0f;
-            cz += fz * span / 6.0f;
-        }
+        const float k = view / span;
         // Across the heading: forward turned a quarter clockwise as seen from above (x right, z up).
         const float rx = fz, rz = -fx;
         const auto toScreen = [&](float x, float z) {
