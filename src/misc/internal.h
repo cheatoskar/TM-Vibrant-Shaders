@@ -22,7 +22,7 @@ struct Settings {
     float mapOpacity = 0.85f;
     bool mapAutoZoom = true;          // follows the car, closer the slower; off: the whole map
     float mapZoom = 1.0f;             // the auto zoom's scale: more is closer (0.5 - 2)
-    bool mapRotate = false;           // the car's heading up instead of a fixed north
+    bool mapRotate = true;            // the car's heading up instead of a fixed north
     bool mapTextured = true;          // "Real look": the blocks' meshes from above; off: squares
     bool splits = false;
     bool splitAttached = true;        // under the minimap (or top right); off: at splitX, splitY

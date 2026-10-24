@@ -191,7 +191,7 @@ void boot() {
     s.mapOpacity = iniFloat(ini, L"MinimapOpacity", 0.85f, 0.2f, 1.0f);
     s.mapAutoZoom = iniInt(ini, L"MinimapAutoZoom", 1, 0, 1) != 0;
     s.mapZoom = iniFloat(ini, L"MinimapZoom", 1.0f, 0.5f, 2.0f);
-    s.mapRotate = iniInt(ini, L"MinimapRotate", 0, 0, 1) != 0;
+    s.mapRotate = iniInt(ini, L"MinimapRotate", 1, 0, 1) != 0;
     s.mapTextured = iniInt(ini, L"MinimapTextured", 1, 0, 1) != 0;
     s.splits = iniInt(ini, L"SplitTimes", 0, 0, 1) != 0;
     s.splitAttached = iniInt(ini, L"SplitTimesAttached", 1, 0, 1) != 0;
