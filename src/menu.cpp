@@ -2523,10 +2523,14 @@ void drawNavigation(Config& config) {
         draw->AddText(g_fontTitle, size, ImVec2(p.x + 14.0f * g_scale, p.y + (h - size) * 0.5f),
                       active ? IM_COL32_WHITE : ImGui::GetColorU32(ImGuiCol_Text, detached ? 0.4f : 0.7f), page.title);
         if (detached) {
+            // Right-aligned, measured in its own size; left out where the title would run into it (the
+            // dimmed title and the tooltip say it then).
             const char* mark = "(detached)";
             const float ms = g_fontTitle->FontSize * 0.6f;
-            draw->AddText(g_fontTitle, ms, ImVec2(p.x + w - ImGui::CalcTextSize(mark).x * 0.9f - 10.0f * g_scale, p.y + (h - ms) * 0.5f),
-                          ImGui::GetColorU32(ImGuiCol_Text, 0.4f), mark);
+            const float markX = p.x + w - g_fontTitle->CalcTextSizeA(ms, FLT_MAX, 0.0f, mark).x - 10.0f * g_scale;
+            const float titleEnd = p.x + 14.0f * g_scale + g_fontTitle->CalcTextSizeA(size, FLT_MAX, 0.0f, page.title).x;
+            if (markX > titleEnd + 8.0f * g_scale)
+                draw->AddText(g_fontTitle, ms, ImVec2(markX, p.y + (h - ms) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text, 0.4f), mark);
         } else if (hovered || active) {
             drawPopOutIcon(draw, iconMin, iconMax, onIcon ? colour(kAccent, 1.0f) : ImGui::GetColorU32(ImGuiCol_Text, 0.45f));
         }

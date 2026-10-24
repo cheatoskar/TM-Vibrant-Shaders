@@ -918,10 +918,11 @@ void drawSessionPanel(const Frame& frame, ImVec2 under, float width) {
     if (!run.cps.empty()) {
         ImGui::TextDisabled("Last run, sector by sector");
         if (ImGui::BeginTable("sectors", 5, ImGuiTableFlags_SizingStretchProp)) {
-            static const char* const kNames[] = {"Sector", "Time", "vs best", "Top km/h", "Avg km/h"};
+            // Short heads: the column is narrow in a minimap-wide panel ("Top km/h" was cut off).
+            static const char* const kNames[] = {"Sector", "Time", "vs best", "Top", "Avg"};
             static const char* const kTips[] = {"From one checkpoint to the next", "Your time in this sector",
-                                                "Against your best time in this sector (plus: slower)", "Your top speed in this sector",
-                                                "Your average speed in this sector"};
+                                                "Against your best time in this sector (plus: slower)", "Your top speed in this sector, km/h",
+                                                "Your average speed in this sector, km/h"};
             ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
             for (int c = 0; c < 5; c++) {
                 ImGui::TableNextColumn();
