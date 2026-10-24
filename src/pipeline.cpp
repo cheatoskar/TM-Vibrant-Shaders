@@ -3513,25 +3513,26 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         const float* f = in.carForward;
         const float* r = in.carRight;
         const float* u = in.carPoseUp;
-        // The Stadium car's lamps: 2.25 m ahead of the drawn position, 0.62 m to each side, a little
+        // The Stadium car's lamps: 1.9 m ahead of the drawn position, 0.62 m to each side, a little
         // above the wheel centres; aimed 4 degrees down at the road (my estimate of the car's model).
         const float pitch = 0.07f;
         float aim[3], left[3], right[3];
         for (int j = 0; j < 3; j++) {
             aim[j] = f[j] * cosf(pitch) - u[j] * sinf(pitch);
-            const float base = p[j] + f[j] * 2.25f + u[j] * 0.15f;
+            const float base = p[j] + f[j] * 1.9f + u[j] * 0.15f;
             left[j] = base - r[j] * 0.62f;
             right[j] = base + r[j] * 0.62f;
         }
         const float h[4][4] = {
-            {1.0f, 0.92f, 0.99f, 110.0f}, // the cone: 23 degrees to its edge, 8 to its bright core
+            {1.0f, 0.89f, 0.985f, 90.0f}, // the cone: 27 degrees to its edge (54 across), 10 to its bright core; the range
             {left[0], left[1], left[2], 1.0f},
-            {right[0], right[1], right[2], 1.0f},
+            {right[0], right[1], right[2], 2.0f * fminf(fmaxf(s.carHeadlightBeam, 0.0f), 1.0f)}, // w: the beam in the air
             {aim[0], aim[1], aim[2], 0.0f},
         };
         float constants[4][4];
         memcpy(constants, h, sizeof(constants));
         constants[0][0] = fminf(s.carHeadlights, 1.0f);
+        constants[0][3] = fminf(fmaxf(s.carHeadlightRange, 20.0f), 200.0f);
         device->SetPixelShaderConstantF(64, &constants[0][0], 4);
         bind(device, 0, in.hdr ? in.hdr : in.color, false);
         bind(device, 1, m_nd.texture, false);

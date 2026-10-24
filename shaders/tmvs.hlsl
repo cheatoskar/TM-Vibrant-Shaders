@@ -3416,14 +3416,17 @@ float4 PS_NeonAdd(float2 uv : TEXCOORD0) : COLOR0 {
 //     the lamp's pixel is hidden behind something nearer
 // No shadows: the light goes through walls and the car's own body (a lamp inside the cone of a wall
 // beside the road lights it); the road and walls ahead are what it is for.
-static const float HEAD_SURFACE = 3.0;
+static const float HEAD_SURFACE = 1.2;
 static const float HEAD_BEAM = 90.0;
 float headSpot(float3 q, float3 lamp) {
     float3 v = q - lamp;
     float d2 = dot(v, v);
     float cone = smoothstep(u_Head0.y, u_Head0.z, dot(v, u_Head3.xyz) * rsqrt(max(d2, 1e-4)));
-    float reach = saturate(1.0 - d2 / (u_Head0.w * u_Head0.w));
-    return cone * reach * reach / (1.0 + d2 * 0.03);
+    // Inverse square past a fifth of the range (so Headlight range moves how far it carries: at 90 m
+    // a wall 50 m out still gets about an eighth of the light near the car), a smooth end at the range.
+    float r2 = d2 / (u_Head0.w * u_Head0.w);
+    float reach = saturate(1.0 - r2 * r2);
+    return cone * reach * reach / (1.0 + r2 * 24.0);
 }
 float headGlare(float3 rd, float3 cam, float3 lamp) {
     float3 w = lamp - cam;
@@ -3433,9 +3436,16 @@ float headGlare(float3 rd, float3 cam, float3 lamp) {
     float2 luv = projectToUV(lv);
     // Hidden behind something nearer (the car's own nose is within a metre of the lamp).
     float seen = lv.z > 0.1 && all(luv > 0.0) && all(luv < 1.0) ? saturate(tex2Dlod(s1, float4(luv, 0, 0)).w - lv.z + 1.0) : (lv.z > 0.1 ? 1.0 : 0.0);
-    float facing = saturate(dot(u_Head3.xyz, -wd) * 2.0 - 0.3);
+    // Strong only in front of the beam, near its axis; a point of light far away: its angle shrinks
+    // with the distance (a lamp 1 m wide at 10 m), its brightness falls and is mostly gone past 60-100 m.
+    float onAxis = saturate(dot(u_Head3.xyz, -wd));
+    float facing = smoothstep(u_Head0.y, 1.0, onAxis);
+    facing *= facing;
+    float k = max(dl * 0.1, 1.0);
     float x = 1.0 - saturate(dot(rd, wd));
-    return (exp(-x * 12000.0) * 4.0 + 2.0 / pow(1.0 + x * 800.0, 1.5)) * facing * seen;
+    float fade = lerp(1.0, 0.08, smoothstep(40.0, 100.0, dl)) / (1.0 + dl * dl * 0.0004);
+    float glare = exp(-x * 12000.0 * k * k) * 4.0 + 2.0 / pow(1.0 + x * 800.0 * k * k, 1.5);
+    return min(glare, 8.0) * facing * seen * fade;
 }
 float4 PS_Headlights(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float4 nd = tex2Dlod(s1, float4(uv, 0, 0));

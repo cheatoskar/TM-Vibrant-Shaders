@@ -25,6 +25,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("AOStrength", "Ambient occlusion", "Lighting", Float, aoStrength, 0.0f, 2.0f),
         TMVS_FIELD("NeonLight", "Neon light spill", "Lighting", Float, neonLight, 0.0f, 2.0f),
         TMVS_FIELD("CarHeadlights", "Car headlights", "Lighting", Float, carHeadlights, 0.0f, 1.0f),
+        TMVS_FIELD("CarHeadlightRange", "Headlight range (m)", "Lighting", Float, carHeadlightRange, 20.0f, 200.0f),
+        TMVS_FIELD("CarHeadlightBeam", "Headlight beam", "Lighting", Float, carHeadlightBeam, 0.0f, 1.0f),
         TMVS_FIELD("GlobalIllumination", "Bounce light", "Lighting", Float, globalIllumination, 0.0f, 2.0f),
         TMVS_FIELD("SunLight", "Sun tint", "Lighting", Float, sunLight, 0.0f, 1.5f),
         TMVS_FIELD("AmbientTint", "Ambient tint", "Lighting", Float, ambientTint, 0.0f, 1.5f),
@@ -429,6 +431,7 @@ const char* const kTagKeys[] = {
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
     "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus", "LampGlare", "LampHaze", "LampSkyHalos", "Floodlights",
     "SMAA", "WaterSplash", "WaterClarity", "CarHeadlights",
+    "CarHeadlightRange", "CarHeadlightBeam",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
@@ -1716,6 +1719,8 @@ void applyPreset(Settings& s, Preset preset) {
             s.skyNight = 1.0f;
             s.skyColor[0] = 0.12f; s.skyColor[1] = 0.17f; s.skyColor[2] = 0.3f;
             s.carHeadlights = 1.0f;
+            s.carHeadlightRange = 90.0f;
+            s.carHeadlightBeam = 0.5f;
             s.floodlights = 0.0f;
             s.borderGlow = 0.0f;
             s.lampGlare = 0.0f;
@@ -1731,7 +1736,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.longShadows = 0.0f;
             s.aoStrength = 1.4f;
             s.ambientTint = 0.9f;
-            s.fogDensity = 3.0f;
+            s.fogDensity = 5.0f;
             s.fogHeightFalloff = 0.4f;
             s.hazeDistance = 0.6f;
             s.bloom = 0.1f;

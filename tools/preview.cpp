@@ -20,6 +20,7 @@
 //                             enters the water 12 m ahead of the camera, t seconds ago (speed m/s, entry
 //                             angle degrees, mode 1 the splash, 2 driving through the water, 3 dripping
 //                             after it came out; default 24, 40, 1)
+//     --carfar <m>            with --carpose: the car this far ahead of the camera, level (the headlights seen from afar)
 //     --carpose <deg>         spray test: the engine's car pose where the depth finder sees the
 //                             car, turned by deg from the camera's level forward (sliding), moving
 //                             with --drive
@@ -416,6 +417,7 @@ int main(int argc, char** argv) {
     // sliding sideways), moving with the camera's --drive.
     float carPoseYaw = 0.0f;
     bool carPoseSet = false;
+    float carFar = 0.0f;                 // --carfar d: with --carpose, the car d metres ahead of the camera (level), not where the depth finder sees it
     float splash[4] = {-1.0f, 24.0f, 40.0f, 1.0f}; // --splash: a car that isn't there enters the water (Inputs::splashTest)
     const char* compare = nullptr;       // --compare: the preset on the split's other side
     float splitAt = 0.5f;
@@ -490,6 +492,8 @@ int main(int argc, char** argv) {
             sscanf(argv[++i], "%f,%f", &carAt[0], &carAt[1]);
         } else if (!strcmp(argv[i], "--splash") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f,%f,%f", &splash[0], &splash[1], &splash[2], &splash[3]);
+        } else if (!strcmp(argv[i], "--carfar") && i + 1 < argc) {
+            carFar = static_cast<float>(atof(argv[++i]));
         } else if (!strcmp(argv[i], "--carpose") && i + 1 < argc) {
             carPoseYaw = static_cast<float>(atof(argv[++i]));
             carPoseSet = true;
@@ -869,6 +873,15 @@ int main(int argc, char** argv) {
                 posed = carPoseSet;
                 if (trail) printf("%s: trail test, car at %.1f %.1f %.1f, %.1f m/s\n", job.output.c_str(), carEnd[0], carEnd[1], carEnd[2], job.trail);
             }
+        }
+        if (carPoseSet && carFar > 0.0f) {
+            const float* V = cap.view;
+            float fl = sqrtf(V[2] * V[2] + V[10] * V[10]);
+            for (int j = 0; j < 3; j++) {
+                const float camera = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
+                carEnd[j] = camera + (j == 0 ? V[2] : j == 2 ? V[10] : 0.0f) / fl * carFar - (j == 1 ? 1.6f : 0.0f);
+            }
+            posed = true;
         }
         // --carpose: the car's axes, and how far the camera (and the car with it) moves each frame.
         float poseForward[3] = {}, poseRight[3] = {}, poseStep[3] = {};
