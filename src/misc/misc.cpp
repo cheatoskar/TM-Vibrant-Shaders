@@ -189,8 +189,10 @@ void boot() {
     s.mapY = iniFloat(ini, L"MinimapY", -1.0f, -1.0f, 16384.0f);
     s.mapSize = iniFloat(ini, L"MinimapSize", 260.0f, 120.0f, 800.0f);
     s.mapOpacity = iniFloat(ini, L"MinimapOpacity", 0.85f, 0.2f, 1.0f);
-    s.mapZoom = iniFloat(ini, L"MinimapZoom", 1.0f, 1.0f, 8.0f);
+    s.mapAutoZoom = iniInt(ini, L"MinimapAutoZoom", 1, 0, 1) != 0;
+    s.mapZoom = iniFloat(ini, L"MinimapZoom", 1.0f, 0.5f, 2.0f);
     s.mapRotate = iniInt(ini, L"MinimapRotate", 0, 0, 1) != 0;
+    s.mapTextured = iniInt(ini, L"MinimapTextured", 1, 0, 1) != 0;
     s.splits = iniInt(ini, L"SplitTimes", 0, 0, 1) != 0;
     s.splitAttached = iniInt(ini, L"SplitTimesAttached", 1, 0, 1) != 0;
     s.splitX = iniFloat(ini, L"SplitTimesX", -1.0f, -1.0f, 16384.0f);
@@ -204,6 +206,7 @@ void boot() {
     s.sessionY = iniFloat(ini, L"SessionY", -1.0f, -1.0f, 16384.0f);
     s.finishEffect = iniInt(ini, L"FinishEffect", 0, 0, 2);
     Config::get().saveExtra = &save;
+    if (s.minimap && s.mapTextured) topview::precompile();
     TMVS_LOG("misc: minimap %s, split times %s (compare with %d), finish effect %d", s.minimap ? "on" : "off", s.splits ? "on" : "off",
              s.splitCompare, s.finishEffect);
 }
@@ -215,8 +218,10 @@ void save(IniFile& ini) {
     setFloat(ini, L"MinimapY", s.mapY);
     setFloat(ini, L"MinimapSize", s.mapSize);
     setFloat(ini, L"MinimapOpacity", s.mapOpacity);
+    setInt(ini, L"MinimapAutoZoom", s.mapAutoZoom ? 1 : 0);
     setFloat(ini, L"MinimapZoom", s.mapZoom);
     setInt(ini, L"MinimapRotate", s.mapRotate ? 1 : 0);
+    setInt(ini, L"MinimapTextured", s.mapTextured ? 1 : 0);
     setInt(ini, L"SplitTimes", s.splits ? 1 : 0);
     setInt(ini, L"SplitTimesAttached", s.splitAttached ? 1 : 0);
     setFloat(ini, L"SplitTimesX", s.splitX);
@@ -244,8 +249,15 @@ void drawPage() {
         changed |= ImGui::SliderFloat("Size", &s.mapSize, 120.0f, 800.0f, "%.0f px");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("At 1440p; smaller screens scale it down.");
         changed |= ImGui::SliderFloat("Opacity", &s.mapOpacity, 0.2f, 1.0f, "%.2f");
-        changed |= ImGui::SliderFloat("Zoom", &s.mapZoom, 1.0f, 8.0f, "%.1fx");
-        changed |= ImGui::Checkbox("Rotate with car", &s.mapRotate);
+        changed |= ImGui::Checkbox("Real look", &s.mapTextured);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The blocks as the game draws them, seen from above. Off: plain squares.");
+        changed |= ImGui::Checkbox("Auto zoom", &s.mapAutoZoom);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Follows the car: closer when slow, wider when fast. Off: the whole map.");
+        if (s.mapAutoZoom) {
+            changed |= ImGui::SliderFloat("Zoom", &s.mapZoom, 0.5f, 2.0f, "%.2fx");
+            changed |= ImGui::Checkbox("Rotate with car", &s.mapRotate);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("The car points up. Off: north up.");
+        }
         if (ImGui::Button("Reset position##map")) {
             s.mapX = s.mapY = -1.0f;
             changed = true;
@@ -298,7 +310,17 @@ void drawPage() {
     if (changed) settingsChanged();
 }
 
+void sceneDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
+               const float view[16], const float projection[16]) {
+    topview::onDraw(device, type, base, minIndex, vertices, start, count, view, projection);
+}
+
+void releaseDevice() {
+    topview::releaseDevice();
+}
+
 bool wantsOverlay(const Frame& frame) {
+    topview::setWanted(g_settings.minimap && g_settings.mapTextured && mapview::wanted());
     // The race is followed also while nothing shows (the finish of a run, your best), but only for
     // the split times and the finish effect.
     if (g_settings.splits || g_settings.finishEffect > 0) splits::update();

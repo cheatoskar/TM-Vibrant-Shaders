@@ -136,7 +136,10 @@ void build(const void* map, uint32_t count, uintptr_t data) {
     p.width = p.height = 0;
     p.blocks = p.cells = p.unreadable = 0;
     p.carChecked = false;
-    if (!data || count == 0 || count > kMaxBlocks) return;
+    if (!data || count == 0 || count > kMaxBlocks) {
+        topview::clearRegion();
+        return;
+    }
     struct Column {
         uint8_t kind = kEmpty;
         int top = INT32_MIN; // the highest track cell (grid y)
@@ -173,6 +176,7 @@ void build(const void* map, uint32_t count, uintptr_t data) {
     }
     if (columns.empty() || maxX - minX >= kMaxGrid || maxZ - minZ >= kMaxGrid) {
         TMVS_LOG("misc: minimap: %u blocks, %d read, no picture (%zu cells)", count, p.blocks, columns.size());
+        topview::clearRegion();
         return;
     }
     p.minX = minX;
@@ -180,6 +184,8 @@ void build(const void* map, uint32_t count, uintptr_t data) {
     p.sizeX = maxX - minX + 1;
     p.sizeZ = maxZ - minZ + 1;
     p.cells = static_cast<int>(columns.size());
+    // The picture from above covers the same area (the same map keeps what it has).
+    topview::setRegion(map, minX * kCellSize, minZ * kCellSize, (maxX + 1) * kCellSize, (maxZ + 1) * kCellSize, p.sizeX, p.sizeZ);
     p.width = p.sizeX * kPixelsPerCell;
     p.height = p.sizeZ * kPixelsPerCell;
     p.pixels.assign(static_cast<size_t>(p.width) * p.height, 0);
@@ -235,6 +241,9 @@ void poll() {
         return;
     }
     if (map == p.map && p.read && count == p.count && data == p.data) return;
+    // Blocks removed in the editor: the picture from above starts over (what is still there comes
+    // back as the game draws it).
+    if (map == p.map && p.read && count < p.count) topview::clearRegion();
     build(map, count, data);
 }
 
@@ -260,6 +269,34 @@ void upload(IDirect3DDevice9* device) {
     for (int y = 0; y < p.height; y++) memcpy(static_cast<BYTE*>(locked.pBits) + y * locked.Pitch, &p.pixels[static_cast<size_t>(y) * p.width], p.width * 4);
     p.texture->UnlockRect(0);
 }
+
+// The picture from above is drawn smaller than it is: mipmaps (ImGui's DirectX 9 drawing leaves the
+// mip filter as it finds it).
+IDirect3DDevice9* g_device = nullptr;
+void mipFilterOn(const ImDrawList*, const ImDrawCmd*) {
+    if (g_device) g_device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+}
+void mipFilterOff(const ImDrawList*, const ImDrawCmd*) {
+    if (g_device) g_device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+}
+
+// The auto zoom: how many metres the view spans, eased. About 150 m standing still, 600 m at
+// 500 km/h, divided by the Zoom slider. The speed is smoothed and small changes (under 10 km/h)
+// leave the target alone, so the view doesn't pump.
+struct AutoZoom {
+    float speed = 0.0f;  // smoothed, km/h
+    float target = 0.0f; // km/h the span is aimed at
+    float span = 0.0f;   // m across
+    float update(float kmh, float zoom, float dt) {
+        const float ease = 1.0f - expf(-dt / 0.6f);
+        speed += (kmh - speed) * ease;
+        if (fabsf(speed - target) > 10.0f) target = speed;
+        const float goal = (150.0f + 450.0f * std::clamp(target / 500.0f, 0.0f, 1.0f)) / std::max(zoom, 0.1f);
+        span = span <= 0.0f ? goal : span + (goal - span) * (1.0f - expf(-dt / 1.2f));
+        return span;
+    }
+};
+AutoZoom g_zoom;
 
 // Once per map: is the car's cell (at the start) one of the block cells? If not, the grid's scale
 // or origin here is wrong (the log tells; my reading is 32 m cells from world 0).
@@ -299,11 +336,14 @@ void drawPageInfo() {
     }
     const Picture& p = g_picture;
     if (p.read && p.cells > 0) ImGui::TextDisabled("%d blocks, %d x %d cells", p.blocks, p.sizeX, p.sizeZ);
+    if (p.read && p.cells > 0 && settings().mapTextured) ImGui::TextDisabled("Real look: %d meshes drawn", topview::meshes());
 }
 
 void draw(const Frame& frame) {
     poll();
     upload(frame.device);
+    if (settings().mapTextured) topview::render(frame.device);
+    g_device = frame.device;
     Picture& p = g_picture;
     Settings& s = settings();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -345,17 +385,28 @@ void draw(const Frame& frame) {
         const float worldX0 = p.minX * kCellSize, worldZ0 = p.minZ * kCellSize;
         const float worldX1 = worldX0 + p.sizeX * kCellSize, worldZ1 = worldZ0 + p.sizeZ * kCellSize;
         const float extent = std::max(worldX1 - worldX0, worldZ1 - worldZ0);
-        const bool follow = car && (s.mapRotate || s.mapZoom > 1.01f);
-        const float cx = follow ? pose.position[0] : (worldX0 + worldX1) * 0.5f;
-        const float cz = follow ? pose.position[2] : (worldZ0 + worldZ1) * 0.5f;
-        const float k = view / (extent / s.mapZoom);
+        // Auto zoom: around the car, the span from its speed. Off (or no car): the whole map.
+        const bool follow = car && s.mapAutoZoom;
+        float speed = 0.0f;
+        if (follow && !engine::carSpeed(speed)) speed = 0.0f;
+        const float span = follow ? g_zoom.update(speed * 3.6f, s.mapZoom, std::min(ImGui::GetIO().DeltaTime, 0.1f)) : extent;
+        if (!follow) g_zoom = AutoZoom();
+        float cx = follow ? pose.position[0] : (worldX0 + worldX1) * 0.5f;
+        float cz = follow ? pose.position[2] : (worldZ0 + worldZ1) * 0.5f;
+        const float k = view / span;
         float fx = 0.0f, fz = 1.0f;
-        if (s.mapRotate && car) {
+        if (s.mapRotate && follow) {
             const float l = sqrtf(pose.forward[0] * pose.forward[0] + pose.forward[2] * pose.forward[2]);
             if (l > 1e-3f) {
                 fx = pose.forward[0] / l;
                 fz = pose.forward[2] / l;
             }
+        }
+        // Turning with the car: the view's centre a sixth of the span ahead, so the car sits a third
+        // from the bottom, looking ahead.
+        if (s.mapRotate && follow) {
+            cx += fx * span / 6.0f;
+            cz += fz * span / 6.0f;
         }
         // Across the heading: forward turned a quarter clockwise as seen from above (x right, z up).
         const float rx = fz, rz = -fx;
@@ -367,6 +418,14 @@ void draw(const Frame& frame) {
         const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(255.0f * s.mapOpacity));
         draw->AddImageQuad(reinterpret_cast<ImTextureID>(p.texture), toScreen(worldX0, worldZ0), toScreen(worldX1, worldZ0),
                            toScreen(worldX1, worldZ1), toScreen(worldX0, worldZ1), ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), tint);
+        // Real look: the blocks the game drew, from above, over the squares (blocks not seen yet stay squares).
+        IDirect3DTexture9* picture = s.mapTextured ? topview::picture() : nullptr;
+        if (picture) {
+            draw->AddCallback(mipFilterOn, nullptr);
+            draw->AddImageQuad(reinterpret_cast<ImTextureID>(picture), toScreen(worldX0, worldZ0), toScreen(worldX1, worldZ0), toScreen(worldX1, worldZ1),
+                               toScreen(worldX0, worldZ1), ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), tint);
+            draw->AddCallback(mipFilterOff, nullptr);
+        }
         if (car) {
             const ImVec2 at = toScreen(pose.position[0], pose.position[2]);
             const ImVec2 ahead = toScreen(pose.position[0] + pose.forward[0], pose.position[2] + pose.forward[2]);

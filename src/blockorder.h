@@ -23,6 +23,11 @@ namespace blockorder {
 // = higher (action blocks above normal ones). Cheap: called for every draw call.
 int currentDrawRank();
 
+// The CHmsItem of the block of the current map the engine is drawing right now (both passes), 0:
+// not a block of the map (the car, the sky, the stadium around it), or the chain doesn't hold.
+// For the minimap's picture (misc/topview.cpp): it tells block draws from the rest, nothing else.
+uintptr_t currentDrawItem();
+
 // Map loaded / block removed / editor changes: rebuild the overlap groups (call sites in engine.cpp).
 void invalidate();
 

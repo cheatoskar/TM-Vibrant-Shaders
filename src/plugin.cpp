@@ -3270,6 +3270,10 @@ bool onSkipDraw(IDirect3DDevice9* device, INT base, UINT start, UINT count) {
 
 void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count) {
     overlapBiasBegin(device); // blocks are indexed draws; restored in onDrawDone
+    // The Misc page's minimap takes the map's blocks for its picture from above (queued, drawn at Present).
+    if (misc::kAvailable && g_scene.inMainCamera && g_scene.haveView && g_scene.haveProjection) {
+        misc::sceneDraw(device, type, base, minIndex, vertices, start, count, g_scene.view, g_scene.projection);
+    }
     if (!g_castersOn || !g_scene.inMainCamera || !g_scene.haveView || !g_scene.haveProjection) return;
     if (!casters::takeTurn()) return; // most draws of a big map wait for a later frame
     DWORD z = FALSE, zwrite = FALSE, blend = FALSE, alphaTest = FALSE, colorWrite = 0;
@@ -3425,6 +3429,7 @@ void onPreReset() {
     g_screenSaved.active = false;
     releaseScreenLayouts(); // made again when needed (the shader from the compile cache)
     casters::releaseDevice();
+    misc::releaseDevice(); // the minimap's picture from above (default pool)
     depth::onPreReset();
     overlay::preReset();
 }

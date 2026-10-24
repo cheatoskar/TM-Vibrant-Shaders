@@ -194,7 +194,8 @@ if(TMVS_MISC_TOOLS)
     src/misc/splits.cpp
     src/misc/replay.cpp
     src/misc/tmx.cpp
-    src/misc/confetti.cpp)
+    src/misc/confetti.cpp
+    src/misc/topview.cpp)
   target_compile_definitions(tm_vibrant_shaders PRIVATE TMVS_MISC_TOOLS=1)
 endif()
 target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR})
@@ -272,6 +273,15 @@ target_compile_options(tmvs_packtest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_replaytest tools/replaytest.cpp src/misc/replay.cpp)
 target_link_libraries(tmvs_replaytest PRIVATE tmvs_core shell32)
 target_compile_options(tmvs_replaytest PRIVATE ${TMVS_OPTIONS})
+
+# The minimap's picture from above (misc/topview.cpp) on a plain D3D9 device: two quads drawn like the
+# game's blocks land at their place, the higher over the lower, and the device state comes back (development tool).
+if(TMVS_MISC_TOOLS)
+  add_executable(tmvs_topviewtest tools/topviewtest.cpp src/misc/topview.cpp src/casters.cpp)
+  target_include_directories(tmvs_topviewtest PRIVATE ${imgui_SOURCE_DIR})
+  target_link_libraries(tmvs_topviewtest PRIVATE tmvs_core)
+  target_compile_options(tmvs_topviewtest PRIVATE ${TMVS_OPTIONS})
+endif()
 
 # Video export read-back test: the frames come out once each and in order, with repeats, flushes
 # and a device reset in between, on a plain D3D9 device (development tool).

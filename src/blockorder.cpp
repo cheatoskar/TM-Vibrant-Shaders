@@ -43,6 +43,11 @@ uintptr_t g_scanData = 0;
 DWORD g_lastPoll = 0;
 std::unordered_map<uintptr_t, uint8_t> g_itemRank; // CHmsItem -> rank (0 included: the block is known)
 int g_rank = 0;
+// The block item drawn now (currentDrawItem), and the ones of the draws around it (a draw inside a
+// draw), given back by endDraw.
+uintptr_t g_item = 0;
+uintptr_t g_itemStack[8] = {};
+unsigned g_itemDepth = 0;
 // What the draws found, logged once per map after enough of them.
 uint32_t g_draws = 0, g_known = 0, g_ranked = 0, g_delayedDraws = 0, g_delayedKnown = 0;
 bool g_reported = false;
@@ -298,6 +303,8 @@ void report() {
 
 int currentDrawRank() { return g_rank; }
 
+uintptr_t currentDrawItem() { return g_item; }
+
 void setIdNameFunction(uintptr_t address) { g_idGetString = reinterpret_cast<IdGetStringFn>(address); }
 
 void invalidate() { InterlockedExchange(&g_dirty, 1); }
@@ -318,6 +325,8 @@ void setChallenge(const void* challenge) {
 
 int beginDraw(const void* corpus, bool delayedPass) {
     const int previous = g_rank;
+    g_itemStack[g_itemDepth++ & 7] = g_item;
+    g_item = 0;
     if (!g_challenge) {
         g_rank = 0;
         return previous;
@@ -343,6 +352,7 @@ int beginDraw(const void* corpus, bool delayedPass) {
         const auto it = g_itemRank.find(item);
         if (it != g_itemRank.end()) {
             rank = it->second;
+            g_item = item;
             if (delayedPass) {
                 g_delayedKnown++;
             } else {
@@ -356,6 +366,9 @@ int beginDraw(const void* corpus, bool delayedPass) {
     return previous;
 }
 
-void endDraw(int previous) { g_rank = previous; }
+void endDraw(int previous) {
+    g_rank = previous;
+    if (g_itemDepth) g_item = g_itemStack[--g_itemDepth & 7];
+}
 
 } // namespace blockorder

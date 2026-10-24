@@ -71,6 +71,11 @@ void releaseDevice();
 // The caster maps' shaders, for gfx::precompile (compiled ahead, off the render thread).
 void runtimeShaders(std::vector<gfx::ShaderSource>& out);
 
+// The world matrix of the indexed draw bound now (row vectors: rows 0..2 the mesh's axes, row 3 its
+// place), from the game's GbxVisualPrCamera constants and the camera, as recordDraw finds it. False:
+// the shader has none, or the draw isn't this camera's. For the minimap's picture (misc/topview.cpp).
+bool drawWorld(IDirect3DDevice9* device, const float view[16], const float projection[16], float world[4][3]);
+
 // How many meshes are kept now (tests, the log), and how many of them are alpha-tested.
 unsigned keptMeshes();
 unsigned keptAlphaMeshes();
