@@ -19,6 +19,7 @@ enum class Action : int {
     Capture,    // frame capture (a photo in photo mode; Shift = hi-res)
     Reload,     // reload the shaders (TMNF only)
     Trace,      // arm the trace (TMNF only)
+    PhotoPanel, // photo mode's compact panel shown / hidden (TMNF only)
     Count
 };
 

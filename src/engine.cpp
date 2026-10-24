@@ -442,6 +442,7 @@ bool g_shaderCensus = false;           // log every material once (dev: finding 
 using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
 LensFlareFn g_lensFlare = nullptr;
 bool g_hideSunFlare = false;           // a night sky replaces the sun: its halo fades out
+volatile bool g_hideCars = false;      // photo mode's Hide car: the cars' draws are skipped (shader level, like the horizon)
 volatile bool g_hideGameSky = false;   // a night sky replaces the game's: its painted horizon isn't drawn
 using LoadSceneFn = void(__fastcall*)(void*, void*);
 LoadSceneFn g_loadScene = nullptr;
@@ -1189,13 +1190,36 @@ void censusShader(const void* shader) {
     else TMVS_LOG("shader %p: (no file)", shader);
 }
 
+// The cars' own materials (Vehicles\..., the glass and rear lights included; not their smoke, chunks and
+// wheel marks): what photo mode's Hide car leaves out, from the shader file like classify().
+bool isVehicle(const void* shader) {
+    static std::unordered_map<const void*, bool> known;
+    static LONG knownLoads = -1;
+    if (!shader) return false;
+    if (knownLoads != g_mapLoads) {
+        known.clear();
+        knownLoads = g_mapLoads;
+    }
+    const auto it = known.find(shader);
+    if (it != known.end()) return it->second;
+    wchar_t path[512] = {};
+    bool vehicle = false;
+    if (nodFilePath(shader, path, 512) && !wcsstr(path, L"\\Menu")) {
+        const wchar_t* file = wcsrchr(path, L'\\');
+        file = file ? file + 1 : path;
+        vehicle = (wcsstr(path, L"Vehicles\\") || wcsstr(path, L"Vehicles/")) && _wcsnicmp(file, L"Particle", 8) && _wcsnicmp(file, L"WheelMarks", 10);
+    }
+    if (known.size() < 8192) known.emplace(shader, vehicle);
+    return vehicle;
+}
+
 void __fastcall drawShaderDetour(void* self, void* edx, void* shader, void* corpus, void* tree, void* visual) {
     const void* previous = g_currentShader;
     g_currentShader = shader;
     if (g_shaderCensus) censusShader(shader);
     // The block this draw belongs to gives the device wrapper its depth bias rank (blockorder.h).
     const int previousRank = blockorder::beginDraw(corpus, false);
-    if (!(g_hideGameSky && isPaintedHorizon(shader))) g_drawShader(self, edx, shader, corpus, tree, visual);
+    if (!(g_hideGameSky && isPaintedHorizon(shader)) && !(g_hideCars && isVehicle(shader))) g_drawShader(self, edx, shader, corpus, tree, visual);
     blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
@@ -1205,7 +1229,7 @@ void __fastcall drawPassDetour(void* self, void* edx, void* delayed) {
     g_currentShader = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedRenderShader);
     if (g_shaderCensus) censusShader(g_currentShader);
     const int previousRank = blockorder::beginDraw(delayed, true);
-    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader))) g_drawPass(self, edx, delayed);
+    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader)) && !(g_hideCars && isVehicle(g_currentShader))) g_drawPass(self, edx, delayed);
     blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
@@ -2968,6 +2992,11 @@ bool cameraMatrices(float view[16], float projection[16]) {
 
 void setProjectionZoom(float zoom) {
     g_zoom = zoom < 1.0f ? 1.0f : zoom;
+}
+
+void hideCars(bool hide) {
+    if (hide != g_hideCars) TMVS_LOG("engine: the cars' draws %s", hide ? "skipped (photo mode)" : "back");
+    g_hideCars = hide;
 }
 
 void hideOverlay(bool hide) {
