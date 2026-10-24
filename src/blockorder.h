@@ -26,6 +26,10 @@ int currentDrawRank();
 // Map loaded / block removed / editor changes: rebuild the overlap groups (call sites in engine.cpp).
 void invalidate();
 
+// How often a poll (every 250 ms, while the game draws) found fewer blocks in the array than the
+// poll before: removals seen without the RemoveBlock hook (another mod, TMUnlimiter, may sit on it).
+int countDrops();
+
 // For engine.cpp: CMwId::GetString (block names, for the action blocks below), once at startup.
 void setIdNameFunction(uintptr_t address);
 
