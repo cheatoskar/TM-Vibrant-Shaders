@@ -3422,11 +3422,11 @@ float headSpot(float3 q, float3 lamp) {
     float3 v = q - lamp;
     float d2 = dot(v, v);
     float cone = smoothstep(u_Head0.y, u_Head0.z, dot(v, u_Head3.xyz) * rsqrt(max(d2, 1e-4)));
-    // Inverse square past a quarter of the range (so Headlight range moves how far it carries: at 90 m
-    // a wall 50 m out still gets a fifth of the light near the car), a smooth end at the range.
+    // Inverse square past a fifth of the range (so Headlight range moves how far it carries: at 90 m
+    // a wall 50 m out still gets about an eighth of the light near the car), a smooth end at the range.
     float r2 = d2 / (u_Head0.w * u_Head0.w);
     float reach = saturate(1.0 - r2 * r2);
-    return cone * reach * reach / (1.0 + r2 * 16.0);
+    return cone * reach * reach / (1.0 + r2 * 24.0);
 }
 float headGlare(float3 rd, float3 cam, float3 lamp) {
     float3 w = lamp - cam;
