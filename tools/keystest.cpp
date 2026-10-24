@@ -62,7 +62,7 @@ int main() {
     CHECK(get(Action::Reload) == Binding{VK_F9, kCtrl});
     CHECK(name(get(Action::Reload)) == "Ctrl+F9");
     CHECK(get(Action::Trace) == Binding{VK_F11, 0});
-    CHECK(get(Action::PhotoPanel) == Binding{VK_F10, 0});
+    CHECK(get(Action::PhotoPanel) == Binding{VK_F6, kCtrl});
 #endif
 
     // Plain letters would eat the game's keys.
@@ -108,11 +108,16 @@ int main() {
     wchar_t text[32] = {};
     GetPrivateProfileStringW(L"Keys", L"Reload", L"", text, 32, ini);
     CHECK(wcscmp(text, L"Ctrl+F9") == 0);
-    CHECK(GetPrivateProfileIntW(L"Keys", L"KeysVersion", 0, ini) == 2);
+    CHECK(GetPrivateProfileIntW(L"Keys", L"KeysVersion", 0, ini) == 3);
     // Written by this version: a deliberate bare F9 stays.
     WritePrivateProfileStringW(L"Keys", L"Reload", L"F9", ini);
     load(ini);
     CHECK(get(Action::Reload) == Binding{VK_F9, 0});
+    // Version 2 with the photo panel on F10 (its first default, Windows' menu key): Ctrl+F6, once.
+    WritePrivateProfileStringW(L"Keys", L"KeysVersion", L"2", ini);
+    WritePrivateProfileStringW(L"Keys", L"PhotoPanel", L"F10", ini);
+    load(ini);
+    CHECK(get(Action::PhotoPanel) == Binding{VK_F6, kCtrl});
     // Old file with another Reload key: untouched. No [Keys] at all: the default.
     DeleteFileW(ini);
     WritePrivateProfileStringW(L"Keys", L"Reload", L"F10", ini);

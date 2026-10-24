@@ -29,7 +29,8 @@ const Info kInfo[kCount] = {
     {"Capture", "Frame capture / photo", {VK_F12, 0}, true},
     {"Reload", "Reload shaders", {VK_F9, kCtrl}, kTmnf},
     {"Trace", "Trace", {VK_F11, 0}, kTmnf},
-    {"PhotoPanel", "Photo mode: panel on / off", {VK_F10, 0}, kTmnf},
+    // Not F10: Windows' menu key (WM_SYSKEYDOWN); in the replay editor it brought the editor's panels back.
+    {"PhotoPanel", "Photo mode: panel on / off", {VK_F6, kCtrl}, kTmnf},
 };
 
 struct Named {
@@ -119,8 +120,9 @@ std::string g_note;
 bool g_capturing = false;
 Action g_target = Action::Count;
 HWND g_gameWindow = nullptr;
-// [Keys] KeysVersion: 1 (or none) = written before Reload moved to Ctrl+F9, 2 = now.
-constexpr int kKeysVersion = 2;
+// [Keys] KeysVersion: 1 (or none) = written before Reload moved to Ctrl+F9, 2 = before the photo
+// panel moved from F10 to Ctrl+F6, 3 = now.
+constexpr int kKeysVersion = 3;
 
 void ensure() {
     if (g_init) return;
@@ -514,6 +516,15 @@ void load(const wchar_t* ini) {
             g_binding[r] = kInfo[r].def;
             g_changed = true; // written back with the new version
             TMVS_LOG("keys: Reload moved from F9 to %s (F9 opens the 100%% TMX menu)", name(g_binding[r]).c_str());
+        }
+    }
+    // The photo panel's first default was F10 (Windows' menu key): moved once, like Reload above.
+    if (GetPrivateProfileIntW(L"Keys", L"KeysVersion", 1, ini) < 3) {
+        const int p = static_cast<int>(Action::PhotoPanel);
+        if (kInfo[p].available && g_binding[p] == Binding{VK_F10, 0}) {
+            g_binding[p] = kInfo[p].def;
+            g_changed = true;
+            TMVS_LOG("keys: photo panel moved from F10 to %s (F10 is Windows' menu key)", name(g_binding[p]).c_str());
         }
     }
     // Two actions on one key (edited by hand): the first keeps it, the later ones go back to
