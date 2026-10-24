@@ -4,6 +4,10 @@ A release candidate for **TrackMania Nations & United Forever**: a new video exp
 
 **This is a pre-release.** It is what I test with right now; things may still change before 1.4.2. Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
 
+![The F8 menu with the Video page, the Resource packs and Misc pages popped out into windows, and the minimap, split times and session panels at the right](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/{{TAG}}/docs/images/1.4.2-menu-misc.jpg)
+
+*The menu with the Video page, Resource packs and Misc popped out into windows; at the right the minimap (Real look), split times and the session panel.*
+
 ---
 
 ### The video export
