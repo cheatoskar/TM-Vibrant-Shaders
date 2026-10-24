@@ -2359,34 +2359,145 @@ void drawHeader(Config& config, Settings& s) {
     ImGui::Spacing();
 }
 
+// --- The pages: one table for the tab bar and for detached windows -------------------
+
+using Names = std::vector<std::string>;
+
+// A page of the menu. Every page is in the table below, in the order of the tab bar; that is all a
+// new page needs: it gets its tab, its window ("detach") and its saved state ([Windows], by `key`).
+struct PageDef {
+    int id;            // the Page enum (saved as MenuPage)
+    const char* key;   // saved in [Windows]; never change it
+    const char* title;
+    const char* hint;
+    bool (*available)(); // null: always; false: not shown (e.g. a page this game doesn't have)
+    // Draws the page's body (no window of its own, no heading) in the menu or in a window; true:
+    // a look setting changed (the preset becomes Custom).
+    bool (*draw)(Config&, Settings&, const Names&);
+};
+
+const PageDef kPageTable[] = {
+    {kShaders, "shaders", "Shaders", "Browse and apply presets", nullptr, [](Config& c, Settings&, const Names&) { drawShaders(c); return false; }},
+    {kCustomize, "customize", "Customize", "Main settings", nullptr, [](Config& c, Settings& s, const Names&) { return drawCustomize(c, s); }},
+    {kStudio, "studio", "Studio", "All settings", nullptr, [](Config& c, Settings& s, const Names&) { return drawStudio(c, s); }},
+    {kMaps, "maps", "Maps", "Presets for day, sunset and night maps", nullptr, [](Config& c, Settings&, const Names& n) { drawMaps(c, n); return false; }},
+    {kPerformance, "performance", "Performance", "Frame rate and effect costs", nullptr, [](Config&, Settings& s, const Names&) { return drawPerformancePage(s); }},
+    {kVideo, "video", "Video", "Shoot video: presets, quality, the camera's look", videoPageShown, [](Config& c, Settings& s, const Names&) { return drawVideoPage(c, s); }},
+    {kPacks, "packs", "Resource packs", "Texture mods on every map", [] { return g_host->resourcePacks != nullptr; }, [](Config& c, Settings&, const Names&) { drawPacks(c); return false; }},
+    {kSettings, "settings", "Settings", "General options", nullptr, [](Config& c, Settings& s, const Names&) { return drawSettings(c, s); }},
+    {kAbout, "about", "About", "Version, updates, help", nullptr, [](Config& c, Settings&, const Names&) { drawAbout(c); return false; }},
+};
+
+bool pageShown(const PageDef& page) {
+    return !page.available || page.available();
+}
+
+const PageDef* findPage(int id) {
+    for (const PageDef& page : kPageTable) {
+        if (page.id == id) return &page;
+    }
+    return nullptr;
+}
+
+// The page a saved number stands for; one this game doesn't have (or an unknown number): Settings.
+const PageDef& pageFor(int id) {
+    const PageDef* page = findPage(id);
+    if (page && pageShown(*page)) return *page;
+    return *findPage(kSettings);
+}
+
+Config::MenuWindow& windowOf(Config& config, const PageDef& page) {
+    return config.menuWindows[page.key];
+}
+
+bool isDetached(Config& config, const PageDef& page) {
+    const auto it = config.menuWindows.find(page.key);
+    return it != config.menuWindows.end() && it->second.detached;
+}
+
+std::string windowName(const PageDef& page) {
+    return std::string(page.title) + "##tmvsWindow_" + page.key;
+}
+
+// The first page in the bar that is shown and still in the menu (the Settings page if none).
+int firstAttached(Config& config) {
+    for (const PageDef& page : kPageTable) {
+        if (pageShown(page) && !isDetached(config, page)) return page.id;
+    }
+    return kSettings;
+}
+
+void detachPage(Config& config, const PageDef& page) {
+    Config::MenuWindow& w = windowOf(config, page);
+    w.detached = true;
+    if (config.menuPage == page.id) config.menuPage = firstAttached(config);
+    config.markDirty();
+}
+
+void attachPage(Config& config, const PageDef& page) {
+    windowOf(config, page).detached = false;
+    config.menuPage = page.id;
+    config.markDirty();
+}
+
+// A page's pointer-sized "pop out" symbol: a frame with an arrow leaving its corner.
+void drawPopOutIcon(ImDrawList* draw, ImVec2 min, ImVec2 max, ImU32 c) {
+    const float w = max.x - min.x, t = 1.5f * g_scale;
+    const ImVec2 a(min.x + w * 0.12f, min.y + w * 0.30f), b(min.x + w * 0.70f, min.y + w * 0.88f);
+    draw->AddRect(a, b, c, 2.0f, 0, t);
+    draw->AddLine(ImVec2(min.x + w * 0.45f, min.y + w * 0.55f), ImVec2(min.x + w * 0.90f, min.y + w * 0.10f), c, t);
+    draw->AddLine(ImVec2(min.x + w * 0.58f, min.y + w * 0.10f), ImVec2(min.x + w * 0.90f, min.y + w * 0.10f), c, t);
+    draw->AddLine(ImVec2(min.x + w * 0.90f, min.y + w * 0.10f), ImVec2(min.x + w * 0.90f, min.y + w * 0.42f), c, t);
+}
+
 void drawNavigation(Config& config) {
-    static const char* const kPages[] = {"Shaders", "Customize", "Studio", "Maps", "Performance", "Settings", "About", "Video", "Resource packs"};
-    static const char* const kHints[] = {"Browse and apply presets", "Main settings", "All settings", "Presets for day, sunset and night maps",
-                                         "Frame rate and effect costs", "General options", "Version, updates, help",
-                                         "Shoot video: presets, quality, the camera's look", "Texture mods on every map"};
-    static const int kOrder[] = {kShaders, kCustomize, kStudio, kMaps, kPerformance, kVideo, kPacks, kSettings, kAbout};
     const bool updateOut = update::latest().state == update::State::Available;
     const float h = 38.0f * g_scale;
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    for (const int i : kOrder) {
-        if (i == kVideo && !videoPageShown()) continue;
-        if (i == kPacks && !g_host->resourcePacks) continue;
-        const bool active = config.menuPage == i;
+    for (const PageDef& page : kPageTable) {
+        if (!pageShown(page)) continue;
+        const bool detached = isDetached(config, page);
+        const bool active = config.menuPage == page.id && !detached;
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float w = ImGui::GetContentRegionAvail().x;
-        if (ImGui::InvisibleButton(kPages[i], ImVec2(w, h)) && !active) {
-            config.menuPage = i;
-            config.markDirty();
-        }
+        const bool clicked = ImGui::InvisibleButton(page.title, ImVec2(w, h));
         const bool hovered = ImGui::IsItemHovered();
-        if (hovered) ImGui::SetTooltip("%s", kHints[i]);
+        // The pop-out symbol at the right end of the tab: a click on it makes the page a window.
+        const float iconSize = 18.0f * g_scale;
+        const ImVec2 iconMin(p.x + w - iconSize - 8.0f * g_scale, p.y + (h - iconSize) * 0.5f), iconMax(iconMin.x + iconSize, iconMin.y + iconSize);
+        const bool onIcon = hovered && !detached && ImGui::IsMouseHoveringRect(iconMin, iconMax);
+        if (clicked) {
+            if (detached) {
+                // Its window: in front (and open if it was minimized).
+                windowOf(config, page).minimized = false;
+                ImGui::SetWindowFocus(windowName(page).c_str());
+            } else if (onIcon) {
+                detachPage(config, page);
+            } else if (!active) {
+                config.menuPage = page.id;
+                config.markDirty();
+            }
+        }
+        if (hovered) {
+            if (detached) ImGui::SetTooltip("%s is in its own window. Click to bring the window to the front.", page.title);
+            else if (onIcon) ImGui::SetTooltip("Open %s in its own window", page.title);
+            else ImGui::SetTooltip("%s", page.hint);
+        }
         if (active || hovered) draw->AddRectFilled(p, ImVec2(p.x + w, p.y + h), active ? colour(kAccent, 0.16f) : IM_COL32(255, 255, 255, 14), 6.0f * g_scale);
         if (active) draw->AddRectFilled(ImVec2(p.x, p.y + h * 0.22f), ImVec2(p.x + 3.0f * g_scale, p.y + h * 0.78f), colour(kAccent, 1.0f), 2.0f);
         const float size = g_fontTitle->FontSize * 0.82f;
         draw->AddText(g_fontTitle, size, ImVec2(p.x + 14.0f * g_scale, p.y + (h - size) * 0.5f),
-                      active ? IM_COL32_WHITE : ImGui::GetColorU32(ImGuiCol_Text, 0.7f), kPages[i]);
-        // A new version: a dot on About.
-        if (i == kAbout && updateOut) draw->AddCircleFilled(ImVec2(p.x + w - 14.0f * g_scale, p.y + h * 0.5f), 4.0f * g_scale, colour(kAccent, 1.0f));
+                      active ? IM_COL32_WHITE : ImGui::GetColorU32(ImGuiCol_Text, detached ? 0.4f : 0.7f), page.title);
+        if (detached) {
+            const char* mark = "(detached)";
+            const float ms = g_fontTitle->FontSize * 0.6f;
+            draw->AddText(g_fontTitle, ms, ImVec2(p.x + w - ImGui::CalcTextSize(mark).x * 0.9f - 10.0f * g_scale, p.y + (h - ms) * 0.5f),
+                          ImGui::GetColorU32(ImGuiCol_Text, 0.4f), mark);
+        } else if (hovered || active) {
+            drawPopOutIcon(draw, iconMin, iconMax, onIcon ? colour(kAccent, 1.0f) : ImGui::GetColorU32(ImGuiCol_Text, 0.45f));
+        }
+        // A new version: a dot on About, left of the pop-out symbol.
+        if (page.id == kAbout && updateOut) draw->AddCircleFilled(ImVec2(p.x + w - 36.0f * g_scale, p.y + h * 0.5f), 4.0f * g_scale, colour(kAccent, 1.0f));
     }
     // Keys at the bottom of the bar.
     const float lines = ImGui::GetTextLineHeightWithSpacing() * 4.0f;
@@ -2398,17 +2509,29 @@ void drawNavigation(Config& config) {
     ImGui::TextDisabled("Changes save automatically");
 }
 
+// A page's body where it is shown: in the menu's page area or in a window of its own. The look
+// settings it changed make the preset Custom (or the base preset again when all are back).
+void drawPageBody(const PageDef& page, Config& config, Settings& s, const Names& names) {
+    ImGui::PushItemWidth(std::min(ImGui::GetContentRegionAvail().x * 0.55f, 360.0f * g_scale));
+    const bool look = page.draw(config, s, names);
+    ImGui::PopItemWidth();
+    if (look) {
+        config.preset = kCustomPreset;
+        // Every setting reset by hand: it is the preset again.
+        bool same = true;
+        for (const Field& f : fields()) {
+            if (!isMachineSetting(f) && differsFromBase(f, s, config.baseline())) {
+                same = false;
+                break;
+            }
+        }
+        if (same) config.preset = config.basePreset();
+    }
+}
+
 void drawMenu() {
     Config& config = Config::get();
     Settings& s = config.settings;
-    // Shown in the game only while the pointer rests on a card (set again by the card).
-    config.previewPreset.clear();
-    if (g_cards.hovered != g_cards.resting) {
-        g_cards.resting = g_cards.hovered;
-        g_cards.restingSince = ImGui::GetTime();
-    }
-    g_cards.hovered.clear();
-
     // Placed again when the screen size or the layout changes; otherwise where you left it.
     static ImVec2 s_display(0.0f, 0.0f);
     static bool s_full = false;
@@ -2433,39 +2556,99 @@ void drawMenu() {
     ImGui::SameLine(0.0f, 14.0f * g_scale);
 
     ImGui::BeginChild("page", ImVec2(0.0f, 0.0f));
-    ImGui::PushItemWidth(std::min(ImGui::GetContentRegionAvail().x * 0.55f, 360.0f * g_scale));
-    const std::vector<std::string> names = config.presetNames();
-    bool look = false;
-    switch (config.menuPage) {
-        case kCustomize: look = drawCustomize(config, s); break;
-        case kStudio: look = drawStudio(config, s); break;
-        case kMaps: drawMaps(config, names); break;
-        case kPerformance: look = drawPerformancePage(s); break;
-        case kSettings: look = drawSettings(config, s); break;
-        case kAbout: drawAbout(config); break;
-        case kVideo: look = videoPageShown() ? drawVideoPage(config, s) : drawSettings(config, s); break;
-        case kPacks:
-            if (g_host->resourcePacks) drawPacks(config);
-            else look = drawSettings(config, s);
-            break;
-        default: drawShaders(config); break;
-    }
-    ImGui::PopItemWidth();
-    ImGui::EndChild();
-
-    if (look) {
-        config.preset = kCustomPreset;
-        // Every setting reset by hand: it is the preset again.
-        bool same = true;
-        for (const Field& f : fields()) {
-            if (!isMachineSetting(f) && differsFromBase(f, s, config.baseline())) {
-                same = false;
-                break;
-            }
+    const PageDef& page = pageFor(config.menuPage);
+    if (isDetached(config, page)) {
+        // The page is in a window (it was the open one when saved, or About from the update note).
+        ImGui::TextDisabled("%s is in its own window.", page.title);
+        if (ImGui::Button("Show the window")) {
+            windowOf(config, page).minimized = false;
+            ImGui::SetWindowFocus(windowName(page).c_str());
         }
-        if (same) config.preset = config.basePreset();
+        ImGui::SameLine();
+        if (ImGui::Button("Bring it back here")) attachPage(config, page);
+    } else {
+        drawPageBody(page, config, s, config.presetNames());
+    }
+    ImGui::EndChild();
+    ImGui::End();
+}
+
+// --- Detached windows ----------------------------------------------------------------
+
+bool windowKept(const Config::MenuWindow& w) {
+    return w.detached && w.keepOpen;
+}
+
+// One page in a window of its own. Position, size, minimized state and the options are saved
+// ([Windows]); closing it (X) puts the page back in the menu's tab bar.
+void drawDetachedWindow(const PageDef& page, Config& config, bool menuOpen) {
+    Config::MenuWindow& w = windowOf(config, page);
+    if (!menuOpen && !w.keepOpen) return;
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float sc = g_scale;
+    ImVec2 size(w.w * sc, w.h * sc), pos(w.x * sc, w.y * sc);
+    if (w.w <= 0.0f) {
+        // First time: beside the menu, each new window a step further.
+        static int s_placed = 0;
+        size = ImVec2(std::min(560.0f * sc, display.x - 40.0f * sc), std::min(560.0f * sc, display.y - 40.0f * sc));
+        pos = ImVec2(display.x * 0.35f + 36.0f * sc * (s_placed % 6), 60.0f * sc + 36.0f * sc * (s_placed % 6));
+        s_placed++;
+        w.x = pos.x / sc, w.y = pos.y / sc, w.w = size.x / sc, w.h = size.y / sc;
+    }
+    size.x = std::clamp(size.x, std::min(320.0f * sc, display.x), display.x);
+    size.y = std::clamp(size.y, std::min(160.0f * sc, display.y), display.y);
+    // Never off the screen (another resolution than when it was saved).
+    pos.x = std::clamp(pos.x, 0.0f, std::max(0.0f, display.x - size.x));
+    pos.y = std::clamp(pos.y, 0.0f, std::max(0.0f, display.y - std::min(size.y, 40.0f * sc)));
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(std::min(320.0f * sc, display.x), std::min(160.0f * sc, display.y)), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowCollapsed(w.minimized, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(ImGui::GetStyle().Colors[ImGuiCol_WindowBg].w * (static_cast<float>(w.opacity) / 100.0f));
+    bool open = true;
+    const std::string name = windowName(page);
+    const bool visible = ImGui::Begin(name.c_str(), &open, ImGuiWindowFlags_NoSavedSettings);
+    const bool collapsed = ImGui::IsWindowCollapsed();
+    // Remember where it is, once the mouse is up (a drag is many positions).
+    const ImVec2 at = ImGui::GetWindowPos(), extent = ImGui::GetWindowSize();
+    if (!ImGui::IsMouseDown(0) || collapsed != w.minimized) {
+        const bool changed = collapsed != w.minimized || (!collapsed && (std::fabs(at.x / sc - w.x) > 0.5f || std::fabs(at.y / sc - w.y) > 0.5f ||
+                                                                          std::fabs(extent.x / sc - w.w) > 0.5f || std::fabs(extent.y / sc - w.h) > 0.5f));
+        if (changed) {
+            w.minimized = collapsed;
+            if (!collapsed) {
+                w.x = std::round(at.x / sc), w.y = std::round(at.y / sc);
+                w.w = std::round(extent.x / sc), w.h = std::round(extent.y / sc);
+            }
+            config.markDirty();
+        }
+    }
+    if (visible && !collapsed) {
+        if (ImGui::SmallButton("Window options")) ImGui::OpenPopup("windowOptions");
+        if (ImGui::BeginPopup("windowOptions")) {
+            if (ImGui::Checkbox("Keep open when the menu closes", &w.keepOpen)) config.markDirty();
+            ImGui::SetNextItemWidth(180.0f * sc);
+            if (ImGui::SliderInt("Opacity", &w.opacity, 30, 100, "%d%%")) config.markDirty();
+            if (ImGui::Button("Back to the menu")) {
+                open = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::Separator();
+        // Its own scroll area under the options, like the menu's page area.
+        ImGui::BeginChild("body", ImVec2(0.0f, 0.0f));
+        drawPageBody(page, config, config.settings, config.presetNames());
+        ImGui::EndChild();
     }
     ImGui::End();
+    if (!open) attachPage(config, page);
+}
+
+void drawDetachedWindows(Config& config, bool menuOpen) {
+    for (const PageDef& page : kPageTable) {
+        if (pageShown(page) && isDetached(config, page)) drawDetachedWindow(page, config, menuOpen);
+    }
 }
 
 } // namespace
@@ -2532,9 +2715,27 @@ float scale() {
 void draw(const Host& host) {
     g_host = &host;
     g_keysShown = false;
-    drawMenu();
+    Config& config = Config::get();
+    // Shown in the game only while the pointer rests on a card (set again by the card).
+    config.previewPreset.clear();
+    if (g_cards.hovered != g_cards.resting) {
+        g_cards.resting = g_cards.hovered;
+        g_cards.restingSince = ImGui::GetTime();
+    }
+    g_cards.hovered.clear();
+    const bool menuOpen = config.showOverlay;
+    if (menuOpen) drawMenu();
+    // After the menu: in front of it.
+    if (!host.hideDetached) drawDetachedWindows(config, menuOpen);
     if (keys::capturing() && !g_keysShown) keys::cancelCapture();
     g_host = nullptr;
+}
+
+bool pinnedWindows() {
+    for (const auto& entry : Config::get().menuWindows) {
+        if (windowKept(entry.second)) return true;
+    }
+    return false;
 }
 
 bool consumeReloadRequest() {

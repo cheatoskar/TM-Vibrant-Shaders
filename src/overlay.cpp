@@ -181,12 +181,15 @@ int mouseButton(UINT msg, WPARAM wparam, bool& up) {
 // A press we swallowed: its release is swallowed too, and only then (a release the game never
 // saw the press of is harmless, a press it saw whose release is eaten is a stuck button).
 bool g_swallowedButton[5] = {};
+// Detached menu windows kept on screen with the menu closed (menu::pinnedWindows): their mouse is
+// handled like the compare split's bar.
+bool g_pinned = false;
 
 // The mouse for the split's bar with the menu closed: moves always (hover), presses only over it
 // (or while ImGui holds one: its release), so the game keeps every other click and its mouse
 // capture (the backend takes and releases the capture with each press).
 bool splitBarMouse(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (!g_splitBar || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
+    if (!(g_splitBar || g_pinned) || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
     ImGuiIO& io = ImGui::GetIO();
     const bool held = io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2];
     if (msg != WM_MOUSEMOVE && !io.WantCaptureMouse && !held) return false;
@@ -504,9 +507,14 @@ void draw(IDirect3DDevice9* device) {
     }
     const bool menu = Config::get().showOverlay;
     const char* photoHint = photo::status();
+    // Detached windows: never in a hi-res photo's tiles or the video export's frames.
+    engine::VideoExport exporting;
+    const bool capturing = photo::tiling() || engine::videoExport(exporting);
+    const bool pinned = !capturing && menu::pinnedWindows();
+    g_pinned = pinned && !menu;
     if (!menu) {
         Config::get().previewPreset.clear();
-        if (!*photoHint) {
+        if (!*photoHint && !pinned) {
             g_splitBar = false;
             publishMouseOwner(false);
             removeTop(); // nothing of ours on screen: the other mod is on top
@@ -519,9 +527,9 @@ void draw(IDirect3DDevice9* device) {
     ImGui_ImplWin32_NewFrame();
     // Draw ImGui's cursor over the menu or the split's bar (the game hides the OS cursor), the game's elsewhere.
     // Only while we own the mouse: with both mods' menus open only one pointer is drawn.
-    ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
+    ImGui::GetIO().MouseDrawCursor = (menu || pinned || g_splitBar) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
-    if (menu) {
+    if (menu || pinned) {
         // The pipeline's GPU timings for the Performance page.
         struct Timings : menu::PassTimings {
             const Pipeline* p;
@@ -557,6 +565,7 @@ void draw(IDirect3DDevice9* device) {
         host.supports = [](const Field& f) { return strcmp(f.key, "ToneCurve") != 0; }; // ManiaPlanet only
         g_packs.device = device;
         host.resourcePacks = &g_packs;
+        host.hideDetached = capturing;
         menu::draw(host);
     }
     if (*photoHint) {
@@ -576,7 +585,7 @@ void draw(IDirect3DDevice9* device) {
     if (g_splitBar) drawSplitBar();
     ImGui::EndFrame();
     // Does one of our windows want the mouse (hovered or held)? Then the other mod stays out of it.
-    publishMouseOwner((menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse);
+    publishMouseOwner((menu || pinned || g_splitBar) && ImGui::GetIO().WantCaptureMouse);
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
         {

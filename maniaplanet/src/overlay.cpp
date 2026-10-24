@@ -411,15 +411,17 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     Config& config = Config::get();
     config.tick(); // saves settings.ini a moment after a change
     hotkeys();
-    g_open = config.showOverlay;
+    // Detached menu windows kept on screen with the menu closed (drawn at Present: never in photos).
+    const bool pinned = tmshaders::menu::pinnedWindows();
+    g_open = config.showOverlay || pinned;
     if (!config.showOverlay) tmshaders::keys::cancelCapture(); // the menu was closed meanwhile
     const bool showToast = GetTickCount64() < g_toastUntil;
     const char* photoLine = photo::status();
     if (!config.showOverlay) config.previewPreset.clear();
     // With photo mode's line on screen only, as TMNF's (drawn at Present: never in the photos).
     g_splitBar = photo::splitShown() && *photoLine;
-    if (!g_splitBar && !config.showOverlay) g_wantMouse = false;
-    if (!config.showOverlay && !showToast && !*photoLine && !photo::splitShown()) return;
+    if (!g_splitBar && !pinned && !config.showOverlay) g_wantMouse = false;
+    if (!config.showOverlay && !pinned && !showToast && !*photoLine && !photo::splitShown()) return;
 
     std::vector<Message> messages;
     {
@@ -432,9 +434,9 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     ImGui_ImplWin32_NewFrame();
     ImGuiIO& io = ImGui::GetIO();
     // ImGui's pointer over the menu (the game hides the OS cursor), the game's elsewhere.
-    io.MouseDrawCursor = (config.showOverlay || g_splitBar) && io.WantCaptureMouse;
+    io.MouseDrawCursor = (config.showOverlay || pinned || g_splitBar) && io.WantCaptureMouse;
     ImGui::NewFrame();
-    if (config.showOverlay) {
+    if (config.showOverlay || pinned) {
         // The effects' GPU times for the Performance page (as TMNF's pipeline reports them).
         struct Timings : tmshaders::menu::PassTimings {
             int count() const override { return kPassCount; }
