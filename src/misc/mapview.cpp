@@ -330,6 +330,19 @@ struct View {
 };
 View g_view;
 
+// What the window shows: glides over about a second (ease in and out, position, zoom and heading)
+// whenever what the view follows changes: the whole track <-> the car, the held view (finish,
+// countdown) -> the car of the next run. A new map snaps.
+enum Source { kWholeTrack = 0, kFollowCar = 1, kHeldView = 2 };
+struct Glide {
+    bool shown = false;
+    int source = -1;
+    float t = 1.0f; // 0..1 through the glide
+    float from[4] = {}, now[4] = {}; // centre x, centre z, span, heading (rad)
+};
+Glide g_glide;
+constexpr float kGlideSeconds = 1.0f;
+
 // Once per map: is the car's cell (at the start) one of the block cells? If not, the grid's scale
 // or origin here is wrong (the log tells; my reading is 32 m cells from world 0).
 void checkCarCell(const engine::CarPose& pose) {
@@ -446,17 +459,25 @@ void drawWindow(const Frame& frame) {
             g_view = View();
             g_view.map = p.map;
             g_zoom = AutoZoom();
+            g_glide = Glide();
         }
-        // The finish freezes the view until the next run starts.
+        // The finish freezes the view until the next run starts (then the zoom starts over from the
+        // standing view: the glide takes it there).
         engine::RaceTimes rt;
         if (engine::raceTimes(rt)) {
-            if (rt.finished && rt.started) g_view.frozen = true;
-            else if (g_view.frozen && (!rt.finished || rt.time + 500 < g_view.lastTime)) g_view.frozen = false;
+            if (rt.finished && rt.started) {
+                g_view.frozen = true;
+            } else if (g_view.frozen && (!rt.finished || rt.time + 500 < g_view.lastTime)) {
+                g_view.frozen = false;
+                g_zoom = AutoZoom();
+            }
             g_view.lastTime = rt.time;
         }
         // The whole track (Auto zoom off, a small track, or nothing known yet).
         float cx = (trackX0 + trackX1) * 0.5f, cz = (trackZ0 + trackZ1) * 0.5f, span = whole, fx = 0.0f, fz = 1.0f;
+        int source = kWholeTrack;
         if (autoZoom && car && !g_view.frozen) {
+            source = kFollowCar;
             float speed = -1.0f;
             if (engine::carSpeed(speed)) speed *= 3.6f;
             else speed = -1.0f; // unknown: the zoom holds
@@ -482,11 +503,41 @@ void drawWindow(const Frame& frame) {
             g_view.fz = fz;
         } else if (autoZoom && g_view.valid) {
             // The car briefly unknown (a reset, the countdown) or the run finished: the last view.
+            source = kHeldView;
             cx = g_view.cx;
             cz = g_view.cz;
             span = g_view.span;
             fx = g_view.fx;
             fz = g_view.fz;
+        }
+        // The glide from what was shown to this target (which may move meanwhile: the car).
+        {
+            const float target[4] = {cx, cz, span, atan2f(fx, fz)};
+            if (!g_glide.shown) {
+                memcpy(g_glide.now, target, sizeof(target));
+                g_glide.shown = true;
+                g_glide.t = 1.0f;
+            } else if (source != g_glide.source) {
+                memcpy(g_glide.from, g_glide.now, sizeof(g_glide.from));
+                g_glide.t = 0.0f;
+            }
+            g_glide.source = source;
+            g_glide.t = std::min(1.0f, g_glide.t + std::min(ImGui::GetIO().DeltaTime, 0.1f) / kGlideSeconds);
+            const float e = g_glide.t * g_glide.t * (3.0f - 2.0f * g_glide.t); // ease in and out
+            if (g_glide.t >= 1.0f) {
+                memcpy(g_glide.now, target, sizeof(target));
+            } else {
+                for (int i = 0; i < 3; i++) g_glide.now[i] = g_glide.from[i] + (target[i] - g_glide.from[i]) * e;
+                float turn = target[3] - g_glide.from[3];
+                while (turn > 3.14159265f) turn -= 6.2831853f;
+                while (turn < -3.14159265f) turn += 6.2831853f;
+                g_glide.now[3] = g_glide.from[3] + turn * e;
+            }
+            cx = g_glide.now[0];
+            cz = g_glide.now[1];
+            span = g_glide.now[2];
+            fx = sinf(g_glide.now[3]);
+            fz = cosf(g_glide.now[3]);
         }
         const float k = view / span;
         // Across the heading: forward turned a quarter clockwise as seen from above (x right, z up).
