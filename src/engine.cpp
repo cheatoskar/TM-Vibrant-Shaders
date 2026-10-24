@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "blockorder.h"
 #include "gbx.h"
 #include "hook.h"
 #include "log.h"
@@ -1117,7 +1118,10 @@ void __fastcall drawShaderDetour(void* self, void* edx, void* shader, void* corp
     const void* previous = g_currentShader;
     g_currentShader = shader;
     if (g_shaderCensus) censusShader(shader);
+    // The block this draw belongs to gives the device wrapper its depth bias rank (blockorder.h).
+    const int previousRank = blockorder::beginDraw(corpus, false);
     if (!(g_hideGameSky && isPaintedHorizon(shader))) g_drawShader(self, edx, shader, corpus, tree, visual);
+    blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
 
@@ -1125,7 +1129,9 @@ void __fastcall drawPassDetour(void* self, void* edx, void* delayed) {
     const void* previous = g_currentShader;
     g_currentShader = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedRenderShader);
     if (g_shaderCensus) censusShader(g_currentShader);
+    const int previousRank = blockorder::beginDraw(delayed, true);
     if (!(g_hideGameSky && isPaintedHorizon(g_currentShader))) g_drawPass(self, edx, delayed);
+    blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
 
@@ -1194,6 +1200,7 @@ void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
 
 int __fastcall removeBlockDetour(void* self, void* edx, void* block) {
     InterlockedIncrement(&g_blocksRemoved);
+    blockorder::invalidate();
     return g_removeBlock(self, edx, block);
 }
 
@@ -1283,6 +1290,7 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
         g_sceneChallenge = nullptr;
     }
     g_setChallenge(self, edx, challenge);
+    blockorder::setChallenge(challenge);
     if (!challenge) InterlockedIncrement(&g_mapCloses);
 }
 

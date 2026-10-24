@@ -149,6 +149,7 @@ add_library(tm_vibrant_shaders SHARED
   src/dllmain.cpp
   src/plugin.cpp
   src/casters.cpp
+  src/blockorder.cpp
   src/perflog.cpp
   src/engine.cpp
   src/hook.cpp
