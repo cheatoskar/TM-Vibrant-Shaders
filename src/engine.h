@@ -1,6 +1,7 @@
 #pragma once
 #include <d3d9.h>
 #include <string>
+#include <vector>
 
 // Hooks into the TrackMania Forever "Vision" engine (CVisionViewportDx9).
 //
@@ -232,6 +233,11 @@ struct RaceTimes {
     const void* race = nullptr; // identifies the race (a new one: a new map or mode)
 };
 bool raceTimes(RaceTimes& out);
+// The opponent ghost of the race with the best time (a solo race's ghosts: your best, a medal's, a
+// replay's): its race time and the race time at each of its checkpoints. False: none.
+bool raceGhostTimes(std::vector<int>& checkpoints, int& raceTime);
+// The race's car speed now (m/s, the physics' world speed). False without a race or another build.
+bool carSpeed(float& metresPerSecond);
 
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.

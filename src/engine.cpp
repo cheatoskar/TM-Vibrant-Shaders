@@ -227,6 +227,13 @@ constexpr size_t kInfoFinalTime = 0x2b0, kInfoLapFinalTime = 0x2bc;
 constexpr size_t kInfoFinished = 0x33c;
 constexpr size_t kInfoPassed = 0x334;
 constexpr size_t kInfoCheckpoints = 0x2f8;
+// The race's opponent ghosts (CTrackManiaRace::Ghosts_GetBestCurrentOpponent, Ghosts_Restart: a
+// CFastBuffer<CGameCtnGhost*> at +0x520); a ghost's race time at +0xe8 (CGameCtnGhost::SetRaceTime,
+// -1 none) and its checkpoint times at +0x94 (SetCheckpoint: {time, score} each). Ported to TMUF over
+// 256 bytes, the same offsets.
+constexpr size_t kRaceGhosts = 0x520;
+constexpr size_t kGhostRaceTime = 0xe8;
+constexpr size_t kGhostCheckpoints = 0x94;
 // The map's identifier (CGameCtnChallenge::GenerateUid writes the UID's CMwId here; the
 // environment at +0xe0 and the author at +0xe4 follow).
 constexpr size_t kChallengeUid = 0xdc;
@@ -2945,6 +2952,63 @@ std::string idText(const void* id) {
     char text[128] = {};
     idTextInto(id, text, sizeof(text));
     return text;
+}
+
+bool raceGhostTimes(std::vector<int>& checkpoints, int& raceTime) {
+    checkpoints.clear();
+    raceTime = -1;
+    if (!g_build || !g_race || GetTickCount() - g_racePlayerTick > 5000) return false;
+    int times[RaceTimes::kMax];
+    int count = 0, best = -1;
+    __try {
+        const BYTE* race = static_cast<const BYTE*>(g_race);
+        const DWORD n = *reinterpret_cast<const DWORD*>(race + kRaceGhosts);
+        const BYTE* const* ghosts = *reinterpret_cast<const BYTE* const* const*>(race + kRaceGhosts + 4);
+        if (n > 64 || (n && !ghosts)) return false;
+        for (DWORD i = 0; i < n; i++) {
+            const BYTE* g = ghosts[i];
+            if (!g) continue;
+            const DWORD time = *reinterpret_cast<const DWORD*>(g + kGhostRaceTime);
+            const DWORD cps = *reinterpret_cast<const DWORD*>(g + kGhostCheckpoints);
+            const DWORD* entries = *reinterpret_cast<const DWORD* const*>(g + kGhostCheckpoints + 4);
+            if (time == 0xffffffffu || time == 0 || time > 24u * 3600u * 1000u || cps == 0 || cps > static_cast<DWORD>(RaceTimes::kMax) || !entries) continue;
+            if (best >= 0 && static_cast<int>(time) >= best) continue;
+            best = static_cast<int>(time);
+            count = static_cast<int>(cps);
+            for (DWORD k = 0; k < cps; k++) times[k] = static_cast<int>(entries[k * 2]);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    if (best < 0) return false;
+    raceTime = best;
+    checkpoints.assign(times, times + count);
+    return true;
+}
+
+namespace {
+// The vehicle's async world speed (inside __try): only a CSceneVehicleCar of this build.
+bool vehicleSpeed(const BYTE* player, float& speed) {
+    __try {
+        const BYTE* gameMobil = *reinterpret_cast<const BYTE* const*>(player + kPlayerMobil);
+        if (!gameMobil || *reinterpret_cast<const int*>(gameMobil + kGameMobilSceneId) == -1) return false;
+        const BYTE* vehicle = *reinterpret_cast<const BYTE* const*>(gameMobil + kGameMobilScene);
+        if (!vehicle) return false;
+        void* const* table = *reinterpret_cast<void* const* const*>(vehicle);
+        if (!table || reinterpret_cast<uintptr_t>(table[kAsyncSpeedSlot]) != rebase(g_build->asyncSpeed)) return false;
+        const float* v = reinterpret_cast<const float*>(vehicle + kVehicleAsyncSpeed);
+        speed = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        return speed < 1000.0f;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool carSpeed(float& metresPerSecond) {
+    metresPerSecond = 0.0f;
+    if (!g_build || !g_build->asyncSpeed || !g_racePlayer || GetTickCount() - g_racePlayerTick > 300) return false;
+    return vehicleSpeed(static_cast<const BYTE*>(g_racePlayer), metresPerSecond);
 }
 
 std::string currentMapUid() {
