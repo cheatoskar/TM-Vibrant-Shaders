@@ -56,6 +56,7 @@ constexpr unsigned kNewPerFrame = 48;  // new meshes measured per frame (their v
 constexpr float kCell = 4.0f;          // m: the place's rounding in the key (the camera's jitter moves it ~1 m)
 constexpr float kNewPerSecond = 5.0f;  // after the build-up: new meshes admitted per second at most
 constexpr DWORD kSettleMs = 5000;       // nothing new for this long: the build-up is over
+constexpr uint8_t kRejected = 0xFF;     // a placement outside the map (in `keys`)
 constexpr DWORD kReportMs = 60000;      // the cost line while the minimap is on
 
 const char* kTopVS = R"(
@@ -137,6 +138,10 @@ struct Sums {
     unsigned capped = 0;     // new meshes refused by the cap after the build-up
     unsigned colour = 0;     // queued with a colour texture
     unsigned grey = 0;       // with a grey texture (tinted)
+    unsigned upgraded = 0;   // placements drawn again with a better texture
+    unsigned noShader = 0;   // draws outside the game's own shader calls (the mod's passes) left out
+    unsigned noTexture = 0;  // the game's draws without any texture bound (depth, shadow) left out
+    unsigned ownMap = 0;     // with the material's own colour map, bound for the draw
 };
 
 struct State {
@@ -155,7 +160,12 @@ struct State {
     IDirect3DPixelShader9* ps = nullptr;
     bool failed = false; // resources could not be made: the squares stay
     std::vector<Job> queue;
-    std::unordered_set<uint64_t> keys;
+    // Per placement: how it went into the picture (kRejected: outside the map; then 1 the material's
+    // colour, 2 a grey texture, 3 a colour texture, 4 the material's own colour map). A better draw
+    // of the same placement later (the pass with the colour map after one with only the lightmap)
+    // draws it again over the first. Above the low byte: the textures bound the last two times it
+    // was looked at (boundTextures, 28 bits each), so a pass with the same ones isn't looked at again.
+    std::unordered_map<uint64_t, uint64_t> keys;
     unsigned frame = 1;
     unsigned drawIndex = 0; // the main camera's indexed draws this frame (the stride)
     unsigned newThisFrame = 0; // new meshes measured this frame (kNewPerFrame)
@@ -169,7 +179,8 @@ struct State {
     int buildLines = 0; // build-up lines this map (a camera that keeps finding more: at most 3)
     float allowance = 0.0f; // after the build-up: new meshes that may still come (kNewPerSecond)
     DWORD allowanceTick = 0;
-    int materialLines = 0;  // materials logged this map (which sampler gave the colour)
+    int materialLines = 0;  // materials logged this map (where their colour came from)
+    std::unordered_set<uintptr_t> loggedMaterials; // material and how its colour came (once each)
     Sums build, window;
     DWORD windowStart = 0;
     GpuTimer gpu[4];
@@ -394,6 +405,95 @@ const char* formatName(D3DFORMAT f) {
     }
 }
 
+bool usableTexture(IDirect3DBaseTexture9* t);
+
+// The textures bound on stages 0..7 as a 28-bit number (pointers only, nothing read from them).
+uint64_t boundTextures(IDirect3DDevice9* device) {
+    uint64_t h = 1469598103934665603ull;
+    for (int st = 0; st < 8; st++) {
+        IDirect3DBaseTexture9* t = nullptr;
+        device->GetTexture(static_cast<DWORD>(st), &t);
+        h = (h ^ reinterpret_cast<uintptr_t>(t)) * 1099511628211ull;
+        if (t) t->Release();
+    }
+    return (h ^ (h >> 28) ^ (h >> 56)) & 0xFFFFFFFull;
+}
+
+// The texture the colour comes from, among those bound for this draw (stages 0..7). The game binds
+// a pass's textures before it draws: CDx9ShaderKeeper::UpdateAndRender (TMNF 0x00971b10, TMUF
+// 0x009719e0) runs CDx9StateBlock::Apply (TMNF 0x00980740, TMUF 0x00980440: SetTexture for each
+// stage) and then CDx9VisualKeeper::RenderVisualGeometry (TMNF 0x0097c660, TMUF 0x0097c350:
+// DrawIndexedPrimitive); the sorted passes (ShadeVisualForCurrentPass) draw with the pass's state
+// applied before them. So what the device holds here, before the game's draw, is that draw's.
+// First the material's own colour map (engine::materialDiffuse) when it is bound; then the sampler
+// named for the colour when the shader keeps its names; else the largest colour texture (not
+// luminance, not a render target), compressed colour (DXT) of 256 px or more first. A grey one only
+// when no colour texture is bound. Returns the rank (0 no texture bound at all, 1 none usable,
+// 2 grey, 3 colour, 4 the material's own colour map) and holds the texture in `out`.
+int chooseTexture(IDirect3DDevice9* device, const void* diffuse, int named, IDirect3DBaseTexture9*& out, int& stage,
+                  D3DSURFACE_DESC& desc, bool& own) {
+    out = nullptr;
+    stage = -1;
+    own = false;
+    double best = 0.0;
+    int bestRank = 1;
+    int bound = 0;
+    for (int st = 0; st < 8; st++) {
+        IDirect3DBaseTexture9* t = nullptr;
+        device->GetTexture(static_cast<DWORD>(st), &t);
+        if (!t) continue;
+        bound++;
+        D3DSURFACE_DESC d{};
+        if (!usableTexture(t) || FAILED(static_cast<IDirect3DTexture9*>(t)->GetLevelDesc(0, &d))) {
+            t->Release();
+            continue;
+        }
+        const bool grey = greyFormat(d.Format);
+        const bool dxt = d.Format == D3DFMT_DXT1 || d.Format == D3DFMT_DXT3 || d.Format == D3DFMT_DXT5;
+        const int rank = grey ? 2 : 3;
+        double score = static_cast<double>(d.Width) * d.Height * (dxt && d.Width >= 256 ? 4.0 : 1.0);
+        if (st == named && rank == 3) score = 1e18; // the shader names it
+        const bool isOwn = diffuse && t == diffuse;
+        if (isOwn) score = 1e19;
+        if (isOwn || (bestRank < 4 && (rank > bestRank || (rank == bestRank && score > best)))) {
+            if (out) out->Release();
+            out = t;
+            stage = st;
+            best = score;
+            bestRank = isOwn ? 4 : rank;
+            desc = d;
+            own = isOwn;
+        } else {
+            t->Release();
+        }
+    }
+    if (!bound) return 0;
+    return bestRank;
+}
+
+// The textures bound on stages 0..3 for the log: "s0 DXT1 512x512, s1 L8 256x256, s2 -, s3 -".
+std::string stagesText(IDirect3DDevice9* device) {
+    std::string out;
+    for (int st = 0; st < 4; st++) {
+        IDirect3DBaseTexture9* t = nullptr;
+        device->GetTexture(static_cast<DWORD>(st), &t);
+        char entry[64];
+        if (!t) {
+            snprintf(entry, sizeof(entry), "%ss%d -", st ? ", " : "", st);
+        } else if (t->GetType() != D3DRTYPE_TEXTURE) {
+            snprintf(entry, sizeof(entry), "%ss%d %s", st ? ", " : "", st, t->GetType() == D3DRTYPE_CUBETEXTURE ? "cube" : "volume");
+        } else {
+            D3DSURFACE_DESC d{};
+            static_cast<IDirect3DTexture9*>(t)->GetLevelDesc(0, &d);
+            snprintf(entry, sizeof(entry), "%ss%d %s %ux%u%s", st ? ", " : "", st, formatName(d.Format), d.Width, d.Height,
+                     (d.Usage & D3DUSAGE_RENDERTARGET) ? " (target)" : "");
+        }
+        if (t) t->Release();
+        out += entry;
+    }
+    return out;
+}
+
 // A texture the picture may use: a plain 2D one, not a render target or depth texture (the game's
 // shadow buffer, reflections: their content changes every frame).
 bool usableTexture(IDirect3DBaseTexture9* t) {
@@ -435,6 +535,7 @@ void forget() {
     g.settled = false;
     g.buildLines = 0;
     g.materialLines = 0;
+    g.loggedMaterials.clear();
     g.allowance = 0.0f;
     g.build = Sums();
 }
@@ -518,6 +619,10 @@ void add(Sums& to, const Sums& from) {
     to.capped += from.capped;
     to.colour += from.colour;
     to.grey += from.grey;
+    to.upgraded += from.upgraded;
+    to.noShader += from.noShader;
+    to.noTexture += from.noTexture;
+    to.ownMap += from.ownMap;
 }
 
 void logSums(const char* what, const Sums& s, double seconds) {
@@ -529,10 +634,12 @@ void logSums(const char* what, const Sums& s, double seconds) {
     const double share = s.added ? 100.0 * s.colour / s.added : 0.0, greyShare = s.added ? 100.0 * s.grey / s.added : 0.0;
     TMVS_LOG("misc: minimap cost, %s (%.0f s, %u frames, Real look %s): CPU %.3f ms a frame (drawing %.3f, of it redraws %.3f; checks of the "
              "game's draws %.3f, %u looked at); GPU %s; %d meshes drawn into the picture, %u new (%.1f a second, %u refused by the cap); "
-             "%.0f %% with a colour texture, %.0f %% grey (tinted), the rest the material's colour; picture %d x %d px, %.1f MB of video memory",
+             "%.0f %% with a colour texture (%u of them the material's own colour map), %.0f %% grey (tinted), the rest the material's colour, "
+             "%u drawn again with a better one; left out: %u draws outside the game's shader calls, %u without a texture; "
+             "picture %d x %d px, %.1f MB of video memory",
              what, seconds, s.frames, g.wanted ? "on" : "off", (s.drawMs + s.checkMs) / frames, s.drawMs / frames, s.renderMs / frames,
-             s.checkMs / frames, s.checked, gpu, s.meshes, s.added, seconds > 0.0 ? s.added / seconds : 0.0, s.capped, share, greyShare,
-             g.texture ? g.width : 0, g.texture ? g.height : 0, megabytes());
+             s.checkMs / frames, s.checked, gpu, s.meshes, s.added, seconds > 0.0 ? s.added / seconds : 0.0, s.capped, share, s.ownMap, greyShare,
+             s.upgraded, s.noShader, s.noTexture, g.texture ? g.width : 0, g.texture ? g.height : 0, megabytes());
 }
 
 } // namespace
@@ -587,6 +694,15 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         ~Timer() { g.window.checkMs += now() - from; }
     } timer{t0};
     if (g.queue.size() >= kMaxQueue) return;
+    // Only the game's own draws: inside its shader call (CDx9ShaderKeeper::UpdateAndRender or a sorted
+    // pass), where its material is known. The mod's own passes (the long shadows' maps, the G-buffer)
+    // draw the game's meshes too, without textures: my first colour test took those (no material,
+    // no texture in the log).
+    const void* shader = engine::currentShader();
+    if (!shader) {
+        g.window.noShader++;
+        return;
+    }
     const engine::Material material = engine::currentMaterial();
     if (material == engine::Material::Car || material == engine::Material::Glass) return; // cars, ghosts, windows
     DWORD z = FALSE, zwrite = FALSE, blend = FALSE, alphaTest = FALSE, colorWrite = 0;
@@ -649,12 +765,65 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         side[k] = c - static_cast<float>(cell[k]) < 0.5f ? cell[k] - 1 : cell[k] + 1;
     }
     const auto keyAt = [&](int64_t x, int64_t y, int64_t z) { return mix(mix(mix(mesh, static_cast<uint64_t>(x)), static_cast<uint64_t>(y)), static_cast<uint64_t>(z)); };
-    const uint64_t key = keyAt(cell[0], cell[1], cell[2]);
-    bool known = false;
-    for (int n = 0; n < 8 && !known; n++) {
-        known = g.keys.count(keyAt((n & 1) ? side[0] : cell[0], (n & 2) ? side[1] : cell[1], (n & 4) ? side[2] : cell[2])) != 0;
+    uint64_t key = keyAt(cell[0], cell[1], cell[2]);
+    uint8_t stored = 0; // 0: not seen
+    uint64_t seen[2] = {0, 0}; // the textures of the last two looks
+    for (int n = 0; n < 8 && !stored; n++) {
+        const uint64_t k = keyAt((n & 1) ? side[0] : cell[0], (n & 2) ? side[1] : cell[1], (n & 4) ? side[2] : cell[2]);
+        auto it = g.keys.find(k);
+        if (it != g.keys.end()) {
+            stored = static_cast<uint8_t>(it->second & 0xFF);
+            seen[0] = (it->second >> 8) & 0xFFFFFFFull;
+            seen[1] = (it->second >> 36) & 0xFFFFFFFull;
+            key = k;
+        }
     }
-    if (known || g.keys.size() >= kMaxKeys) {
+    if (stored == kRejected || stored == 4 || (!stored && g.keys.size() >= kMaxKeys)) {
+        releaseJob(j);
+        return;
+    }
+    const uint64_t textures = boundTextures(device);
+    if (stored && (textures == seen[0] || textures == seen[1])) { // looked at with these textures already
+        releaseJob(j);
+        return;
+    }
+    // Its colour, from the textures bound for this draw (see chooseTexture).
+    int named = -1;
+    const char* names = "(no pixel shader)";
+    IDirect3DPixelShader9* ps = nullptr;
+    device->GetPixelShader(&ps);
+    if (ps) {
+        auto it = g_samplers.find(ps);
+        if (it == g_samplers.end()) {
+            if (g_samplers.size() >= 1024) {
+                for (auto& e : g_samplers) e.first->Release();
+                g_samplers.clear();
+            }
+            ps->AddRef();
+            it = g_samplers.emplace(ps, samplersOf(ps)).first;
+        }
+        named = it->second.colour;
+        names = it->second.names.empty() ? "(none)" : it->second.names.c_str();
+        ps->Release();
+    }
+    wchar_t diffuseFile[96] = L"";
+    IDirect3DBaseTexture9* diffuse = engine::materialDiffuse(shader, diffuseFile, 96);
+    D3DSURFACE_DESC desc{};
+    int stage = -1;
+    bool own = false;
+    int rank = chooseTexture(device, diffuse, named, j.texture, stage, desc, own);
+    if (rank == 0) { // nothing bound: not the colour pass (depth, shadows)
+        g.window.noTexture++;
+        releaseJob(j);
+        return;
+    }
+    if (!j.texcoord && rank > 1) { // no texture coordinates to read it with
+        gfx::release(j.texture);
+        rank = 1;
+        own = false;
+    }
+    if (stored && rank <= stored) { // drawn already, and this pass has nothing better: remember its textures
+        g.keys[key] = (seen[0] << 36) | (textures << 8) | stored;
         releaseJob(j);
         return;
     }
@@ -675,54 +844,36 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         g.allowance -= 1.0f;
     }
     g.newThisFrame++;
-    g.keys.insert(key); // looked at once, kept or not
-    float lo[3], hi[3];
-    if (!meshBounds(j, info.positionOffset, lo, hi) || !insideMap(j, lo, hi)) {
-        releaseJob(j);
-        return;
+    if (!stored) {
+        float lo[3], hi[3];
+        if (!meshBounds(j, info.positionOffset, lo, hi) || !insideMap(j, lo, hi)) {
+            g.keys[key] = kRejected; // looked at once
+            releaseJob(j);
+            return;
+        }
+    } else {
+        g.window.upgraded++;
     }
-    // Its colour: the texture of the sampler the game's pixel shader takes its colour from; a grey
-    // one (luminance) tints the material's colour; none: the material's colour alone.
+    g.keys[key] = (seen[0] << 36) | (textures << 8) | static_cast<uint64_t>(rank);
+    j.mode = rank >= 3 ? 1 : rank == 2 ? 2 : 0;
+    if (!j.mode) gfx::release(j.texture);
     materialTint(j.tint);
-    int stage = -1;
-    std::string names = "(no pixel shader)";
-    IDirect3DPixelShader9* ps = nullptr;
-    device->GetPixelShader(&ps);
-    if (ps) {
-        auto it = g_samplers.find(ps);
-        if (it == g_samplers.end()) {
-            if (g_samplers.size() >= 1024) {
-                for (auto& e : g_samplers) e.first->Release();
-                g_samplers.clear();
-            }
-            ps->AddRef();
-            it = g_samplers.emplace(ps, samplersOf(ps)).first;
-        }
-        stage = it->second.colour;
-        names = it->second.names.empty() ? "(no names)" : it->second.names;
-        ps->Release();
-    }
-    D3DSURFACE_DESC desc{};
-    if (stage >= 0 && j.texcoord) {
-        device->GetTexture(static_cast<DWORD>(stage), &j.texture);
-        if (j.texture && !usableTexture(j.texture)) gfx::release(j.texture);
-        if (j.texture) {
-            static_cast<IDirect3DTexture9*>(j.texture)->GetLevelDesc(0, &desc);
-            j.mode = greyFormat(desc.Format) ? 2 : 1;
-        }
-    }
     (j.mode == 1 ? g.window.colour : g.window.grey) += j.mode != 0 ? 1 : 0;
+    g.window.ownMap += own ? 1 : 0;
     g.window.added++;
-    // Which sampler gave the colour, for the first materials of a map (the next game test shows it).
-    if (g.materialLines < 8) {
+    // Each material once per map (the first 16): its file, its colour map, the samplers' names,
+    // what is bound on stages 0..3 and the choice (the next game test shows where the colour is).
+    if (g.materialLines < 16 && g.loggedMaterials.insert(reinterpret_cast<uintptr_t>(shader) ^ static_cast<uintptr_t>(rank)).second) {
         g.materialLines++;
         wchar_t file[160] = L"(unnamed)";
-        engine::materialFile(engine::currentShader(), file, 160);
+        engine::materialFile(shader, file, 160);
         const wchar_t* fileName = wcsrchr(file, L'\\');
-        char from[16] = "no sampler";
-        if (stage >= 0) snprintf(from, sizeof(from), "s%d", stage);
-        TMVS_LOG("misc: minimap: material %ls: samplers %s; colour from %s: %s %ux%u%s", fileName ? fileName + 1 : file, names.c_str(), from,
-                 j.texture ? formatName(desc.Format) : "no texture", desc.Width, desc.Height, j.mode == 2 ? " (grey, tinted)" : "");
+        char from[48] = "the material's colour";
+        if (stage >= 0) snprintf(from, sizeof(from), "s%d%s%s", stage, own ? " (its colour map)" : "", j.mode == 2 ? " (grey, tinted)" : "");
+        TMVS_LOG("misc: minimap: material %ls (class %d): colour map %ls%s; samplers %s; bound %s; colour from %s%s",
+                 fileName ? fileName + 1 : file, static_cast<int>(material), diffuseFile[0] ? diffuseFile : L"(none)",
+                 diffuseFile[0] && !diffuse ? " (not loaded)" : diffuseFile[0] && !own ? " (not bound here)" : "", names,
+                 stagesText(device).c_str(), from, stored ? ", drawn again over the first" : "");
     }
     g.lowestSeen = std::min(g.lowestSeen, j.world[3][1]);
     g.queue.push_back(j);

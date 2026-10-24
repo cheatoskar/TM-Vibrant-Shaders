@@ -1193,6 +1193,65 @@ bool textureFiles(const void* shader, wchar_t* out, size_t size) {
     return used > 0;
 }
 
+// The colour map among a material's textures: by its file, as the game's texture names go
+// ("StadiumRoadBorderD": D the colour, N the normal map, S the specular map, L the lightmap; my
+// material captures name no other kind). The grass has no D: StadiumGrass1, StadiumGrass2. The
+// Direct3D texture is the one CDx9StateBlock::Apply hands to SetTexture (device vtable +0x104)
+// for a stage: CPlugBitmap +0x14 its CDx9TextureKeeper, that +0xc the IDirect3DBaseTexture9
+// (TMNF 0x00980740, TMUF 0x00980440: the same offsets in both). Null while the keeper isn't made.
+constexpr size_t kBitmapKeeper = 0x14;
+constexpr size_t kKeeperTexture = 0xc;
+// One look per material and map (the file names come through the game's fid calls).
+struct DiffuseOf {
+    const void* bitmap;
+    std::wstring file;
+};
+const void* findDiffuse(const void* shader, wchar_t* file, size_t size);
+const void* diffuseBitmap(const void* shader, wchar_t* file, size_t size) {
+    static std::unordered_map<const void*, DiffuseOf> known;
+    static LONG knownLoads = -1;
+    if (knownLoads != g_mapLoads) {
+        known.clear();
+        knownLoads = g_mapLoads;
+    }
+    auto it = known.find(shader);
+    if (it == known.end()) {
+        wchar_t name[96] = {};
+        const void* bitmap = findDiffuse(shader, name, 96);
+        if (known.size() >= 8192) known.clear();
+        it = known.emplace(shader, DiffuseOf{bitmap, name}).first;
+    }
+    if (file && size) wcsncpy_s(file, size, it->second.file.c_str(), _TRUNCATE);
+    return it->second.bitmap;
+}
+const void* findDiffuse(const void* shader, wchar_t* file, size_t size) {
+    const void* bitmaps[16] = {};
+    const int n = shaderBitmaps(shader, bitmaps, 16);
+    const void* best = nullptr;
+    int bestRank = 0;
+    for (int i = 0; i < n; i++) {
+        wchar_t path[512] = {};
+        if (!nodFilePath(bitmaps[i], path, 512)) continue;
+        const wchar_t* name = wcsrchr(path, L'\\');
+        name = name ? name + 1 : path;
+        const wchar_t* dot = wcschr(name, L'.');
+        const size_t length = dot ? static_cast<size_t>(dot - name) : wcslen(name);
+        int rank = 0;
+        if (length > 1 && name[length - 1] == L'D') rank = 2;
+        else if (length > 12 && !_wcsnicmp(name, L"StadiumGrass", 12) && iswdigit(name[12])) rank = 1;
+        if (rank > bestRank) {
+            bestRank = rank;
+            best = bitmaps[i];
+            if (file && size) {
+                const size_t keep = length < size - 1 ? length : size - 1;
+                wmemcpy(file, name, keep);
+                file[keep] = L'\0';
+            }
+        }
+    }
+    return best;
+}
+
 Material materialOf(const void* shader) {
     static std::unordered_map<const void*, Material> known;
     static LONG knownLoads = -1;
@@ -3416,6 +3475,19 @@ bool materialFile(const void* shader, wchar_t* out, size_t size) {
 
 bool materialTextures(const void* shader, wchar_t* out, size_t size) {
     return shader && size > 0 && textureFiles(shader, out, size);
+}
+
+IDirect3DBaseTexture9* materialDiffuse(const void* shader, wchar_t* file, size_t size) {
+    if (file && size) file[0] = L'\0';
+    if (!shader) return nullptr;
+    const void* bitmap = diffuseBitmap(shader, file, size);
+    if (!bitmap) return nullptr;
+    __try {
+        const BYTE* keeper = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(bitmap) + kBitmapKeeper);
+        return keeper ? *reinterpret_cast<IDirect3DBaseTexture9* const*>(keeper + kKeeperTexture) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
 }
 
 bool neonMaterialsKnown() {

@@ -87,9 +87,12 @@ reads it. The engine's readers (`engine::raceTimes`, `currentMapUid`, `idText`, 
 
 `topview.cpp` draws the map's blocks again from straight above, from the game's own draws: no mesh is
 read from the files. In `plugin.cpp`'s `onDrawIndexed` (the game's state bound, before its draw) every
-indexed draw of the main camera goes to `misc::sceneDraw`. A draw counts when it is opaque (depth and
-colour written, no blending, no alpha test), from the managed pool (the game's static meshes), not a
-car's or glass material, and has a world matrix in the game's constants: its place is the mesh -> clip
+indexed draw of the main camera goes to `misc::sceneDraw` (the mod's own draws never get there:
+`hook::gameCall`). A draw counts when it comes from inside the game's shader call, so its material is
+known (`engine::currentShader`: CDx9ShaderKeeper::UpdateAndRender or ShadeVisualForCurrentPass, the
+hooks the hide-car path uses), is opaque (depth and colour written, no blending, no alpha test), has
+at least one texture bound (a depth or shadow pass has none), is from the managed pool (the game's
+static meshes), not a car's or glass material, and has a world matrix in the game's constants: its place is the mesh -> clip
 constant (GbxVisualPrCamera) with the camera undone (`casters::drawWorld`, the long shadows' recovery).
 Its vertices' box, turned into the world, must lie inside the map's grid (16 m of margin) and below the
 highest track cell plus 40 m: the sky, the clouds and the stadium around the grid stay out. Blocks are
@@ -97,7 +100,10 @@ not asked for by identity: on A01 only about 2 % of the main path's draws and 12
 passes' mapped to a block through `blockorder`'s corpus -> item chain (my first test), so that path was
 dropped. Each placement is taken once per map, keyed by its buffers, index range, turn (1/20) and
 place in 4 m cells; a place near a cell's edge also finds the neighbouring cell's key on that side.
-(My retest: keyed by the place to 0.25 m, the key changed every frame: the place the constants give
+The same placement drawn in several passes keeps the best colour it got: the material's colour map
+over another colour texture over a grey one over the material's colour; a later pass with something
+better draws it again over the first. The textures bound for each look are kept (two per placement),
+so a pass seen before isn't looked at again. (My retest: keyed by the place to 0.25 m, the key changed every frame: the place the constants give
 moves by up to about a metre, the camera's jitter in the projection, and 2500 meshes a second came as
 new forever.) Instances of a block share their buffers and differ by place. It is queued with
 references to the game's vertex and index buffers, its declaration's POSITION and TEXCOORD0 and the
@@ -109,12 +115,24 @@ next frames. The build-up ends when nothing new came for 5 s, or after 20 s; the
 looked at per frame and at most 5 new meshes a second are taken (something that moves would otherwise
 come as new forever; the log counts what the cap refused).
 
-The colour: the game's lightmapped blocks don't keep their colour texture on stage 0 (my retest: the
-map came out grey). The pixel shader's constant table names its samplers; the colour comes from the
-one named for it ("Diffuse", "Diff..."), else the first not named for light, normals, specular,
-reflections, clouds, masks or shadows. A luminance texture (L8, A8L8) tints the material's colour; no
-texture: the material's colour (grass green, dirt brown, water blue, the rest grey, from the engine's
-material class). The log names the samplers and the choice for the first eight materials of a map.
+The colour comes from the material itself (`engine::materialDiffuse`). Each block material is a
+CPlugShaderApply with its own bitmaps; the colour map is the one whose file ends in D
+(StadiumRoadBorderD; N is the normal map, S the specular map, L the lightmap, in all my material
+captures), for grass StadiumGrass1 or 2. Its Direct3D texture is what the game hands to SetTexture:
+CPlugBitmap +0x14 its CDx9TextureKeeper, that +0xc the IDirect3DBaseTexture9, read in
+CDx9StateBlock::Apply (TMNF 0x00980740, TMUF 0x00980440, the same offsets in both). Only when that
+pointer is bound on a stage of the draw is it used (no call on a pointer the device doesn't hold).
+The textures are bound before the draw: UpdateAndRender (TMNF 0x00971b10, TMUF 0x009719e0) applies a
+pass's state block, then CDx9VisualKeeper::RenderVisualGeometry (TMNF 0x0097c660, TMUF 0x0097c350)
+calls DrawIndexedPrimitive; the device hook runs between the two. Without the colour map bound: the
+sampler the pixel shader's constant table names for the colour, if it has names (the first game test
+showed none: the shaders seen there had no table, or were the mod's patched ones); else the largest
+colour texture, DXT of 256 px or more first. A luminance texture (L8, A8L8) tints the material's colour;
+none usable: the material's colour (grass green, dirt brown, water blue, the rest grey, from the
+engine's material class). The log names, for the first 16 materials of a map, the material, its
+colour map, the textures on stages 0 to 3 (format and size) and the choice. (My first colour test
+picked the stage from the constant table alone: no names, so no texture was even looked at, and every
+material logged was unnamed: the draws taken then were outside the game's shader calls.)
 
 The cost goes into `tmvs.log`: CPU per frame of drawing the minimap (`mapview::draw`, the redraws
 included) and of the checks in `onDrawIndexed`, GPU per frame of the redraws (D3D9 timestamp queries
@@ -124,10 +142,10 @@ same on 3000 meshes of 512 triangles at 1024 and 4096 pixels.
 
 What `tools/topviewtest.cpp` proves on a real D3D9 device: a draw made like the game's lands at its
 place (row 0 at the area's z0, the edges on the right pixels), with its texture, the higher over the
-lower, each draw once, nothing elsewhere, and the device state comes back. What only the game can
-prove: that the block draws are found (the log line's mesh count), that stage 0 holds a block's colour
-texture (my material captures list the colour texture first for roads, platforms and grass, in
-the engine's order; that the card's stage 0 follows it is a guess) and that
+lower, each draw once, a draw without textures left out, a placement first drawn with the lightmap
+drawn again with its colour map, nothing elsewhere, and the device state comes back. What only the game can
+prove: that the block draws are found (the log line's mesh count), that the colour map is bound in
+the draws taken (the log line's count "the material's own colour map" and the material lines) and that
 TEXCOORD0 is its coordinate (a wrong one still gives the texture's average colour at this size), and
 the cost (the same log line). The frame-capture previewer can't emulate it: a capture holds the
 finished image and depth, not the draw calls.

@@ -166,6 +166,9 @@ Material materialClass(const void* shader);
 bool materialFile(const void* shader, wchar_t* out, size_t size);
 // Its textures' files, "; " between them (false: none read).
 bool materialTextures(const void* shader, wchar_t* out, size_t size);
+// Its colour map: the Direct3D texture the game binds for it (null: none known or not loaded),
+// with the file's name in `file` (the Real look picture of the minimap).
+IDirect3DBaseTexture9* materialDiffuse(const void* shader, wchar_t* file, size_t size);
 // The draws' materials are known and their textures can be read: the neon strips are told by
 // their material (Material::Neon), not by their colour. False on an unknown build, without the
 // draw hooks, or while no texture had a file name yet.
