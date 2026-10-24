@@ -97,6 +97,7 @@ By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `M
 | **Rainy** | Overcast, wet track, puddles, rain. |
 | **Storm** | Low clouds, pouring rain, deep puddles, lightning and thunder. |
 | **Snowstorm** | A blizzard: driving snow, thick haze close around you and the howl of the wind. Snow on the ground is off (*Snow on the ground* in the menu; a snow texture pack looks better on the road). |
+| **Horror** | Black night: every lamp and neon strip off, thick fog, and only your car's two headlights light the road (beams in the fog, glare when you look into them). Nations/United only for now. |
 | **Replay Cinema** | Film look with motion blur and depth of field, for replays and the video export. |
 | **Competition** | Clarity first: AO and contact shadows, no haze or lens effects. |
 | **Performance** | Vibrant with the expensive parts off. |

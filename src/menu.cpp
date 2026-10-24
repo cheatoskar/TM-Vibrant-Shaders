@@ -387,6 +387,7 @@ const char* tooltipFor(const char* key) {
         {"VolumetricLight", "Haze that shows the sun's shadows as beams."},
         {"HighlightBoost", "How strongly lamps and bright spots glow."},
         {"BorderGlow", "Glow of the neon strips along the road. Needs Game light sources."},
+        {"CarHeadlights", "Two spotlights from the front of your car: they light the road and the walls ahead, show as beams in the haze and glare when you look into them. 1 = full, 0 = off. Needs the car the game reports (races, replays)."},
         {"LampGlare", "Part of the lamps' light leaves the bright core and spreads wide and soft around them: the bulbs stay apart, the light reaches farther. 0 = off. Needs Game light sources."},
         {"LampHaze", "The light the haze takes from the lamps glows in the air around them; stronger with more haze and for far lamps. 1 = all of it, 0 = off. Needs Game light sources."},
         {"LampSkyHalos", "At night the lamps' halos also shine over the sky instead of ending at the edge of the lamp's frame. Needs Game light sources."},
@@ -842,6 +843,7 @@ const BuiltInInfo kBuiltIn[] = {
     {"Replay Cinema", "Film look with motion blur and depth of field, for replays.", 3},
     {"Storm", "Low clouds, pouring rain, deep puddles, lightning and thunder.", 3},
     {"Snowstorm", "A blizzard: driving snow and thick haze close around you.", 2},
+    {"Horror", "Black night, every lamp off. Only your headlights light the road, in thick fog.", 2},
 };
 
 const BuiltInInfo* builtInInfo(const std::string& name) {
@@ -1123,6 +1125,9 @@ void drawShaders(Config& config) {
 
     std::vector<std::string> builtIn;
     for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
+#ifdef TMVS_MANIAPLANET
+        if (i == static_cast<int>(Preset::Horror)) continue; // its headlights are TrackMania Nations/United's so far
+#endif
         const std::string name = presetName(static_cast<Preset>(i));
         if (passes(s_filter, lookInfo(name))) builtIn.push_back(name);
     }
@@ -1342,6 +1347,7 @@ bool drawCustomize(Config& config, Settings& s) {
                                     {"LongShadows", "Long shadows"},
                                     {"AOStrength", "Ambient occlusion"},
                                     {"NeonLight", "Neon light spill"},
+                                    {"CarHeadlights", "Car headlights"},
                                     {"GodRays", "Light shafts"}}));
     panels.push_back(settingsPanel("Sky", s,
                                    {{"SkyMode", "Sky"},

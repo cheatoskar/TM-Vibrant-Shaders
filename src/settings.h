@@ -131,6 +131,7 @@ struct Settings {
     float lampHaze = 1.0f;         // EngineLights: the light the haze takes from the lamps glows in the air around them (1 = all of it, 0 = off)
     bool lampSkyHalos = false;     // EngineLights at night: the lamps' halos also over the sky, not cut at the edge of what the lamp sits on
     float floodlights = 1.0f;      // EngineLights: the strength of floodlights and lamps (the game's glows) and the light they spill, apart from the neon borders and HighlightBoost (1 = as before)
+    float carHeadlights = 0.0f;    // two spotlights from the front of the car the camera follows, lighting the road, the walls and the haze (0 = off, 1 = full; needs the engine's car)
     float lensFlare = 0.25f;
     float chromaticAberration = 0.05f;
     float vignette = 0.25f;

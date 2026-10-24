@@ -57,6 +57,10 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
+float4 u_Head0     : register(c64); // CarHeadlights (PS_Headlights): strength, cos of the cone's edge, cos of its bright core, range (m)
+float4 u_Head1     : register(c65); // the left lamp (world), glare strength
+float4 u_Head2     : register(c66); // the right lamp (world), beam strength
+float4 u_Head3     : register(c67); // the lamps' aim (world, unit)
 float4 u_Neon      : register(c58); // x: 1 = the neon strips are known by their material (s13 g 0 on them, above 0.1 elsewhere; PS_NeonGlow), 0 = by their colour
 float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
 float4 u_Water2    : register(c51); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
@@ -3401,6 +3405,73 @@ float4 PS_NeonAdd(float2 uv : TEXCOORD0) : COLOR0 {
     float3 v = viewPosition(uv, 1.0);
     float fog = z < SKY_Z ? hazeAmount(viewToWorldDir(normalize(v)), length(v) * z) : 1.0;
     return float4(glow * (1.0 - 0.6 * fog), 0);
+}
+
+// CarHeadlights: two spotlights on the car, added to the lit image (blend one, one). s0 = the game's
+// image (the surface's colour, for what the light falls on), s1 = full normal/depth. u_Head0..3 (c64..c67).
+//   - the surfaces: each lamp lights what is in its cone, by distance and the angle of the surface to it
+//   - the haze: 16 samples along the view ray, each in the lamps' cones, scattered toward the eye (the
+//     beams show in thick fog and as a faint cone in clear air)
+//   - the glare: looking into a lamp (the camera in front of the car) a core and a halo, covered where
+//     the lamp's pixel is hidden behind something nearer
+// No shadows: the light goes through walls and the car's own body (a lamp inside the cone of a wall
+// beside the road lights it); the road and walls ahead are what it is for.
+static const float HEAD_SURFACE = 3.0;
+static const float HEAD_BEAM = 90.0;
+float headSpot(float3 q, float3 lamp) {
+    float3 v = q - lamp;
+    float d2 = dot(v, v);
+    float cone = smoothstep(u_Head0.y, u_Head0.z, dot(v, u_Head3.xyz) * rsqrt(max(d2, 1e-4)));
+    float reach = saturate(1.0 - d2 / (u_Head0.w * u_Head0.w));
+    return cone * reach * reach / (1.0 + d2 * 0.03);
+}
+float headGlare(float3 rd, float3 cam, float3 lamp) {
+    float3 w = lamp - cam;
+    float dl = length(w);
+    float3 wd = w / dl;
+    float3 lv = worldToViewDir(w);
+    float2 luv = projectToUV(lv);
+    // Hidden behind something nearer (the car's own nose is within a metre of the lamp).
+    float seen = lv.z > 0.1 && all(luv > 0.0) && all(luv < 1.0) ? saturate(tex2Dlod(s1, float4(luv, 0, 0)).w - lv.z + 1.0) : (lv.z > 0.1 ? 1.0 : 0.0);
+    float facing = saturate(dot(u_Head3.xyz, -wd) * 2.0 - 0.3);
+    float x = 1.0 - saturate(dot(rd, wd));
+    return (exp(-x * 12000.0) * 4.0 + 2.0 / pow(1.0 + x * 800.0, 1.5)) * facing * seen;
+}
+float4 PS_Headlights(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
+    float3 rdView = normalize(viewPosition(uv, 1.0));
+    float3 rd = viewToWorldDir(rdView);
+    float3 cam = cameraWorld();
+    bool sky = nd.w >= SKY_Z;
+    float dist = sky ? 1e5 : nd.w / max(rdView.z, 1e-3);
+    float3 lampL = u_Head1.xyz, lampR = u_Head2.xyz;
+    float3 add = 0;
+    if (!sky) {
+        float3 world = cam + rd * dist;
+        float3 n = viewToWorldDir(nd.xyz);
+        float3 colour = min(toLinear(tex2Dlod(s0, float4(uv, 0, 0)).rgb), 1.0);
+        float3 albedo = sqrt(colour) * 0.65 + 0.04; // the game's night is dark: its colours, lifted
+        // The lamps sit low: a road is lit at a grazing angle, and in a game it should not be black. The angle is taken from lamps 3 m higher.
+        float3 raise = float3(0.0, 3.0, 0.0);
+        float3 toL = normalize(lampL + raise - world), toR = normalize(lampR + raise - world);
+        float lit = headSpot(world, lampL) * (saturate(dot(n, toL)) * 0.7 + 0.3) + headSpot(world, lampR) * (saturate(dot(n, toR)) * 0.7 + 0.3);
+        add = albedo * lit * HEAD_SURFACE * float3(1.0, 0.93, 0.8) * u_Head0.x * (1.0 - 0.6 * hazeAmount(rd, dist));
+    }
+    // The beams: the haze in the cones, forward-scattering toward the lamps.
+    float reach = min(dist, u_Head0.w * 1.2);
+    float noise = ign(vpos);
+    float scatter = 0.0;
+    [loop] for (int i = 0; i < 16; i++) {
+        float f = (i + noise) / 16.0;
+        float t = f * f * reach;
+        float3 q = cam + rd * t;
+        scatter += (headSpot(q, lampL) + headSpot(q, lampR)) * (f * 2.0 * reach / 16.0);
+    }
+    float density = (u_Atmo.x * 0.0009 + 0.0008) * u_Sky3.w;
+    float phase = henyeyGreenstein(dot(u_Head3.xyz, -rd), 0.7) * 0.9 + 0.02;
+    add += scatter * density * phase * HEAD_BEAM * float3(1.0, 0.93, 0.8) * u_Head2.w * u_Head0.x;
+    add += (headGlare(rd, cam, lampL) + headGlare(rd, cam, lampR)) * float3(1.0, 0.92, 0.8) * u_Head1.w * u_Head0.x;
+    return float4(add, 0);
 }
 
 // The strips' glow over frames: s0 = this frame's PS_NeonGlow (point), s1 = the history (rgb its

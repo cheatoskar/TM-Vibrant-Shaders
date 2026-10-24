@@ -13,6 +13,7 @@
 210 RCDATA "replay_cinema.jpg"
 211 RCDATA "storm.jpg"
 212 RCDATA "snowstorm.jpg"
+213 RCDATA "horror.jpg"
 
 // The mod's icon in the menu's header (image::kIconResource, src/image.cpp), found in
 // packaging/icons (CMake adds that folder to this file's include path).
