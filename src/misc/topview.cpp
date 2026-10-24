@@ -48,6 +48,7 @@ constexpr float kLowest = -64.0f;       // m: the depth range of the picture (hi
 constexpr float kHighest = 2048.0f;
 constexpr float kMargin = 16.0f;        // m a mesh may reach past the grid area
 constexpr unsigned kStride = 8;         // after the build-up: one draw in 8 looked at per frame
+constexpr unsigned kNewPerFrame = 48;  // new meshes measured per frame (their vertices are read: ~20 us each)
 constexpr DWORD kSettleMs = 5000;       // nothing new for this long: the build-up is over
 constexpr DWORD kReportMs = 60000;      // the cost line while the minimap is on
 
@@ -141,6 +142,7 @@ struct State {
     std::unordered_set<uint64_t> keys;
     unsigned frame = 1;
     unsigned drawIndex = 0; // the main camera's indexed draws this frame (the stride)
+    unsigned newThisFrame = 0; // new meshes measured this frame (kNewPerFrame)
     int drawn = 0;
     // The height shading's base: the lowest mesh seen before the first drawing (the ground).
     float lowestSeen = 1e9f, ground = 0.0f;
@@ -491,6 +493,12 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     if (!info.own) return;
     Job j;
     j.decl = info.own;
+    j.type = type;
+    j.base = base;
+    j.minIndex = minIndex;
+    j.vertices = vertices; // meshBounds reads this range
+    j.start = start;
+    j.count = count;
     j.streams = info.streamCount;
     j.texcoord = info.texcoord;
     bool ok = true;
@@ -520,10 +528,14 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     for (int r = 0; r < 3; r++) {
         for (int k = 0; k < 3; k++) key = mix(key, static_cast<uint64_t>(rounded(j.world[r][k], 0.01f)));
     }
-    if (g.keys.count(key) || g.keys.size() >= kMaxKeys) {
+    // New meshes are measured a few dozen a frame (reading their vertices is the costly part): the
+    // rest come again in the next frames, so a map's start doesn't stutter.
+    if (g.keys.count(key) || g.keys.size() >= kMaxKeys || g.newThisFrame >= kNewPerFrame) {
+        if (!g.keys.count(key) && g.newThisFrame >= kNewPerFrame) g.lastNew = GetTickCount(); // more to come: not settled
         releaseJob(j);
         return;
     }
+    g.newThisFrame++;
     g.keys.insert(key); // looked at once, kept or not
     float lo[3], hi[3];
     if (!meshBounds(j, info.positionOffset, lo, hi) || !insideMap(j, lo, hi)) {
@@ -533,12 +545,6 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     device->GetTexture(0, &j.texture);
     if (j.texture && !usableTexture(j.texture)) gfx::release(j.texture);
     g.lowestSeen = std::min(g.lowestSeen, j.world[3][1]);
-    j.type = type;
-    j.base = base;
-    j.minIndex = minIndex;
-    j.vertices = vertices;
-    j.start = start;
-    j.count = count;
     g.queue.push_back(j);
     g.lastNew = GetTickCount();
     if (!g.firstNew) g.firstNew = g.lastNew;
@@ -548,6 +554,7 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
 void render(IDirect3DDevice9* device) {
     g.frame++;
     g.drawIndex = 0;
+    g.newThisFrame = 0;
     if (!g.wanted || !g.region || !device || g.queue.empty()) return;
     if (!ensureResources(device)) {
         clearQueue();

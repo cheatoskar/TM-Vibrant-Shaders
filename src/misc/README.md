@@ -100,7 +100,8 @@ and turn (1/100): instances of a block share their buffers. It is queued with re
 vertex and index buffers, its declaration's POSITION and TEXCOORD0 and the texture on stage 0, and
 drawn at Present, before the overlay: at most 400 a frame, inside a saved and restored device state (a
 D3D9 state block plus the render and depth targets), into an A8R8G8B8 target of 1 pixel per metre with
-its own depth buffer (higher covers lower) and mipmaps. Once nothing new came for 5 s, only one draw in
+its own depth buffer (higher covers lower) and mipmaps. New meshes are measured (their vertices read for
+the box) at most 48 a frame, about 1 ms: the rest come again in the next frames. Once nothing new came for 5 s, only one draw in
 8 is looked at per frame (each one every 8 frames); something new and all are looked at again.
 
 The cost goes into `tmvs.log`: CPU per frame of drawing the minimap (`mapview::draw`, the redraws

@@ -172,18 +172,24 @@ void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DVertex
             }
             return ms;
         };
-        const double newMs = frameOfDraws();
         device->EndScene();
         finishGpu(device);
+        // The build-up: each frame the game's 3000 draws (checks), then the redraws, until all are in.
         int frames = 0;
-        double cpuSum = 0.0, cpuMax = 0.0, wallSum = 0.0, wallMax = 0.0;
-        while (topview::meshes() < kMeshes && frames < 100) {
+        double checkSum = 0.0, checkMax = 0.0, cpuSum = 0.0, cpuMax = 0.0, wallSum = 0.0, wallMax = 0.0;
+        while (topview::meshes() < kMeshes && frames < 400) {
+            device->BeginScene();
+            const double checks = frameOfDraws();
+            device->EndScene();
+            finishGpu(device);
             const double t0 = milliseconds();
             topview::render(device);
             const double t1 = milliseconds();
             finishGpu(device);
             const double t2 = milliseconds();
             frames++;
+            checkSum += checks;
+            checkMax = std::max(checkMax, checks);
             cpuSum += t1 - t0;
             cpuMax = std::max(cpuMax, t1 - t0);
             wallSum += t2 - t0;
@@ -201,10 +207,10 @@ void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DVertex
         device->EndScene();
         printf("bench %d x %d px, %d meshes of %u triangles: %d meshes drawn in %d frames\n", cells * 32, cells * 32, kMeshes, triangles,
                topview::meshes(), frames);
-        printf("      redraw frames: CPU %.2f ms a frame (most %.2f), CPU + GPU until done %.2f ms a frame (most %.2f)\n", cpuSum / std::max(frames, 1),
-               cpuMax, wallSum / std::max(frames, 1), wallMax);
-        printf("      checks of %d draws a frame: new %.2f ms (%.2f us a draw), known %.2f ms, after the build-up %.2f ms\n", kMeshes, newMs,
-               newMs * 1000.0 / kMeshes, knownMs, settledMs);
+        printf("      build-up frames: checks of %d draws %.2f ms a frame (most %.2f); redraws CPU %.2f ms (most %.2f), CPU + GPU until done %.2f ms (most %.2f)\n",
+               kMeshes, checkSum / std::max(frames, 1), checkMax, cpuSum / std::max(frames, 1), cpuMax, wallSum / std::max(frames, 1), wallMax);
+        printf("      after it: checks of %d known draws %.2f ms a frame while still looking at all, %.2f ms once settled (one in 8)\n", kMeshes, knownMs,
+               settledMs);
     }
     vb->Release();
     ib->Release();
