@@ -306,7 +306,6 @@ void draw(const Frame& frame) {
     upload(frame.device);
     Picture& p = g_picture;
     Settings& s = settings();
-    const float scale = menu::scale();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float side = s.mapSize * screenScale();
     // The size and place are the settings'; the slider and dragging the corner both change them.
@@ -315,8 +314,9 @@ void draw(const Frame& frame) {
     static WindowPlace s_place;
     const float margin = 16.0f * screenScale();
     s_place.before(frame, ImVec2(s.mapX >= 0.0f ? s.mapX : display.x - side - margin, s.mapY >= 0.0f ? s.mapY : margin), ImVec2(side, side));
+    const PanelStyle panelStyle;
     ImGui::SetNextWindowBgAlpha(0.45f * s.mapOpacity);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * scale, 4.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(side * 0.015f, side * 0.015f));
     ImGui::Begin("Minimap##misc", nullptr, windowFlags(frame, true));
     ImGui::PopStyleVar();
     ImVec2 pos, size;
@@ -374,12 +374,12 @@ void draw(const Frame& frame) {
             const float l = sqrtf(dx * dx + dy * dy);
             dx = l > 1e-4f ? dx / l : 0.0f;
             dy = l > 1e-4f ? dy / l : -1.0f;
-            const float r = 7.0f * scale;
+            const float r = side * 0.027f; // the car arrow: in proportion to the minimap
             const ImVec2 tip(at.x + dx * r * 1.4f, at.y + dy * r * 1.4f);
             const ImVec2 left(at.x - dx * r * 0.8f + dy * r * 0.8f, at.y - dy * r * 0.8f - dx * r * 0.8f);
             const ImVec2 right(at.x - dx * r * 0.8f - dy * r * 0.8f, at.y - dy * r * 0.8f + dx * r * 0.8f);
             draw->AddTriangleFilled(tip, left, right, IM_COL32(255, 170, 60, 255));
-            draw->AddTriangle(tip, left, right, IM_COL32(20, 20, 20, 220), 1.5f * scale);
+            draw->AddTriangle(tip, left, right, IM_COL32(20, 20, 20, 220), std::max(1.0f, side * 0.006f));
         }
         draw->PopClipRect();
     } else {

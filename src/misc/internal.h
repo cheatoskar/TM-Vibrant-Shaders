@@ -23,12 +23,14 @@ struct Settings {
     float mapZoom = 1.0f;             // 1: the whole map; more: closer around the car
     bool mapRotate = false;           // the car's heading up instead of a fixed north
     bool splits = false;
-    float splitX = -1.0f, splitY = -1.0f; // < 0: under the minimap (or top right)
+    bool splitAttached = true;        // under the minimap (or top right); off: at splitX, splitY
+    float splitX = -1.0f, splitY = -1.0f;
     float splitWidth = 260.0f;
     int splitCompare = kCompareBest;
     bool splitBar = true;             // the sector clock
     bool session = true;              // the Session panel (with the split times)
-    float sessionX = -1.0f, sessionY = -1.0f; // < 0: under the split times
+    bool sessionAttached = true;      // under the split times; off: at sessionX, sessionY
+    float sessionX = -1.0f, sessionY = -1.0f;
     int finishEffect = 0;             // 0 off, 1 subtle, 2 big
 };
 Settings& settings();
@@ -36,6 +38,14 @@ void settingsChanged(); // saved a moment later with settings.ini
 
 // Sizes: pixels on this screen for a size given at 1440 pixels of height.
 float screenScale();
+// The panels' text and spacing against the menu's (its font is made once for the screen at start and
+// never below 1080p): 1 on most screens, less in a small window, so everything keeps its proportions.
+float textScale();
+// Pushes the spacing scaled by textScale() for one window (around Begin and End).
+struct PanelStyle {
+    PanelStyle();
+    ~PanelStyle();
+};
 
 // The overlay windows' place and size: from the settings with the menu closed, when it opens and
 // when the page's sliders change them; moved and resized by hand while the menu is open, which
@@ -44,6 +54,7 @@ struct WindowPlace {
     ImVec2 applied{-1.0f, -1.0f}, appliedSize{-1.0f, -1.0f};
     bool wasOpen = false;
     bool autoHeight = false;
+    bool lockHeight = false;    // the height is the caller's alone (only the width can be dragged)
     float contentHeight = 0.0f; // the content's height last frame (autoHeight)
     // Before Begin. size.y <= 0: only the width is the window's, its height follows the content.
     void before(const Frame& frame, ImVec2 pos, ImVec2 size);

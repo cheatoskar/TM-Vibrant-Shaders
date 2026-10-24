@@ -60,8 +60,30 @@ void settingsChanged() {
 }
 
 float screenScale() {
-    const float h = ImGui::GetIO().DisplaySize.y;
-    return h > 100.0f ? h / 1440.0f : 1.0f;
+    // The game window's client area against 2560 x 1440: by its height, or by its width when it is
+    // narrower than 16:9 (a 4:3 or a tall window), so nothing grows past the window's edges.
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    if (size.x < 100.0f || size.y < 100.0f) return 1.0f;
+    return std::min(size.y / 1440.0f, size.x / 2560.0f);
+}
+
+float textScale() {
+    // The menu's font is 17 px at 1080p and grows with the screen (22.7 px at 1440p).
+    const float font = ImGui::GetFont() ? ImGui::GetFont()->FontSize : 0.0f;
+    return font > 1.0f ? std::clamp(screenScale() * 17.0f * 1440.0f / 1080.0f / font, 0.4f, 2.0f) : 1.0f;
+}
+
+PanelStyle::PanelStyle() {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float r = textScale();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.WindowPadding.x * r, style.WindowPadding.y * r));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x * r, style.ItemSpacing.y * r));
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x * r, style.CellPadding.y * r));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x * r, style.FramePadding.y * r));
+}
+
+PanelStyle::~PanelStyle() {
+    ImGui::PopStyleVar(4);
 }
 
 void WindowPlace::before(const Frame& frame, ImVec2 pos, ImVec2 size) {
@@ -80,6 +102,7 @@ void WindowPlace::before(const Frame& frame, ImVec2 pos, ImVec2 size) {
         appliedSize = size;
     }
     if (autoHeight) ImGui::SetNextWindowSizeConstraints(ImVec2(80.0f, 0.0f), ImVec2(FLT_MAX, FLT_MAX), contentHeightOnly, this);
+    else if (lockHeight) ImGui::SetNextWindowSizeConstraints(ImVec2(80.0f, size.y), ImVec2(FLT_MAX, size.y));
     wasOpen = frame.menuOpen;
 }
 
@@ -107,28 +130,30 @@ int windowFlags(const Frame& frame, bool resizable) {
 }
 
 float windowChrome(const Frame& frame, const char* title, bool resizable) {
+    ImGui::SetWindowFontScale(textScale());
     if (!frame.menuOpen) return 0.0f;
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
-    const float h = ImGui::GetTextLineHeight() + 4.0f;
+    // Sizes from the text's height, so the strip keeps its proportions on every screen.
+    const float t = ImGui::GetTextLineHeight(), h = t * 1.25f, w = std::max(1.0f, t * 0.08f);
     const ImU32 strip = IM_COL32(255, 160, 60, 70), line = IM_COL32(255, 210, 160, 230);
     draw->AddRectFilled(wp, ImVec2(wp.x + ws.x, wp.y + h), strip, ImGui::GetStyle().WindowRounding, ImDrawFlags_RoundCornersTop);
     // The move symbol: a cross with four arrow heads.
     const float c = h * 0.5f, r = h * 0.32f, a = h * 0.12f;
-    const ImVec2 m(wp.x + 6.0f + r, wp.y + c);
-    draw->AddLine(ImVec2(m.x - r, m.y), ImVec2(m.x + r, m.y), line, 1.5f);
-    draw->AddLine(ImVec2(m.x, m.y - r), ImVec2(m.x, m.y + r), line, 1.5f);
+    const ImVec2 m(wp.x + t * 0.35f + r, wp.y + c);
+    draw->AddLine(ImVec2(m.x - r, m.y), ImVec2(m.x + r, m.y), line, w);
+    draw->AddLine(ImVec2(m.x, m.y - r), ImVec2(m.x, m.y + r), line, w);
     draw->AddTriangleFilled(ImVec2(m.x - r - a, m.y), ImVec2(m.x - r + a, m.y - a), ImVec2(m.x - r + a, m.y + a), line);
     draw->AddTriangleFilled(ImVec2(m.x + r + a, m.y), ImVec2(m.x + r - a, m.y - a), ImVec2(m.x + r - a, m.y + a), line);
     draw->AddTriangleFilled(ImVec2(m.x, m.y - r - a), ImVec2(m.x - a, m.y - r + a), ImVec2(m.x + a, m.y - r + a), line);
     draw->AddTriangleFilled(ImVec2(m.x, m.y + r + a), ImVec2(m.x - a, m.y + r - a), ImVec2(m.x + a, m.y + r - a), line);
-    draw->AddText(ImVec2(m.x + r + 8.0f, wp.y + 2.0f), line, title);
+    draw->AddText(ImVec2(m.x + r + t * 0.45f, wp.y + (h - t) * 0.5f), line, title);
     if (resizable) {
         // The grip: three diagonal lines in the lower right corner.
-        const ImVec2 e(wp.x + ws.x - 3.0f, wp.y + ws.y - 3.0f);
+        const ImVec2 e(wp.x + ws.x - t * 0.18f, wp.y + ws.y - t * 0.18f);
         for (int k = 1; k <= 3; k++) {
-            const float d = k * 4.0f;
-            draw->AddLine(ImVec2(e.x - d, e.y), ImVec2(e.x, e.y - d), line, 1.5f);
+            const float d = k * t * 0.24f;
+            draw->AddLine(ImVec2(e.x - d, e.y), ImVec2(e.x, e.y - d), line, w);
         }
     }
     ImGui::Dummy(ImVec2(0.0f, h - ImGui::GetStyle().WindowPadding.y));
@@ -167,12 +192,14 @@ void boot() {
     s.mapZoom = iniFloat(ini, L"MinimapZoom", 1.0f, 1.0f, 8.0f);
     s.mapRotate = iniInt(ini, L"MinimapRotate", 0, 0, 1) != 0;
     s.splits = iniInt(ini, L"SplitTimes", 0, 0, 1) != 0;
+    s.splitAttached = iniInt(ini, L"SplitTimesAttached", 1, 0, 1) != 0;
     s.splitX = iniFloat(ini, L"SplitTimesX", -1.0f, -1.0f, 16384.0f);
     s.splitY = iniFloat(ini, L"SplitTimesY", -1.0f, -1.0f, 16384.0f);
     s.splitWidth = iniFloat(ini, L"SplitTimesWidth", 260.0f, 160.0f, 800.0f);
     s.splitCompare = iniInt(ini, L"SplitCompare", kCompareBest, 0, 3);
     s.splitBar = iniInt(ini, L"SplitBar", 1, 0, 1) != 0;
     s.session = iniInt(ini, L"SessionPanel", 1, 0, 1) != 0;
+    s.sessionAttached = iniInt(ini, L"SessionAttached", 1, 0, 1) != 0;
     s.sessionX = iniFloat(ini, L"SessionX", -1.0f, -1.0f, 16384.0f);
     s.sessionY = iniFloat(ini, L"SessionY", -1.0f, -1.0f, 16384.0f);
     s.finishEffect = iniInt(ini, L"FinishEffect", 0, 0, 2);
@@ -191,12 +218,14 @@ void save(IniFile& ini) {
     setFloat(ini, L"MinimapZoom", s.mapZoom);
     setInt(ini, L"MinimapRotate", s.mapRotate ? 1 : 0);
     setInt(ini, L"SplitTimes", s.splits ? 1 : 0);
+    setInt(ini, L"SplitTimesAttached", s.splitAttached ? 1 : 0);
     setFloat(ini, L"SplitTimesX", s.splitX);
     setFloat(ini, L"SplitTimesY", s.splitY);
     setFloat(ini, L"SplitTimesWidth", s.splitWidth);
     setInt(ini, L"SplitCompare", s.splitCompare);
     setInt(ini, L"SplitBar", s.splitBar ? 1 : 0);
     setInt(ini, L"SessionPanel", s.session ? 1 : 0);
+    setInt(ini, L"SessionAttached", s.sessionAttached ? 1 : 0);
     setFloat(ini, L"SessionX", s.sessionX);
     setFloat(ini, L"SessionY", s.sessionY);
     setInt(ini, L"FinishEffect", s.finishEffect);
@@ -221,6 +250,7 @@ void drawPage() {
             s.mapX = s.mapY = -1.0f;
             changed = true;
         }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Top right; attached panels follow.");
         mapview::drawPageInfo();
     }
 
@@ -228,12 +258,29 @@ void drawPage() {
     changed |= ImGui::Checkbox("Split times", &s.splits);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Your time at each checkpoint against a reference, and each sector after the finish.");
     if (s.splits) {
-        changed |= ImGui::SliderFloat("Width", &s.splitWidth, 160.0f, 800.0f, "%.0f px");
+        if (s.splitAttached && s.minimap) {
+            ImGui::TextDisabled("Width: the minimap's");
+        } else {
+            changed |= ImGui::SliderFloat("Width", &s.splitWidth, 160.0f, 800.0f, "%.0f px");
+        }
         changed |= ImGui::Checkbox("Sector clock", &s.splitBar);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Time in the current sector against the reference's sector time.");
+        if (ImGui::Checkbox("Attach to minimap", &s.splitAttached)) {
+            s.splitX = s.splitY = -1.0f; // unticked: it stays where it is
+            changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sits under the minimap, as wide as it, and moves with it.");
         changed |= ImGui::Checkbox("Session panel", &s.session);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Attempts, best, median and last times, theoretical best, sector speeds.");
+        if (s.session) {
+            if (ImGui::Checkbox("Attach to split times", &s.sessionAttached)) {
+                s.sessionX = s.sessionY = -1.0f;
+                changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sits under the split times and moves with them.");
+        }
         if (ImGui::Button("Reset position##splits")) {
+            s.splitAttached = s.sessionAttached = true;
             s.splitX = s.splitY = s.sessionX = s.sessionY = -1.0f;
             changed = true;
         }

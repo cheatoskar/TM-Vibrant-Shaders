@@ -71,7 +71,7 @@ void burstAt(float x, float y, ImU32 colour, int count, float scale) {
 
 void start(bool big, bool personalBest) {
     const ImVec2 size = ImGui::GetIO().DisplaySize;
-    const float scale = menu::scale();
+    const float scale = screenScale() * 1440.0f / 1080.0f; // 1 at 1080p, in proportion to the window
     g_seed ^= GetTickCount() | 1u;
     QueryPerformanceCounter(&g_last);
     // Paper from the top (subtle) or from both lower corners up into the screen (big).
@@ -123,7 +123,7 @@ void draw(const Frame&) {
     QueryPerformanceFrequency(&frequency);
     const float dt = std::clamp(static_cast<float>(now.QuadPart - g_last.QuadPart) / static_cast<float>(frequency.QuadPart), 0.0f, 0.1f);
     g_last = now;
-    const float scale = menu::scale();
+    const float scale = screenScale() * 1440.0f / 1080.0f; // 1 at 1080p, in proportion to the window
     ImDrawList* draw = ImGui::GetForegroundDrawList();
     for (Rocket& r : g_rockets) {
         r.fuse -= dt;
