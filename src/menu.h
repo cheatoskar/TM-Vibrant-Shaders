@@ -9,6 +9,7 @@
 namespace tmshaders {
 struct Field;
 struct Settings;
+class Config;
 
 // The F8 menu, shared by the TMNF and the ManiaPlanet builds. The game side fills a Host.
 namespace menu {
@@ -107,6 +108,10 @@ struct Host {
 // Colours, sizes and fonts (after ImGui::CreateContext, before the renderer backend).
 void setupStyle(HWND window);
 float scale();
+// A look setting was changed outside the menu's pages (the photo panel's sliders): the preset becomes Custom
+// (or the base preset again when everything is back), as for the menu's own sliders; without it a
+// map-type preset or a mood change puts the preset's values back over the change.
+void lookEdited(Config& config, Settings& s);
 // The menu's windows: the menu itself when it is open, and the pages the player pulled out of it
 // into windows of their own (those with "Keep open when the menu closes" also while it is closed).
 // Host::hideDetached: a photo or a capture is being taken, no detached windows.

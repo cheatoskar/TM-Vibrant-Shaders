@@ -28,6 +28,8 @@
 #include "soundcapture.h"
 #include "videoencoder.h"
 #include "tm_shaders_version.h"
+#include <set>
+#include <tuple>
 #include <d3d9.h>
 #include <algorithm>
 #include <array>
@@ -3193,6 +3195,43 @@ void overlapBiasDone(IDirect3DDevice9* device) {
 
 // CasterShadows: the main camera's opaque draws of static materials go to casters.cpp (which
 // keeps the meshes that stay put). Not the car (it moves), glass or water (light passes).
+// Hide car, the passes under other shaders: a car's own colour draws (a Vehicles shader, engine::carDrawNow)
+// are left out here and their vertex buffer, offset, base and index range remembered; any other draw of the
+// same mesh (its shadow in the game's shadow map, a depth pass) matches and is left out too. The log says
+// under which shader the first of those came. Forgotten with the map.
+bool onSkipDraw(IDirect3DDevice9* device, INT base, UINT start, UINT count) {
+    if (!engine::hidingCars()) return false;
+    static std::set<std::tuple<uintptr_t, UINT, UINT, INT, UINT, UINT>> s_meshes;
+    static int s_map = -1;
+    if (s_map != engine::mapLoads()) {
+        s_map = engine::mapLoads();
+        s_meshes.clear();
+    }
+    const bool own = engine::carDrawNow();
+    if (!own && s_meshes.empty()) return false;
+    IDirect3DVertexBuffer9* vb = nullptr;
+    UINT offset = 0, stride = 0;
+    {
+        hook::InternalScope internal;
+        if (FAILED(device->GetStreamSource(0, &vb, &offset, &stride)) || !vb) return own;
+    }
+    vb->Release();
+    const auto key = std::make_tuple(reinterpret_cast<uintptr_t>(vb), offset, stride, base, start, count);
+    if (own) {
+        if (s_meshes.size() < 4096) s_meshes.insert(key);
+        return true;
+    }
+    if (s_meshes.count(key) == 0) return false;
+    static int s_logged = 0;
+    if (s_logged < 6) {
+        s_logged++;
+        wchar_t file[512] = {};
+        if (!engine::materialFile(engine::currentShader(), file, 512)) wcscpy_s(file, L"(no shader file)");
+        TMVS_LOG("engine: hide car: a draw of a car's mesh under %ls left out (%u meshes known)", file, static_cast<unsigned>(s_meshes.size()));
+    }
+    return true;
+}
+
 void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count) {
     overlapBiasBegin(device); // blocks are indexed draws; restored in onDrawDone
     if (!g_castersOn || !g_scene.inMainCamera || !g_scene.haveView || !g_scene.haveProjection) return;
@@ -3858,6 +3897,7 @@ void bootOnce() {
     deviceCallbacks.draw = onDraw;
     deviceCallbacks.drawDone = onDrawDone;
     deviceCallbacks.drawIndexed = onDrawIndexed;
+    deviceCallbacks.skipDraw = onSkipDraw;
     deviceCallbacks.setViewport = onSetViewport;
     deviceCallbacks.getViewport = onGetViewport;
     deviceCallbacks.setScissorRect = onSetScissorRect;

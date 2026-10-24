@@ -213,13 +213,22 @@ void drawPhotoPanel() {
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
     ImGui::TextDisabled("Photo   %s hides this", keys::name(keys::get(keys::Action::PhotoPanel)).c_str());
     ImGui::PushItemWidth(170.0f * s);
-    if (ImGui::SliderFloat("Exposure", &config.settings.exposure, -2.0f, 2.0f, "%+.1f EV")) config.markDirty();
+    if (ImGui::SliderFloat("Exposure", &config.settings.exposure, -2.0f, 2.0f, "%+.1f EV")) {
+        config.markDirty();
+        menu::lookEdited(config, config.settings);
+    }
     char aperture[32];
     snprintf(aperture, sizeof(aperture), "f/%.1f", photo::fNumber(config.photoDof));
     if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
     ImGui::SliderFloat("Zoom", &photo::zoom(), 1.0f, 8.0f, "%.1fx", ImGuiSliderFlags_Logarithmic);
-    if (ImGui::SliderFloat("Vignette", &config.settings.vignette, 0.0f, 1.0f, "%.2f")) config.markDirty();
-    if (ImGui::SliderFloat("Film grain", &config.settings.filmGrain, 0.0f, 0.15f, "%.3f")) config.markDirty();
+    if (ImGui::SliderFloat("Vignette", &config.settings.vignette, 0.0f, 1.0f, "%.2f")) {
+        config.markDirty();
+        menu::lookEdited(config, config.settings);
+    }
+    if (ImGui::SliderFloat("Film grain", &config.settings.filmGrain, 0.0f, 0.15f, "%.3f")) {
+        config.markDirty();
+        menu::lookEdited(config, config.settings);
+    }
     if (!config.lutFile.empty() && ImGui::SliderFloat("Look strength", &config.lutAmount, 0.0f, 1.0f, "%.2f")) config.markDirty();
     ImGui::PopItemWidth();
     if (ImGui::Button("Clear focus")) photo::clearFocus();

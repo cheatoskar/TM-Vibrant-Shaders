@@ -23,6 +23,8 @@ struct DeviceCallbacks {
     // An indexed draw, after `draw`, with its parameters (CasterShadows keeps static meshes).
     void (*drawIndexed)(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start,
                         UINT count) = nullptr;
+    // Before an indexed draw of the game: true = leave it out (photo mode's Hide car).
+    bool (*skipDraw)(IDirect3DDevice9* device, INT base, UINT start, UINT count) = nullptr;
     void (*setTransform)(D3DTRANSFORMSTATETYPE type, const D3DMATRIX* matrix) = nullptr;
     void (*setLight)(DWORD index, const D3DLIGHT9* light) = nullptr;
     // Before the game's Clear (not the plugin's own).

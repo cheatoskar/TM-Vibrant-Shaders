@@ -2549,18 +2549,7 @@ void drawPageBody(const PageDef& page, Config& config, Settings& s, const Names&
     ImGui::PushItemWidth(std::min(ImGui::GetContentRegionAvail().x * 0.55f, 360.0f * g_scale));
     const bool look = page.draw(config, s, names);
     ImGui::PopItemWidth();
-    if (look) {
-        config.preset = kCustomPreset;
-        // Every setting reset by hand: it is the preset again.
-        bool same = true;
-        for (const Field& f : fields()) {
-            if (!isMachineSetting(f) && differsFromBase(f, s, config.baseline())) {
-                same = false;
-                break;
-            }
-        }
-        if (same) config.preset = config.basePreset();
-    }
+    if (look) lookEdited(config, s);
 }
 
 void drawMenu() {
@@ -2689,6 +2678,19 @@ void drawDetachedWindows(Config& config, bool menuOpen) {
 
 const char* tooltip(const char* key) {
     return tooltipFor(key);
+}
+
+void lookEdited(Config& config, Settings& s) {
+    config.preset = kCustomPreset;
+    // Every setting reset by hand: it is the preset again.
+    bool same = true;
+    for (const Field& f : fields()) {
+        if (!isMachineSetting(f) && differsFromBase(f, s, config.baseline())) {
+            same = false;
+            break;
+        }
+    }
+    if (same) config.preset = config.basePreset();
 }
 
 void setupStyle(HWND window) {
