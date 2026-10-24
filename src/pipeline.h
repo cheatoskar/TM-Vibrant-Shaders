@@ -433,6 +433,7 @@ private:
         kExportChroma,
         kClearWater,
         kWaterSplash,
+        kHeadlights,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).

@@ -30,7 +30,7 @@ const char* const kEntryPoints[] = {
     "PS_SmaaEdges", "PS_SmaaWeights", "PS_SmaaBlend",
     "PS_SpillSourceNeon", "PS_NeonGlow", "PS_NeonAdd", "PS_NeonTemporal",
     "PS_Accumulate", "PS_AccumResolve", "PS_ExportLuma", "PS_ExportChroma",
-    "PS_ClearWater", "PS_WaterSplash",
+    "PS_ClearWater", "PS_WaterSplash", "PS_Headlights",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -3503,6 +3503,43 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
         device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
         runPass(device, kNeonAdd, m_hdr);
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    }
+
+    // 4a. CarHeadlights: two spotlights on the car (PS_Headlights), added to the lit image. Without the
+    // engine's car there is no lamp to put them on.
+    if (s.carHeadlights > 0.0f && in.carPoseKnown) {
+        const float* p = in.carPosePosition;
+        const float* f = in.carForward;
+        const float* r = in.carRight;
+        const float* u = in.carPoseUp;
+        // The Stadium car's lamps: 2.25 m ahead of the drawn position, 0.62 m to each side, a little
+        // above the wheel centres; aimed 4 degrees down at the road (my estimate of the car's model).
+        const float pitch = 0.07f;
+        float aim[3], left[3], right[3];
+        for (int j = 0; j < 3; j++) {
+            aim[j] = f[j] * cosf(pitch) - u[j] * sinf(pitch);
+            const float base = p[j] + f[j] * 2.25f + u[j] * 0.15f;
+            left[j] = base - r[j] * 0.62f;
+            right[j] = base + r[j] * 0.62f;
+        }
+        const float h[4][4] = {
+            {1.0f, 0.92f, 0.99f, 110.0f}, // the cone: 23 degrees to its edge, 8 to its bright core
+            {left[0], left[1], left[2], 1.0f},
+            {right[0], right[1], right[2], 1.0f},
+            {aim[0], aim[1], aim[2], 0.0f},
+        };
+        float constants[4][4];
+        memcpy(constants, h, sizeof(constants));
+        constants[0][0] = fminf(s.carHeadlights, 1.0f);
+        device->SetPixelShaderConstantF(64, &constants[0][0], 4);
+        bind(device, 0, in.hdr ? in.hdr : in.color, false);
+        bind(device, 1, m_nd.texture, false);
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+        runPass(device, kHeadlights, m_hdr);
         device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     }
 

@@ -24,6 +24,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("LongShadows", "Long shadows", "Lighting", Float, longShadows, 0.0f, 1.0f),
         TMVS_FIELD("AOStrength", "Ambient occlusion", "Lighting", Float, aoStrength, 0.0f, 2.0f),
         TMVS_FIELD("NeonLight", "Neon light spill", "Lighting", Float, neonLight, 0.0f, 2.0f),
+        TMVS_FIELD("CarHeadlights", "Car headlights", "Lighting", Float, carHeadlights, 0.0f, 1.0f),
         TMVS_FIELD("GlobalIllumination", "Bounce light", "Lighting", Float, globalIllumination, 0.0f, 2.0f),
         TMVS_FIELD("SunLight", "Sun tint", "Lighting", Float, sunLight, 0.0f, 1.5f),
         TMVS_FIELD("AmbientTint", "Ambient tint", "Lighting", Float, ambientTint, 0.0f, 1.5f),
@@ -192,6 +193,7 @@ const char* presetName(Preset preset) {
         case Preset::ReplayCinema: return "Replay Cinema";
         case Preset::Storm: return "Storm";
         case Preset::Snowstorm: return "Snowstorm";
+        case Preset::Horror: return "Horror";
         case Preset::Custom: return "Custom";
         default: return "?";
     }
@@ -426,11 +428,11 @@ const char* const kTagKeys[] = {
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
     "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus", "LampGlare", "LampHaze", "LampSkyHalos", "Floodlights",
-    "SMAA", "WaterSplash", "WaterClarity",
+    "SMAA", "WaterSplash", "WaterClarity", "CarHeadlights",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
-    "Rainy", "Replay Cinema", "Storm", "Snowstorm",
+    "Rainy", "Replay Cinema", "Storm", "Snowstorm", "Horror",
 };
 constexpr unsigned char kTagVersion = 1;
 const char kBase64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -947,7 +949,12 @@ bool Config::applyShareCode(const std::string& text, std::string& message) {
 
 std::vector<std::string> Config::presetNames() const {
     std::vector<std::string> names;
-    for (int i = 0; i < static_cast<int>(Preset::Custom); i++) names.push_back(presetName(static_cast<Preset>(i)));
+    for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
+#ifdef TMVS_MANIAPLANET
+        if (i == static_cast<int>(Preset::Horror)) continue; // its headlights are TrackMania Nations/United's so far
+#endif
+        names.push_back(presetName(static_cast<Preset>(i)));
+    }
     names.insert(names.end(), m_userPresets.begin(), m_userPresets.end());
     return names;
 }
@@ -1697,6 +1704,49 @@ void applyPreset(Settings& s, Preset preset) {
             s.chromaticAberration = 0.0f;
             s.filmGrain = 0.015f;
             s.autoExposure = 0.2f;  // a white world must not be pulled down to grey
+            break;
+        case Preset::Horror:
+            // Black night: the game's lamps are taken out (Floodlights 0 removes the light its additive
+            // draws add, the lamps' glow and their spill; the neon strips and every glow with them) and
+            // what the game baked into the night is darkened by the night itself (Night darkening 1,
+            // GameLight stays off). Only the car's headlights light the road, in thick fog.
+            s.skyMode = 2;
+            s.starAmount = 0.5f;
+            s.skyBrightness = 0.25f;
+            s.skyNight = 1.0f;
+            s.skyColor[0] = 0.12f; s.skyColor[1] = 0.17f; s.skyColor[2] = 0.3f;
+            s.carHeadlights = 1.0f;
+            s.floodlights = 0.0f;
+            s.borderGlow = 0.0f;
+            s.lampGlare = 0.0f;
+            s.lampHaze = 0.0f;
+            s.neonLight = 0.0f;
+            s.highlightBoost = 0.0f;
+            s.volumetricLight = 0.0f;
+            s.godRays = 0.0f;
+            s.sunGlow = 0.0f;
+            s.lensFlare = 0.0f;
+            s.globalIllumination = 0.0f;
+            s.shadowStrength = 0.0f;
+            s.longShadows = 0.0f;
+            s.aoStrength = 1.4f;
+            s.ambientTint = 0.9f;
+            s.fogDensity = 3.0f;
+            s.fogHeightFalloff = 0.4f;
+            s.hazeDistance = 0.6f;
+            s.bloom = 0.1f;
+            s.bloomRadius = 0.8f;
+            s.exposure = -0.4f;
+            s.autoExposure = 0.0f;  // the dark stays dark
+            s.contrast = 1.12f;
+            s.saturation = 0.6f;
+            s.vibrance = 0.0f;
+            s.temperature = -0.1f;
+            s.shadowTint = 0.5f;
+            s.vignette = 0.55f;
+            s.chromaticAberration = 0.0f;
+            s.filmGrain = 0.03f;
+            s.reflections = 0.4f;
             break;
         default:
             break;

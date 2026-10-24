@@ -20,6 +20,7 @@ enum class Preset : int {
     ReplayCinema,    // film look with motion blur and depth of field for replays
     Storm,           // dark, overcast, pouring rain, soaked track, lightning
     Snowstorm,       // blizzard: driving snow, snow fields, white-out haze
+    Horror,          // black night: every lamp and neon strip off, only the car's headlights light the road
     Custom,
     Count
 };

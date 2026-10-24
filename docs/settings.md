@@ -28,7 +28,7 @@ The menu opens over most of the screen's height and the left part of its width: 
 
 | Section | Settings |
 |---|---|
-| Light and shadows | Shadows, long shadows, ambient occlusion, neon light spill, light shafts |
+| Light and shadows | Shadows, long shadows, ambient occlusion, neon light spill, car headlights, light shafts |
 | Sky | Sky, turn the sky, stars, aurora movement, planet, planet size and view, planet direction and height, black hole size, direction and height, clouds (only what the chosen sky uses) |
 | Bloom and lens | Glow, glow radius, light intensity, neon borders, floodlights, lens flare, colour fringes, vignette, film grain |
 | Colour | Brightness, contrast, saturation |
@@ -141,6 +141,7 @@ Range is the slider range. Key is the name in `settings.ini` and in preset files
 | Sun shadows | `ShadowStrength` | 0 – 1 | Strength of the sun shadows traced against the depth buffer. 0 = off. |
 | Long shadows | `LongShadows` | 0 – 1 | Shadows from a height map of the track that builds up while you drive: long evening shadows, also from objects off screen. |
 | Ambient occlusion | `AOStrength` | 0 – 2 | Darkens corners and contact areas. |
+| Car headlights | `CarHeadlights` | 0 – 1 (0) | Two spotlights from the front of the car the camera follows (races, and the car a replay's cameras show; the car the game reports): they light the road and the walls ahead (cone of about 36 degrees, 110 m), show as beams in the haze (more with more *Haze density*) and glare when the camera looks into them. No shadows: the light goes through walls. One extra pass, about 0.7 ms at 1440p in my previewer measurement. The *Horror* preset uses 1. |
 | Neon light spill | `NeonLight` | 0 – 2 | How much the coloured borders and signs light up the road and walls around them. With *Game light sources* the light comes only from what the game draws as light (lamps, glows, start lights) and the neon borders (by *Neon strip glow*), each in its own colour; floodlit grass, banners and car paint no longer light their surroundings. |
 | Bounce light | `GlobalIllumination` | 0 – 2 | One bounce of coloured light from surface to surface. |
 | Sun tint | `SunLight` | 0 – 1.5 | How strongly sunlit surfaces take on the sun colour. |
