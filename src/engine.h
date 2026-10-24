@@ -167,16 +167,6 @@ void shaderCensus(bool on);
 // The free camera (cam 7 in replays, the editor's) is on. False without the hook.
 bool freeCamActive();
 
-// Photo mode's freeze: the game's own pause of a race (what its in-game menu does), TMNF / TMUF.
-// freezeAllowed: why the race may be frozen now ("run over", "editor test"),
-// null when it must not: online (any doubt counts as online), a live run, replays, no race.
-// freezeRace pauses it (true when frozen, also when it was already); unfreezeRace resumes it.
-// Nothing here writes a field of the game: only its own Pause / Resume / Start- and StopSimulation.
-const char* freezeAllowed();
-bool freezeRace();
-void unfreezeRace();
-bool raceFrozen();
-
 // Counters of race (re)starts / map loads and of respawns (for the neon trail).
 int raceResets();
 int respawns();

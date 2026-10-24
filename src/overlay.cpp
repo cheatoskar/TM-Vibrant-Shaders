@@ -551,7 +551,7 @@ void draw(IDirect3DDevice9* device) {
         host.splitPosition = &photo::splitPosition();
         host.splitSwapped = &photo::splitSwapped();
         host.splitPreset = &photo::splitPreset();
-        host.photoFreeze = true;
+        host.photoHideCar = true;
         host.photoOn = [] {
             if (!photo::active()) photo::toggle();
         };

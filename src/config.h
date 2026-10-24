@@ -96,7 +96,6 @@ public:
     bool photoAuto = true;
     bool photoHideHud = true;
     bool photoHideCar = false; // photo mode leaves the cars out (TMNF)
-    bool photoFreeze = true; // photo mode pauses a finished race, or an editor test (TMNF)
     int photoTiles = 2;
     float photoDof = 0.5f;
     bool splitPhotoLabels = true; // the compare split's names burnt into photos (TMNF)

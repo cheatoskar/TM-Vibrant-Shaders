@@ -196,26 +196,6 @@ void beginFrame() {
     engine::fullViewDistance(g_active);
     engine::setProjectionZoom(g_active ? g_zoom : 1.0f);
 
-    // The freeze: the game's own pause of the race, only where it is no live run (the run is over,
-    // the editor's test; never online, in a live run or a
-    // replay: engine::freezeAllowed). Dropped when that stops being true (a restart, the end-of-race
-    // replay) and with photo mode. Asked four times a second, the game's pause is not free.
-    if (g_active && config.photoFreeze) {
-        static DWORD s_asked = 0;
-        const DWORD now = GetTickCount();
-        if (!engine::raceFrozen()) {
-            if (now - s_asked > 250) {
-                s_asked = now;
-                if (engine::freezeRace()) setStatus("The game is paused   leaving photo mode goes on", 4);
-            }
-        } else if (now - s_asked > 250) {
-            s_asked = now;
-            if (!engine::freezeAllowed()) engine::unfreezeRace();
-        }
-    } else if (engine::raceFrozen()) {
-        engine::unfreezeRace();
-    }
-
     // The screen size comes with the first frame after the request (no 0 / 0 before).
     if (g_job == Job::Tiles && g_width > 0 && g_height > 0) {
         const int n = g_tiles;
@@ -513,7 +493,6 @@ const char* status() {
         char line[160];
         snprintf(line, sizeof(line), "%s   Zoom %.1fx   Focus %s%s%s", aperture, g_zoom, g_focus[0] >= 0.0f ? "point" : "auto",
                  g_split ? "   Compare" : "", g_split && !g_splitPreset.empty() ? (" with " + g_splitPreset).c_str() : "");
-        if (engine::raceFrozen()) strncat_s(line, "   Paused", _TRUNCATE);
         std::string text = line;
         if (!g_status.empty()) text += "\n" + g_status;
         strncpy_s(g_statusCopy, text.c_str(), _TRUNCATE);

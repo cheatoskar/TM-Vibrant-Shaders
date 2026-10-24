@@ -106,9 +106,8 @@ For screenshots of replays. It comes on by itself with the free camera (cam 7 in
 
 - The game's adaptive view distance (launcher *ZClip*) is off, so far blocks stay in the picture even when the frame rate drops.
 - **Hide car** (*Hide car*, `PhotoHideCar`, off; TrackMania Nations/United): the game's draws of the cars (body, glass, lights) are skipped while photo mode is on, so the road and the scenery show without them, in photos too. Smoke and tyre marks stay.
-- **The game pauses** (*Pause the game*, `PhotoFreeze`, on; TrackMania Nations/United) in the two places of a race where that cannot help a timed run: after the finish line, while the run is over (the car stops where it is, mid-air included, the race clock stops), and in the editor's test mode. Photo mode asks the game to do what its own `Esc` menu does when it pauses a solo race (stop its clock, pause the race), without the menu on the picture; leaving photo mode, restarting the race or the end-of-race replay starting gives it back. It never pauses **online** (the mod takes anything it can't tell for sure as online), **in a live run** and **in replays**, which have their own pause button. The reason is the leaderboards: a pause with a free camera in the middle of a timed run would let you stop and look at the track ahead, so a live run stays live, and photo mode there keeps the camera the game allows. The game's own cameras and MediaTracker clips are never switched off. While paused the line at the top says *Paused*; whether the free camera (cam 7) still moves while the game is paused depends on the game's own input handling.
 
-The options are on the *Settings* page (*Photo mode* panel) and in `settings.ini` (`[General]`: `PhotoAuto`, `PhotoFreeze`, `PhotoHideCar`, `PhotoTiles`, `PhotoDof`, `SplitPhotoLabels`). They are not part of presets.
+The options are on the *Settings* page (*Photo mode* panel) and in `settings.ini` (`[General]`: `PhotoAuto`, `PhotoHideCar`, `PhotoTiles`, `PhotoDof`, `SplitPhotoLabels`). They are not part of presets.
 
 ## Colour look (LUT)
 
