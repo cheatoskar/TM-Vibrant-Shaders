@@ -26,6 +26,13 @@ bool wantsOverlay(const Frame& frame);
 void drawOverlay(const Frame& frame);
 // Writes [Misc] into settings.ini with the rest (Config::save).
 void save(IniFile& ini);
+// Every indexed draw of the game's main camera, before the game draws it (its state bound): the
+// minimap's picture from above takes the map's blocks from here (misc/topview.cpp). Cheap when
+// it has nothing to do.
+void sceneDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
+               const float view[16], const float projection[16]);
+// Before a device reset and at shutdown: the video memory of the minimap's picture.
+void releaseDevice();
 constexpr bool kAvailable = true;
 #else
 inline void boot() {}
@@ -33,6 +40,8 @@ inline void drawPage() {}
 inline bool wantsOverlay(const Frame&) { return false; }
 inline void drawOverlay(const Frame&) {}
 inline void save(IniFile&) {}
+inline void sceneDraw(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT, const float*, const float*) {}
+inline void releaseDevice() {}
 constexpr bool kAvailable = false;
 #endif
 

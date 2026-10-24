@@ -20,8 +20,10 @@ struct Settings {
     float mapX = -1.0f, mapY = -1.0f; // window position (pixels; < 0: the default place, top right)
     float mapSize = 260.0f;
     float mapOpacity = 0.85f;
-    float mapZoom = 1.0f;             // 1: the whole map; more: closer around the car
+    bool mapAutoZoom = true;          // follows the car, closer the slower; off: the whole map
+    float mapZoom = 1.0f;             // the auto zoom's scale: more is closer (0.5 - 2)
     bool mapRotate = false;           // the car's heading up instead of a fixed north
+    bool mapTextured = true;          // "Real look": the blocks' meshes from above; off: squares
     bool splits = false;
     bool splitAttached = true;        // under the minimap (or top right); off: at splitX, splitY
     float splitX = -1.0f, splitY = -1.0f;
@@ -69,6 +71,25 @@ int windowFlags(const Frame& frame, bool resizable);
 // the lower right corner (resizable): the window can be dragged and resized. Returns the height the
 // strip takes at the top of the content (0 with the menu closed).
 float windowChrome(const Frame& frame, const char* title, bool resizable);
+
+// The minimap's picture from above (topview.cpp).
+namespace topview {
+// Once a frame: the picture is wanted (minimap on, Real look on, a Stadium map). Off: let go.
+void setWanted(bool wanted);
+// The map's area (world metres, x and z) and its size in grid cells; a new area starts over.
+void setRegion(const void* map, float x0, float z0, float x1, float z1, int cellsX, int cellsZ);
+void clearRegion();
+// misc::sceneDraw: one draw of the main camera.
+void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
+            const float view[16], const float projection[16]);
+// Draws what is queued into the picture (at Present, outside ImGui's drawing), a share a frame.
+void render(IDirect3DDevice9* device);
+// The picture over the map's area (row 0 at z0), null while nothing is in it.
+IDirect3DTexture9* picture();
+int meshes();
+void releaseDevice();
+void precompile(); // its shaders, on a thread at startup
+} // namespace topview
 
 // Minimap (mapview.cpp).
 namespace mapview {

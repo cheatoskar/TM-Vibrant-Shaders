@@ -990,6 +990,23 @@ void mapInfo(const LightMap& m, MapInfo& out) {
 
 } // namespace
 
+bool drawWorld(IDirect3DDevice9* device, const float view[16], const float projection[16], float world[4][3]) {
+    IDirect3DVertexShader9* vs = nullptr;
+    device->GetVertexShader(&vs);
+    if (!vs) return false;
+    const int reg = cameraRegister(vs);
+    vs->Release();
+    float c[4][4];
+    if (reg < 0 || FAILED(device->GetVertexShaderConstantF(reg, &c[0][0], 4)) || !inverseView(view)) return false;
+    double w[4][4];
+    bool otherProjection = false;
+    if (!meshToWorld(c, projection, w, otherProjection)) return false;
+    for (int r = 0; r < 4; r++) {
+        for (int k = 0; k < 3; k++) world[r][k] = static_cast<float>(w[r][k]);
+    }
+    return true;
+}
+
 bool takeTurn() {
     g_stats.draws++;
     const unsigned drawIndex = g_frameDraws++;
