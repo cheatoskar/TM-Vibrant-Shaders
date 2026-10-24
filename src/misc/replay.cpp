@@ -331,6 +331,15 @@ bool parseReplay(const std::vector<unsigned char>& file, bool body, Replay& out,
         error = "no checkpoint times in the replay";
         return false;
     }
+    // Older replays can hold a run that never finished (times -1) or times of two ghosts that don't
+    // belong together: only a finished run whose last checkpoint is its race time counts.
+    bool rising = out.raceTime > 0;
+    for (size_t i = 0; i < out.checkpoints.size() && rising; i++) rising = out.checkpoints[i] > (i ? out.checkpoints[i - 1] : 0);
+    if (!rising || out.checkpoints.back() != out.raceTime) {
+        error = "not a finished run";
+        out.checkpoints.clear();
+        return false;
+    }
     findSpeeds(data, out); // optional: without it no speed comparison
     return true;
 }
