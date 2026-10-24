@@ -108,7 +108,9 @@ const InfoClass& classOf(uintptr_t info) {
     uintptr_t waypoint = 3;
     if (read32(info + kInfoWaypoint, waypoint) && waypoint <= 4 && waypoint != 3) c.priority = kWaypoint;
     if (readName(info, c.name, sizeof(c.name))) {
-        if (strstr(c.name, "FreeWheel")) c.priority = kEngineOff;
+        // Engine off is "StadiumRoadMainFW" in TMNF (my editor test); "FreeWheel" for other names.
+        const size_t length = strlen(c.name);
+        if ((length >= 2 && !strcmp(c.name + length - 2, "FW")) || strstr(c.name, "FreeWheel")) c.priority = kEngineOff;
         else if (strstr(c.name, "Turbo") || strstr(c.name, "Boost")) c.priority = kBooster;
     }
     return g_infoClass.emplace(info, c).first->second;
