@@ -3416,16 +3416,17 @@ float4 PS_NeonAdd(float2 uv : TEXCOORD0) : COLOR0 {
 //     the lamp's pixel is hidden behind something nearer
 // No shadows: the light goes through walls and the car's own body (a lamp inside the cone of a wall
 // beside the road lights it); the road and walls ahead are what it is for.
-static const float HEAD_SURFACE = 3.0;
+static const float HEAD_SURFACE = 1.2;
 static const float HEAD_BEAM = 90.0;
 float headSpot(float3 q, float3 lamp) {
     float3 v = q - lamp;
     float d2 = dot(v, v);
     float cone = smoothstep(u_Head0.y, u_Head0.z, dot(v, u_Head3.xyz) * rsqrt(max(d2, 1e-4)));
-    // Inverse square near the lamp, a smooth end at the range.
+    // Inverse square past a quarter of the range (so Headlight range moves how far it carries: at 90 m
+    // a wall 50 m out still gets a fifth of the light near the car), a smooth end at the range.
     float r2 = d2 / (u_Head0.w * u_Head0.w);
     float reach = saturate(1.0 - r2 * r2);
-    return cone * reach * reach / (1.0 + d2 * 0.06);
+    return cone * reach * reach / (1.0 + r2 * 16.0);
 }
 float headGlare(float3 rd, float3 cam, float3 lamp) {
     float3 w = lamp - cam;
