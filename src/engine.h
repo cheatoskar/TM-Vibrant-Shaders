@@ -210,6 +210,27 @@ struct CarPose {
     int source = 0; // 1 the race's player, 2 a clip's car
 };
 bool carPose(CarPose& pose);
+// For the Misc page (src/misc), read only. The map open now (CGameCtnChallenge), null: none; the
+// text of a CMwId in the game's memory (a block info's name, the map's UID), "" unreadable.
+const void* currentMap();
+std::string idText(const void* id);
+// The map's UID (its CMwId at challenge +0xdc), "" none.
+std::string currentMapUid();
+// The local player's race as the game's HUD keeps it (CTrackManiaPlayerInfo, the same layout in
+// both builds): its clock and the race time at each checkpoint. False when no race checked its
+// player within the last few seconds (a finished race stops checking soon after the finish).
+struct RaceTimes {
+    static constexpr int kMax = 128;
+    int time = 0;          // race time now (ms): 0 before the start, the final time once finished
+    bool started = false;  // the clock runs or ran
+    bool finished = false;
+    int passed = 0;        // checkpoints passed in this run, the finish included
+    int count = 0;         // entries in times (checkpoints and finish; with laps, of all laps)
+    int times[kMax] = {};  // race time at each of them (ms), -1 not yet
+    const void* race = nullptr; // identifies the race (a new one: a new map or mode)
+};
+bool raceTimes(RaceTimes& out);
+
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.
 bool currentMapComments(std::string& comments);

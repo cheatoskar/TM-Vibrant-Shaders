@@ -253,6 +253,12 @@ add_executable(tmvs_packtest tools/packtest.cpp)
 target_link_libraries(tmvs_packtest PRIVATE tmvs_core)
 target_compile_options(tmvs_packtest PRIVATE ${TMVS_OPTIONS})
 
+# Replay reader test: LZO1X, the GBX header and the ghost's checkpoint times, on your replays in
+# Documents\TrackMania\Tracks\Replays (development tool; the Misc page's split times read them).
+add_executable(tmvs_replaytest tools/replaytest.cpp src/misc/replay.cpp)
+target_link_libraries(tmvs_replaytest PRIVATE tmvs_core shell32)
+target_compile_options(tmvs_replaytest PRIVATE ${TMVS_OPTIONS})
+
 # Video export read-back test: the frames come out once each and in order, with repeats, flushes
 # and a device reset in between, on a plain D3D9 device (development tool).
 add_executable(tmvs_planereadtest tools/planereadtest.cpp)
