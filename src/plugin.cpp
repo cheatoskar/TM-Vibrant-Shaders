@@ -62,6 +62,7 @@ struct DevOptions {
     bool fakeBlockRank = false;  // "FakeBlockRank=1": OverlapFix takes a rank from the vertex buffer's address (0..7) instead of blockorder, to test the bias without the engine side
     float exitAt = 0.0f;         // terminate the game (0 = off)
     float hardExitAt = 0.0f;     // terminate even if no gameplay camera appeared (absolute time)
+    int waterSplashTest = 0;     // "WaterSplashTest=1": every 8 s a car that isn't there enters the water 12 m ahead of the camera (24 m/s, 40 degrees); 2: it drives through, 3: it drips after coming out (WaterSplash on, a map with water)
     // "Keys=4:13,7:a13,9:min,12:restore": post VK 13 at 4 s, Alt+Enter at 7 s, minimize / restore.
     // Photo mode: "photomode" (like F6), "photo" / "photohires" (like F12 / Shift+F12 in it).
     std::vector<std::pair<float, std::wstring>> keys;
@@ -575,6 +576,7 @@ void loadDevOptions() {
     g_dev.exitAt = iniFloat(ini, L"ExitAt", 0.0f);
     g_dev.fakeBlockRank = GetPrivateProfileIntW(L"dev", L"FakeBlockRank", 0, ini) != 0;
     g_dev.hardExitAt = iniFloat(ini, L"HardExitAt", 0.0f);
+    g_dev.waterSplashTest = GetPrivateProfileIntW(L"dev", L"WaterSplashTest", 0, ini);
     wchar_t buffer[MAX_PATH] = {};
     GetPrivateProfileStringW(L"dev", L"ShaderDir", L"", buffer, MAX_PATH, ini);
     g_dev.shaderDir = buffer;
@@ -2456,6 +2458,11 @@ void processScene(IDirect3DDevice9* device) {
     inputs.time = effectTime();
     inputs.temporal = temporal;
     inputs.video = g_exporting;
+    if (g_dev.waterSplashTest > 0) {
+        const float cycle = fmodf(inputs.time, 8.0f);
+        const float test[4] = {cycle, 24.0f, 40.0f, static_cast<float>(g_dev.waterSplashTest)};
+        memcpy(inputs.splashTest, test, sizeof(test));
+    }
     inputs.repeat = repeat;
     {
         float lo = 0.0f, hi = 0.0f;

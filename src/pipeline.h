@@ -98,6 +98,11 @@ public:
         // The game's video export: photo mode's depth of field (full resolution, many samples,
         // no noise) for a moving camera.
         bool video = false;
+        // Development (dev.ini WaterSplashTest, the previewer's --splash): a car that is not there
+        // enters the water where the middle of the lower screen meets it. x seconds since it entered (< 0 off), y its
+        // speed (m/s), z entry angle (degrees), w 1 the splash, 2 the car driving through the
+        // water (wake and bow wave), 3 dripping after it came out (x seconds since).
+        float splashTest[4] = {-1.0f, 0.0f, 0.0f, 0.0f};
         // Another sub-pixel sample of the frame just shaded (the export's supersampling, into
         // the same target): looks like that frame, reads its history (motion blur, focus,
         // exposure) but advances none of it. temporal is false.
@@ -426,6 +431,8 @@ private:
         kAccumResolve,
         kExportLuma,
         kExportChroma,
+        kClearWater,
+        kWaterSplash,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
@@ -454,6 +461,12 @@ private:
     bool ensureSmaa(IDirect3DDevice9* device, UINT width, UINT height);
     bool buildMaterialMask(IDirect3DDevice9* device, const Inputs& in);
     bool ensureRain(IDirect3DDevice9* device);
+    bool ensureWaterAtlas(IDirect3DDevice9* device);
+    // WaterSplash: the car's tyres against the water's height (entering, in it, leaving), once per
+    // frame on the effects' clock; drawWater draws what that left (inside drawRain's pass).
+    void updateWater(const Inputs& inputs, const Settings& settings, float dt);
+    void drawWater(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings);
+    bool waterLevelOf(const Inputs& inputs, float y, float& level) const;
     bool ensureTrail(IDirect3DDevice9* device);
     static std::string trailSource();
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
@@ -652,10 +665,35 @@ private:
     IDirect3DVertexShader9* m_splashVS = nullptr;
     IDirect3DVertexShader9* m_sprayVS = nullptr;
     IDirect3DVertexShader9* m_snowVS = nullptr;
+    IDirect3DVertexShader9* m_waterVS = nullptr;
     IDirect3DVertexDeclaration9* m_rainDecl = nullptr;
     IDirect3DVertexBuffer9* m_rainVB = nullptr; // drops, then splashes
     IDirect3DIndexBuffer9* m_rainIB = nullptr;
     bool m_rainSupported = true;
+    // Water: the pictures (waterfx.h) and the image the lighting starts from with WaterClarity.
+    IDirect3DTexture9* m_waterAtlas = nullptr;
+    gfx::Target m_clearWater;
+    // WaterSplash: the car and the water. An entry is where the tyres went under, its velocity and
+    // strength (0..1) and when (the effects' clock); the newest four are kept and drawn while young.
+    struct WaterEntry {
+        float position[3] = {};
+        float velocity[3] = {};
+        float strength = 0.0f;
+        float time = -1e9f;
+    };
+    WaterEntry m_waterEntries[4];
+    int m_waterNext = 0;
+    bool m_waterIn = false;          // the tyres are under the surface
+    bool m_waterValid = false;       // the last frame's car and level are known (an entry needs both)
+    float m_waterPrev[3] = {};       // the car's place then, and the height of its tyres' bottom
+    float m_waterPrevBottom = 0.0f;
+    float m_waterLevelY = 0.0f;      // the surface the car is judged against (set with m_waterLevelKnown)
+    bool m_waterLevelKnown = false;
+    float m_waterWake = 0.0f;        // 0..1: how far in the water the car is (smoothed)
+    float m_waterInFor = 0.0f;       // seconds in the water this time
+    float m_waterExitTime = -1e9f;   // when the car came out, for the drips, and how much it carried
+    float m_waterDrip = 0.0f;
+    float m_waterLogTime = -1e9f;    // the log says one splash a second
     // Neon trail: the car's positions in a ring buffer texture (xyz, time stamp; < 0 = a new
     // line starts here, 0 = no car found), drawn as a glowing ribbon.
     static constexpr UINT kTrailWidth = 128, kTrailHeight = 128;

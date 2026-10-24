@@ -160,6 +160,8 @@ struct Settings {
     float snowCover = 0.0f;        // snow lying on the ground, the grass and everything facing up
     float puddles = 0.0f;          // standing water on flat ground
     float waterSurfaces = 1.0f;   // waves, reflections and refraction on the game's water (pools, sea)
+    float waterSplash = 0.6f;      // the car's splash, wake and drips where it enters, drives through and leaves the game's water (pools, sea)
+    float waterClarity = 0.5f;     // the game's water clear: the bottom shows through, depth tints it, foam at the edges (0 = the game's own murk)
     float lightning = 0.0f;        // lightning flashes (how often)
     bool lensDrops = false;        // rain drops on the lens (only while it rains)
     bool weatherShelter = true;    // no rain or snow under roofs, bridges and in buildings

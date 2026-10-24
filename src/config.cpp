@@ -108,6 +108,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Reflections", "Track reflections", "Weather and surfaces", Float, reflections, 0.0f, 2.0f),
         TMVS_FIELD("ReflectionBlur", "Reflection blur", "Weather and surfaces", Float, reflectionBlur, 0.0f, 1.0f),
         TMVS_FIELD("WaterSurfaces", "Water", "Weather and surfaces", Float, waterSurfaces, 0.0f, 1.0f),
+        TMVS_FIELD("WaterClarity", "Water clarity", "Weather and surfaces", Float, waterClarity, 0.0f, 1.0f),
+        TMVS_FIELD("WaterSplash", "Water splash", "Weather and surfaces", Float, waterSplash, 0.0f, 1.0f),
         TMVS_FIELD("GrassDetail", "Grass detail", "Weather and surfaces", Float, grassDetail, 0.0f, 1.0f),
         TMVS_FIELD("MowingStripes", "Mowing stripes", "Weather and surfaces", Float, mowingStripes, 0.0f, 1.0f),
 
@@ -424,7 +426,7 @@ const char* const kTagKeys[] = {
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
     "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus", "LampGlare", "LampHaze", "LampSkyHalos", "Floodlights",
-    "SMAA",
+    "SMAA", "WaterSplash", "WaterClarity",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
