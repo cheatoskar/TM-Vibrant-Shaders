@@ -90,6 +90,8 @@ ComposeOut PS_WaterCompose(float4 pos : SV_Position)
     // No water in front of this point (the fog draws cover only what lies under a surface; the
     // variants with caustics add their light even where the fog is still nothing).
     if (fog.a <= 1e-4 && max(fog.r, max(fog.g, fog.b)) <= 1e-6) discard;
+    // Nothing that isn't a number goes into the image (the exposure and bloom average over all of it).
+    if (any(!isfinite(fog))) discard;
     float clarity = c_Water.x;
     float a = clamp(fog.a, 0.0, 0.999);
     // The engine's murk as an optical depth (Beer-Lambert: a = 1 - exp(-tau)), clarity takes it down
@@ -119,7 +121,10 @@ ComposeOut PS_WaterCompose(float4 pos : SV_Position)
         [unroll] for (int i = 0; i < 8; i++)
         {
             float d = dot(float4(world, 1.0), planes[i]);
-            if (i < (int)c_Water.z && d > -0.05 && d < below) below = d;
+            // Only a plane like the engine's (a unit normal: depth in metres); any other is skipped.
+            float n2 = dot(planes[i].xyz, planes[i].xyz);
+            bool plane = n2 > 0.81 && n2 < 1.21 && all(isfinite(planes[i]));
+            if (i < (int)c_Water.z && plane && d > -0.05 && d < below) below = d;
         }
         [branch] if (below < 1e8)
         {
@@ -157,5 +162,11 @@ ComposeOut PS_WaterCompose(float4 pos : SV_Position)
     ComposeOut o;
     o.add = float4(inscatter + extra * through * (1.0 - foam), 0.0);
     o.keep = float4(through * (1.0 - foam), 1.0);
+    // Should anything above give no number: the engine's own fog for this pixel.
+    if (any(!isfinite(o.add.rgb)) || any(!isfinite(o.keep.rgb)))
+    {
+        o.add = float4(max(fog.rgb, 0.0), 0.0);
+        o.keep = float4((1.0 - a).xxx, 1.0);
+    }
     return o;
 }
