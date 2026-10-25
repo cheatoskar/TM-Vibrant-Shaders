@@ -385,21 +385,64 @@ void drawIntoVideo(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT wid
     frame.device = device;
     mapview::draw(frame, ImVec2(crop[0] * width, crop[1] * height), ImVec2((crop[0] + crop[2]) * width, (crop[1] + crop[3]) * height));
     ImGui::Render();
+    // Every 5 s of video: what it shows (I can't see the export; F12 doesn't work while it runs).
+    static unsigned s_frames = 0;
+    if (s_frames++ % static_cast<unsigned>(std::max(1.0f, 5.0f / io.DeltaTime)) == 0) TMVS_LOG("misc: minimap in the video: %s", mapview::describe().c_str());
     IDirect3DSurface9 *savedTarget = nullptr, *savedDepth = nullptr;
     device->GetRenderTarget(0, &savedTarget);
     device->GetDepthStencilSurface(&savedDepth);
+    // Here, inside the game's frame, the device holds the pipeline's and the game's states, which
+    // ImGui's DirectX 9 drawing doesn't all set (it expects a plain device at Present): a texture
+    // coordinate transform or index, a second texture stage, a colour write mask or instancing left
+    // on drew the minimap as a stretched texture without its window and arrow (my export test). All
+    // of them plain for the drawing, and everything given back after it.
+    IDirect3DStateBlock9* saved = nullptr;
+    if (FAILED(device->CreateStateBlock(D3DSBT_ALL, &saved))) saved = nullptr;
+    IDirect3DSurface9* savedMore[3] = {};
+    for (DWORD i = 1; i < 4; i++) device->GetRenderTarget(i, &savedMore[i - 1]);
     device->SetRenderTarget(0, target);
+    for (DWORD i = 1; i < 4; i++) device->SetRenderTarget(i, nullptr);
     device->SetDepthStencilSurface(nullptr); // the game's may be smaller than the video's frame
+    for (DWORD stage = 0; stage < 8; stage++) {
+        device->SetTextureStageState(stage, D3DTSS_TEXCOORDINDEX, stage);
+        device->SetTextureStageState(stage, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+        if (stage > 0) {
+            device->SetTexture(stage, nullptr);
+            device->SetTextureStageState(stage, D3DTSS_COLOROP, D3DTOP_DISABLE);
+            device->SetTextureStageState(stage, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+        }
+    }
+    device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    device->SetSamplerState(0, D3DSAMP_MIPMAPLODBIAS, 0);
+    device->SetSamplerState(0, D3DSAMP_MAXMIPLEVEL, 0);
     // The frame holds the encoded colours (as the screen's back buffer): no sRGB conversion either way.
-    DWORD srgbWrite = 0, srgbRead = 0;
-    device->GetRenderState(D3DRS_SRGBWRITEENABLE, &srgbWrite);
-    device->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &srgbRead);
-    device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
     device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+    device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+    device->SetRenderState(D3DRS_WRAP0, 0);
+    device->SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+    device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    device->SetRenderState(D3DRS_POINTSPRITEENABLE, FALSE);
+    device->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_ANTIALIASEDLINEENABLE, FALSE);
+    device->SetRenderState(D3DRS_MULTISAMPLEANTIALIAS, FALSE);
+    device->SetRenderState(D3DRS_FOGENABLE, FALSE);
+    device->SetRenderState(D3DRS_VERTEXBLEND, D3DVBF_DISABLE);
+    device->SetRenderState(D3DRS_INDEXEDVERTEXBLENDENABLE, FALSE);
+    device->SetStreamSourceFreq(0, 1);
+    device->SetStreamSourceFreq(1, 1);
     ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
-    device->SetRenderState(D3DRS_SRGBWRITEENABLE, srgbWrite);
-    device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, srgbRead);
+    if (saved) {
+        saved->Apply();
+        saved->Release();
+    }
     device->SetRenderTarget(0, savedTarget);
+    for (DWORD i = 1; i < 4; i++) {
+        device->SetRenderTarget(i, savedMore[i - 1]);
+        if (savedMore[i - 1]) savedMore[i - 1]->Release();
+    }
     device->SetDepthStencilSurface(savedDepth);
     if (savedTarget) savedTarget->Release();
     if (savedDepth) savedDepth->Release();

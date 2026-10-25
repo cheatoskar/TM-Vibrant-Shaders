@@ -363,6 +363,13 @@ struct Glide {
 };
 Glide g_glide;
 constexpr float kGlideSeconds = 1.0f;
+// The last drawing, for the log (describe).
+struct Shown {
+    bool car = false, squares = false, picture = false;
+    int source = -1;
+    float cx = 0.0f, cz = 0.0f, span = 0.0f, carX = 0.0f, carZ = 0.0f;
+};
+Shown g_shown;
 
 // Once per map: is the car's cell (at the start) one of the block cells? If not, the grid's scale
 // or origin here is wrong (the log tells; my reading is 32 m cells from world 0).
@@ -386,6 +393,15 @@ bool wanted() {
 }
 
 double g_drawMs = 0.0; // the last on-screen or video drawing's CPU time, for the cost lines
+
+std::string describe() {
+    char text[256];
+    static const char* const kSources[] = {"the whole track", "following the car", "the last view"};
+    snprintf(text, sizeof(text), "car %s (%.0f, %.0f), view %s at (%.0f, %.0f) %.0f m across, squares %s, Real look picture %s (%d meshes)",
+             g_shown.car ? "known" : "unknown", g_shown.carX, g_shown.carZ, g_shown.source >= 0 && g_shown.source < 3 ? kSources[g_shown.source] : "none",
+             g_shown.cx, g_shown.cz, g_shown.span, g_shown.squares ? "drawn" : "not drawn", g_shown.picture ? "drawn" : "not drawn", topview::meshes());
+    return text;
+}
 
 void prepare(IDirect3DDevice9* device) {
     poll();
@@ -451,6 +467,10 @@ void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
     engine::CarPose pose;
     const bool car = engine::carPose(pose);
     if (car) checkCarCell(pose);
+    g_shown = Shown();
+    g_shown.car = car;
+    g_shown.carX = pose.position[0];
+    g_shown.carZ = pose.position[2];
     if (p.texture && p.sizeX > 0) {
         // World (x, z) to the window: x to the right, z up (seen from above in the engine's
         // left-handed space); with "turn with the car", the car's heading up.
@@ -542,6 +562,10 @@ void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
             fx = sinf(g_glide.now[3]);
             fz = cosf(g_glide.now[3]);
         }
+        g_shown.source = source;
+        g_shown.cx = cx;
+        g_shown.cz = cz;
+        g_shown.span = span;
         const float k = view / span;
         // Across the heading: forward turned a quarter clockwise as seen from above (x right, z up).
         const float rx = fz, rz = -fx;
@@ -555,6 +579,8 @@ void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
                            toScreen(worldX1, worldZ1), toScreen(worldX0, worldZ1), ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), tint);
         // Real look: the blocks the game drew, from above, over the squares (blocks not seen yet stay squares).
         IDirect3DTexture9* picture = s.mapTextured ? topview::picture() : nullptr;
+        g_shown.squares = true;
+        g_shown.picture = picture != nullptr;
         if (picture) {
             draw->AddCallback(mipFilterOn, nullptr);
             draw->AddImageQuad(reinterpret_cast<ImTextureID>(picture), toScreen(worldX0, worldZ0), toScreen(worldX1, worldZ0), toScreen(worldX1, worldZ1),

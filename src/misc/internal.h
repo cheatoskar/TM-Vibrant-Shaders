@@ -104,6 +104,7 @@ bool wanted();
 // At Present while a Stadium map is open with the minimap on (also while you drive, nothing shown):
 // the blocks read and the Real look picture filled in, so a replay starts with it; the cost lines.
 void prepare(IDirect3DDevice9* device);
+std::string describe(); // what the last drawing showed, for the log
 void drawPageInfo(); // a line about the map read
 } // namespace mapview
 
