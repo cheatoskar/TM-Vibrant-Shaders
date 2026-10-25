@@ -1,8 +1,8 @@
 ## TM Vibrant Shaders 1.4.2
 
-A release candidate for **TrackMania Nations & United Forever**: a new video export, resource packs on every map, a Horror look with car headlights, clear water and splashes, a fix for flickering overlapped blocks, photo mode in the MediaTracker, and a Misc page with split times (and a minimap in the replay editor and exported videos). TrackMania 2 gets car spray from the real tyres and menu pages in their own windows.
+For **TrackMania Nations & United Forever**: a new video export, resource packs on every map, a Horror look with car headlights, clear water and splashes, a fix for flickering overlapped blocks, photo mode in the MediaTracker, and a Misc page with split times (and a minimap in the replay editor and exported videos). **TrackMania 2** gets the Horror look with car headlights, clear water and splashes, car spray from the real tyres and menu pages in their own windows.
 
-**This is a pre-release.** It is what I test with right now; things may still change before 1.4.2. Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
+Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`, in TrackMania 2 `Documents\ManiaPlanet\TMVS\tmvs-mp.log`).
 
 ---
 
@@ -32,11 +32,13 @@ A new **Resource packs** page: your environment mods from `Skins\<Environment>\M
 
 ### Horror look and car headlights
 
-The **Horror** preset is a black night with every lamp off, thick fog, and your car's headlights as the only light: they light the road and walls ahead and show as beams in the fog. *Car headlights* works with any preset, with *Headlight range* (how far they reach) and *Headlight beam* (how strongly the cone shows in the air).
+The **Horror** preset is a black night with every lamp off, thick fog, and your car's headlights as the only light: they light the road and walls ahead and show as beams in the fog. *Car headlights* works with any preset, with *Headlight range* (how far they reach) and *Headlight beam* (how strongly the cone shows in the air). In TrackMania 2 too, with *Floodlights* to turn the map's lamps, neon and screens down.
 
 ### Water
 
 **Clear water** (*Water clarity*): the murky grey pools turn clear, sandy in the shallows and blue-green deep, with caustics and foam at the edges. **Water splash** (*Water splash*): the car throws up a fountain, rings and foam when it enters water, a bow wave while it drives through, and drips when it comes out. Also in exported videos.
+
+In **TrackMania 2** the engine's murk under its water gets thinner (*Water clarity*, 0.6), deep water turns blue-green, with caustics on the bottom and foam at the edges; *Water splash* (off by default there) throws up the fountain and the wake.
 
 ### Photo mode in the replay editor
 
@@ -62,10 +64,10 @@ Every menu page can be popped out into a window of its own (move, resize, minimi
 
 ### Install (Nations & United Forever)
 
-**With the ModLoader, updates itself (the beta address gets pre-releases like this one):** close the ModLoader, open `%LOCALAPPDATA%\TMLoader\config.yaml` with Notepad and add this line under `servers:`:
+**With the ModLoader, updates itself:** close the ModLoader, open `%LOCALAPPDATA%\TMLoader\config.yaml` with Notepad and add this line under `servers:`:
 
 ```yaml
-  - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/'
+  - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'
 ```
 
 Then tick *TM Vibrant Shaders* in your profile. New versions arrive on their own from then on.

@@ -35,7 +35,22 @@ knows (its normals, material colours, sun shadow maps, motion vectors and HDR im
   at 0 under a night sky (Horror) the lamps' light in the light maps and the moon go too, as real night
   does on day maps. The log: `headlights: on the car's front ...` (where the lamps sit, once per change),
   `headlights: the car's front from the camera's view ...`, `headlights: no car from the engine ...`.
-  About 0.5 ms at 2560 x 1440 in my previewer measurement. Not tested in the game yet.
+  About 0.5 ms at 2560 x 1440 in my previewer measurement; tested in my game.
+- **Water** (*Water clarity*, *Water splash*): the engine fogs what lies under its water
+  (`Tech3/DeferredWaterFog_p`, one draw per water volume, premultiplied over its HDR image) before it
+  copies the image for the surface's refraction (`Tech3/Sea_DefWrite_p`). The mod lets those draws go
+  into a buffer of its own (the engine's shader, only the target and the blend are the mod's) and puts
+  that into the image itself right before the next draw: with *Water clarity* the murk is thinner (at
+  1 the same murk needs eight times the water), red goes first so deep water turns blue-green, the
+  sun draws caustics on the bottom and foam forms where the bottom comes up to the surface; at 0 it is
+  the engine's fog exactly. The engine's surface (refraction, its reflections, Fresnel) stays. *Water
+  splash* (TMNF's: fountain, mist, rings and foam where the car goes in, a wake and a bow wave while it
+  drives through, drips when it comes out) finds the surface near the car on the screen: points around
+  the car where the camera sees one of the water volumes' planes with the engine's fog behind it (read
+  back a few frames later). Needs the HDR stage. The log: `water: the engine's water fog drawn into the
+  mod's buffer (...)`, `water: put into the image (...)`, `water: surface near the car at ...`,
+  `water: splash at ... m/s`; the menu's status line *Water*. Nothing in the game's memory changes, no
+  engine shader is replaced.
 - **Look:** the HDR stage in place of the engine's tone map (curves, bloom), grading, LUT looks.
 - **Auto quality** (the TMNF mod's, on the effects' GPU times) and the Performance page.
 
@@ -44,7 +59,8 @@ knows (its normals, material colours, sun shadow maps, motion vectors and HDR im
 
 What ManiaPlanet can't do (yet): long-range shadows (the engine has its own shadow maps), TAA jitter, hi-res photos and zoom (they
 need the engine's projection), "only in replays" (replays aren't told from driving yet: with it on,
-depth of field and motion blur run in photo mode only), water surfaces, grass detail.
+depth of field and motion blur run in photo mode only), the TMNF mod's own water surface (waves,
+far reflections: TrackMania 2 keeps the engine's), grass detail.
 
 ## Install
 
@@ -155,6 +171,9 @@ The log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in `Documents\Man
 - Whether servers or competitions allow a `d3d11.dll` mod is not confirmed. Check the rules of where you play.
 - *Soft sun shadows* (on by default, 1°) draws the engine's sun shadow pass with the mod's own shader.
   Nothing in the game's memory changes, but whether the anti-cheat minds a replaced shader is not known.
+- *Water clarity* (0.6 by default here) and *Water splash* (off by default here) draw
+  the engine's water fog into the mod's own buffer (its shader, another render target and blend state
+  for those draws). At 0 the engine's water draws stay alone.
 - Openplanet can run at the same time (it loads as its own DLL). If something breaks with
   Openplanet, test once without it and report it with a capture.
 
@@ -280,6 +299,7 @@ Captures go to `Documents\ManiaPlanet\TMVS\captures\capture_NNN\`:
 | `shadow_cb.bin`, `scenep.bin` | The sun shadow pass's constants (for `mp_shadowtest`) |
 | `camera.txt`, `scenev.bin` | The engine camera, decoded and raw |
 | `tonemap_cb.bin` | The engine's tone-map constants (for `mp_preview --hdr`) |
+| `water_fog.dds`, `water.txt` | The water: the engine's fog draws as the mod's buffer holds them (rgb the fog, a its cover), each water volume's surface plane and the status line |
 | `car.txt` | The car per frame over the last 240 frames: time, frame time, found, position, step (is the neon trail's source even?), camera, which car was taken, and every car in the camera's view (ghosts) |
 
 `mp_preview` renders a capture through the same renderer as the game, without the game:
@@ -291,6 +311,7 @@ build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 40 --car
 build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 120 --runs 2 --car x,y,z --carfrom x,y,z --set TrailKeepRuns=3   # restarts: earlier runs 2 m apart, dimmer
 build-mp/Release/mp_preview.exe --trailtest   # the trail's recording: how evenly its end and its start behind the car move
 build-mp/Release/mp_preview.exe --cartest     # which car the trail follows with a ghost around (chase, cockpit, respawn)
+build-mp/Release/mp_preview.exe <capture folder> out.bmp --hdr --frames 40 --carfrom x,y,z --car x,y,z --water y   # a splash: the car drives down through water at height y
 ```
 
 ## Build and test
@@ -317,6 +338,10 @@ python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" "Tech3 Block DefReadP
 build-mp/Release/mp_harness.exe ... defread.dxbc --selfillum selfillum.dxbc   # also: EngineLightDraws' light buffer
 python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/DeferredShadowPssm_p pssm.dxbc 30a64492   # the five-split variant
 build-mp/Release/mp_harness.exe ... [--decomp decomp.dxbc] --shadow pssm.dxbc   # also: soft shadows
+python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/DeferredWaterFog_p fog.dxbc dfb9866c   # TMapDepth at t0
+build-mp/Release/mp_harness.exe ... --water fog.dxbc   # also: clear water
+python -I maniaplanet/tools/gpucache.py --dump "<...>.zip" Tech3/CarSkin_DefWrite_p carskin.dxbc
+build-mp/Release/mp_harness.exe ... --water fog.dxbc --car carskin.dxbc   # also: the splash; the game's b5 and b13 stay bound
 ```
 
 It checks that:
@@ -329,6 +354,10 @@ It checks that:
 - with `--selfillum`: with EngineLightDraws the engine's image stays the same and the light buffer holds the
   material's own light, not its lit surface, also for a draw with a strict depth test that writes its depth
   (the redraws let its own depth through), and the engine's depth-stencil state is bound again afterwards;
+- with `--water`: the engine's water fog over a bottom 3 m under the surface: with both water settings at 0 it
+  draws into the image as it is; with only *Water splash* it goes through the mod's buffer and the image
+  stays the engine's; with *Water clarity* 1 there is less murk over the bottom, red taken first, the dry
+  ground unchanged; the engine's target and blend state are bound again after each fog draw;
 - with `--shadow`: soft shadows off, the engine's sun shadow pass draws; on, the mod's shader draws a
   penumbra at a shadow's edge and the same light and shadow elsewhere, says so in the log, and the
   engine's shader and slots are bound again after the draw; off again, the engine's light mask to the bit;
@@ -349,6 +378,8 @@ It checks that:
 | `src/shaderdb.cpp`, `src/shaderdb_table.inc` | Engine shader checksums (generated by `tools/gen_shaderdb.py`) |
 | `src/renderer.cpp`, `shaders/mp.hlsl` | The passes (luma blur for clarity, grade), state save/restore |
 | `src/effects_headlights.cpp`, `shaders/headlights.hlsl` | Car headlights: the lamps on the engine's car, their light on the G-buffer and in the haze |
+| `src/water11.cpp`, `shaders/water.hlsl` | Clear water: the engine's water fog drawn into the mod's buffer and put into the image |
+| `src/effects_water.cpp`, `shaders/weather.hlsl` | Water splash: the surface near the car, the splash |
 | `src/softshadow.cpp`, `shaders/softshadow*.hlsl*` | Soft sun shadows: the engine's shadow variants, the swap at its draw, the PCSS shader |
 | `tools/shadowtest.cpp` | Offline test of the soft shadows against the engine's shadow shader |
 | `src/overlay.cpp` | F8 menu (ImGui, DX11) |

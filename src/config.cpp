@@ -1353,8 +1353,8 @@ void applyPreset(Settings& s, Preset preset) {
     s.renderScale = keepScale;
     s.fsrSharpness = keepFsrSharpness;
 #ifdef TMVS_MANIAPLANET
-    // ManiaPlanet: clear water and the splash stay off until I've confirmed them in game.
-    s.waterClarity = 0.0f;
+    // ManiaPlanet: clear water at 0.6 (my game test); the splash stays off by default.
+    s.waterClarity = 0.6f;
     s.waterSplash = 0.0f;
 #endif
     switch (preset) {
