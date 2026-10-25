@@ -602,9 +602,10 @@ void drawSplitPanel(const Frame& frame, ImVec2& shownPos, ImVec2& shownSize) {
     Settings& s = settings();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float k = screenScale(), margin = 16.0f * k;
-    // Attached: at the top right.
+    // Attached: at the top right, where it sat under the minimap (260 px down at 1440p), below the
+    // game's map name and author; right at the top it covered them (my test).
     const float width = s.splitWidth * k;
-    ImVec2 pos(display.x - width - margin, margin);
+    ImVec2 pos(display.x - width - margin, margin + 260.0f * k);
     if (!s.splitAttached) {
         if (s.splitX < 0.0f) { // just unticked on the page: it stays where it is
             s.splitX = pos.x;
