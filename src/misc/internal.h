@@ -16,8 +16,7 @@ enum Compare : int { kCompareRecord = 0, kCompareGhost = 1, kCompareBest = 2, kC
 // [Misc] in settings.ini. Machine settings, not part of a look (no preset or share code has them).
 // Sizes are pixels on a 1440 pixel high screen (scaled with the screen's height).
 struct Settings {
-    bool minimap = false;
-    float mapX = -1.0f, mapY = -1.0f; // window position (pixels; < 0: the default place, top right)
+    bool minimap = false;             // in exported videos only (top right), never while you drive
     float mapSize = 260.0f;
     float mapOpacity = 0.85f;
     bool mapAutoZoom = true;          // follows the car, closer the slower; off: the whole map
@@ -25,7 +24,7 @@ struct Settings {
     bool mapRotate = true;            // the car's heading up instead of a fixed north
     bool mapTextured = true;          // "Real look": the blocks' meshes from above; off: squares
     bool splits = false;
-    bool splitAttached = true;        // under the minimap (or top right); off: at splitX, splitY
+    bool splitAttached = true;        // top right; off: at splitX, splitY
     float splitX = -1.0f, splitY = -1.0f;
     float splitWidth = 260.0f;
     int splitCompare = kCompareBest;
@@ -83,7 +82,8 @@ void clearRegion();
 // misc::sceneDraw: one draw of the main camera.
 void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
             const float view[16], const float projection[16]);
-// Draws what is queued into the picture (at Present, outside ImGui's drawing), a share a frame.
+// Draws what is queued into the picture (outside ImGui's drawing: at Present while a replay plays,
+// before the video's minimap), a share a call.
 void render(IDirect3DDevice9* device);
 // The picture over the map's area (row 0 at z0), null while nothing is in it.
 IDirect3DTexture9* picture();
@@ -95,13 +95,15 @@ void releaseDevice();
 void precompile(); // its shaders, on a thread at startup
 } // namespace topview
 
-// Minimap (mapview.cpp).
+// Minimap (mapview.cpp), only in the video export's frames.
 namespace mapview {
-void draw(const Frame& frame);
+// Between NewFrame and Render of the video's own ImGui frame: at the top right of the area (pixels).
+void draw(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax);
 bool wanted();
+// At Present while a replay plays (the replay editor before Shoot video): the blocks read and the
+// Real look picture filled in, nothing shown, so the video starts with it.
+void prepare(IDirect3DDevice9* device);
 void drawPageInfo(); // a line about the map read
-// The minimap's window this frame (for the panels placed under it); false: not shown.
-bool rect(ImVec2& pos, ImVec2& size);
 } // namespace mapview
 
 // Split times and the session (splits.cpp).

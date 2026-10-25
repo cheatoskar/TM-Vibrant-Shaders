@@ -25,6 +25,9 @@
 // see checkCarCell; TMUF's other environments have other cells, so the minimap is Stadium's only).
 // The picture is made once per map and when the editor changes the block list, into a texture;
 // each frame draws it and the car.
+//
+// Only in the video export's frames (misc::drawIntoVideo), never on screen while you drive: TMX
+// doesn't allow a minimap in the race.
 namespace tmshaders {
 namespace misc {
 namespace mapview {
@@ -82,9 +85,6 @@ struct Picture {
     bool carChecked = false;
 };
 Picture g_picture;
-// The window as drawn last (the split times go under it).
-ImVec2 g_shownAt, g_shownSize;
-int g_shownFrame = -10;
 
 bool read32(uintptr_t address, uint32_t& out) {
     __try {
@@ -318,6 +318,24 @@ struct AutoZoom {
 };
 AutoZoom g_zoom;
 
+// The car's speed from its motion between the video's frames (a replay has no race to ask): km/h,
+// -1 unknown (the first frame, a jump of the camera's car).
+struct Motion {
+    bool known = false;
+    float x = 0.0f, z = 0.0f;
+    float kmh(const engine::CarPose& pose, float dt) {
+        const float dx = pose.position[0] - x, dz = pose.position[2] - z;
+        const bool was = known;
+        known = true;
+        x = pose.position[0];
+        z = pose.position[2];
+        const float metres = sqrtf(dx * dx + dz * dz);
+        if (!was || dt <= 0.0f || metres > 200.0f * dt) return -1.0f; // over 720 km/h: another car or a cut
+        return metres / dt * 3.6f;
+    }
+};
+Motion g_motion;
+
 // The last view of the auto zoom (centre, span, heading). Kept while the car is briefly unknown (a
 // reset, the countdown) and frozen from the finish until the next run starts (the race clock goes
 // back or the run is no longer finished); only a new map starts over.
@@ -360,14 +378,13 @@ void checkCarCell(const engine::CarPose& pose) {
 
 } // namespace
 
-bool rect(ImVec2& pos, ImVec2& size) {
-    pos = g_shownAt;
-    size = g_shownSize;
-    return ImGui::GetFrameCount() - g_shownFrame <= 1;
-}
-
 bool wanted() {
     return settings().minimap && engine::currentMap() != nullptr && engine::stadium();
+}
+
+void prepare(IDirect3DDevice9* device) {
+    poll();
+    if (settings().mapTextured) topview::render(device);
 }
 
 void drawPageInfo() {
@@ -391,45 +408,32 @@ double milliseconds() {
     return static_cast<double>(t.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart);
 }
 
-void drawWindow(const Frame& frame);
+void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax);
 
-void draw(const Frame& frame) {
+void draw(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
     // Its CPU time goes into the log's cost lines (topview::noteFrame).
     const double t0 = milliseconds();
-    drawWindow(frame);
+    drawWindow(frame, areaMin, areaMax);
     topview::noteFrame(milliseconds() - t0);
 }
 
-void drawWindow(const Frame& frame) {
+void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
     poll();
     upload(frame.device);
     if (settings().mapTextured) topview::render(frame.device);
     g_device = frame.device;
     Picture& p = g_picture;
     Settings& s = settings();
-    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    // At the top right of the part of the frame the video shows.
     const float side = s.mapSize * screenScale();
-    // The size and place are the settings'; the slider and dragging the corner both change them.
-    // (The window's own size used to be written back every frame while the menu was open: the size
-    // slider jumped back at once.)
-    static WindowPlace s_place;
     const float margin = 16.0f * screenScale();
-    s_place.before(frame, ImVec2(s.mapX >= 0.0f ? s.mapX : display.x - side - margin, s.mapY >= 0.0f ? s.mapY : margin), ImVec2(side, side));
+    ImGui::SetNextWindowPos(ImVec2(areaMax.x - side - margin, areaMin.y + margin), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(side, side), ImGuiCond_Always);
     const PanelStyle panelStyle;
     ImGui::SetNextWindowBgAlpha(0.45f * s.mapOpacity);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(side * 0.015f, side * 0.015f));
     ImGui::Begin("Minimap##misc", nullptr, windowFlags(frame, true));
     ImGui::PopStyleVar();
-    ImVec2 pos, size;
-    if (s_place.after(frame, pos, size)) {
-        s.mapX = pos.x;
-        s.mapY = pos.y;
-        s.mapSize = std::clamp(std::max(size.x, size.y) / screenScale(), 120.0f, 800.0f);
-        settingsChanged();
-    }
-    g_shownAt = ImGui::GetWindowPos();
-    g_shownSize = ImGui::GetWindowSize();
-    g_shownFrame = ImGui::GetFrameCount();
     windowChrome(frame, "Minimap", true);
     const ImVec2 lo = ImGui::GetCursorScreenPos(), wp = ImGui::GetWindowPos();
     const ImVec2 hi = ImGui::GetWindowContentRegionMax();
@@ -460,7 +464,12 @@ void drawWindow(const Frame& frame) {
             g_view.map = p.map;
             g_zoom = AutoZoom();
             g_glide = Glide();
+            g_motion = Motion();
         }
+        const float dt = std::min(ImGui::GetIO().DeltaTime, 0.1f);
+        float speed = -1.0f; // km/h, unknown: the zoom holds
+        if (car) speed = g_motion.kmh(pose, dt);
+        else g_motion = Motion();
         // The finish freezes the view until the next run starts (then the zoom starts over from the
         // standing view: the glide takes it there).
         engine::RaceTimes rt;
@@ -478,10 +487,7 @@ void drawWindow(const Frame& frame) {
         int source = kWholeTrack;
         if (autoZoom && car && !g_view.frozen) {
             source = kFollowCar;
-            float speed = -1.0f;
-            if (engine::carSpeed(speed)) speed *= 3.6f;
-            else speed = -1.0f; // unknown: the zoom holds
-            span = std::min(g_zoom.update(speed, s.mapZoom, std::min(ImGui::GetIO().DeltaTime, 0.1f)), whole);
+            span = std::min(g_zoom.update(speed, s.mapZoom, dt), whole);
             cx = pose.position[0];
             cz = pose.position[2];
             if (s.mapRotate) {
@@ -522,7 +528,7 @@ void drawWindow(const Frame& frame) {
                 g_glide.t = 0.0f;
             }
             g_glide.source = source;
-            g_glide.t = std::min(1.0f, g_glide.t + std::min(ImGui::GetIO().DeltaTime, 0.1f) / kGlideSeconds);
+            g_glide.t = std::min(1.0f, g_glide.t + dt / kGlideSeconds);
             const float e = g_glide.t * g_glide.t * (3.0f - 2.0f * g_glide.t); // ease in and out
             if (g_glide.t >= 1.0f) {
                 memcpy(g_glide.now, target, sizeof(target));

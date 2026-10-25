@@ -588,18 +588,8 @@ bool wanted() {
 
 namespace {
 
-// Attached under the minimap, the split times take its width; a new width (the panels' edges) then
-// goes to the minimap, so the column keeps one width. Otherwise they have their own.
-bool widthFromMap() {
-    ImVec2 a, b;
-    return settings().splitAttached && mapview::rect(a, b);
-}
-
 void setWidth(float pixels) {
-    Settings& s = settings();
-    const float k = screenScale();
-    if (widthFromMap()) s.mapSize = std::clamp(pixels / k, 120.0f, 800.0f);
-    else s.splitWidth = std::clamp(pixels / k, 160.0f, 800.0f);
+    settings().splitWidth = std::clamp(pixels / screenScale(), 160.0f, 800.0f);
 }
 
 // A window let go of moved but kept its size: dragged away (it detaches). A changed size is a resize
@@ -612,14 +602,9 @@ void drawSplitPanel(const Frame& frame, ImVec2& shownPos, ImVec2& shownSize) {
     Settings& s = settings();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     const float k = screenScale(), margin = 16.0f * k;
-    // Attached: right under the minimap with its width, or at the top right without it.
-    ImVec2 mapPos, mapSize;
-    float width = s.splitWidth * k;
+    // Attached: at the top right.
+    const float width = s.splitWidth * k;
     ImVec2 pos(display.x - width - margin, margin);
-    if (s.splitAttached && mapview::rect(mapPos, mapSize)) {
-        width = mapSize.x;
-        pos = ImVec2(mapPos.x, mapPos.y + mapSize.y);
-    }
     if (!s.splitAttached) {
         if (s.splitX < 0.0f) { // just unticked on the page: it stays where it is
             s.splitX = pos.x;

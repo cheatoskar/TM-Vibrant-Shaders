@@ -353,6 +353,9 @@ void finishOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT wi
     if (g_own.tenBitOk < 0) g_own.tenBitOk = Pipeline::tenBitPlanesSupported(device) ? 1 : 0;
     // P010 wanted but no 16-bit target: NV12 planes, the encoder takes those too.
     const bool tenBit = format.tenBit && g_own.tenBitOk == 1;
+    // The Misc page's minimap: only here, in the video's frames.
+    misc::drawIntoVideo(device, g_own.frame.surface, g_own.frame.width, g_own.frame.height, format.crop,
+                        g_export.fps > 0.0f ? 1.0f / g_export.fps : 0.0f);
     // Half a step of dither: enough to break the bands of a dark sky, while a full step of noise
     // on every pixel cost the encoder bits everywhere.
     if (!g_pipeline.exportPlanes(device, g_own.frame.texture, static_cast<UINT>(format.width), static_cast<UINT>(format.height), format.crop, tenBit,

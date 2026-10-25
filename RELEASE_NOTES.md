@@ -1,12 +1,8 @@
 ## TM Vibrant Shaders 1.4.2
 
-A release candidate for **TrackMania Nations & United Forever**: a new video export, resource packs on every map, a Horror look with car headlights, clear water and splashes, a fix for flickering overlapped blocks, photo mode in the MediaTracker, and a Misc page with a minimap and split times. TrackMania 2 gets car spray from the real tyres and menu pages in their own windows.
+A release candidate for **TrackMania Nations & United Forever**: a new video export, resource packs on every map, a Horror look with car headlights, clear water and splashes, a fix for flickering overlapped blocks, photo mode in the MediaTracker, and a Misc page with split times (and a minimap in exported videos). TrackMania 2 gets car spray from the real tyres and menu pages in their own windows.
 
 **This is a pre-release.** It is what I test with right now; things may still change before 1.4.2. Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
-
-![The F8 menu with the Video page, the Resource packs and Misc pages popped out into windows, and the minimap, split times and session panels at the right](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/{{TAG}}/docs/images/1.4.2-menu-misc.jpg)
-
-*The menu with the Video page, Resource packs and Misc popped out into windows; at the right the minimap (Real look), split times and the session panel.*
 
 ---
 
@@ -49,14 +45,14 @@ The **Horror** preset is a black night with every lamp off, thick fog, and your 
 - **Hide car**: the car and its shadow are left out of the picture.
 - A compact photo panel (`Ctrl+F6`): exposure, aperture, zoom, vignette, grain, focus.
 
-### Misc page: minimap, split times, session
+### Misc page: split times, session, minimap in videos
 
-All off until you switch them on. They form one column at the top right and scale with the game window.
-- **Minimap**: the track from above with your car. *Real look* draws the blocks as the game shows them, in their own colours. *Auto zoom* follows the car and zooms with your speed, a small track is shown whole, and the view holds at the finish until your next run.
+All off until you switch them on. The panels sit at the top right and scale with the game window.
+- **Minimap in videos**: the track from above with the car, drawn into the exported video only, never on screen while you drive. *Real look* draws the blocks as the game shows them, in their own colours. *Auto zoom* follows the car and zooms with its speed.
 - **Split times** at each checkpoint, time and speed, against the map's record from TMX (fetched by itself), the ghost you race against, your best run or a replay file.
 - **Session**: attempts, best, median and last time, respawns, and your theoretical best from all your runs and replays of the map.
 - **Finish effects**: confetti, fireworks for a new best run.
-- No ideal line, no checkpoint highlights on the minimap, nothing that changes the race.
+- No ideal line, no checkpoint highlights, no minimap in the race, nothing that changes the race.
 
 ### Menu
 

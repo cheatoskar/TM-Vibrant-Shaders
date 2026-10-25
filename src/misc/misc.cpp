@@ -1,8 +1,10 @@
 #include "misc/internal.h"
 #include "config.h"
+#include "engine.h"
 #include "inifile.h"
 #include "log.h"
 #include "menu.h"
+#include "backends/imgui_impl_dx9.h"
 #include <windows.h>
 #include <algorithm>
 #include <cfloat>
@@ -16,6 +18,9 @@ namespace {
 
 Settings g_settings;
 const wchar_t* const kSection = L"Misc";
+// The game's draws go into the minimap's picture only while a replay plays or the video export
+// runs (engine::cinematicActive): never a cost while you drive, where the minimap never shows.
+bool g_collect = false;
 
 float iniFloat(const wchar_t* ini, const wchar_t* key, float fallback, float lo, float hi) {
     wchar_t text[32] = {};
@@ -185,8 +190,6 @@ void boot() {
     const wchar_t* ini = path.c_str();
     Settings& s = g_settings;
     s.minimap = iniInt(ini, L"Minimap", 0, 0, 1) != 0;
-    s.mapX = iniFloat(ini, L"MinimapX", -1.0f, -1.0f, 16384.0f);
-    s.mapY = iniFloat(ini, L"MinimapY", -1.0f, -1.0f, 16384.0f);
     s.mapSize = iniFloat(ini, L"MinimapSize", 260.0f, 120.0f, 800.0f);
     s.mapOpacity = iniFloat(ini, L"MinimapOpacity", 0.85f, 0.2f, 1.0f);
     s.mapAutoZoom = iniInt(ini, L"MinimapAutoZoom", 1, 0, 1) != 0;
@@ -214,8 +217,6 @@ void boot() {
 void save(IniFile& ini) {
     const Settings& s = g_settings;
     setInt(ini, L"Minimap", s.minimap ? 1 : 0);
-    setFloat(ini, L"MinimapX", s.mapX);
-    setFloat(ini, L"MinimapY", s.mapY);
     setFloat(ini, L"MinimapSize", s.mapSize);
     setFloat(ini, L"MinimapOpacity", s.mapOpacity);
     setInt(ini, L"MinimapAutoZoom", s.mapAutoZoom ? 1 : 0);
@@ -244,7 +245,8 @@ void drawPage() {
     ImGui::Spacing();
 
     ImGui::SeparatorText("Minimap");
-    changed |= ImGui::Checkbox("Minimap", &s.minimap);
+    changed |= ImGui::Checkbox("Minimap in videos", &s.minimap);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only in exported videos (effects on), never while you drive.");
     if (s.minimap) {
         changed |= ImGui::SliderFloat("Size", &s.mapSize, 120.0f, 800.0f, "%.0f px");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("At 1440p; smaller screens scale it down.");
@@ -258,11 +260,6 @@ void drawPage() {
             changed |= ImGui::Checkbox("Rotate with car", &s.mapRotate);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("The car points up. Off: north up.");
         }
-        if (ImGui::Button("Reset position##map")) {
-            s.mapX = s.mapY = -1.0f;
-            changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Top right; attached panels follow.");
         mapview::drawPageInfo();
     }
 
@@ -270,18 +267,14 @@ void drawPage() {
     changed |= ImGui::Checkbox("Split times", &s.splits);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Your time at each checkpoint against a reference, and each sector after the finish.");
     if (s.splits) {
-        if (s.splitAttached && s.minimap) {
-            ImGui::TextDisabled("Width: the minimap's");
-        } else {
-            changed |= ImGui::SliderFloat("Width", &s.splitWidth, 160.0f, 800.0f, "%.0f px");
-        }
+        changed |= ImGui::SliderFloat("Width", &s.splitWidth, 160.0f, 800.0f, "%.0f px");
         changed |= ImGui::Checkbox("Sector clock", &s.splitBar);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Time in the current sector against the reference's sector time.");
-        if (ImGui::Checkbox("Attach to minimap", &s.splitAttached)) {
+        if (ImGui::Checkbox("Top right", &s.splitAttached)) {
             s.splitX = s.splitY = -1.0f; // unticked: it stays where it is
             changed = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sits under the minimap, as wide as it, and moves with it.");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Off: where you drag it.");
         changed |= ImGui::Checkbox("Session panel", &s.session);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Attempts, best, median and last times, theoretical best, sector speeds.");
         if (s.session) {
@@ -312,7 +305,7 @@ void drawPage() {
 
 void sceneDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
                const float view[16], const float projection[16]) {
-    topview::onDraw(device, type, base, minIndex, vertices, start, count, view, projection);
+    if (g_collect) topview::onDraw(device, type, base, minIndex, vertices, start, count, view, projection);
 }
 
 void releaseDevice() {
@@ -321,6 +314,8 @@ void releaseDevice() {
 
 bool wantsOverlay(const Frame& frame) {
     topview::setWanted(g_settings.minimap && g_settings.mapTextured && mapview::wanted());
+    g_collect = mapview::wanted() && engine::cinematicActive();
+    if (g_collect) mapview::prepare(frame.device);
     // The race is followed also while nothing shows (the finish of a run, your best), but only for
     // the split times and the finish effect.
     if (g_settings.splits || g_settings.finishEffect > 0) splits::update();
@@ -329,14 +324,71 @@ bool wantsOverlay(const Frame& frame) {
     // A finish while hidden (photo mode, a screenshot) has no effect later.
     if (splits::takeFinish(time, best) && g_settings.finishEffect > 0 && !frame.hide) confetti::start(g_settings.finishEffect == 2, best);
     if (frame.hide) return false;
-    return mapview::wanted() || splits::wanted() || confetti::active();
+    return splits::wanted() || confetti::active();
 }
 
 void drawOverlay(const Frame& frame) {
     if (frame.hide) return;
-    if (mapview::wanted()) mapview::draw(frame);
     if (splits::wanted()) splits::draw(frame);
     confetti::draw(frame);
+}
+
+void drawIntoVideo(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT width, UINT height, const float crop[4], float seconds) {
+    if (!g_settings.minimap || !mapview::wanted() || !device || !target || width < 100 || height < 100) return;
+    // An ImGui context of its own at the video's size: the screen's (the menu, the panels) has its
+    // frame at Present and the window's size. It shares the screen's fonts and borrows its DirectX 9
+    // drawing (the same device and font texture), only for this call.
+    ImGuiContext* screen = ImGui::GetCurrentContext();
+    if (!screen) return;
+    ImGuiIO& screenIo = ImGui::GetIO();
+    if (!screenIo.BackendRendererUserData || !screenIo.Fonts->IsBuilt()) return;
+    static ImGuiContext* s_video = nullptr;
+    if (!s_video) {
+        s_video = ImGui::CreateContext(screenIo.Fonts);
+        TMVS_LOG("misc: minimap drawn into the video's frames (%ux%u)", width, height);
+        ImGui::SetCurrentContext(screen);
+    }
+    const ImGuiStyle style = ImGui::GetStyle();
+    void* const renderer = screenIo.BackendRendererUserData;
+    const ImGuiBackendFlags flags = screenIo.BackendFlags & ImGuiBackendFlags_RendererHasVtxOffset;
+    ImFont* const font = screenIo.FontDefault;
+    const float fontScale = screenIo.FontGlobalScale;
+    ImGui::SetCurrentContext(s_video);
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.LogFilename = nullptr;
+    io.BackendRendererUserData = renderer;
+    io.BackendFlags = flags;
+    io.FontDefault = font;
+    io.FontGlobalScale = fontScale;
+    io.DisplaySize = ImVec2(static_cast<float>(width), static_cast<float>(height));
+    io.DeltaTime = seconds > 0.0f ? seconds : 1.0f / 60.0f;
+    ImGui::GetStyle() = style;
+    ImGui::NewFrame();
+    Frame frame;
+    frame.device = device;
+    mapview::draw(frame, ImVec2(crop[0] * width, crop[1] * height), ImVec2((crop[0] + crop[2]) * width, (crop[1] + crop[3]) * height));
+    ImGui::Render();
+    IDirect3DSurface9 *savedTarget = nullptr, *savedDepth = nullptr;
+    device->GetRenderTarget(0, &savedTarget);
+    device->GetDepthStencilSurface(&savedDepth);
+    device->SetRenderTarget(0, target);
+    device->SetDepthStencilSurface(nullptr); // the game's may be smaller than the video's frame
+    // The frame holds the encoded colours (as the screen's back buffer): no sRGB conversion either way.
+    DWORD srgbWrite = 0, srgbRead = 0;
+    device->GetRenderState(D3DRS_SRGBWRITEENABLE, &srgbWrite);
+    device->GetSamplerState(0, D3DSAMP_SRGBTEXTURE, &srgbRead);
+    device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+    device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+    ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+    device->SetRenderState(D3DRS_SRGBWRITEENABLE, srgbWrite);
+    device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, srgbRead);
+    device->SetRenderTarget(0, savedTarget);
+    device->SetDepthStencilSurface(savedDepth);
+    if (savedTarget) savedTarget->Release();
+    if (savedDepth) savedDepth->Release();
+    io.BackendRendererUserData = nullptr; // the screen's, never released through this context
+    ImGui::SetCurrentContext(screen);
 }
 
 } // namespace misc

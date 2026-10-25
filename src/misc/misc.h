@@ -22,8 +22,12 @@ void boot();
 void drawPage();
 // Something to draw this frame, also with the menu closed (the overlay then starts an ImGui frame).
 bool wantsOverlay(const Frame& frame);
-// The minimap, the split times and the finish effects (ImGui windows), between NewFrame and Render.
+// The split times and the finish effects (ImGui windows), between NewFrame and Render.
 void drawOverlay(const Frame& frame);
+// The video export's own frame, finished (`width` x `height`, `crop` the part the video shows, uv x,
+// y, w, h; `seconds` a video frame): the minimap drawn into it at its top right. Its only place: it
+// never shows on screen while you drive (TMX allows no minimap in the race).
+void drawIntoVideo(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT width, UINT height, const float crop[4], float seconds);
 // Writes [Misc] into settings.ini with the rest (Config::save).
 void save(IniFile& ini);
 // Every indexed draw of the game's main camera, before the game draws it (its state bound): the
@@ -39,6 +43,7 @@ inline void boot() {}
 inline void drawPage() {}
 inline bool wantsOverlay(const Frame&) { return false; }
 inline void drawOverlay(const Frame&) {}
+inline void drawIntoVideo(IDirect3DDevice9*, IDirect3DSurface9*, UINT, UINT, const float*, float) {}
 inline void save(IniFile&) {}
 inline void sceneDraw(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT, const float*, const float*) {}
 inline void releaseDevice() {}
