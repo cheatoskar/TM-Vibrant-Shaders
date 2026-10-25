@@ -1168,7 +1168,7 @@ bool writeTarget(IDirect3DDevice9* device, IDirect3DSurface9* target, D3DFORMAT 
 // loads it is there at once, its heights and the meshes in it known. Only for a map told by its UID
 // (the high bit).
 constexpr uint32_t kDiskMagic = 0x4D4D5654; // "TVMM"
-constexpr uint32_t kDiskVersion = 2;        // 2: with the heights
+constexpr uint32_t kDiskVersion = 3;        // 2: with the heights; 3: the blocks read first (older ones were the camera's alone)
 struct DiskHeader {
     uint32_t magic, version;
     int32_t width, height, drawn;

@@ -448,6 +448,10 @@ void logDone() {
 
 } // namespace
 
+bool firstPassDone() {
+    return (g.addressesTried && !g.addressesKnown) || g.done || g.passes > 1;
+}
+
 void read(IDirect3DDevice9* device, uint32_t count, uintptr_t data) {
     if (!g.addressesTried) {
         g.addressesTried = true;

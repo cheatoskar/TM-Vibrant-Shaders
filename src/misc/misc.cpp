@@ -309,7 +309,7 @@ void drawPage() {
 
 void sceneDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
                const float view[16], const float projection[16]) {
-    if (g_collect) topview::onDraw(device, type, base, minIndex, vertices, start, count, view, projection);
+    if (g_collect && blockmesh::firstPassDone()) topview::onDraw(device, type, base, minIndex, vertices, start, count, view, projection);
 }
 
 void releaseDevice() {

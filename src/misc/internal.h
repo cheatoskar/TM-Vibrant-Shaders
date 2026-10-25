@@ -128,6 +128,10 @@ namespace blockmesh {
 // The picture starting over (topview::epoch changed: a new map or area, a device reset, the
 // setting off and on) starts the reading over too; what the picture holds already is skipped.
 void read(IDirect3DDevice9* device, uint32_t count, uintptr_t data);
+// The map's blocks were read once (or can't be in this build): the camera's draws may come in now.
+// Before, they wait, so every mesh a block has comes from the block (the same texture coordinates and
+// colour everywhere; the camera's grass came out coarser) and the camera only adds what no block has.
+bool firstPassDone();
 } // namespace blockmesh
 
 // Minimap (mapview.cpp), only in the replay editor and the video export's frames.
