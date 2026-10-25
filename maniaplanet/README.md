@@ -161,6 +161,9 @@ The log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in `Documents\Man
 - Whether servers or competitions allow a `d3d11.dll` mod is not confirmed. Check the rules of where you play.
 - *Soft sun shadows* (on by default, 1°) draws the engine's sun shadow pass with the mod's own shader.
   Nothing in the game's memory changes, but whether the anti-cheat minds a replaced shader is not known.
+- *Water clarity* and *Water splash* (on by default) draw the engine's water fog into the mod's own
+  buffer (its shader, another render target and blend state for those draws). Set both to 0 to leave
+  the engine's water draws alone.
 - Openplanet can run at the same time (it loads as its own DLL). If something breaks with
   Openplanet, test once without it and report it with a capture.
 
