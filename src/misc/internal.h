@@ -83,8 +83,7 @@ void clearRegion();
 // misc::sceneDraw: one draw of the main camera.
 void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
             const float view[16], const float projection[16]);
-// Draws what is queued into the picture (outside ImGui's drawing: at Present while a replay plays,
-// before the video's minimap), a share a call.
+// Draws what is queued into the picture (at Present, outside ImGui's drawing), a share a call.
 void render(IDirect3DDevice9* device);
 // The picture over the map's area (row 0 at z0), null while nothing is in it.
 IDirect3DTexture9* picture();
@@ -102,8 +101,8 @@ namespace mapview {
 // of the area (pixels).
 void draw(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax);
 bool wanted();
-// At Present while a replay plays (the replay editor, the video export): the blocks read and the
-// Real look picture filled in, so the video starts with it; the cost lines.
+// At Present while a Stadium map is open with the minimap on (also while you drive, nothing shown):
+// the blocks read and the Real look picture filled in, so a replay starts with it; the cost lines.
 void prepare(IDirect3DDevice9* device);
 void drawPageInfo(); // a line about the map read
 } // namespace mapview

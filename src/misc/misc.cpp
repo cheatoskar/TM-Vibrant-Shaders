@@ -19,8 +19,9 @@ namespace {
 
 Settings g_settings;
 const wchar_t* const kSection = L"Misc";
-// The game's draws go into the minimap's picture only while a replay plays or the video export
-// runs (engine::cinematicActive): never a cost while you drive, where the minimap never shows.
+// The game's draws go into the minimap's picture whenever a Stadium map is open with the minimap on,
+// also while you drive (nothing shows then): the replay of a run you drove has the whole track. The
+// picture goes to disk per map, so this costs only on a map's first runs.
 bool g_collect = false;
 // The minimap on screen this frame: only in the replay editor (never while you drive, TMX).
 bool g_mapOnScreen = false;
@@ -318,7 +319,7 @@ void releaseDevice() {
 bool wantsOverlay(const Frame& frame) {
     // Not tied to an open map: Shoot video closes and loads the map again, the picture stays.
     topview::setWanted(g_settings.minimap && g_settings.mapTextured);
-    g_collect = mapview::wanted() && engine::cinematicActive();
+    g_collect = mapview::wanted();
     if (g_collect) mapview::prepare(frame.device);
     g_mapOnScreen = g_collect && !frame.hide && engine::replayEditorOpen();
     // The race is followed also while nothing shows (the finish of a run, your best), but only for

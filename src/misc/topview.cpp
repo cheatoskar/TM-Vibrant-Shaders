@@ -1,4 +1,5 @@
 #include "misc/internal.h"
+#include "capwriter.h"
 #include "casters.h"
 #include "engine.h"
 #include "gfx.h"
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <string>
 #include <cwchar>
 #include <cctype>
@@ -113,6 +115,7 @@ struct Job {
     INT base = 0;
     UINT minIndex = 0, vertices = 0, start = 0, count = 0;
     float world[4][3] = {};
+    uint64_t key = 0; // its placement's key (g.keys)
 };
 
 // GPU time of the redraws: timestamps around each frame's batch, read a few frames later.
@@ -164,6 +167,10 @@ struct State {
     DWORD changedTick = 0; // the picture last drawn into
     DWORD copyTick = 0;    // the copy made
     bool restore = false;  // after a reset: the copy goes back in before anything else
+    // Placements taken since the copy (drawn or still queued): not in it, so a reset forgets them and
+    // they come again (the rest stays known: nothing is drawn twice over the copy, whose heights are gone).
+    std::vector<uint64_t> sinceCopy;
+    int savedDrawn = -1;   // g.drawn when the picture went to disk (Minimap\<map>.bin)
     IDirect3DStateBlock9* saved = nullptr;
     IDirect3DVertexShader9* vs = nullptr;
     IDirect3DPixelShader9* ps = nullptr;
@@ -540,6 +547,8 @@ void forget() {
     g.copy.clear();
     g.copyDrawn = -1;
     g.restore = false;
+    g.sinceCopy.clear();
+    g.savedDrawn = -1;
     g.cleared = false;
     g.drawn = 0;
     g.lowestSeen = 1e9f;
@@ -665,6 +674,8 @@ void setWanted(bool wanted) {
     g.wanted = wanted;
 }
 
+void loadFromDisk();
+
 void setRegion(uint64_t map, float x0, float z0, float x1, float z1, float top, int cellsX, int cellsZ) {
     int width = cellsX * kPixelsPerCell, height = cellsZ * kPixelsPerCell;
     const int largest = std::max(width, height);
@@ -686,6 +697,7 @@ void setRegion(uint64_t map, float x0, float z0, float x1, float z1, float top, 
     g.width = width;
     g.height = height;
     g.failed = false;
+    loadFromDisk();
 }
 
 void clearRegion() {
@@ -761,11 +773,17 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         releaseJob(j);
         return;
     }
-    // The key: the buffers, the index range, the turn (1/20) and the place in 4 m cells. The place
-    // the constants give moves by up to about a metre from frame to frame (the camera's jitter in the
-    // projection, float noise far away): a place near a cell's edge also finds the key of the
-    // neighbouring cell on that side, so each placement is taken once.
-    uint64_t mesh = mix(mix(14695981039346656037ull, reinterpret_cast<uintptr_t>(j.vb[0])), reinterpret_cast<uintptr_t>(j.ib));
+    // The key: the buffers' sizes (not their addresses: the same map loaded again, as Shoot video does,
+    // has new buffers with the same meshes, and the picture and its keys go to disk), the vertex
+    // stride, the index range, the turn (1/20) and the place in 4 m cells. The place the constants give
+    // moves by up to about a metre from frame to frame (the camera's jitter in the projection, float
+    // noise far away): a place near a cell's edge also finds the key of the neighbouring cell on that
+    // side, so each placement is taken once.
+    D3DVERTEXBUFFER_DESC vbDesc{};
+    D3DINDEXBUFFER_DESC ibDesc{};
+    j.vb[0]->GetDesc(&vbDesc);
+    j.ib->GetDesc(&ibDesc);
+    uint64_t mesh = mix(mix(14695981039346656037ull, (static_cast<uint64_t>(vbDesc.Size) << 32) | ibDesc.Size), j.stride[0]);
     mesh = mix(mesh, (static_cast<uint64_t>(start) << 32) | count);
     mesh = mix(mesh, (static_cast<uint64_t>(static_cast<uint32_t>(base)) << 32) | minIndex);
     for (int r = 0; r < 3; r++) {
@@ -868,6 +886,8 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         g.window.upgraded++;
     }
     g.keys[key] = (seen[0] << 36) | (textures << 8) | static_cast<uint64_t>(rank);
+    g.sinceCopy.push_back(key);
+    j.key = key;
     j.mode = rank >= 3 ? 1 : rank == 2 ? 2 : 0;
     if (!j.mode) gfx::release(j.texture);
     materialTint(j.tint);
@@ -896,6 +916,89 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     }
 }
 
+// The picture on disk, per map (Documents\TrackMania\TMVS\Minimap\<map>.bin): the next time the map
+// loads it is there at once, the meshes in it known. Only for a map told by its UID (the high bit).
+constexpr uint32_t kDiskMagic = 0x4D4D5654; // "TVMM"
+constexpr uint32_t kDiskVersion = 1;
+struct DiskHeader {
+    uint32_t magic, version;
+    int32_t width, height, drawn;
+    uint32_t keys;
+    float x0, z0, x1, z1, top;
+};
+
+std::wstring diskFile(uint64_t map) {
+    if (!(map >> 63)) return std::wstring();
+    wchar_t name[32];
+    swprintf(name, 32, L"\\%016llx.bin", static_cast<unsigned long long>(map));
+    const std::wstring folder = log::dataDir() + L"\\Minimap";
+    CreateDirectoryW(folder.c_str(), nullptr);
+    return folder + name;
+}
+
+void saveToDisk() {
+    const std::wstring file = diskFile(g.map);
+    if (file.empty() || g.copy.empty()) return;
+    g.savedDrawn = g.drawn;
+    auto data = std::make_shared<std::vector<char>>();
+    std::unordered_set<uint64_t> pending(g.sinceCopy.begin(), g.sinceCopy.end());
+    std::vector<std::pair<uint64_t, uint64_t>> keys;
+    keys.reserve(g.keys.size());
+    for (const auto& e : g.keys) {
+        if (!pending.count(e.first)) keys.push_back(e);
+    }
+    const DiskHeader h = {kDiskMagic, kDiskVersion, g.width, g.height, g.drawn, static_cast<uint32_t>(keys.size()), g.x0, g.z0, g.x1, g.z1, g.top};
+    const size_t pixels = g.copy.size() * 4, pairs = keys.size() * sizeof(keys[0]);
+    data->resize(sizeof(h) + pixels + pairs);
+    memcpy(data->data(), &h, sizeof(h));
+    memcpy(data->data() + sizeof(h), g.copy.data(), pixels);
+    if (pairs) memcpy(data->data() + sizeof(h) + pixels, keys.data(), pairs);
+    const int drawn = g.drawn;
+    capwriter::post([data, file, drawn] {
+        const std::wstring part = file + L".part";
+        HANDLE f = CreateFileW(part.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f == INVALID_HANDLE_VALUE) return;
+        DWORD written = 0;
+        const bool ok = WriteFile(f, data->data(), static_cast<DWORD>(data->size()), &written, nullptr) && written == data->size();
+        CloseHandle(f);
+        if (ok && MoveFileExW(part.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            TMVS_LOG("misc: minimap: the picture from above saved (%d meshes, %.1f MB)", drawn, data->size() / 1048576.0);
+        } else {
+            DeleteFileW(part.c_str());
+        }
+    });
+}
+
+// A new map: its picture from disk, if one was made for this area (it goes in at the next render).
+void loadFromDisk() {
+    const std::wstring file = diskFile(g.map);
+    if (file.empty()) return;
+    HANDLE f = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DiskHeader h{};
+    DWORD read = 0;
+    bool ok = ReadFile(f, &h, sizeof(h), &read, nullptr) && read == sizeof(h) && h.magic == kDiskMagic && h.version == kDiskVersion &&
+              h.width == g.width && h.height == g.height && h.x0 == g.x0 && h.z0 == g.z0 && h.x1 == g.x1 && h.z1 == g.z1 && h.top == g.top &&
+              h.drawn > 0 && h.keys <= kMaxKeys;
+    if (ok) {
+        g.copy.resize(static_cast<size_t>(h.width) * h.height);
+        std::vector<std::pair<uint64_t, uint64_t>> keys(h.keys);
+        const DWORD pixels = static_cast<DWORD>(g.copy.size() * 4), pairs = static_cast<DWORD>(keys.size() * sizeof(keys[0]));
+        ok = ReadFile(f, g.copy.data(), pixels, &read, nullptr) && read == pixels &&
+             (!pairs || (ReadFile(f, keys.data(), pairs, &read, nullptr) && read == pairs));
+        if (ok) {
+            for (const auto& e : keys) g.keys.insert(e);
+            g.drawn = g.copyDrawn = g.savedDrawn = h.drawn;
+            g.restore = true;
+            g.firstNew = g.lastNew = GetTickCount(); // the build-up ends 5 s after the last new one
+            TMVS_LOG("misc: minimap: the picture from above loaded (%d meshes, %u known)", h.drawn, h.keys);
+        } else {
+            g.copy.clear();
+        }
+    }
+    CloseHandle(f);
+}
+
 // The picture into memory, a second after it was last drawn into or every 5 s while it fills (one
 // read-back: it waits for the card once, a few milliseconds for a 1024 x 1024 picture), so a device
 // reset doesn't lose it.
@@ -913,8 +1016,12 @@ void keepCopy(IDirect3DDevice9* device) {
             memcpy(&g.copy[static_cast<size_t>(y) * g.width], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, g.width * 4);
         memory->UnlockRect();
         g.copyDrawn = g.drawn;
+        // What is still queued isn't in the copy.
+        g.sinceCopy.clear();
+        for (const Job& j : g.queue) g.sinceCopy.push_back(j.key);
     }
     memory->Release();
+    if (g.copyDrawn == g.drawn && g.settled && g.savedDrawn != g.drawn) saveToDisk();
 }
 
 // After a device reset: the copy back into a new picture (its mipmaps made again).
@@ -1137,12 +1244,13 @@ void releaseDevice() {
     // is drawn twice), an older one lets them come again over it. Without one everything starts over.
     clearQueue();
     if (g.copyDrawn > 0 && !g.copy.empty()) {
-        if (g.copyDrawn != g.drawn) {
-            g.keys.clear();
-            g.drawn = g.copyDrawn;
+        for (uint64_t k : g.sinceCopy) g.keys.erase(k);
+        if (!g.sinceCopy.empty()) {
             g.settled = false;
-            g.firstNew = g.lastNew = 0;
+            g.firstNew = g.lastNew = GetTickCount();
         }
+        g.sinceCopy.clear();
+        g.drawn = g.copyDrawn;
         g.restore = true;
         g.cleared = false;
     } else {

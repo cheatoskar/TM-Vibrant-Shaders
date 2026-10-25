@@ -342,15 +342,12 @@ struct Motion {
 };
 Motion g_motion;
 
-// The last view of the auto zoom (centre, span, heading). Kept while the car is briefly unknown (a
-// reset, the countdown) and frozen from the finish until the next run starts (the race clock goes
-// back or the run is no longer finished); only a new map starts over.
+// The last view of the auto zoom (centre, span, heading), kept while the car is briefly unknown;
+// only a new map starts over.
 struct View {
     const void* map = nullptr;
     bool valid = false;
-    bool frozen = false;
     float cx = 0.0f, cz = 0.0f, span = 0.0f, fx = 0.0f, fz = 1.0f;
-    int lastTime = 0;
 };
 View g_view;
 
@@ -480,22 +477,12 @@ void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
         float speed = -1.0f; // km/h, unknown: the zoom holds
         if (car) speed = g_motion.kmh(pose, dt);
         else g_motion = Motion();
-        // The finish freezes the view until the next run starts (then the zoom starts over from the
-        // standing view: the glide takes it there).
-        engine::RaceTimes rt;
-        if (engine::raceTimes(rt)) {
-            if (rt.finished && rt.started) {
-                g_view.frozen = true;
-            } else if (g_view.frozen && (!rt.finished || rt.time + 500 < g_view.lastTime)) {
-                g_view.frozen = false;
-                g_zoom = AutoZoom();
-            }
-            g_view.lastTime = rt.time;
-        }
         // The whole track (Auto zoom off, a small track, or nothing known yet).
         float cx = (trackX0 + trackX1) * 0.5f, cz = (trackZ0 + trackZ1) * 0.5f, span = whole, fx = 0.0f, fz = 1.0f;
         int source = kWholeTrack;
-        if (autoZoom && car && !g_view.frozen) {
+        // A replay's car is followed all the way (the race behind a replay counts as finished, which
+        // once froze the view at the finish: the editor showed the whole track, north up).
+        if (autoZoom && car) {
             source = kFollowCar;
             span = std::min(g_zoom.update(speed, s.mapZoom, dt), whole);
             cx = pose.position[0];
@@ -518,7 +505,7 @@ void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
             g_view.fx = fx;
             g_view.fz = fz;
         } else if (autoZoom && g_view.valid) {
-            // The car briefly unknown (a reset, the countdown) or the run finished: the last view.
+            // The car briefly unknown (the clip paused, a cut): the last view.
             source = kHeldView;
             cx = g_view.cx;
             cz = g_view.cz;
