@@ -3431,6 +3431,10 @@ void hideEditor(bool hide) {
     }
 }
 
+bool replayEditorOpen() {
+    return currentMediaTracker() != nullptr;
+}
+
 void hideOverlay(bool hide) {
     if (hide == g_hideOverlay) return;
     g_hideOverlay = hide;

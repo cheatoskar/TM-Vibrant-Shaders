@@ -544,22 +544,63 @@ void drawSplitBar() {
                        photo::splitSwapped(), photo::splitLightNote());
 }
 
-// The mod's name and version at the top right of the game's menus and login screen (no map open),
-// as TrackMania 2's build greets with its version. Never in a race, a replay, the editor, the video
-// export or photos (those have a map open, or hideTools).
+// The welcome badge: a notch at the top centre with the logo, the mod's name and version and the
+// keys for the menu and the effects (the menu's key is F5 when CenterSpeed has F8, keys.cpp), for
+// 8 s from the first time the game shows its menus or login screen after starting, as TrackMania 2's
+// build greets. Never in a race, a replay, the editor, the video export or photos.
+constexpr DWORD kWelcomeMs = 8000, kWelcomeFadeMs = 800;
+DWORD g_welcomeStart = 0;
+bool g_welcomeDone = false;
+
 bool statusLineWanted() {
-    return engine::active() && !engine::mapOpen() && !photo::active() && !g_status.hideTools;
+    if (g_welcomeDone) return false;
+    if (!engine::active() || engine::mapOpen() || photo::active() || g_status.hideTools) {
+        if (g_welcomeStart) g_welcomeDone = true; // gone once something else takes the screen
+        return false;
+    }
+    const DWORD now = GetTickCount();
+    if (!g_welcomeStart) g_welcomeStart = now;
+    if (now - g_welcomeStart >= kWelcomeMs) {
+        g_welcomeDone = true;
+        return false;
+    }
+    return true;
 }
 
-void drawStatusLine() {
+void drawStatusLine(IDirect3DDevice9* device) {
     const float scale = menu::scale();
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 12.0f * scale, 8.0f * scale), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.35f);
+    const DWORD shown = GetTickCount() - g_welcomeStart;
+    const float alpha = shown + kWelcomeFadeMs > kWelcomeMs ? static_cast<float>(kWelcomeMs - shown) / kWelcomeFadeMs : 1.0f;
+    const float round = 14.0f * scale;
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, round);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f * scale, 10.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    // Its top edge (with the upper rounding) above the screen: a notch hanging from the top.
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, -round), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.82f);
     ImGui::Begin("##statusLine", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    ImGui::TextDisabled("TM Vibrant Shaders %s", TM_SHADERS_VERSION_A);
+    ImGui::Dummy(ImVec2(0.0f, round));
+    ImFont* title = menu::titleFont();
+    const float line = (title ? title->FontSize : ImGui::GetFontSize()) + ImGui::GetFontSize() + ImGui::GetStyle().ItemSpacing.y;
+    const int iconSize = static_cast<int>(line + 0.5f);
+    if (IDirect3DTexture9* logo = thumbnails::icon(device, iconSize)) {
+        ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(logo)), ImVec2(line, line));
+        ImGui::SameLine(0.0f, 12.0f * scale);
+    }
+    ImGui::BeginGroup();
+    if (title) ImGui::PushFont(title);
+    ImGui::TextColored(ImVec4(1.0f, 0.63f, 0.24f, 1.0f), "TM Vibrant Shaders");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", TM_SHADERS_VERSION_A);
+    if (title) ImGui::PopFont();
+    const std::string menuKey = keys::name(keys::get(keys::Action::Menu)), effectsKey = keys::name(keys::get(keys::Action::Effects));
+    ImGui::Text("%s menu   %s effects on/off", menuKey.c_str(), effectsKey.c_str());
+    ImGui::EndGroup();
     ImGui::End();
+    ImGui::PopStyleVar(4);
 }
 
 void draw(IDirect3DDevice9* device) {
@@ -611,7 +652,7 @@ void draw(IDirect3DDevice9* device) {
     // Only while we own the mouse: with both mods' menus open only one pointer is drawn.
     ImGui::GetIO().MouseDrawCursor = (menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
-    if (statusLine) drawStatusLine();
+    if (statusLine) drawStatusLine(device);
     if (toolsWanted) misc::drawOverlay(tools); // before the menu: it stays on top
     if (menu || pinned) {
         // The pipeline's GPU timings for the Performance page.

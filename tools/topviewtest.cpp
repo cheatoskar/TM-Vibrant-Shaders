@@ -155,7 +155,7 @@ void bench(IDirect3DDevice9* device, IDirect3DVertexShader9* vs, IDirect3DPixelS
     const UINT nv = static_cast<UINT>(vertices.size()), triangles = static_cast<UINT>(indices.size() / 3);
     for (int cells : {32, 128}) {
         const float side = cells * 32.0f;
-        topview::setRegion(reinterpret_cast<const void*>(static_cast<uintptr_t>(0x5000 + cells)), 0.0f, 0.0f, side, side, 200.0f, cells, cells);
+        topview::setRegion(static_cast<uint64_t>(0x5000 + cells), 0.0f, 0.0f, side, side, 200.0f, cells, cells);
         unsigned seed = 12345;
         const auto random = [&seed]() {
             seed = seed * 1664525u + 1013904223u;
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
     const float projection[16] = {s, 0, 0, 0, 0, s, 0, 0, 0, 0, f / (f - n), 1, 0, 0, -n * f / (f - n), 0};
 
     topview::setWanted(true);
-    topview::setRegion(reinterpret_cast<const void*>(0x1234), 0.0f, 0.0f, 64.0f, 64.0f, 100.0f, 2, 2); // 64 x 64 px, up to 100 m
+    topview::setRegion(0x1234, 0.0f, 0.0f, 64.0f, 64.0f, 100.0f, 2, 2); // 64 x 64 px, up to 100 m
 
     device->BeginScene();
     device->SetVertexDeclaration(decl);

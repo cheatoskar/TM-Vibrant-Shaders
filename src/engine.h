@@ -102,6 +102,8 @@ bool carDrawNow();
 // interface switch (its Tab key), and its 3D view fills the screen; back with photo mode. Without the hook or
 // an open editor nothing happens.
 void hideEditor(bool hide);
+// The replay editor (MediaTracker) is open: the app's editor is one (read only).
+bool replayEditorOpen();
 void hideOverlay(bool hide);
 
 // Skips the game's own FX post-processing (bloom and colour filter, the launcher's "FX"

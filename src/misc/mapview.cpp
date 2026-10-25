@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -26,8 +28,8 @@
 // The picture is made once per map and when the editor changes the block list, into a texture;
 // each frame draws it and the car.
 //
-// Only in the video export's frames (misc::drawIntoVideo), never on screen while you drive: TMX
-// doesn't allow a minimap in the race.
+// Only in the replay editor and the video export's frames (misc::drawIntoVideo), never while you
+// drive: TMX doesn't allow a minimap in the race.
 namespace tmshaders {
 namespace misc {
 namespace mapview {
@@ -202,7 +204,11 @@ void build(const void* map, uint32_t count, uintptr_t data) {
     // Up to the highest track cell's top (8 m a grid unit) and some more: the stadium's roofs and
     // lights above it stay out.
     const float top = maxY == INT32_MIN ? 2048.0f : (maxY + 1) * kCellHeight + 40.0f;
-    topview::setRegion(map, minX * kCellSize, minZ * kCellSize, (maxX + 1) * kCellSize, (maxZ + 1) * kCellSize, top, p.sizeX, p.sizeZ);
+    // The picture's map by its UID: Shoot video loads the same map again (a new map object), and the
+    // picture made while the replay played is kept.
+    const std::string uid = engine::currentMapUid();
+    const uint64_t identity = uid.empty() ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(map)) : std::hash<std::string>()(uid) | 1ull << 63;
+    topview::setRegion(identity, minX * kCellSize, minZ * kCellSize, (maxX + 1) * kCellSize, (maxZ + 1) * kCellSize, top, p.sizeX, p.sizeZ);
     p.width = p.sizeX * kPixelsPerCell;
     p.height = p.sizeZ * kPixelsPerCell;
     p.pixels.assign(static_cast<size_t>(p.width) * p.height, 0);
@@ -382,9 +388,13 @@ bool wanted() {
     return settings().minimap && engine::currentMap() != nullptr && engine::stadium();
 }
 
+double g_drawMs = 0.0; // the last on-screen or video drawing's CPU time, for the cost lines
+
 void prepare(IDirect3DDevice9* device) {
     poll();
     if (settings().mapTextured) topview::render(device);
+    topview::noteFrame(g_drawMs);
+    g_drawMs = 0.0;
 }
 
 void drawPageInfo() {
@@ -411,20 +421,20 @@ double milliseconds() {
 void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax);
 
 void draw(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
-    // Its CPU time goes into the log's cost lines (topview::noteFrame).
+    // Its CPU time goes into the log's cost lines (prepare, topview::noteFrame).
     const double t0 = milliseconds();
     drawWindow(frame, areaMin, areaMax);
-    topview::noteFrame(milliseconds() - t0);
+    g_drawMs += milliseconds() - t0;
 }
 
 void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
+    // The picture from above is drawn into at Present (prepare), while a replay plays.
     poll();
     upload(frame.device);
-    if (settings().mapTextured) topview::render(frame.device);
     g_device = frame.device;
     Picture& p = g_picture;
     Settings& s = settings();
-    // At the top right of the part of the frame the video shows.
+    // At the top right of the area (the replay editor's 3D view, the part of the frame the video shows).
     const float side = s.mapSize * screenScale();
     const float margin = 16.0f * screenScale();
     ImGui::SetNextWindowPos(ImVec2(areaMax.x - side - margin, areaMin.y + margin), ImGuiCond_Always);

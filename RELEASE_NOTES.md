@@ -1,6 +1,6 @@
 ## TM Vibrant Shaders 1.4.2
 
-A release candidate for **TrackMania Nations & United Forever**: a new video export, resource packs on every map, a Horror look with car headlights, clear water and splashes, a fix for flickering overlapped blocks, photo mode in the MediaTracker, and a Misc page with split times (and a minimap in exported videos). TrackMania 2 gets car spray from the real tyres and menu pages in their own windows.
+A release candidate for **TrackMania Nations & United Forever**: a new video export, resource packs on every map, a Horror look with car headlights, clear water and splashes, a fix for flickering overlapped blocks, photo mode in the MediaTracker, and a Misc page with split times (and a minimap in the replay editor and exported videos). TrackMania 2 gets car spray from the real tyres and menu pages in their own windows.
 
 **This is a pre-release.** It is what I test with right now; things may still change before 1.4.2. Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
 
@@ -45,10 +45,10 @@ The **Horror** preset is a black night with every lamp off, thick fog, and your 
 - **Hide car**: the car and its shadow are left out of the picture.
 - A compact photo panel (`Ctrl+F6`): exposure, aperture, zoom, vignette, grain, focus.
 
-### Misc page: split times, session, minimap in videos
+### Misc page: split times, session, minimap for replays
 
 All off until you switch them on. The panels sit at the top right and scale with the game window.
-- **Minimap in videos**: the track from above with the car, drawn into the exported video only, never on screen while you drive. *Real look* draws the blocks as the game shows them, in their own colours. *Auto zoom* follows the car and zooms with its speed.
+- **Minimap** in the replay editor and in exported videos, never while you drive: the track from above with the car. *Real look* draws the blocks as the game shows them, in their own colours. *Auto zoom* follows the car and zooms with its speed.
 - **Split times** at each checkpoint, time and speed, against the map's record from TMX (fetched by itself), the ghost you race against, your best run or a replay file.
 - **Session**: attempts, best, median and last time, respawns, and your theoretical best from all your runs and replays of the map.
 - **Finish effects**: confetti, fireworks for a new best run.
@@ -56,7 +56,7 @@ All off until you switch them on. The panels sit at the top right and scale with
 
 ### Menu
 
-Every menu page can be popped out into a window of its own (move, resize, minimize, keep it on screen over the game). Shorter, plainer texts throughout. The game's menus show the mod's version at the top right.
+Every menu page can be popped out into a window of its own (move, resize, minimize, keep it on screen over the game). Shorter, plainer texts throughout. After the game starts a badge at the top shows the mod's version and which keys open the menu and switch the effects.
 
 ---
 

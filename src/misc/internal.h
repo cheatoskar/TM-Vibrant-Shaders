@@ -76,8 +76,9 @@ namespace topview {
 // Once a frame: the picture is wanted (minimap on, Real look on, a Stadium map). Off: let go.
 void setWanted(bool wanted);
 // The map's area (world metres, x and z), the highest a mesh may reach (m), and its size in grid
-// cells; a new area starts over.
-void setRegion(const void* map, float x0, float z0, float x1, float z1, float top, int cellsX, int cellsZ);
+// cells; `map` the map's identity (the same map loaded again, as Shoot video does, keeps the
+// picture); a new map or area starts over.
+void setRegion(uint64_t map, float x0, float z0, float x1, float z1, float top, int cellsX, int cellsZ);
 void clearRegion();
 // misc::sceneDraw: one draw of the main camera.
 void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
@@ -95,13 +96,14 @@ void releaseDevice();
 void precompile(); // its shaders, on a thread at startup
 } // namespace topview
 
-// Minimap (mapview.cpp), only in the video export's frames.
+// Minimap (mapview.cpp), only in the replay editor and the video export's frames.
 namespace mapview {
-// Between NewFrame and Render of the video's own ImGui frame: at the top right of the area (pixels).
+// Between NewFrame and Render (the screen's in the replay editor, the video's own): at the top right
+// of the area (pixels).
 void draw(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax);
 bool wanted();
-// At Present while a replay plays (the replay editor before Shoot video): the blocks read and the
-// Real look picture filled in, nothing shown, so the video starts with it.
+// At Present while a replay plays (the replay editor, the video export): the blocks read and the
+// Real look picture filled in, so the video starts with it; the cost lines.
 void prepare(IDirect3DDevice9* device);
 void drawPageInfo(); // a line about the map read
 } // namespace mapview

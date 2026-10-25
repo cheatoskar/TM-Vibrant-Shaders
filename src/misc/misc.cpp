@@ -4,6 +4,7 @@
 #include "inifile.h"
 #include "log.h"
 #include "menu.h"
+#include "photo.h"
 #include "backends/imgui_impl_dx9.h"
 #include <windows.h>
 #include <algorithm>
@@ -21,6 +22,8 @@ const wchar_t* const kSection = L"Misc";
 // The game's draws go into the minimap's picture only while a replay plays or the video export
 // runs (engine::cinematicActive): never a cost while you drive, where the minimap never shows.
 bool g_collect = false;
+// The minimap on screen this frame: only in the replay editor (never while you drive, TMX).
+bool g_mapOnScreen = false;
 
 float iniFloat(const wchar_t* ini, const wchar_t* key, float fallback, float lo, float hi) {
     wchar_t text[32] = {};
@@ -245,8 +248,8 @@ void drawPage() {
     ImGui::Spacing();
 
     ImGui::SeparatorText("Minimap");
-    changed |= ImGui::Checkbox("Minimap in videos", &s.minimap);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only in exported videos (effects on), never while you drive.");
+    changed |= ImGui::Checkbox("Minimap", &s.minimap);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("In the replay editor and exported videos, never while you drive.");
     if (s.minimap) {
         changed |= ImGui::SliderFloat("Size", &s.mapSize, 120.0f, 800.0f, "%.0f px");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("At 1440p; smaller screens scale it down.");
@@ -313,9 +316,11 @@ void releaseDevice() {
 }
 
 bool wantsOverlay(const Frame& frame) {
-    topview::setWanted(g_settings.minimap && g_settings.mapTextured && mapview::wanted());
+    // Not tied to an open map: Shoot video closes and loads the map again, the picture stays.
+    topview::setWanted(g_settings.minimap && g_settings.mapTextured);
     g_collect = mapview::wanted() && engine::cinematicActive();
     if (g_collect) mapview::prepare(frame.device);
+    g_mapOnScreen = g_collect && !frame.hide && engine::replayEditorOpen();
     // The race is followed also while nothing shows (the finish of a run, your best), but only for
     // the split times and the finish effect.
     if (g_settings.splits || g_settings.finishEffect > 0) splits::update();
@@ -324,11 +329,21 @@ bool wantsOverlay(const Frame& frame) {
     // A finish while hidden (photo mode, a screenshot) has no effect later.
     if (splits::takeFinish(time, best) && g_settings.finishEffect > 0 && !frame.hide) confetti::start(g_settings.finishEffect == 2, best);
     if (frame.hide) return false;
-    return splits::wanted() || confetti::active();
+    return g_mapOnScreen || splits::wanted() || confetti::active();
 }
 
 void drawOverlay(const Frame& frame) {
     if (frame.hide) return;
+    if (g_mapOnScreen) {
+        // In the editor's 3D view (between its panels), else the whole screen; it can't be moved.
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        RECT view{};
+        const bool part = photo::viewArea(static_cast<UINT>(display.x), static_cast<UINT>(display.y), view);
+        Frame fixed;
+        fixed.device = frame.device;
+        mapview::draw(fixed, part ? ImVec2(static_cast<float>(view.left), static_cast<float>(view.top)) : ImVec2(0.0f, 0.0f),
+                      part ? ImVec2(static_cast<float>(view.right), static_cast<float>(view.bottom)) : display);
+    }
     if (splits::wanted()) splits::draw(frame);
     confetti::draw(frame);
 }

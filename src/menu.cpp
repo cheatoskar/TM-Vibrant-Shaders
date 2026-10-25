@@ -2752,6 +2752,10 @@ float scale() {
     return g_scale;
 }
 
+ImFont* titleFont() {
+    return g_fontTitle;
+}
+
 void draw(const Host& host) {
     g_host = &host;
     g_keysShown = false;

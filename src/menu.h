@@ -108,6 +108,7 @@ struct Host {
 // Colours, sizes and fonts (after ImGui::CreateContext, before the renderer backend).
 void setupStyle(HWND window);
 float scale();
+ImFont* titleFont(); // headings (null before setupStyle)
 // A look setting was changed outside the menu's pages (the photo panel's sliders): the preset becomes Custom
 // (or the base preset again when everything is back), as for the menu's own sliders; without it a
 // map-type preset or a mood change puts the preset's values back over the change.

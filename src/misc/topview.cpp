@@ -146,7 +146,7 @@ struct Sums {
 
 struct State {
     bool wanted = false;
-    const void* map = nullptr;
+    uint64_t map = 0; // the map's identity (its UID's hash): the same map loaded again keeps the picture
     bool region = false;
     float x0 = 0, z0 = 0, x1 = 1, z1 = 1, top = kHighest;
     int width = 0, height = 0;
@@ -155,6 +155,15 @@ struct State {
     IDirect3DSurface9* depth = nullptr;
     bool mipmaps = false;
     bool cleared = false;
+    bool depthCleared = false;
+    // A copy of the picture in memory (level 0, ARGB rows), made a second after it changed: a device
+    // reset (the video export's start, a focus or mode change) loses the video memory, and the copy
+    // brings it back with what was drawn (the placements stay known, so nothing is drawn twice).
+    std::vector<uint32_t> copy;
+    int copyDrawn = -1;    // g.drawn when it was made
+    DWORD changedTick = 0; // the picture last drawn into
+    DWORD copyTick = 0;    // the copy made
+    bool restore = false;  // after a reset: the copy goes back in before anything else
     IDirect3DStateBlock9* saved = nullptr;
     IDirect3DVertexShader9* vs = nullptr;
     IDirect3DPixelShader9* ps = nullptr;
@@ -520,6 +529,7 @@ void releaseTargets() {
     gfx::release(g.saved);
     releaseGpuTimers();
     g.cleared = false;
+    g.depthCleared = false;
 }
 
 // Everything drawn is gone (a new map, a device reset, the setting off): the draws come again
@@ -527,6 +537,9 @@ void releaseTargets() {
 void forget() {
     clearQueue();
     g.keys.clear();
+    g.copy.clear();
+    g.copyDrawn = -1;
+    g.restore = false;
     g.cleared = false;
     g.drawn = 0;
     g.lowestSeen = 1e9f;
@@ -652,7 +665,7 @@ void setWanted(bool wanted) {
     g.wanted = wanted;
 }
 
-void setRegion(const void* map, float x0, float z0, float x1, float z1, float top, int cellsX, int cellsZ) {
+void setRegion(uint64_t map, float x0, float z0, float x1, float z1, float top, int cellsX, int cellsZ) {
     int width = cellsX * kPixelsPerCell, height = cellsZ * kPixelsPerCell;
     const int largest = std::max(width, height);
     if (largest > kMaxSize) {
@@ -678,7 +691,7 @@ void setRegion(const void* map, float x0, float z0, float x1, float z1, float to
 void clearRegion() {
     forget();
     g.region = false;
-    g.map = nullptr;
+    g.map = 0;
 }
 
 void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
@@ -883,11 +896,63 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     }
 }
 
+// The picture into memory, a second after it was last drawn into or every 5 s while it fills (one
+// read-back: it waits for the card once, a few milliseconds for a 1024 x 1024 picture), so a device
+// reset doesn't lose it.
+void keepCopy(IDirect3DDevice9* device) {
+    if (!g.texture || !g.surface || !g.cleared || g.drawn <= 0 || g.copyDrawn == g.drawn) return;
+    const DWORD tick = GetTickCount();
+    if (tick - g.changedTick < 1000 && tick - g.copyTick < 5000) return;
+    g.copyTick = tick;
+    IDirect3DSurface9* memory = nullptr;
+    if (FAILED(device->CreateOffscreenPlainSurface(g.width, g.height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &memory, nullptr)) || !memory) return;
+    D3DLOCKED_RECT locked{};
+    if (SUCCEEDED(device->GetRenderTargetData(g.surface, memory)) && SUCCEEDED(memory->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+        g.copy.resize(static_cast<size_t>(g.width) * g.height);
+        for (int y = 0; y < g.height; y++)
+            memcpy(&g.copy[static_cast<size_t>(y) * g.width], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, g.width * 4);
+        memory->UnlockRect();
+        g.copyDrawn = g.drawn;
+    }
+    memory->Release();
+}
+
+// After a device reset: the copy back into a new picture (its mipmaps made again).
+void restoreCopy(IDirect3DDevice9* device) {
+    g.restore = false;
+    if (g.copy.size() != static_cast<size_t>(g.width) * g.height || !ensureResources(device)) {
+        forget();
+        return;
+    }
+    IDirect3DSurface9* memory = nullptr;
+    bool ok = false;
+    D3DLOCKED_RECT locked{};
+    if (SUCCEEDED(device->CreateOffscreenPlainSurface(g.width, g.height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &memory, nullptr)) && memory &&
+        SUCCEEDED(memory->LockRect(&locked, nullptr, 0))) {
+        for (int y = 0; y < g.height; y++)
+            memcpy(static_cast<BYTE*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, &g.copy[static_cast<size_t>(y) * g.width], g.width * 4);
+        memory->UnlockRect();
+        ok = SUCCEEDED(device->UpdateSurface(memory, nullptr, g.surface, nullptr));
+    }
+    gfx::release(memory);
+    if (!ok) {
+        forget();
+        return;
+    }
+    if (g.mipmaps) g.texture->GenerateMipSubLevels();
+    g.cleared = true;
+    g.depthCleared = false;
+    TMVS_LOG("misc: minimap: the picture from above back after the device reset (%d meshes)", g.drawn);
+}
+
 void render(IDirect3DDevice9* device) {
     g.frame++;
     g.drawIndex = 0;
     g.newThisFrame = 0;
-    if (!g.wanted || !g.region || !device || g.queue.empty()) return;
+    if (!g.wanted || !g.region || !device) return;
+    if (g.restore) restoreCopy(device);
+    else keepCopy(device);
+    if (g.queue.empty()) return;
     if (!ensureResources(device)) {
         clearQueue();
         return;
@@ -922,6 +987,11 @@ void render(IDirect3DDevice9* device) {
         if (!g.cleared) {
             device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
             g.cleared = true;
+            g.depthCleared = true;
+        } else if (!g.depthCleared) {
+            // The picture came back from its copy, the heights didn't: what comes now covers it.
+            device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+            g.depthCleared = true;
         }
         device->SetRenderState(D3DRS_ZENABLE, TRUE);
         device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
@@ -990,6 +1060,7 @@ void render(IDirect3DDevice9* device) {
             releaseJob(j);
             g.drawn++;
             g.window.meshes++;
+            g.changedTick = GetTickCount();
         }
         g.queue.erase(g.queue.begin(), g.queue.begin() + static_cast<std::ptrdiff_t>(i));
         device->SetTexture(0, nullptr);
@@ -1061,7 +1132,22 @@ int meshes() {
 }
 
 void releaseDevice() {
-    forget();
+    // The game's buffers held by the queue must go before the reset. With a copy of the picture it
+    // goes back in after the reset; a copy of all that was drawn keeps the placements known (nothing
+    // is drawn twice), an older one lets them come again over it. Without one everything starts over.
+    clearQueue();
+    if (g.copyDrawn > 0 && !g.copy.empty()) {
+        if (g.copyDrawn != g.drawn) {
+            g.keys.clear();
+            g.drawn = g.copyDrawn;
+            g.settled = false;
+            g.firstNew = g.lastNew = 0;
+        }
+        g.restore = true;
+        g.cleared = false;
+    } else {
+        forget();
+    }
     releaseTargets();
     forgetDecls();
     for (auto& e : g_samplers) e.first->Release();

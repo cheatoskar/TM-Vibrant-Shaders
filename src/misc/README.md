@@ -5,7 +5,7 @@ the menu's *Misc* page, each off until the player switches it on:
 
 | Tool | What it shows | Where its data comes from |
 |---|---|---|
-| Minimap, only in exported videos (`mapview.cpp`, `topview.cpp`) | The track's shape seen from above and the car the camera follows; with *Real look* the blocks' meshes from above with their textures; *Auto zoom* by the car's speed (from its motion between the video's frames) | The map's block list in the game's memory (read only), `engine::carPose`; for *Real look* the game's own solid draws inside the map's grid while a replay plays or the export runs (`casters::drawWorld` gives their place), drawn again into a texture; the minimap drawn into the export's own frames (`misc::drawIntoVideo`, an ImGui context of its own at the video's size) |
+| Minimap, only in the replay editor and exported videos (`mapview.cpp`, `topview.cpp`) | The track's shape seen from above and the car the camera follows; with *Real look* the blocks' meshes from above with their textures; *Auto zoom* by the car's speed (from its motion between the video's frames) | The map's block list in the game's memory (read only), `engine::carPose`; for *Real look* the game's own solid draws inside the map's grid while a replay plays or the export runs (`casters::drawWorld` gives their place), drawn again into a texture; the minimap drawn into the export's own frames (`misc::drawIntoVideo`, an ImGui context of its own at the video's size) |
 | Split times (`splits.cpp`) | At each checkpoint, in the moment the game registers it: the time and the car's speed against a reference (the map's record, the ghost you race against, your best run, a replay file); a sector clock; a fixed height with five scrolling checkpoint rows; after the finish each sector against your best and the reference; the Session panel (attempts, best / median / last, respawns, spread, your theoretical best from all your runs and replays of the map, the best combined with the reference, the last run's sectors) | The race's own checkpoint times (`engine::raceTimes`), its opponent ghosts' checkpoint times (`engine::raceGhostTimes`), the car's speed (`engine::carSpeed`), all read only; your best run and best sectors in `Documents\TrackMania\TMVS\splits`; your own replays of the map (driver names from `Tracks\Replays\Autosaves`); a replay's checkpoint times and speed at them (`replay.cpp`) from a local file or TMX (`tmx.cpp`) |
 | Finish effects (`confetti.cpp`) | Confetti at the finish, fireworks for a new best run | The finish the split times see |
 
@@ -43,8 +43,8 @@ point.
 5. **Nothing is written into the game's memory** by these tools: the block list, the race times and the
    car are read inside SEH guards; a value that doesn't look like the game's turns the tool off.
 6. **Online play:** split times and finish effects are allowed online. The minimap is not (TMX: no
-   minimap in the race), so it is drawn only into the video export's frames (`misc::drawIntoVideo`,
-   from `finishOwnFrame` in `plugin.cpp`) and never on screen. There is no offline lock and none is needed.
+   minimap in the race), so it shows only in the replay editor (`engine::replayEditorOpen`) and in the video export's frames
+   (`misc::drawIntoVideo`, from `finishOwnFrame` in `plugin.cpp`), never while you drive. There is no offline lock and none is needed.
 7. **TMX:** with *Compare with: Record (TMX, auto)* the record is fetched by itself when a map is
    loaded, otherwise never. One request at a time, at least 20 s apart, once per map and session, with a
    User-Agent naming the mod; the replay is kept on disk (`tmx::cached`) and a map found not to be on TMX
