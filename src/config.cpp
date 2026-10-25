@@ -953,9 +953,6 @@ bool Config::applyShareCode(const std::string& text, std::string& message) {
 std::vector<std::string> Config::presetNames() const {
     std::vector<std::string> names;
     for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
-#ifdef TMVS_MANIAPLANET
-        if (i == static_cast<int>(Preset::Horror)) continue; // its headlights are TrackMania Nations/United's so far
-#endif
         names.push_back(presetName(static_cast<Preset>(i)));
     }
     names.insert(names.end(), m_userPresets.begin(), m_userPresets.end());

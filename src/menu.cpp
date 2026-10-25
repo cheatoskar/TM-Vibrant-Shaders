@@ -1122,9 +1122,6 @@ void drawShaders(Config& config) {
 
     std::vector<std::string> builtIn;
     for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
-#ifdef TMVS_MANIAPLANET
-        if (i == static_cast<int>(Preset::Horror)) continue; // its headlights are TrackMania Nations/United's so far
-#endif
         const std::string name = presetName(static_cast<Preset>(i));
         if (passes(s_filter, lookInfo(name))) builtIn.push_back(name);
     }

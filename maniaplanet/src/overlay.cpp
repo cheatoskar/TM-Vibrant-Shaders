@@ -481,6 +481,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             // What works differently here than in TMNF (the shared tooltips describe TMNF's).
             h.tips = {{"GameNight", "Day and sunset maps under a night sky (Starry night, Black hole, Aurora): darkens sky light, light maps and reflections to moonlight, since TrackMania 2 can't change the time of day. Lamps and neon stay. Night maps are unchanged (with Game moonlight Off their sky light is darkened too)."},
                       {"EngineMoon", "Night maps under a night sky (Starry night, Black hole, Aurora). Game's: the moon stays as it is. Black hole: the moon's light and blue glint are replaced by the black hole's warm light (brightness: Black hole light, ManiaPlanet panel); under other skies the moon stays. Off: the moon's light and glint go (with Real night on, the sky light dims too). Lamps and neon stay. Applies at once."},
+                      {"Floodlights", "Brightness of the game's lamps, neon and screens. 0 turns them off."},
                       {"CinematicOnlyInReplays", "Motion blur and depth of field only in photo mode (TrackMania 2 can't tell replays from driving yet). Off: always."},
                       {"DofAutofocus", "Where automatic focus sits. Middle: the screen centre. Car: your car, or the centre while it is off screen. A click in photo mode still wins."}};
             h.engineMoon = engineMoonChoice;

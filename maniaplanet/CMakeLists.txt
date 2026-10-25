@@ -111,6 +111,7 @@ add_library(tmvs_mp_core STATIC
   src/effects_weather.cpp
   src/effects_cinema.cpp
   src/effects_trail.cpp
+  src/effects_headlights.cpp
   src/maplook.cpp
   src/autoquality11.cpp
   src/photo11.cpp

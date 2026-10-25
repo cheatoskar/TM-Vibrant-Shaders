@@ -14,6 +14,11 @@ namespace tmvs_mp {
 class Effects;
 struct SceneFrame;
 
+// Which of the car's model axes is ahead, as the spray's check from the car's motion found it
+// (WeatherStage::spray): +1 its z, -1 -z. `decided` stays false until enough moves showed it
+// (+1 until then). The headlights read it too.
+float carForwardSign(bool& decided);
+
 class WeatherStage {
 public:
     bool init(ID3D11Device* device);
