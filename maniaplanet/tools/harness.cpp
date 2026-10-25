@@ -191,6 +191,11 @@ int main(int argc, char** argv) {
     const char* waterPath = nullptr;
     for (int i = 6; i + 1 < argc; i++)
         if (strcmp(argv[i], "--water") == 0) waterPath = argv[i + 1];
+    // --car: Tech3/CarSkin_DefWrite_p, a car in front of the camera during the water checks (its
+    // constants like the game uploads them), so WaterSplash looks for the water around it.
+    const char* carPath = nullptr;
+    for (int i = 6; i + 1 < argc; i++)
+        if (strcmp(argv[i], "--car") == 0) carPath = argv[i + 1];
     // --selfillum: "Tech3 Block DefReadP1 SelfIllum" (gpucache.py --dump), for the check of
     // EngineLightDraws: its own light goes into the light buffer, its lit surface doesn't, and the
     // engine's image stays as it was.
@@ -364,6 +369,26 @@ int main(int argc, char** argv) {
         }
     }
     bool withWater = false; // the frames draw the water fog after the light-read pass
+    ID3D11PixelShader* carPs = nullptr;
+    ID3D11Buffer* carCb = nullptr;    // its vertex constants (ObjectV, 2368 bytes, dynamic like the game's)
+    ID3D11Buffer* gameMarker = nullptr; // a constant buffer of the game's at pixel slots 5 and 13 before the tone map
+    if (carPath) {
+        const std::vector<char> code = readFile(carPath);
+        if (code.empty() || FAILED(device->CreatePixelShader(code.data(), code.size(), nullptr, &carPs))) {
+            printf("cannot create engine shader %s\n", carPath);
+            return 2;
+        }
+        D3D11_BUFFER_DESC b = {};
+        b.ByteWidth = 2368;
+        b.Usage = D3D11_USAGE_DYNAMIC;
+        b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        b.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        device->CreateBuffer(&b, nullptr, &carCb);
+        b.ByteWidth = 16;
+        b.Usage = D3D11_USAGE_DEFAULT;
+        b.CPUAccessFlags = 0;
+        device->CreateBuffer(&b, nullptr, &gameMarker);
+    }
 
     // The engine's sun shadow pass (--shadow) into a light mask of its own: a plane facing the light
     // 10 m from the camera, and in every split the left half of it under a caster 20 m nearer the
@@ -779,6 +804,23 @@ int main(int argc, char** argv) {
         viewport(ctx, 0, 0, 1, 1);
         ctx->Draw(3, 0);
         if (shadowPs) drawShadow();
+        if (withWater && carPs) {
+            // The car 6 m ahead of the camera, a little below its eye, facing along its view.
+            D3D11_MAPPED_SUBRESOURCE carMap;
+            if (SUCCEEDED(ctx->Map(carCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &carMap))) {
+                memset(carMap.pData, 0, 2368);
+                const float place[12] = {1, 0, 0, 0, 0, 1, 0, -0.5f, 0, 0, 1, 6};
+                memcpy(static_cast<char*>(carMap.pData) + 112, place, sizeof(place));
+                ctx->Unmap(carCb, 0);
+            }
+            ctx->VSSetConstantBuffers(0, 1, &carCb);
+            ctx->OMSetRenderTargets(1, &hdrRtv, dsv);
+            ctx->PSSetShader(carPs, nullptr, 0);
+            viewport(ctx, 0, 0, 1, 1);
+            ctx->Draw(3, 0);
+            ID3D11Buffer* noCb = nullptr;
+            ctx->VSSetConstantBuffers(0, 1, &noCb);
+        }
         // Light-read pass: camera at vertex slot 13, the buffers at the shader's own slots
         // (Block_DefReadP1: light mask t1, diffuse t2, specular t3, normals t4), motion as target 1.
         D3D11_MAPPED_SUBRESOURCE mapped;
@@ -828,6 +870,13 @@ int main(int argc, char** argv) {
         ID3D11ShaderResourceView* noGbuffer[4] = {};
         ctx->PSSetShaderResources(1, 4, noGbuffer);
         if (withWater) drawFog();
+        // The game's constants at slots the mod's passes don't keep for themselves: they must still be
+        // bound after the tone map (the engine's FXAA reads its raster position from SceneP, b13).
+        if (withWater && gameMarker) {
+            ctx->PSSetConstantBuffers(5, 1, &gameMarker);
+            ctx->PSSetConstantBuffers(13, 1, &gameMarker);
+            ctx->VSSetConstantBuffers(5, 1, &gameMarker);
+        }
         // Tone map into the back buffer.
         if (grade) ctx->UpdateSubresource(backBuffer, 0, nullptr, picture.data(), W * 4, 0);
         else ctx->ClearRenderTargetView(bbRtv, clear);
@@ -873,7 +922,7 @@ int main(int argc, char** argv) {
     stats(s);
     printf("  stats: placed %d, tone map %d, shaders %d/%d, depth %d, draws %d, camera %d, textures 0x%x; centre %u %u %u, "
            "hud %u %u %u\n", s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], centre[0], centre[1], centre[2], hud[0], hud[1], hud[2]);
-    check(s[2] == 4 + (decomp ? 1 : 0) + (selfIllum ? 1 : 0) + (shadowPs ? 1 : 0) + (fogPs ? 1 : 0),
+    check(s[2] == 4 + (decomp ? 1 : 0) + (selfIllum ? 1 : 0) + (shadowPs ? 1 : 0) + (fogPs ? 1 : 0) + (carPs ? 1 : 0),
           "the engine shaders are recognised (and only those)");
     check(s[6] == 1, "the engine camera is read from its SceneV upload");
     check(s[8] == 1000 && s[9] == 2000 && s[10] == 3000, "the camera's eye is (10, 20, 30)");
@@ -1216,6 +1265,25 @@ int main(int argc, char** argv) {
         check(clearL[0] > engineL[0] + 0.05f && clearL[0] < clearL[2] && clearR[0] == engineR[0],
               "WaterClarity 1: less murk over the bottom, red taken first, the dry ground unchanged");
         check(fogRestored, "after each fog draw the engine's target and blend state are bound again");
+        if (carPs) {
+            // With the car the splash looks for the water around it every frame (PS_WaterLevel, its
+            // planes at b6 - b13) and draws: the game's constant buffers stay where they were. (The
+            // car is taken up once it held its place for a few frames.)
+            for (int i = 0; i < 12; i++) frame(true, centre, hud);
+            const std::vector<char> carLog = readFile((std::string(data) + "\\tmvs-mp.log").c_str());
+            const std::string carText(carLog.begin(), carLog.end());
+            ID3D11Buffer* ps5 = nullptr;
+            ID3D11Buffer* ps13 = nullptr;
+            ID3D11Buffer* vs5 = nullptr;
+            ctx->PSGetConstantBuffers(5, 1, &ps5);
+            ctx->PSGetConstantBuffers(13, 1, &ps13);
+            ctx->VSGetConstantBuffers(5, 1, &vs5);
+            check(carText.find("hooks: car found") != std::string::npos, "the car in front of the camera is found");
+            check(ps5 == gameMarker && ps13 == gameMarker && vs5 == gameMarker,
+                  "with the car and the water the game's constant buffers (b5, b13) are still bound after the tone map");
+            for (ID3D11Buffer* b : {ps5, ps13, vs5})
+                if (b) b->Release();
+        }
         // A capture holds the fog buffer and the water volume's plane.
         requestCapture();
         for (int i = 0; i < 3; i++) frame(true, centre, hud);

@@ -280,6 +280,20 @@ bool beginFog(ID3D11Device* device, ID3D11DeviceContext* ctx, const ShaderInfo& 
         releaseBound();
         return false;
     }
+    // Only the HDR image, drawn whole: anything else isn't the pass I know.
+    D3D11_VIEWPORT vp = {};
+    UINT vpCount = 1;
+    ctx->RSGetViewports(&vpCount, &vp);
+    const bool hdr = td.Format == DXGI_FORMAT_R11G11B10_FLOAT || td.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ||
+                     td.Format == DXGI_FORMAT_R32G32B32A32_FLOAT;
+    const bool whole = vpCount == 1 && vp.TopLeftX == 0.0f && vp.TopLeftY == 0.0f && vp.Width == static_cast<float>(td.Width) &&
+                       vp.Height == static_cast<float>(td.Height);
+    if (!hdr || !whole) {
+        logOnce(6, "water: the water fog draws into format %d (viewport %.0fx%.0f of %ux%u): left alone", td.Format, vp.Width, vp.Height,
+                td.Width, td.Height);
+        releaseBound();
+        return false;
+    }
     // A second render of the same frame (the video export's) or a new target: start over.
     if (g.started && (g.hdrRtv != rtvs[0] || g.fogW != td.Width || g.fogH != td.Height)) releaseRender();
     if (!g.started) {
@@ -353,9 +367,7 @@ void compose(ID3D11DeviceContext* ctx, ID3D11Resource* albedo, ID3D11Resource* n
     if (!g.ready || !g.hdrRtv || !g.fogSrv) return;
     hooks::Inside inside;
     StateBackup backup;
-    backup.save(ctx);
-    ID3D11Buffer* savedCbs[7] = {}; // b5 - b11 (the backup keeps b0 - b4)
-    ctx->PSGetConstantBuffers(5, 7, savedCbs);
+    backup.save(ctx); // all constant buffer slots: the engine's b0 and b13 are bound again afterwards
 
     const int planes = std::max(g.planeCount, 0);
     ID3D11ShaderResourceView* gAlbedo = viewOf(0, albedo);
@@ -386,8 +398,6 @@ void compose(ID3D11DeviceContext* ctx, ID3D11Resource* albedo, ID3D11Resource* n
     ctx->PSSetShader(g.ps, nullptr, 0);
     ctx->Draw(3, 0);
 
-    ctx->PSSetConstantBuffers(5, 7, savedCbs);
-    for (auto*& b : savedCbs) safeRelease(b);
     backup.restore(ctx);
     snprintf(g.status, sizeof(g.status), "%d volume%s, %s", g.fogDraws, g.fogDraws == 1 ? "" : "s",
              g.clarity > 0.0f ? (detail ? "clear, with caustics and foam" : "clear") : "the game's murk");

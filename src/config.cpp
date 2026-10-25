@@ -1355,6 +1355,11 @@ void applyPreset(Settings& s, Preset preset) {
     s.taaJitter = keepJitter;
     s.renderScale = keepScale;
     s.fsrSharpness = keepFsrSharpness;
+#ifdef TMVS_MANIAPLANET
+    // ManiaPlanet: clear water and the splash stay off until I've confirmed them in game.
+    s.waterClarity = 0.0f;
+    s.waterSplash = 0.0f;
+#endif
     switch (preset) {
         case Preset::Vibrant:
             // The Settings defaults are the base of every preset; Vibrant's own tuning on top.
