@@ -155,7 +155,7 @@ By default the split times sit at the right, below the game's map name (where th
 
 `settings.ini` keeps these in `[Misc]`, with the panels' places (`SplitTimesX`, `SplitTimesY`, `SessionX`, `SessionY`, used while the panel is not attached). Not part of presets or share codes.
 
-After the game starts, its menus or login screen show a badge at the top centre for 8 seconds: the logo, `TM Vibrant Shaders 1.4.2` and the keys for the menu and the effects (the menu is on F5 when CenterSpeed has F8). Never in a race, a replay, the editor, photos or the video export.
+After the game starts, its menus or login screen show a badge at the top centre for 10 seconds: the logo, `TM Vibrant Shaders 1.4.2` and the keys for the menu and the effects (the menu is on F5 when CenterSpeed has F8). Never in a race, a replay, the editor, photos or the video export.
 
 ## All settings
 

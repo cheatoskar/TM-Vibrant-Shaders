@@ -546,9 +546,9 @@ void drawSplitBar() {
 
 // The welcome badge: a notch at the top centre with the logo, the mod's name and version and the
 // keys for the menu and the effects (the menu's key is F5 when CenterSpeed has F8, keys.cpp), for
-// 8 s from the first time the game shows its menus or login screen after starting, as TrackMania 2's
+// 10 s from the first time the game shows its menus or login screen after starting, as TrackMania 2's
 // build greets. Never in a race, a replay, the editor, the video export or photos.
-constexpr DWORD kWelcomeMs = 8000, kWelcomeFadeMs = 800;
+constexpr DWORD kWelcomeMs = 10000, kWelcomeFadeMs = 800;
 DWORD g_welcomeStart = 0;
 bool g_welcomeDone = false;
 
