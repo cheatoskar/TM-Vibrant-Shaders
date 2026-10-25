@@ -761,8 +761,9 @@ float4 lightingPass(VSOut i, bool blackHoleMoon)
     // Neon light: what the lamps and neon cast on their surroundings.
     if (u_Light2.x > 0.0)
         ambient += albedo * upsampleSpill(uv, z) * u_Light2.x * 3.0 * lerp(1.0, 2.0, saturate(dist / 120.0)) * ao;
-    // Light sources: as bright as the engine drew them, the preset's highlight boost on top.
-    float3 glow = emissive * lerp(1.0, u_Rays.w / 3.5, 0.5);
+    // Light sources: as bright as the engine drew them, the preset's highlight boost on top;
+    // Floodlights (u_Lights.x) turns them down or off (Horror).
+    float3 glow = emissive * (lerp(1.0, u_Rays.w / 3.5, 0.5) * u_Lights.x);
 
     weatherSurface(surf, sun, ambient, glow);
     float3 lit = weatherReflect(surf, sun + ambient, skyAvg);

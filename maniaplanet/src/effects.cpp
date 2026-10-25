@@ -41,7 +41,7 @@ const char* const kPassNames[kPassCount] = {
     "SkyAurora",    "SkyRing",         "AuroraHalf",    "SkyAverage", "Clouds",   "Reflect",    "SpillDown", "SpillBlur",
     "SpillTemporal", "Lighting",     "RainDrop",        "RainSplash",    "Spray",    "SnowFlake",  "Trail",      "Focus",    "DofBlur",
     "Cinematic",    "RayMask",         "RayBlur",       "BloomDown", "BloomUp",   "Final",      "TAA",      "Sharpen",
-    "Volumetric"};
+    "Volumetric",   "Headlights"};
 
 // The settings ManiaPlanet can do so far (the menu shows only these). The look (hdr.hlsl), then
 // the scene effects (scene.hlsl), then the stages as they come. Not DisableGameFX: the engine's
@@ -54,7 +54,10 @@ const char* const kSupported[] = {
     "AOStrength", "AORadius", "ShadowStrength", "ShadowLength", "NeonLight", "GlobalIllumination", "SunLight", "AmbientTint",
     "SunColor", "GameSunColor", "SkyColor", "SkyEnhance", "SunGlow", "FogDensity", "FogHeightFalloff", "FogSunScatter",
     "HazeDistance", "HighlightBoost", "Quality", "AutoQuality", "TargetFPS", "SunElevation", "SunAzimuth",
-    "VolumetricLight", "GameNight", "EngineMoon"};
+    "VolumetricLight", "GameNight", "EngineMoon",
+    // the engine's light sources (all of them here: lamps, neon, screens), with 0 under a night sky
+    // also the lamps' light in the light maps (the Horror preset)
+    "Floodlights"};
 
 } // namespace
 
@@ -228,6 +231,7 @@ bool Effects::init(ID3D11Device* device) {
     if (!m_weather.init(device)) TMVS_LOG("effects: the weather stage failed to start");
     if (!m_cinema.init(device)) TMVS_LOG("effects: the cinema stage failed to start");
     if (!m_trail.init(device)) TMVS_LOG("effects: the neon trail failed to start");
+    if (!m_headlights.init(device)) TMVS_LOG("effects: the headlights failed to start");
     if (!ok) TMVS_LOG("effects: creating shaders or states failed (feature level 0x%x)", device->GetFeatureLevel());
     return ok;
 }
@@ -257,6 +261,7 @@ void Effects::release() {
     m_weather.release();
     m_cinema.release();
     m_trail.release();
+    m_headlights.release();
     m_profiler.release();
     safeRelease(m_vs);
     safeRelease(m_ndHalf);
@@ -286,14 +291,15 @@ bool Effects::wanted(const tmshaders::Settings& s) {
            s.ambientTint > 0.0f || s.fogDensity > 0.0f || s.skyMode > 0 || s.skyEnhance > 0.0f || s.debugView != 0 ||
            s.volumetricClouds > 0.0f || s.godRays > 0.0f || s.lensFlare > 0.0f || s.wetness > 0.0f || s.rain > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f ||
            s.puddles > 0.0f || s.reflections > 0.0f || s.lightning > 0.0f || s.depthOfField > 0.0f || s.motionBlur > 0.0f || s.taa ||
-           s.volumetricLight > 0.0f || s.neonTrail > 0.0f;
+           s.volumetricLight > 0.0f || s.neonTrail > 0.0f || s.carHeadlights > 0.0f;
 }
 
 bool Effects::supports(const char* key) {
     if (!strcmp(key, "VideoExportBest")) return true; // the replay editor's Shoot video (hooks.cpp, VideoWatch)
     for (const char* k : kSupported)
         if (!strcmp(k, key)) return true;
-    return SkyStage::supports(key) || WeatherStage::supports(key) || CinemaStage::supports(key) || TrailStage::supports(key);
+    return SkyStage::supports(key) || WeatherStage::supports(key) || CinemaStage::supports(key) || TrailStage::supports(key) ||
+           HeadlightStage::supports(key);
 }
 
 bool Effects::ensureTargets(UINT w, UINT h) {
@@ -376,7 +382,7 @@ void Effects::run(ID3D11DeviceContext* ctx, int pass, ID3D11PixelShader* ps, con
 // The TMNF constants (pipeline.cpp, setFrameConstants) from the settings and the engine's camera.
 void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings& s) {
     const Camera& cam = *frame.camera;
-    float(&c)[49][4] = m_c;
+    float(&c)[50][4] = m_c;
     memset(c, 0, sizeof(c));
     constexpr float kPi = 3.14159265f;
 
@@ -645,6 +651,16 @@ void Effects::buildConstants(const SceneFrame& frame, const tmshaders::Settings&
     c[44][1] = s.gameNight ? 1.0f : 0.0f;
     c[44][2] = nightSky ? 1.0f : 0.0f;
     c[44][3] = s.toneKnee;
+    // Floodlights: the engine's light sources and their spill (TrackMania 2 tells no lamp from neon
+    // or a screen: all of them). At 0 under a night sky (the Horror preset) the lamps' light baked
+    // into the light maps goes too: on night maps as well the moon goes and the rest comes down to
+    // moonlight, as real night does on day maps, whatever Real night says.
+    const float lamps = std::clamp(s.floodlights, 0.0f, 3.0f);
+    c[49][0] = lamps;
+    c[36][0] = s.neonLight * lamps;
+    const float lightsOut = nightSky ? 1.0f - std::min(lamps, 1.0f) : 0.0f;
+    c[43][0] = std::max(c[43][0], lightsOut);
+    c[44][1] = std::max(c[44][1], lightsOut);
     // The engine's cloud factor at its darkest (it lights with 2 x a factor between its clouds' min
     // and max): how much of the estimated sun can go under a night sky (scene.hlsl).
     if (cam.hasSceneP) {
@@ -779,7 +795,7 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
 
     // Neon light.
     ID3D11ShaderResourceView* spill = nullptr;
-    if (s.neonLight > 0.0f) {
+    if (s.neonLight > 0.0f && s.floodlights > 0.0f) {
         // Quality 2: the sources found pixel by pixel first (full res), then taken down to quarter
         // res. PS_SpillDown reads 4 of the 16 pixels of each block: a far strip 1-2 px high was
         // seen or not by where it fell, and the light on the wall next to it pulsed as the camera
@@ -857,6 +873,14 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     run(ctx, kLighting, lighting, m_hdr[0], in, 8, p0, p1);
     ID3D11ShaderResourceView* noVolume[2] = {};
     ctx->PSSetShaderResources(16, 2, noVolume);
+
+    // The car's headlights on the lit image, before the cinema passes blur and smooth it.
+    if (s.carHeadlights > 0.0f) {
+        m_headlights.draw(ctx, *this, frame, s);
+        bindFrame(ctx);
+        ctx->PSSetConstantBuffers(2, 1, &engineTone);
+        ctx->PSSetShaderResources(8, 8, engine);
+    }
 
     // On the HDR image: cinema (depth of field, motion blur, TAA), then the weather's particles and
     // lens drops (after TAA as in TMNF: it would smear the streaks), then the sun's light shafts and

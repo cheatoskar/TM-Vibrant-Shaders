@@ -7,6 +7,7 @@
 // The constants keep the TMNF shader's layout (shaders/common.hlsli), so its effects carry over.
 // Stages (sky, weather, cinema) live in their own files and use the helpers below.
 #include "effects_cinema.h"
+#include "effects_headlights.h"
 #include "effects_sky.h"
 #include "effects_trail.h"
 #include "effects_weather.h"
@@ -69,6 +70,7 @@ enum Pass : int {
     kTAA,
     kSharpen,
     kVolumetric,
+    kHeadlights,
     kPassCount
 };
 const char* passName(int pass);
@@ -233,8 +235,9 @@ private:
     WeatherStage m_weather;
     CinemaStage m_cinema;
     TrailStage m_trail;
+    HeadlightStage m_headlights;
 
-    float m_c[49][4] = {};
+    float m_c[50][4] = {};
     float m_prevW2C[12] = {};
     float m_prevProj[4] = {};
     bool m_havePrevious = false;
