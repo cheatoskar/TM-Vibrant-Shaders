@@ -171,6 +171,17 @@ bool materialTextures(const void* shader, wchar_t* out, size_t size);
 // Its colour map: the Direct3D texture the game binds for it (null: none known or not loaded),
 // with the file's name in `file` (the Real look picture of the minimap).
 IDirect3DBaseTexture9* materialDiffuse(const void* shader, wchar_t* file, size_t size);
+// The game's code addresses (rebased to this process) the minimap's block reading compares its
+// reads against: never called, only compared (a mesh tree's class by its vtable's child functions,
+// a visual's geometry kind by its keeper's loader). False on an unknown build.
+struct MeshReadAddresses {
+    uintptr_t treeChildCount, treeGetChild; // CPlugTree's vtable slots 31 and 32 (its children at +0x28)
+    uintptr_t mipChildCount, mipGetChild;   // CPlugTreeVisualMip's (children at +0x28, then its levels at +0xac)
+    // CDx9VisualKeeper::LoadAndPrepareGeometry_Static, _StaticVisualSplits, _StaticSubVisuals
+    uintptr_t geometryStatic, geometrySplits, geometrySubVisuals;
+    uintptr_t declarations; // CDx9VertexDeclaration::s_Declarations: CFastBuffer of {SStreamDecl, SStreamDecl, IDirect3DVertexDeclaration9*}
+};
+bool meshReadAddresses(MeshReadAddresses& out);
 // The draws' materials are known and their textures can be read: the neon strips are told by
 // their material (Material::Neon), not by their colour. False on an unknown build, without the
 // draw hooks, or while no texture had a file name yet.

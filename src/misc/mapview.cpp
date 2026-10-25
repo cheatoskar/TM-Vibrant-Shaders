@@ -405,7 +405,12 @@ std::string describe() {
 
 void prepare(IDirect3DDevice9* device) {
     poll();
-    if (settings().mapTextured) topview::render(device);
+    if (settings().mapTextured) {
+        // The blocks' meshes read at once (a share a frame), then what is queued drawn.
+        const Picture& p = g_picture;
+        if (p.read && p.cells > 0) blockmesh::read(device, p.count, p.data);
+        topview::render(device);
+    }
     topview::noteFrame(g_drawMs);
     g_drawMs = 0.0;
 }

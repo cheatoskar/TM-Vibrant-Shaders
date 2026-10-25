@@ -6,6 +6,7 @@
 #include "log.h"
 #include <windows.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -37,8 +38,10 @@
 // references to all of that and drawn at Present (before the overlay), at most kPerFrame a frame,
 // inside a saved and restored device state: never inside one of the game's passes.
 //
-// Meshes the game hasn't drawn yet stay the plain squares of mapview.cpp under the picture; they
-// fill in as the camera sees them. Once nothing new came for a while, only one draw in kStride is
+// The map's blocks are also read at once (blockmesh.cpp -> addBlockMesh): the game's own buffers,
+// draw and place for each of their meshes, with the same key, so the picture is whole as soon as
+// the map is open and the camera's draws of them are known. What neither gave yet stays the plain
+// squares of mapview.cpp under the picture and fills in as the camera sees it. Once nothing new came for a while, only one draw in kStride is
 // looked at per frame (each one every kStride frames), so the checks cost little after the build-up.
 namespace tmshaders {
 namespace misc {
@@ -172,6 +175,7 @@ struct Sums {
     unsigned noShader = 0;   // draws outside the game's own shader calls (the mod's passes) left out
     unsigned noTexture = 0;  // the game's draws without any texture bound (depth, shadow) left out
     unsigned ownMap = 0;     // with the material's own colour map, bound for the draw
+    unsigned fromBlocks = 0; // of the new ones: read from the map's blocks (blockmesh.cpp)
 };
 
 struct State {
@@ -232,6 +236,14 @@ struct State {
     DWORD allowanceTick = 0;
     int materialLines = 0;  // materials logged this map (where their colour came from)
     std::unordered_set<uintptr_t> loggedMaterials; // material and how its colour came (once each)
+    // Placements read from the blocks (addBlockMesh): the camera's draws that find one are counted
+    // (the log's check that both ways make the same keys).
+    std::unordered_map<uint64_t, bool> blockKeys; // true: the camera found it
+    unsigned blockHits = 0;
+    // The meshes' own bounds by buffer and range (instances of a block share them: measured once).
+    std::unordered_map<uint64_t, std::array<float, 6>> bounds;
+    IDirect3DTexture9* probe = nullptr; // a managed texture of ours: the class a usable colour map has
+    unsigned epoch = 0;                 // forget() and device resets (blockmesh starts over)
     Sums build, window;
     DWORD windowStart = 0;
     GpuTimer gpu[4];
@@ -380,6 +392,84 @@ bool insideMap(const Job& j, const float lo[3], const float hi[3]) {
            whi[1] > kLowest;
 }
 
+// A placement in g.keys: its key (the one found, or the new one), what is stored for it (0: not
+// seen) and the textures bound the last two times it was looked at.
+struct Placement {
+    uint64_t key = 0;
+    uint8_t stored = 0;
+    uint64_t seen[2] = {0, 0};
+};
+
+// The key: the buffers' sizes (not their addresses: the same map loaded again, as Shoot video does,
+// has new buffers with the same meshes, and the picture and its keys go to disk), the vertex
+// stride, the index range, the turn (1/20) and the place in 4 m cells. The place the constants give
+// moves by up to about a metre from frame to frame (the camera's jitter in the projection, float
+// noise far away): a place near a cell's edge also finds the key of the neighbouring cell on that
+// side, so each placement is taken once. The same for a camera draw (onDraw) and a mesh read from
+// the blocks (addBlockMesh): what one took, the other finds.
+Placement findPlacement(const Job& j) {
+    D3DVERTEXBUFFER_DESC vbDesc{};
+    D3DINDEXBUFFER_DESC ibDesc{};
+    j.vb[0]->GetDesc(&vbDesc);
+    j.ib->GetDesc(&ibDesc);
+    uint64_t mesh = mix(mix(14695981039346656037ull, (static_cast<uint64_t>(vbDesc.Size) << 32) | ibDesc.Size), j.stride[0]);
+    mesh = mix(mesh, (static_cast<uint64_t>(j.start) << 32) | j.count);
+    mesh = mix(mesh, (static_cast<uint64_t>(static_cast<uint32_t>(j.base)) << 32) | j.minIndex);
+    for (int r = 0; r < 3; r++) {
+        for (int k = 0; k < 3; k++) mesh = mix(mesh, static_cast<uint64_t>(rounded(j.world[r][k], 0.05f)));
+    }
+    int64_t cell[3], side[3];
+    for (int k = 0; k < 3; k++) {
+        const float c = j.world[3][k] / kCell;
+        cell[k] = static_cast<int64_t>(floorf(c));
+        side[k] = c - static_cast<float>(cell[k]) < 0.5f ? cell[k] - 1 : cell[k] + 1;
+    }
+    const auto keyAt = [&](int64_t x, int64_t y, int64_t z) { return mix(mix(mix(mesh, static_cast<uint64_t>(x)), static_cast<uint64_t>(y)), static_cast<uint64_t>(z)); };
+    Placement p;
+    p.key = keyAt(cell[0], cell[1], cell[2]);
+    for (int n = 0; n < 8 && !p.stored; n++) {
+        const uint64_t k = keyAt((n & 1) ? side[0] : cell[0], (n & 2) ? side[1] : cell[1], (n & 4) ? side[2] : cell[2]);
+        auto it = g.keys.find(k);
+        if (it != g.keys.end()) {
+            p.stored = static_cast<uint8_t>(it->second & 0xFF);
+            p.seen[0] = (it->second >> 8) & 0xFFFFFFFull;
+            p.seen[1] = (it->second >> 36) & 0xFFFFFFFull;
+            p.key = k;
+        }
+    }
+    return p;
+}
+
+// Two COM objects of the same class (their vtables), read inside a guard.
+bool sameClass(const void* a, const void* b) {
+    __try {
+        return *static_cast<void* const*>(a) == *static_cast<void* const*>(b);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// A mesh's own bounds, measured once per buffer and range (meshBounds reads its vertices).
+bool cachedBounds(const Job& j, WORD positionOffset, float lo[3], float hi[3]) {
+    D3DVERTEXBUFFER_DESC d{};
+    j.vb[0]->GetDesc(&d);
+    uint64_t id = mix(mix(reinterpret_cast<uintptr_t>(j.vb[0]), d.Size), (static_cast<uint64_t>(static_cast<uint32_t>(j.base)) << 32) | j.minIndex);
+    id = mix(mix(id, j.vertices), (static_cast<uint64_t>(j.stride[0]) << 16) | positionOffset);
+    auto it = g.bounds.find(id);
+    if (it == g.bounds.end()) {
+        std::array<float, 6> b{};
+        if (!meshBounds(j, positionOffset, &b[0], &b[3])) b[0] = 1e30f; // not readable: remembered as such
+        if (g.bounds.size() >= 65536) g.bounds.clear();
+        it = g.bounds.emplace(id, b).first;
+    }
+    if (it->second[0] > 1e29f) return false;
+    for (int k = 0; k < 3; k++) {
+        lo[k] = it->second[k];
+        hi[k] = it->second[3 + k];
+    }
+    return true;
+}
+
 // The samplers in a pixel shader's constant table (shaders the game compiled from HLSL keep it): the
 // one named for the colour ("Diffuse", "Diff..."), else the first not named for light, normals,
 // specular, reflections, clouds, masks or shadows. -1: none.
@@ -429,8 +519,8 @@ bool greyFormat(D3DFORMAT f) {
 }
 
 // The material's colour when no colour texture is known: grass green, dirt brown, water blue, else grey.
-void materialTint(float out[4]) {
-    switch (engine::currentMaterial()) {
+void materialTint(engine::Material material, float out[4]) {
+    switch (material) {
     case engine::Material::Grass: out[0] = 0.30f, out[1] = 0.46f, out[2] = 0.22f; break;
     case engine::Material::Dirt: out[0] = 0.48f, out[1] = 0.35f, out[2] = 0.22f; break;
     case engine::Material::Water: out[0] = 0.20f, out[1] = 0.36f, out[2] = 0.55f; break;
@@ -598,6 +688,9 @@ void forget() {
     g.loggedMaterials.clear();
     g.allowance = 0.0f;
     g.build = Sums();
+    g.blockKeys.clear();
+    g.bounds.clear(); // the next map's buffers may sit at the same addresses
+    g.epoch++;
 }
 
 // Video memory of the picture: the colour target with its mipmaps and the depth buffer.
@@ -703,6 +796,7 @@ void add(Sums& to, const Sums& from) {
     to.noShader += from.noShader;
     to.noTexture += from.noTexture;
     to.ownMap += from.ownMap;
+    to.fromBlocks += from.fromBlocks;
 }
 
 void logSums(const char* what, const Sums& s, double seconds) {
@@ -713,12 +807,12 @@ void logSums(const char* what, const Sums& s, double seconds) {
     else if (s.meshes == 0) snprintf(gpu, sizeof(gpu), "none (no redraws)");
     const double share = s.added ? 100.0 * s.colour / s.added : 0.0, greyShare = s.added ? 100.0 * s.grey / s.added : 0.0;
     TMVS_LOG("misc: minimap cost, %s (%.0f s, %u frames, Real look %s): CPU %.3f ms a frame (drawing %.3f, of it redraws %.3f; checks of the "
-             "game's draws %.3f, %u looked at); GPU %s; %d meshes drawn into the picture, %u new (%.1f a second, %u refused by the cap); "
+             "game's draws %.3f, %u looked at); GPU %s; %d meshes drawn into the picture, %u new (%u of them read from the blocks; %.1f a second, %u refused by the cap); "
              "%.0f %% with a colour texture (%u of them the material's own colour map), %.0f %% grey (tinted), the rest the material's colour, "
              "%u drawn again with a better one; left out: %u draws outside the game's shader calls, %u without a texture; "
              "picture %d x %d px, %.1f MB of video memory",
              what, seconds, s.frames, g.wanted ? "on" : "off", (s.drawMs + s.checkMs) / frames, s.drawMs / frames, s.renderMs / frames,
-             s.checkMs / frames, s.checked, gpu, s.meshes, s.added, seconds > 0.0 ? s.added / seconds : 0.0, s.capped, share, s.ownMap, greyShare,
+             s.checkMs / frames, s.checked, gpu, s.meshes, s.added, s.fromBlocks, seconds > 0.0 ? s.added / seconds : 0.0, s.capped, share, s.ownMap, greyShare,
              s.upgraded, s.noShader, s.noTexture, g.texture ? g.width : 0, g.texture ? g.height : 0, megabytes());
 }
 
@@ -831,40 +925,16 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         releaseJob(j);
         return;
     }
-    // The key: the buffers' sizes (not their addresses: the same map loaded again, as Shoot video does,
-    // has new buffers with the same meshes, and the picture and its keys go to disk), the vertex
-    // stride, the index range, the turn (1/20) and the place in 4 m cells. The place the constants give
-    // moves by up to about a metre from frame to frame (the camera's jitter in the projection, float
-    // noise far away): a place near a cell's edge also finds the key of the neighbouring cell on that
-    // side, so each placement is taken once.
-    D3DVERTEXBUFFER_DESC vbDesc{};
-    D3DINDEXBUFFER_DESC ibDesc{};
-    j.vb[0]->GetDesc(&vbDesc);
-    j.ib->GetDesc(&ibDesc);
-    uint64_t mesh = mix(mix(14695981039346656037ull, (static_cast<uint64_t>(vbDesc.Size) << 32) | ibDesc.Size), j.stride[0]);
-    mesh = mix(mesh, (static_cast<uint64_t>(start) << 32) | count);
-    mesh = mix(mesh, (static_cast<uint64_t>(static_cast<uint32_t>(base)) << 32) | minIndex);
-    for (int r = 0; r < 3; r++) {
-        for (int k = 0; k < 3; k++) mesh = mix(mesh, static_cast<uint64_t>(rounded(j.world[r][k], 0.05f)));
-    }
-    int64_t cell[3], side[3];
-    for (int k = 0; k < 3; k++) {
-        const float c = j.world[3][k] / kCell;
-        cell[k] = static_cast<int64_t>(floorf(c));
-        side[k] = c - static_cast<float>(cell[k]) < 0.5f ? cell[k] - 1 : cell[k] + 1;
-    }
-    const auto keyAt = [&](int64_t x, int64_t y, int64_t z) { return mix(mix(mix(mesh, static_cast<uint64_t>(x)), static_cast<uint64_t>(y)), static_cast<uint64_t>(z)); };
-    uint64_t key = keyAt(cell[0], cell[1], cell[2]);
-    uint8_t stored = 0; // 0: not seen
-    uint64_t seen[2] = {0, 0}; // the textures of the last two looks
-    for (int n = 0; n < 8 && !stored; n++) {
-        const uint64_t k = keyAt((n & 1) ? side[0] : cell[0], (n & 2) ? side[1] : cell[1], (n & 4) ? side[2] : cell[2]);
-        auto it = g.keys.find(k);
-        if (it != g.keys.end()) {
-            stored = static_cast<uint8_t>(it->second & 0xFF);
-            seen[0] = (it->second >> 8) & 0xFFFFFFFull;
-            seen[1] = (it->second >> 36) & 0xFFFFFFFull;
-            key = k;
+    // The placement's key (findPlacement), the same for a mesh read from the blocks.
+    const Placement placement = findPlacement(j);
+    const uint64_t key = placement.key;
+    const uint8_t stored = placement.stored; // 0: not seen
+    const uint64_t* const seen = placement.seen; // the textures of the last two looks
+    if (stored && !g.blockKeys.empty()) { // the first time the camera finds a placement read from the blocks
+        auto hit = g.blockKeys.find(key);
+        if (hit != g.blockKeys.end() && !hit->second) {
+            hit->second = true;
+            g.blockHits++;
         }
     }
     if (stored == kRejected || stored == 4 || (!stored && g.keys.size() >= kMaxKeys)) {
@@ -948,7 +1018,7 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     j.key = key;
     j.mode = rank >= 3 ? 1 : rank == 2 ? 2 : 0;
     if (!j.mode) gfx::release(j.texture);
-    materialTint(j.tint);
+    materialTint(material, j.tint);
     (j.mode == 1 ? g.window.colour : g.window.grey) += j.mode != 0 ? 1 : 0;
     g.window.ownMap += own ? 1 : 0;
     g.window.added++;
@@ -972,6 +1042,93 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
         g.lastNew = GetTickCount();
         if (!g.firstNew) g.firstNew = g.lastNew;
     }
+}
+
+// A mesh read from the blocks: queued like a camera draw, with the same key, its material's own
+// colour map (the texture the game binds for it) or, without one, the material's colour.
+BlockMeshResult addBlockMesh(IDirect3DDevice9* device, const BlockMesh& m) {
+    if (!g.wanted || !g.region || g.failed || !device || !m.decl || !m.vb || !m.ib || m.count == 0 || m.stride == 0) return BlockMeshResult::Unusable;
+    if (g.queue.size() >= kMaxQueue) return BlockMeshResult::Full;
+    if (!ensureResources(device)) return BlockMeshResult::Unusable;
+    if (!g.probe && FAILED(device->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &g.probe, nullptr))) g.probe = nullptr;
+    const DeclInfo info = declInfo(device, m.decl);
+    if (!info.own || info.streamCount != 1) return BlockMeshResult::Unusable;
+    Job j;
+    j.decl = info.own;
+    j.vb[0] = m.vb;
+    j.stride[0] = m.stride;
+    j.streams = 1;
+    j.ib = m.ib;
+    j.texcoord = info.texcoord;
+    j.type = m.type;
+    j.base = m.base;
+    j.minIndex = m.minIndex;
+    j.vertices = m.vertices;
+    j.start = m.start;
+    j.count = m.count;
+    memcpy(j.world, m.world, sizeof(j.world));
+    const Placement placement = findPlacement(j);
+    if (placement.stored == kRejected || placement.stored == 4 || (!placement.stored && g.keys.size() >= kMaxKeys)) return BlockMeshResult::Known;
+    // Its colour: the material's colour map, if its texture is one of the device's plain textures
+    // (the class of a managed texture of ours; a pointer that isn't is left alone).
+    wchar_t diffuseFile[96] = L"";
+    IDirect3DBaseTexture9* diffuse = j.texcoord ? engine::materialDiffuse(m.shader, diffuseFile, 96) : nullptr;
+    const bool plain = diffuse && g.probe && sameClass(diffuse, g.probe);
+    const int rank = plain && usableTexture(diffuse) ? 4 : 1;
+    if (placement.stored && rank <= placement.stored) return BlockMeshResult::Known;
+    if (!placement.stored) {
+        float lo[3], hi[3];
+        if (!cachedBounds(j, info.positionOffset, lo, hi) || !insideMap(j, lo, hi)) {
+            g.keys[placement.key] = kRejected;
+            return BlockMeshResult::Outside;
+        }
+    } else {
+        g.window.upgraded++;
+    }
+    j.vb[0]->AddRef();
+    j.ib->AddRef();
+    if (rank == 4) {
+        j.texture = diffuse;
+        j.texture->AddRef();
+        j.mode = 1;
+        g.window.colour++;
+        g.window.ownMap++;
+    }
+    const engine::Material material = engine::materialClass(m.shader);
+    materialTint(material, j.tint);
+    g.keys[placement.key] = static_cast<uint64_t>(rank);
+    g.blockKeys.emplace(placement.key, false);
+    g.sinceCopy.push_back(placement.key);
+    j.key = placement.key;
+    g.window.added++;
+    g.window.fromBlocks++;
+    if (g.materialLines < 16 && g.loggedMaterials.insert(reinterpret_cast<uintptr_t>(m.shader) ^ 0x100u ^ static_cast<uintptr_t>(rank)).second) {
+        g.materialLines++;
+        wchar_t file[160] = L"(unnamed)";
+        engine::materialFile(m.shader, file, 160);
+        const wchar_t* fileName = wcsrchr(file, L'\\');
+        TMVS_LOG("misc: minimap: material %ls (class %d), read from a block: colour map %ls%s; colour from %s", fileName ? fileName + 1 : file,
+                 static_cast<int>(material), diffuseFile[0] ? diffuseFile : L"(none)",
+                 diffuseFile[0] && !diffuse ? " (not loaded)" : diffuse && !plain ? " (not a plain texture)" : "",
+                 rank == 4 ? "its colour map" : "the material's colour");
+    }
+    g.lowestSeen = std::min(g.lowestSeen, j.world[3][1]);
+    g.queue.push_back(j);
+    if (!g.settled) {
+        g.lastNew = GetTickCount();
+        if (!g.firstNew) g.firstNew = g.lastNew;
+    }
+    return BlockMeshResult::Queued;
+}
+
+unsigned takeBlockHits() {
+    const unsigned hits = g.blockHits;
+    g.blockHits = 0;
+    return hits;
+}
+
+unsigned epoch() {
+    return g.epoch;
 }
 
 // A render target into memory (4 bytes a pixel: the picture's ARGB, the heights' float), and back.
@@ -1385,6 +1542,9 @@ void releaseDevice() {
     }
     releaseTargets();
     forgetDecls();
+    g.bounds.clear();
+    gfx::release(g.probe);
+    g.epoch++; // what the copy doesn't hold comes again from the blocks
     for (auto& e : g_samplers) e.first->Release();
     g_samplers.clear();
     for (auto& e : g_ownDecls) gfx::release(e.second);

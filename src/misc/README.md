@@ -5,7 +5,7 @@ the menu's *Misc* page, each off until the player switches it on:
 
 | Tool | What it shows | Where its data comes from |
 |---|---|---|
-| Minimap, only in the replay editor and exported videos (`mapview.cpp`, `topview.cpp`) | The track's shape seen from above and the car the camera follows; with *Real look* the blocks' meshes from above with their textures; *Auto zoom* by the car's speed (from its motion between the video's frames) | The map's block list in the game's memory (read only), `engine::carPose`; for *Real look* the game's own solid draws inside the map's grid while a replay plays or the export runs (`casters::drawWorld` gives their place), drawn again into a texture; the minimap drawn into the export's own frames (`misc::drawIntoVideo`, an ImGui context of its own at the video's size) |
+| Minimap, only in the replay editor and exported videos (`mapview.cpp`, `topview.cpp`) | The track's shape seen from above and the car the camera follows; with *Real look* the blocks' meshes from above with their textures; *Auto zoom* by the car's speed (from its motion between the video's frames) | The map's block list in the game's memory (read only), `engine::carPose`; for *Real look* every block's meshes read from the game's memory as soon as the map is open (`blockmesh.cpp`: the game's own buffers, material and place), and the game's own solid draws inside the map's grid while a replay plays or the export runs (`casters::drawWorld` gives their place), drawn again into a texture; the minimap drawn into the export's own frames (`misc::drawIntoVideo`, an ImGui context of its own at the video's size) |
 | Split times (`splits.cpp`) | At each checkpoint, in the moment the game registers it: the time and the car's speed against a reference (the map's record, the ghost you race against, your best run, a replay file); a sector clock; a fixed height with five scrolling checkpoint rows; after the finish each sector against your best and the reference; the Session panel (attempts, best / median / last, respawns, spread, your theoretical best from all your runs and replays of the map, the best combined with the reference, the last run's sectors) | The race's own checkpoint times (`engine::raceTimes`), its opponent ghosts' checkpoint times (`engine::raceGhostTimes`), the car's speed (`engine::carSpeed`), all read only; your best run and best sectors in `Documents\TrackMania\TMVS\splits`; your own replays of the map (driver names from `Tracks\Replays\Autosaves`); a replay's checkpoint times and speed at them (`replay.cpp`) from a local file or TMX (`tmx.cpp`) |
 | Finish effects (`confetti.cpp`) | Confetti at the finish, fireworks for a new best run | The finish the split times see |
 
@@ -23,7 +23,10 @@ point.
    platform: `mapview.cpp` never reads a block info's waypoint field (+0x11c) and has no colour or
    marker for any of them (`kindOf`). *Real look* (`topview.cpp`) takes every solid draw inside the
    map's grid alike, with the same shader for all: it never asks which block a draw belongs to, so a
-   checkpoint gate is its plain geometry, as in the editor.
+   checkpoint gate is its plain geometry, as in the editor. Its block reading (`blockmesh.cpp`) walks
+   every block the same way (its mobils, their mesh trees, each mesh with its own material's colour
+   map); what it draws never depends on the block info, its name or its waypoint field (the first
+   block's name is read once per map for a log line only).
    *Real look* off (`MinimapTextured=0`) leaves the squares. Nothing is drawn in the 3D world at all (no
    beams, rays or markers): every tool is a 2D ImGui window over the finished image.
 2. **Split times appear only when the game registers a checkpoint.** `splits::update` reacts to the
@@ -86,8 +89,9 @@ reads it. The engine's readers (`engine::raceTimes`, `currentMapUid`, `idText`, 
 
 ## The minimap's picture from above (Real look)
 
-`topview.cpp` draws the map's blocks again from straight above, from the game's own draws: no mesh is
-read from the files. In `plugin.cpp`'s `onDrawIndexed` (the game's state bound, before its draw) every
+`topview.cpp` draws the map's blocks again from straight above, from the game's own meshes: no mesh is
+read from the files. Two ways in, with the same placement key, so a mesh comes once whichever finds it
+first: the blocks read at once (`blockmesh.cpp`, below) and the camera's draws. In `plugin.cpp`'s `onDrawIndexed` (the game's state bound, before its draw) every
 indexed draw of the main camera goes to `misc::sceneDraw` (the mod's own draws never get there:
 `hook::gameCall`). A draw counts when it comes from inside the game's shader call, so its material is
 known (`engine::currentShader`: CDx9ShaderKeeper::UpdateAndRender or ShadeVisualForCurrentPass, the
@@ -115,6 +119,38 @@ measured (their vertices read for the box) at most 48 a frame, about 1 ms: the r
 next frames. The build-up ends when nothing new came for 5 s, or after 20 s; then only one draw in 16 is
 looked at per frame and at most 5 new meshes a second are taken (something that moves would otherwise
 come as new forever; the log counts what the cap refused).
+
+The blocks read at once (`blockmesh.cpp`): when the map's block list is read (and again when the editor
+changes it, after a device reset or with Real look switched on), each block's meshes are found in the
+game's memory the way its renderer draws them, read only inside SEH guards, and queued with
+`topview::addBlockMesh`: up to 300 a frame and 1.5 ms of reading, the queue's 4096 at most (a full
+queue stops the block, it comes again next frame). From the block: its CSceneMobil (+0x30), a clip's
+mobils (+0x38) and their child mobils (the links at mobil +0x38, each object at +0x18: a gate's
+checkpoint part); each mobil's CHmsItem (+0x28, pointing back at +0x40), its CPlugSolid (+0x14) and
+tree (solid +0x64), placed by each of the item's corpora (+0x34, the place a GmIso4 at corpus +0x18).
+The tree: children at +0x28 (CPlugTreeVisualMip: then its levels at +0xac, level 0 taken), shown with
+bit 8 of +0x9c, its own GmIso4 at +0x5c with bit 4, the visual +0x90 and material +0x94. The visual's
+CDx9VisualKeeper (+0x14) holds what the game made for it: the vertex buffer (+0x30 + 12 p: the
+CDx9VertexBuffer, its first vertex and count; stride at +0x0, the managed IDirect3DVertexBuffer9 at
++0x14), the static index buffer (+0x78: count and buffer at +0x8 + 12 p and +0x10 + 12 p), the split
+table (+0x88) for a tree's share, the vertex format (+0x14, its declaration from
+CDx9VertexDeclaration::s_Declarations) and the primitive kind (bits 16..21 of +0xc, as
+RenderVisualGeometry switches on it). Only the static geometry loaders are taken (Static,
+StaticVisualSplits, StaticSubVisuals, told by the keeper's loader at +0x2c) with static indices;
+lines, sprites, dynamic and skinned meshes, quads and visuals the game hasn't made buffers for are
+skipped and counted. The draw is the one the game makes (base vertex, first vertex, vertex count,
+first index, primitive count), its place the corpus' times the tree's places, so the key is the
+camera's (`misc: minimap: the camera's draws found N of the M placements read from the blocks`, 30 s
+after the reading, says whether they meet). The colour: the material's own colour map
+(`engine::materialDiffuse`) when its texture is a plain texture of the device's (the class of a
+managed texture of ours), else the material's colour; a camera draw with something better draws it
+again as before. Each mesh's bounds are measured once per buffer and range (instances share them).
+The addresses compared (tree vtables' child functions, the three loaders, s_Declarations) are per
+build in `engine::meshReadAddresses` (TMNF from its symbols; TMUF ported with
+`tools/port_address.py`, each function confirmed over 256 bytes, so the offsets are the same).
+`tmvs.log`: `misc: minimap: first block read: ...` (a block's grid cell against its first mesh's
+place) and `misc: minimap: blocks read: N blocks, M meshes queued (K unreadable) ...` with what was
+skipped.
 
 The colour comes from the material itself (`engine::materialDiffuse`). Each block material is a
 CPlugShaderApply with its own bitmaps; the colour map is the one whose file ends in D
@@ -144,7 +180,9 @@ same on 3000 meshes of 512 triangles at 1024 and 4096 pixels.
 What `tools/topviewtest.cpp` proves on a real D3D9 device: a draw made like the game's lands at its
 place (row 0 at the area's z0, the edges on the right pixels), with its texture, the higher over the
 lower, each draw once, a draw without textures left out, a placement first drawn with the lightmap
-drawn again with its colour map, nothing elsewhere, and the device state comes back. What only the game can
+drawn again with its colour map, nothing elsewhere, and the device state comes back; a mesh handed in
+as read from the blocks lands at its place with its colour map, is known when read again, and the
+camera's draw of the same placement (moved by the jitter) isn't taken again. What only the game can
 prove: that the block draws are found (the log line's mesh count), that the colour map is bound in
 the draws taken (the log line's count "the material's own colour map" and the material lines) and that
 TEXCOORD0 is its coordinate (a wrong one still gives the texture's average colour at this size), and

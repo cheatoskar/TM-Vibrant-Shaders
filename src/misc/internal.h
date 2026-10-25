@@ -83,6 +83,30 @@ void clearRegion();
 // misc::sceneDraw: one draw of the main camera.
 void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
             const float view[16], const float projection[16]);
+// A mesh read from one of the map's blocks (blockmesh.cpp): the game's own vertex declaration,
+// buffers and draw (as its renderer would make it), its place in the world (row vectors: x' = x
+// world[0] + y world[1] + z world[2] + world[3]) and its material (a CPlugShader). Nothing is held
+// by the caller: addBlockMesh takes its own references.
+struct BlockMesh {
+    IDirect3DVertexDeclaration9* decl = nullptr;
+    IDirect3DVertexBuffer9* vb = nullptr;
+    UINT stride = 0;
+    IDirect3DIndexBuffer9* ib = nullptr;
+    D3DPRIMITIVETYPE type = D3DPT_TRIANGLELIST;
+    INT base = 0;
+    UINT minIndex = 0, vertices = 0, start = 0, count = 0;
+    float world[4][3] = {};
+    const void* shader = nullptr;
+};
+enum class BlockMeshResult { Queued, Known, Outside, Full, Unusable };
+// Queues it like a camera draw (the same placement key: what the camera draws later of it is
+// known, and the other way round), with the material's colour map. Full: the queue is full (try
+// again next frame). Only at Present (it may make the picture's resources).
+BlockMeshResult addBlockMesh(IDirect3DDevice9* device, const BlockMesh& mesh);
+// The camera's draws that found a placement read from the blocks (since the last call), for the log.
+unsigned takeBlockHits();
+// Counts the times the picture forgot placements (a new map or area, a device reset, Real look off).
+unsigned epoch();
 // Draws what is queued into the picture (at Present, outside ImGui's drawing), a share a call.
 void render(IDirect3DDevice9* device);
 // The picture over the map's area (row 0 at z0), null while nothing is in it.
@@ -94,6 +118,17 @@ void noteFrame(double drawMs);
 void releaseDevice();
 void precompile(); // its shaders, on a thread at startup
 } // namespace topview
+
+// The Real look picture filled from the map's block list at once (blockmesh.cpp): every block's
+// meshes read from the game's memory (read only) and queued with topview::addBlockMesh.
+namespace blockmesh {
+// Once a frame at Present while the picture is wanted, with the map's block list as mapview read
+// it (CGameCtnChallenge +0x54: count, the CGameCtnBlock* array): goes on where it stopped, a share
+// a frame; a new list (another map, the editor's changes) starts over.
+// The picture starting over (topview::epoch changed: a new map or area, a device reset, the
+// setting off and on) starts the reading over too; what the picture holds already is skipped.
+void read(IDirect3DDevice9* device, uint32_t count, uintptr_t data);
+} // namespace blockmesh
 
 // Minimap (mapview.cpp), only in the replay editor and the video export's frames.
 namespace mapview {
