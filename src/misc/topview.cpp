@@ -56,7 +56,8 @@ constexpr float kMargin = 16.0f;        // m a mesh may reach past the grid area
 constexpr unsigned kStride = 16;        // after the build-up: one draw in 16 looked at per frame
 constexpr unsigned kNewPerFrame = 48;  // new meshes measured per frame (their vertices are read: ~20 us each)
 constexpr float kCell = 4.0f;          // m: the place's rounding in the key (the camera's jitter moves it ~1 m)
-constexpr float kNewPerSecond = 5.0f;  // after the build-up: new meshes admitted per second at most
+constexpr float kNewPerSecond = 40.0f; // after the build-up: new meshes admitted per second at most (a replay's
+                                       // camera keeps finding parts it hadn't seen: 5 left holes)
 constexpr DWORD kSettleMs = 5000;       // nothing new for this long: the build-up is over
 constexpr uint8_t kRejected = 0xFF;     // a placement outside the map (in `keys`)
 constexpr DWORD kReportMs = 60000;      // the cost line while the minimap is on
@@ -64,12 +65,13 @@ constexpr DWORD kReportMs = 60000;      // the cost line while the minimap is on
 const char* kTopVS = R"(
 float4x4 u_MeshToMap : register(c0);   // mesh -> the picture's clip space (row vectors, columns)
 float4x4 u_MeshToWorld : register(c4);
-struct Out { float4 pos : POSITION; float2 uv : TEXCOORD0; float3 world : TEXCOORD1; };
+struct Out { float4 pos : POSITION; float2 uv : TEXCOORD0; float3 world : TEXCOORD1; float depth : TEXCOORD2; };
 Out main(float4 pos : POSITION, float2 uv : TEXCOORD0) {
     Out o;
     o.pos = mul(pos, u_MeshToMap);
     o.uv = uv;
     o.world = mul(pos, u_MeshToWorld).xyz;
+    o.depth = o.pos.z / o.pos.w;
     return o;
 }
 )";
@@ -79,7 +81,8 @@ sampler2D s_Texture : register(s0);
 float4 u_Params : register(c0); // x: 0 the tint alone, 1 a colour texture, 2 a grey texture times the tint;
                                 // y: lowest height (m), z: 1 / height range
 float4 u_Tint : register(c1);   // the material's colour (grass, dirt, water, the rest grey)
-float4 main(float2 uv : TEXCOORD0, float3 world : TEXCOORD1) : COLOR0 {
+struct PSOut { float4 colour : COLOR0; float4 height : COLOR1; }; // the height: the depth it wrote (kept with the copy)
+PSOut main(float2 uv : TEXCOORD0, float3 world : TEXCOORD1, float depth : TEXCOORD2) {
     float3 base = u_Tint.rgb;
     if (u_Params.x > 1.5) base = u_Tint.rgb * (0.55 + 0.9 * tex2D(s_Texture, uv).r);
     else if (u_Params.x > 0.5) base = tex2D(s_Texture, uv).rgb;
@@ -87,7 +90,31 @@ float4 main(float2 uv : TEXCOORD0, float3 world : TEXCOORD1) : COLOR0 {
     if (n.y < 0.0) n = -n;
     float light = 0.62 + 0.38 * saturate(dot(n, normalize(float3(0.35, 1.0, 0.25))));
     float height = saturate((world.y - u_Params.y) * u_Params.z);
-    return float4(base * light * (0.85 + 0.3 * height), 1.0);
+    PSOut o;
+    o.colour = float4(base * light * (0.85 + 0.3 * height), 1.0);
+    o.height = float4(depth, 0.0, 0.0, 1.0);
+    return o;
+}
+)";
+
+// The depth buffer made again from the heights target (rebuildDepth).
+const char* kDepthVS = R"(
+struct Out { float4 pos : POSITION; float2 uv : TEXCOORD0; };
+Out main(float4 pos : POSITION, float2 uv : TEXCOORD0) {
+    Out o;
+    o.pos = pos;
+    o.uv = uv;
+    return o;
+}
+)";
+const char* kDepthPS = R"(
+sampler2D s_Height : register(s0);
+struct PSOut { float4 colour : COLOR0; float depth : DEPTH; };
+PSOut main(float2 uv : TEXCOORD0) {
+    PSOut o;
+    o.colour = 0.0;
+    o.depth = tex2D(s_Height, uv).r;
+    return o;
 }
 )";
 
@@ -156,6 +183,13 @@ struct State {
     IDirect3DTexture9* texture = nullptr;
     IDirect3DSurface9* surface = nullptr;
     IDirect3DSurface9* depth = nullptr;
+    // The second target: each pixel's depth as written (R32F), so the copy keeps the heights and a
+    // restored picture gets its depth back (null: a card without two targets; then no copy).
+    IDirect3DTexture9* heightTex = nullptr;
+    IDirect3DSurface9* heightSurface = nullptr;
+    IDirect3DVertexShader9* depthVs = nullptr;
+    IDirect3DPixelShader9* depthPs = nullptr;
+    IDirect3DVertexDeclaration9* depthDecl = nullptr;
     bool mipmaps = false;
     bool cleared = false;
     bool depthCleared = false;
@@ -163,6 +197,7 @@ struct State {
     // reset (the video export's start, a focus or mode change) loses the video memory, and the copy
     // brings it back with what was drawn (the placements stay known, so nothing is drawn twice).
     std::vector<uint32_t> copy;
+    std::vector<uint32_t> heightCopy; // the heights target's floats
     int copyDrawn = -1;    // g.drawn when it was made
     DWORD changedTick = 0; // the picture last drawn into
     DWORD copyTick = 0;    // the copy made
@@ -533,6 +568,8 @@ void releaseTargets() {
     gfx::release(g.surface);
     gfx::release(g.texture);
     gfx::release(g.depth);
+    gfx::release(g.heightSurface);
+    gfx::release(g.heightTex);
     gfx::release(g.saved);
     releaseGpuTimers();
     g.cleared = false;
@@ -545,6 +582,7 @@ void forget() {
     clearQueue();
     g.keys.clear();
     g.copy.clear();
+    g.heightCopy.clear();
     g.copyDrawn = -1;
     g.restore = false;
     g.sinceCopy.clear();
@@ -582,6 +620,26 @@ bool ensureResources(IDirect3DDevice9* device) {
             device->CreateTexture(g.width, g.height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &g.texture, nullptr);
         }
         if (g.texture && FAILED(g.texture->GetSurfaceLevel(0, &g.surface))) gfx::release(g.texture);
+    }
+    if (!g.heightTex) {
+        D3DCAPS9 caps{};
+        if (SUCCEEDED(device->GetDeviceCaps(&caps)) && caps.NumSimultaneousRTs >= 2 &&
+            SUCCEEDED(device->CreateTexture(g.width, g.height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_R32F, D3DPOOL_DEFAULT, &g.heightTex, nullptr)) &&
+            g.heightTex && FAILED(g.heightTex->GetSurfaceLevel(0, &g.heightSurface))) {
+            gfx::release(g.heightTex);
+        }
+        if (!g.depthVs) g.depthVs = gfx::compileVertexShader(device, kDepthVS, "main", "MinimapDepthVS");
+        if (!g.depthPs) g.depthPs = gfx::compilePixelShader(device, kDepthPS, "main", "MinimapDepthPS");
+        if (!g.depthDecl) {
+            const D3DVERTEXELEMENT9 elements[] = {{0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+                                                  {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+                                                  D3DDECL_END()};
+            device->CreateVertexDeclaration(elements, &g.depthDecl);
+        }
+        if (!g.depthVs || !g.depthPs || !g.depthDecl) {
+            gfx::release(g.heightSurface);
+            gfx::release(g.heightTex);
+        }
     }
     if (!g.depth && FAILED(device->CreateDepthStencilSurface(g.width, g.height, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE, &g.depth, nullptr))) {
         g.depth = nullptr;
@@ -916,10 +974,44 @@ void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minI
     }
 }
 
+// A render target into memory (4 bytes a pixel: the picture's ARGB, the heights' float), and back.
+bool readTarget(IDirect3DDevice9* device, IDirect3DSurface9* target, D3DFORMAT format, std::vector<uint32_t>& out) {
+    IDirect3DSurface9* memory = nullptr;
+    if (FAILED(device->CreateOffscreenPlainSurface(g.width, g.height, format, D3DPOOL_SYSTEMMEM, &memory, nullptr)) || !memory) return false;
+    bool ok = false;
+    D3DLOCKED_RECT locked{};
+    if (SUCCEEDED(device->GetRenderTargetData(target, memory)) && SUCCEEDED(memory->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+        out.resize(static_cast<size_t>(g.width) * g.height);
+        for (int y = 0; y < g.height; y++)
+            memcpy(&out[static_cast<size_t>(y) * g.width], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, g.width * 4);
+        memory->UnlockRect();
+        ok = true;
+    }
+    memory->Release();
+    return ok;
+}
+
+bool writeTarget(IDirect3DDevice9* device, IDirect3DSurface9* target, D3DFORMAT format, const std::vector<uint32_t>& in) {
+    if (in.size() != static_cast<size_t>(g.width) * g.height) return false;
+    IDirect3DSurface9* memory = nullptr;
+    bool ok = false;
+    D3DLOCKED_RECT locked{};
+    if (SUCCEEDED(device->CreateOffscreenPlainSurface(g.width, g.height, format, D3DPOOL_SYSTEMMEM, &memory, nullptr)) && memory &&
+        SUCCEEDED(memory->LockRect(&locked, nullptr, 0))) {
+        for (int y = 0; y < g.height; y++)
+            memcpy(static_cast<BYTE*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, &in[static_cast<size_t>(y) * g.width], g.width * 4);
+        memory->UnlockRect();
+        ok = SUCCEEDED(device->UpdateSurface(memory, nullptr, target, nullptr));
+    }
+    gfx::release(memory);
+    return ok;
+}
+
 // The picture on disk, per map (Documents\TrackMania\TMVS\Minimap\<map>.bin): the next time the map
-// loads it is there at once, the meshes in it known. Only for a map told by its UID (the high bit).
+// loads it is there at once, its heights and the meshes in it known. Only for a map told by its UID
+// (the high bit).
 constexpr uint32_t kDiskMagic = 0x4D4D5654; // "TVMM"
-constexpr uint32_t kDiskVersion = 1;
+constexpr uint32_t kDiskVersion = 2;        // 2: with the heights
 struct DiskHeader {
     uint32_t magic, version;
     int32_t width, height, drawn;
@@ -938,7 +1030,8 @@ std::wstring diskFile(uint64_t map) {
 
 void saveToDisk() {
     const std::wstring file = diskFile(g.map);
-    if (file.empty() || g.copy.empty()) return;
+    const size_t size = static_cast<size_t>(g.width) * g.height;
+    if (file.empty() || g.copy.size() != size || g.heightCopy.size() != size) return;
     g.savedDrawn = g.drawn;
     auto data = std::make_shared<std::vector<char>>();
     std::unordered_set<uint64_t> pending(g.sinceCopy.begin(), g.sinceCopy.end());
@@ -948,11 +1041,12 @@ void saveToDisk() {
         if (!pending.count(e.first)) keys.push_back(e);
     }
     const DiskHeader h = {kDiskMagic, kDiskVersion, g.width, g.height, g.drawn, static_cast<uint32_t>(keys.size()), g.x0, g.z0, g.x1, g.z1, g.top};
-    const size_t pixels = g.copy.size() * 4, pairs = keys.size() * sizeof(keys[0]);
-    data->resize(sizeof(h) + pixels + pairs);
+    const size_t pixels = size * 4, pairs = keys.size() * sizeof(keys[0]);
+    data->resize(sizeof(h) + 2 * pixels + pairs);
     memcpy(data->data(), &h, sizeof(h));
     memcpy(data->data() + sizeof(h), g.copy.data(), pixels);
-    if (pairs) memcpy(data->data() + sizeof(h) + pixels, keys.data(), pairs);
+    memcpy(data->data() + sizeof(h) + pixels, g.heightCopy.data(), pixels);
+    if (pairs) memcpy(data->data() + sizeof(h) + 2 * pixels, keys.data(), pairs);
     const int drawn = g.drawn;
     capwriter::post([data, file, drawn] {
         const std::wstring part = file + L".part";
@@ -981,11 +1075,13 @@ void loadFromDisk() {
               h.width == g.width && h.height == g.height && h.x0 == g.x0 && h.z0 == g.z0 && h.x1 == g.x1 && h.z1 == g.z1 && h.top == g.top &&
               h.drawn > 0 && h.keys <= kMaxKeys;
     if (ok) {
-        g.copy.resize(static_cast<size_t>(h.width) * h.height);
+        const size_t size = static_cast<size_t>(h.width) * h.height;
+        g.copy.resize(size);
+        g.heightCopy.resize(size);
         std::vector<std::pair<uint64_t, uint64_t>> keys(h.keys);
-        const DWORD pixels = static_cast<DWORD>(g.copy.size() * 4), pairs = static_cast<DWORD>(keys.size() * sizeof(keys[0]));
-        ok = ReadFile(f, g.copy.data(), pixels, &read, nullptr) && read == pixels &&
-             (!pairs || (ReadFile(f, keys.data(), pairs, &read, nullptr) && read == pairs));
+        const DWORD pixels = static_cast<DWORD>(size * 4), pairs = static_cast<DWORD>(keys.size() * sizeof(keys[0]));
+        ok = ReadFile(f, g.copy.data(), pixels, &read, nullptr) && read == pixels && ReadFile(f, g.heightCopy.data(), pixels, &read, nullptr) &&
+             read == pixels && (!pairs || (ReadFile(f, keys.data(), pairs, &read, nullptr) && read == pairs));
         if (ok) {
             for (const auto& e : keys) g.keys.insert(e);
             g.drawn = g.copyDrawn = g.savedDrawn = h.drawn;
@@ -994,62 +1090,84 @@ void loadFromDisk() {
             TMVS_LOG("misc: minimap: the picture from above loaded (%d meshes, %u known)", h.drawn, h.keys);
         } else {
             g.copy.clear();
+            g.heightCopy.clear();
         }
     }
     CloseHandle(f);
 }
 
-// The picture into memory, a second after it was last drawn into or every 5 s while it fills (one
-// read-back: it waits for the card once, a few milliseconds for a 1024 x 1024 picture), so a device
-// reset doesn't lose it.
+// The picture and its heights into memory, a second after it was last drawn into or every 5 s while
+// it fills (a read-back: it waits for the card once, a few milliseconds for a 1024 x 1024 picture),
+// so a device reset doesn't lose them. Without the heights target (a card without two render targets)
+// there is no copy: a reset starts over.
 void keepCopy(IDirect3DDevice9* device) {
-    if (!g.texture || !g.surface || !g.cleared || g.drawn <= 0 || g.copyDrawn == g.drawn) return;
+    if (!g.texture || !g.surface || !g.heightSurface || !g.cleared || g.drawn <= 0 || g.copyDrawn == g.drawn) return;
     const DWORD tick = GetTickCount();
     if (tick - g.changedTick < 1000 && tick - g.copyTick < 5000) return;
     g.copyTick = tick;
-    IDirect3DSurface9* memory = nullptr;
-    if (FAILED(device->CreateOffscreenPlainSurface(g.width, g.height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &memory, nullptr)) || !memory) return;
-    D3DLOCKED_RECT locked{};
-    if (SUCCEEDED(device->GetRenderTargetData(g.surface, memory)) && SUCCEEDED(memory->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
-        g.copy.resize(static_cast<size_t>(g.width) * g.height);
-        for (int y = 0; y < g.height; y++)
-            memcpy(&g.copy[static_cast<size_t>(y) * g.width], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, g.width * 4);
-        memory->UnlockRect();
-        g.copyDrawn = g.drawn;
-        // What is still queued isn't in the copy.
-        g.sinceCopy.clear();
-        for (const Job& j : g.queue) g.sinceCopy.push_back(j.key);
-    }
-    memory->Release();
-    if (g.copyDrawn == g.drawn && g.settled && g.savedDrawn != g.drawn) saveToDisk();
-}
-
-// After a device reset: the copy back into a new picture (its mipmaps made again).
-void restoreCopy(IDirect3DDevice9* device) {
-    g.restore = false;
-    if (g.copy.size() != static_cast<size_t>(g.width) * g.height || !ensureResources(device)) {
-        forget();
+    if (!readTarget(device, g.surface, D3DFMT_A8R8G8B8, g.copy) || !readTarget(device, g.heightSurface, D3DFMT_R32F, g.heightCopy)) {
+        g.copy.clear();
+        g.heightCopy.clear();
+        g.copyDrawn = -1;
         return;
     }
-    IDirect3DSurface9* memory = nullptr;
-    bool ok = false;
-    D3DLOCKED_RECT locked{};
-    if (SUCCEEDED(device->CreateOffscreenPlainSurface(g.width, g.height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &memory, nullptr)) && memory &&
-        SUCCEEDED(memory->LockRect(&locked, nullptr, 0))) {
-        for (int y = 0; y < g.height; y++)
-            memcpy(static_cast<BYTE*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, &g.copy[static_cast<size_t>(y) * g.width], g.width * 4);
-        memory->UnlockRect();
-        ok = SUCCEEDED(device->UpdateSurface(memory, nullptr, g.surface, nullptr));
-    }
-    gfx::release(memory);
-    if (!ok) {
+    g.copyDrawn = g.drawn;
+    // What is still queued isn't in the copy.
+    g.sinceCopy.clear();
+    for (const Job& j : g.queue) g.sinceCopy.push_back(j.key);
+    if (g.settled && g.savedDrawn != g.drawn) saveToDisk();
+}
+
+// After a device reset or from disk: the copy back into a new picture (its mipmaps made again) and
+// its heights; the depth is made from them in the next render (rebuildDepth).
+void restoreCopy(IDirect3DDevice9* device) {
+    g.restore = false;
+    if (!ensureResources(device) || !g.heightSurface || !writeTarget(device, g.surface, D3DFMT_A8R8G8B8, g.copy) ||
+        !writeTarget(device, g.heightSurface, D3DFMT_R32F, g.heightCopy)) {
         forget();
         return;
     }
     if (g.mipmaps) g.texture->GenerateMipSubLevels();
     g.cleared = true;
     g.depthCleared = false;
-    TMVS_LOG("misc: minimap: the picture from above back after the device reset (%d meshes)", g.drawn);
+    TMVS_LOG("misc: minimap: the picture from above put back with its heights (%d meshes)", g.drawn);
+}
+
+// The depth buffer from the heights target (after restoreCopy): higher keeps covering lower for what
+// comes next. Inside the render's scene, its target bound.
+void rebuildDepth(IDirect3DDevice9* device) {
+    device->SetRenderState(D3DRS_ZENABLE, TRUE);
+    device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+    device->SetRenderState(D3DRS_ZFUNC, D3DCMP_ALWAYS);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+    device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+    device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+    device->SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+    device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+    device->SetRenderTarget(1, nullptr); // read below
+    device->SetTexture(0, g.heightTex);
+    device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+    device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+    device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+    device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    device->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+    device->SetVertexShader(g.depthVs);
+    device->SetPixelShader(g.depthPs);
+    device->SetVertexDeclaration(g.depthDecl);
+    // The whole picture, half a pixel over for D3D9's pixel centres.
+    const float dx = 1.0f / g.width, dy = 1.0f / g.height;
+    const float quad[4][6] = {{-1.0f - dx, 1.0f + dy, 0.5f, 1.0f, 0.0f, 0.0f},
+                              {1.0f - dx, 1.0f + dy, 0.5f, 1.0f, 1.0f, 0.0f},
+                              {-1.0f - dx, -1.0f + dy, 0.5f, 1.0f, 0.0f, 1.0f},
+                              {1.0f - dx, -1.0f + dy, 0.5f, 1.0f, 1.0f, 1.0f}};
+    device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(quad[0]));
+    device->SetTexture(0, nullptr);
+    device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+    device->SetRenderTarget(1, g.heightSurface);
 }
 
 void render(IDirect3DDevice9* device) {
@@ -1092,12 +1210,21 @@ void render(IDirect3DDevice9* device) {
         const D3DVIEWPORT9 viewport = {0, 0, static_cast<DWORD>(g.width), static_cast<DWORD>(g.height), 0.0f, 1.0f};
         device->SetViewport(&viewport);
         if (!g.cleared) {
+            if (g.heightSurface) {
+                device->SetRenderTarget(0, g.heightSurface); // the heights: 1, as far as the depth's clear
+                device->Clear(0, nullptr, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+                device->SetRenderTarget(0, g.surface);
+            }
             device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
             g.cleared = true;
             g.depthCleared = true;
-        } else if (!g.depthCleared) {
-            // The picture came back from its copy, the heights didn't: what comes now covers it.
-            device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+        }
+        if (g.heightSurface) device->SetRenderTarget(1, g.heightSurface);
+        device->SetViewport(&viewport);
+        if (!g.depthCleared) {
+            // The picture came back from its copy: its depth from the heights.
+            if (g.heightSurface) rebuildDepth(device);
+            else device->Clear(0, nullptr, D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
             g.depthCleared = true;
         }
         device->SetRenderState(D3DRS_ZENABLE, TRUE);
@@ -1243,7 +1370,7 @@ void releaseDevice() {
     // goes back in after the reset; a copy of all that was drawn keeps the placements known (nothing
     // is drawn twice), an older one lets them come again over it. Without one everything starts over.
     clearQueue();
-    if (g.copyDrawn > 0 && !g.copy.empty()) {
+    if (g.copyDrawn > 0 && !g.copy.empty() && g.heightCopy.size() == g.copy.size()) {
         for (uint64_t k : g.sinceCopy) g.keys.erase(k);
         if (!g.sinceCopy.empty()) {
             g.settled = false;
@@ -1264,6 +1391,9 @@ void releaseDevice() {
     g_ownDecls.clear();
     gfx::release(g.vs);
     gfx::release(g.ps);
+    gfx::release(g.depthVs);
+    gfx::release(g.depthPs);
+    gfx::release(g.depthDecl);
     g.failed = false;
 }
 

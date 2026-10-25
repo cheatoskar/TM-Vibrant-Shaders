@@ -410,6 +410,40 @@ int main(int argc, char** argv) {
         gfx::release(copy);
         gfx::release(level);
     }
+    // A device reset (Shoot video): the picture and its heights copied a second after the last
+    // drawing, given back after the reset; a lower quad seen afterwards under B stays under it.
+    Sleep(1100);
+    topview::render(device); // nothing queued: the copy is made
+    topview::releaseDevice();
+    device->BeginScene();
+    device->SetVertexDeclaration(decl);
+    device->SetStreamSource(0, vb, 0, sizeof(Vertex));
+    device->SetIndices(ib);
+    device->SetVertexShader(vs);
+    device->SetPixelShader(ps);
+    device->SetTexture(0, lightmap);
+    drawQuad(16.0f, 5.0f, 16.0f, red); // lower than B, at B's place
+    device->EndScene();
+    topview::render(device); // the copy back, its depth from the heights, then the new quad
+    check(topview::meshes() == 4, "after the reset: the three from the copy and the new one");
+    picture = topview::picture();
+    check(picture != nullptr, "the picture is back after the reset");
+    if (picture) {
+        IDirect3DSurface9* level = nullptr;
+        IDirect3DSurface9* copy = nullptr;
+        picture->GetSurfaceLevel(0, &level);
+        device->CreateOffscreenPlainSurface(64, 64, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &copy, nullptr);
+        device->GetRenderTargetData(level, copy);
+        D3DLOCKED_RECT r{};
+        copy->LockRect(&r, nullptr, D3DLOCK_READONLY);
+        const auto at = [&](int x, int z) { return reinterpret_cast<const D3DCOLOR*>(static_cast<const BYTE*>(r.pBits) + z * r.Pitch)[x]; };
+        const D3DCOLOR a = at(8, 8), b = at(40, 40);
+        check(((a >> 16) & 255) > 150 && ((a >> 8) & 255) < 40, "after the reset: A still red (from the copy)");
+        check(((b >> 8) & 255) > 150 && ((b >> 16) & 255) < 40, "after the reset: B still green over the lower quad seen later (heights kept)");
+        copy->UnlockRect();
+        gfx::release(copy);
+        gfx::release(level);
+    }
     if (benchmark) bench(device, vs, ps, decl, green, view, projection);
     topview::releaseDevice();
     printf(g_failed ? "%d check(s) failed\n" : "all passed\n", g_failed);
