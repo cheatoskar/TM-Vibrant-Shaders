@@ -121,6 +121,11 @@ bool inTheGame() {
 
 } // namespace
 
+// Which of the car's model axes is ahead (+1: its z, -1: -z), as the spray decided it (the water's wake).
+float weatherCarForwardSign() {
+    return g_forward.sign;
+}
+
 bool WeatherStage::init(ID3D11Device* device) {
     bool ok = SUCCEEDED(device->CreatePixelShader(g_PS_Reflect, sizeof(g_PS_Reflect), nullptr, &m_reflectPs));
     ok &= SUCCEEDED(device->CreateVertexShader(g_VS_RainDrop, sizeof(g_VS_RainDrop), nullptr, &m_dropVs));

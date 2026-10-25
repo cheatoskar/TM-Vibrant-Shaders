@@ -28,6 +28,8 @@
 // further along -x, the car back at the start for each (a restart: TrailKeepRuns).
 // --carfwd x,y,z (with --car): the way the car faces (default: the way it drives); another way
 // than it drives makes it slide (the spray, Spray with Wetness).
+// --water y (with --car): water at height y around the car (WaterSplash without the engine's water):
+// a car driving down through y splashes in, one under it leaves a wake.
 // An output ending in .jpg is a preset picture for the menu (384 x 216, tools/make-thumbnails.ps1).
 #include "effects_trail.h"
 #include "image.h"
@@ -556,6 +558,8 @@ int main(int argc, char** argv) {
     float trailFwd[3] = {};                 // --carfwd x,y,z: the way it faces (default: the way it drives)
     bool haveTrailFwd = false;
     int trailRuns = 0; // --runs: earlier runs of the drive before the last (restarts)
+    bool haveWater = false; // --water y: a water surface at y for the splash
+    float waterLevel = 0.0f;
     float focus[2] = {-1.0f, -1.0f}; // --focus u,v: the photo mode's focus point
     std::string compare;              // --compare: the preset on the split's other side
     float splitAt = 0.5f;             // --split
@@ -609,6 +613,7 @@ int main(int argc, char** argv) {
         else if (opt == "--time") time = atof(value.c_str());
         else if (opt == "--frames") frames = std::max(1, atoi(value.c_str()));
         else if (opt == "--runs") trailRuns = std::max(0, atoi(value.c_str()));
+        else if (opt == "--water") haveWater = sscanf(value.c_str(), "%f", &waterLevel) == 1;
         else if (opt == "--car") haveTrailCar = sscanf(value.c_str(), "%f,%f,%f", &trailCar[0], &trailCar[1], &trailCar[2]) == 3;
         else if (opt == "--carfrom") haveTrailFrom = sscanf(value.c_str(), "%f,%f,%f", &trailFrom[0], &trailFrom[1], &trailFrom[2]) == 3;
         else if (opt == "--carfwd") haveTrailFwd = sscanf(value.c_str(), "%f,%f,%f", &trailFwd[0], &trailFwd[1], &trailFwd[2]) == 3;
@@ -754,6 +759,7 @@ int main(int argc, char** argv) {
     Renderer renderer;
     if (!renderer.init(device)) return 2;
     renderer.effects().setSpillHistory(spillHistory);
+    if (haveWater) renderer.effects().setTestWaterLevel(waterLevel);
     // --compare: the preset's look as hooks.cpp prepareLook makes it (your machine settings with
     // the preset's look), from a renderer of its own; each look draws its side of the line.
     const bool comparing = !compare.empty();

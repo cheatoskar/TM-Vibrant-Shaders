@@ -9,6 +9,7 @@
 #include "effects_cinema.h"
 #include "effects_sky.h"
 #include "effects_trail.h"
+#include "effects_water.h"
 #include "effects_weather.h"
 #include "engine_frame.h"
 #include <d3d11.h>
@@ -69,6 +70,7 @@ enum Pass : int {
     kTAA,
     kSharpen,
     kVolumetric,
+    kWaterSplash,
     kPassCount
 };
 const char* passName(int pass);
@@ -179,6 +181,8 @@ public:
     // The previewer's A/B of the neon spill over frames (--nospillhistory: each frame on its own,
     // as before 1.4.0).
     void setSpillHistory(bool on) { m_spillHistoryOn = on; }
+    // The previewer's water surface (mp_preview --water y): the splash without the engine's water.
+    void setTestWaterLevel(float y) { m_water.setTestLevel(y); }
     // The compare split's preset side draws your neon trail (`from`'s), recording none.
     void shareTrail(const Effects* from) { m_trail.shareFrom(from ? &from->m_trail : nullptr); }
 
@@ -233,6 +237,7 @@ private:
     WeatherStage m_weather;
     CinemaStage m_cinema;
     TrailStage m_trail;
+    WaterStage m_water;
 
     float m_c[49][4] = {};
     float m_prevW2C[12] = {};

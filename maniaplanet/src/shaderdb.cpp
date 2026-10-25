@@ -30,11 +30,13 @@ ShaderInfo identify(const void* bytecode, size_t size) {
     return info;
 }
 
-uint8_t lightTextureSlot(const void* bytecode, size_t size) {
+namespace {
+
+// The first texture binding named one of `names` (its RDEF chunk), or kNoSlot.
+uint8_t findTexture(const void* bytecode, size_t size, const char* const* names, size_t nameCount) {
     // DXBC: "DXBC", checksum, 1, total size, chunk count, chunk offsets; RDEF: constant buffer
     // count and offset, binding count and offset, then 32-byte bindings (name offset, type, return
     // type, dimension, samples, bind point, bind count, flags). Offsets are from the chunk's data.
-    static const char* const kNames[] = {"TMapSelfIllum", "TMapAdvert", "TMapIllum"};
     const auto* b = static_cast<const unsigned char*>(bytecode);
     auto u32 = [&](size_t at) {
         uint32_t v = 0;
@@ -55,14 +57,25 @@ uint8_t lightTextureSlot(const void* bytecode, size_t size) {
             if (type != 2 || name >= length || point > 127) continue; // textures only
             const char* s = reinterpret_cast<const char*>(b + data + name);
             const size_t room = length - name;
-            for (const char* n : kNames) {
-                const size_t len = strlen(n);
-                if (room > len && !memcmp(s, n, len + 1)) return static_cast<uint8_t>(point);
+            for (size_t j = 0; j < nameCount; j++) {
+                const size_t len = strlen(names[j]);
+                if (room > len && !memcmp(s, names[j], len + 1)) return static_cast<uint8_t>(point);
             }
         }
         return kNoSlot;
     }
     return kNoSlot;
+}
+
+} // namespace
+
+uint8_t lightTextureSlot(const void* bytecode, size_t size) {
+    static const char* const kNames[] = {"TMapSelfIllum", "TMapAdvert", "TMapIllum"};
+    return findTexture(bytecode, size, kNames, std::size(kNames));
+}
+
+uint8_t textureSlot(const void* bytecode, size_t size, const char* name) {
+    return findTexture(bytecode, size, &name, 1);
 }
 
 const char* roleName(Role role) {

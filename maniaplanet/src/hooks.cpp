@@ -21,6 +21,7 @@
 #include "maplook.h"
 #include "shaderdb.h"
 #include "softshadow.h"
+#include "water11.h"
 #include <windows.h>
 #include <atomic>
 #include <dxgi1_2.h>
@@ -406,6 +407,8 @@ void releaseTextures() {
 EngineShadow g_shadow;
 // The mod's soft shadow shader is bound for the engine's shadow draw (softshadow::end after it).
 bool g_softShadowBound = false;
+// The engine's water fog draw goes into the mod's buffer (water::endFog after it).
+bool g_waterFogBound = false;
 
 void releaseShadow() {
     if (g_shadow.constants) g_shadow.constants->Release();
@@ -984,6 +987,12 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     Frame& f = g_frame;
     f.draws++;
     f.light = lights::Draw{};
+    // Clear water: the fog draws went into the mod's buffer; it goes into the image before the next
+    // other draw (the engine's copy of the image for its refraction).
+    if (water::pending() && !(f.phase == Phase::Scene && water::isFogShader(f.ps.name))) {
+        water::compose(ctx, g_tex[kTexDiffuse], g_tex[kTexNormal], g_tex[kTexLightMask]);
+        if (capture::active()) capture::traceNote("water: the mod's fog buffer put into the image (before the next draw)");
+    }
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
     // Only the effects' tone maps are the tone map: the editor draws Engines/CopyColor0_ToneMapT3
     // into the HDR image in the middle of the scene (with depth), and the effects ran there, on
@@ -1024,6 +1033,7 @@ bool onDraw(ID3D11DeviceContext* ctx) {
         f.toneMapSeen = true;
         videoTick(f.rtW, f.rtH);
         f.toneMapped = replaceToneMap(ctx);
+        water::endRender(); // the effects have used this render's water
         return f.toneMapped;
     }
     if (role == Role::ToneMap && f.rt) {
@@ -1076,6 +1086,16 @@ bool onDraw(ID3D11DeviceContext* ctx) {
                 for (auto* v : rtv)
                     if (v) v->Release();
             }
+        }
+        // The engine's water fog (WaterClarity, WaterSplash): drawn into the mod's buffer.
+        if (role == Role::Scene && water::isFogShader(f.ps.name) && f.rt && screenSized(f.rtW, f.rtH)) {
+            const bool on = g_lookSettings.enabled && g_rendererReady;
+            water::Params wp;
+            wp.clarity = on ? std::clamp(g_lookSettings.waterClarity, 0.0f, 1.0f) : 0.0f;
+            wp.splash = on && g_lookSettings.waterSplash > 0.0f && options::current().hdrStage;
+            wp.time = effectTime();
+            g_waterFogBound = water::beginFog(g_device, ctx, f.ps, wp);
+            if (g_waterFogBound && capture::active()) capture::traceNote("water: drawn into the mod's fog buffer");
         }
         return false;
     }
@@ -1132,6 +1152,7 @@ HRESULT STDMETHODCALLTYPE createPixelShaderDetour(ID3D11Device* device, const vo
         ShaderInfo info = shaderdb::identify(code, size);
         if (info.role == Role::Scene) info.lightSlot = shaderdb::lightTextureSlot(code, size);
         if (info.name && !strcmp(info.name, "Tech3/DeferredShadowPssm_p")) softshadow::noteEngineShader(*out, code, size);
+        if (water::isFogShader(info.name)) info.depthSlot = shaderdb::textureSlot(code, size, "TMapDepth");
         {
             std::unique_lock<std::shared_mutex> lock(g_shaderLock);
             g_shaders[*out] = info;
@@ -1202,6 +1223,10 @@ void STDMETHODCALLTYPE omSetRenderTargetsAndUAVsDetour(ID3D11DeviceContext* ctx,
 
 // After a draw of the game: the engine's shader back where the mod's soft shadows drew.
 void afterDraw(ID3D11DeviceContext* ctx) {
+    if (g_waterFogBound) {
+        g_waterFogBound = false;
+        water::endFog(ctx);
+    }
     if (!g_softShadowBound) return;
     g_softShadowBound = false;
     softshadow::end(ctx);
@@ -1628,6 +1653,7 @@ bool onPresent(IDXGISwapChain* sc) {
     }
     capture::endFrame();
     lights::endFrame();
+    water::endFrame();
 
     // The map's time of day from the engine's light (day, sunset, night presets, as in TMNF):
     // only in frames with a scene, and only once it holds for a second.
@@ -1701,6 +1727,7 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
         releaseTextures();
         releaseShadow();
         lights::release();
+        water::release();
         g_isSceneV.clear();
         g_frame = Frame{};
         TMVS_LOG("hooks: ResizeBuffers %ux%u", w, h);
