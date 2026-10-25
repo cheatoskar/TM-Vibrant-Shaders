@@ -482,10 +482,12 @@ void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
         const float trackZ0 = p.track ? p.trackZ0 * kCellSize : worldZ0, trackZ1 = p.track ? (p.trackZ1 + 1) * kCellSize : worldZ1;
         const float whole = std::max(trackX1 - trackX0, trackZ1 - trackZ0) * 1.15f;
         // Auto zoom: around the car, the span from its speed, at most the whole track. A track that
-        // fits in about 1.3 times the standing-still view is shown whole instead (centred, north up).
-        // Off (or no car): the whole track.
+        // fits in about 1.3 times the standing-still view is shown whole instead: centred and north up,
+        // or with Rotate with car around the car, turning with it, at the whole track's span (my
+        // export test: a small track never turned). Off (or no car): the whole track.
         const float standing = 150.0f / std::max(s.mapZoom, 0.1f);
-        const bool autoZoom = s.mapAutoZoom && whole > standing * 1.3f;
+        const bool smallTrack = whole <= standing * 1.3f;
+        const bool autoZoom = s.mapAutoZoom && (!smallTrack || s.mapRotate);
         if (g_view.map != p.map) {
             g_view = View();
             g_view.map = p.map;
@@ -505,6 +507,7 @@ void drawWindow(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax) {
         if (autoZoom && car) {
             source = kFollowCar;
             span = std::min(g_zoom.update(speed, s.mapZoom, dt), whole);
+            if (smallTrack) span = whole;
             cx = pose.position[0];
             cz = pose.position[2];
             if (s.mapRotate) {
