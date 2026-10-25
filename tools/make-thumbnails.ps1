@@ -22,7 +22,7 @@ $out = 'thumbnails'
 
 # Same order as the Preset enum (src/config.h) and the ids in thumbnails.rc.
 $presets = @('Vibrant', 'Realistic', 'Golden Hour', 'Dreamy', 'Neon', 'Horizon', 'Aurora', 'Competition',
-             'Performance', 'Rainy', 'Replay Cinema', 'Storm', 'Snowstorm')
+             'Performance', 'Rainy', 'Replay Cinema', 'Storm', 'Snowstorm', 'Horror')
 $jobs = Join-Path $env:TEMP 'tmvs_thumbnails.txt'
 $lines = foreach ($p in $presets) {
     $file = ($p.ToLower() -replace ' ', '_') + '.jpg'

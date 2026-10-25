@@ -57,6 +57,10 @@ float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, re
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
+float4 u_Head0     : register(c64); // CarHeadlights (PS_Headlights): strength, cos of the cone's edge, cos of its bright core, range (m)
+float4 u_Head1     : register(c65); // the left lamp (world), glare strength
+float4 u_Head2     : register(c66); // the right lamp (world), beam strength
+float4 u_Head3     : register(c67); // the lamps' aim (world, unit)
 float4 u_Neon      : register(c58); // x: 1 = the neon strips are known by their material (s13 g 0 on them, above 0.1 elsewhere; PS_NeonGlow), 0 = by their colour
 float4 u_Engine    : register(c46); // EngineLights: x s14 holds the added light; y its extra strength per highlight boost; z the reflections' boost of bright hits (1 as before, 0 off); w the neon strips' glow (BorderGlow)
 float4 u_Water2    : register(c51); // x: clean water, 1 = on and the water's height known (the reflection on the game's water mirrors only what it can see, and isn't blurred like the dry track); 0 = as before
@@ -1760,7 +1764,7 @@ float2 rippleSlope(float2 xz, float t) {
 float2 waveSlope(float2 xz, float t, float footprint) {
     float2 g = 0;
     float2 d0 = float2(0.8, 0.6), d1 = float2(-0.4, 0.92), d2 = float2(0.97, -0.24), d3 = float2(-0.7, -0.7);
-    float px = 2.0 * footprint;
+    float px = 3.0 * footprint; // no wave under 3 pixels of this: it only aliases
     g += d0 * cos(dot(d0, xz) * 0.9 + t * 1.3) * 0.05 * saturate(7.0 / px - 1.0);
     g += d1 * cos(dot(d1, xz) * 1.7 + t * 1.9) * 0.035 * saturate(3.7 / px - 1.0);
     g += d2 * cos(dot(d2, xz) * 3.1 + t * 2.6) * 0.025 * saturate(2.0 / px - 1.0);
@@ -2095,6 +2099,7 @@ float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
     dir *= sEnd;
     k1 = lerp(k0, k1, sEnd);
     float sPrev = 0.0;
+    float zPrev = p.z;
     [loop] for (int i = 1; i <= (int)steps; i++) {
         float x = (i - 1 + noise) / steps;
         // Somewhat finer near the start: where things stand in the water, their mirror image
@@ -2108,7 +2113,11 @@ float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
         float level;
         if (delta > 0.0 && waterLevelMatch(worldPosition(viewPosition(quv, sceneZ)), level) > 0.1) delta = -1.0;
         float t = length(viewPosition(quv, rayZ) - p);
-        if (delta > 0.0 && delta < 0.4 + t * 0.1) {
+        // The ray's depth changes by a long way in one step across the screen: a thin mast or a
+        // banner's rim fell between two steps and the mirror image came out in dashes and holes.
+        // The window for a hit is the step's own depth change; a ray that went behind a surface
+        // is dropped below (the depth jump at the hit).
+        if (delta > 0.0 && delta < 0.4 + t * 0.1 + abs(rayZ - zPrev)) {
             // Refine between the last two steps.
             float a = sPrev, b = s;
             [unroll] for (int k = 0; k < 6; k++) {
@@ -2123,6 +2132,7 @@ float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
             float4 hitNd = tex2Dlod(s1, float4(quv, 0, 0));
             if (dot(hitNd.xyz, r) > 0.0 || rayZ - hitNd.w > 0.1 + t * 0.03) {
                 sPrev = s;
+                zPrev = rayZ;
                 continue;
             }
             float edge = min(min(quv.x, 1.0 - quv.x), min(quv.y, 1.0 - quv.y));
@@ -2134,6 +2144,7 @@ float4 traceWaterFar(float3 p, float3 r, float noise, float steps) {
             return float4(hit, confidence);
         }
         sPrev = s;
+        zPrev = rayZ;
     }
     return 0;
 }
@@ -2728,11 +2739,12 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
     float ao = lerp(1.0, occ.r, u_Light.x);
     float sunVis = occ.g;
     float shadow = 1.0;
+    // The sky's colour at the brightness of white (shadows and ambient occlusion take it on).
+    const float3 skyTint = u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3);
     if (u_SunView.w > 0.5) {
         float ndl = saturate(dot(nLight, u_SunView.xyz));
         shadow = lerp(1.0, sunVis, u_Light.z * saturate(ndl * 4.0));
         // In shadow: lose direct light and take on the sky's colour.
-        float3 skyTint = u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3);
         float shadowed = (1.0 - shadow);
         c *= lerp(1.0, 0.32, shadowed);
         c *= lerp(float3(1, 1, 1), skyTint, u_SkyColor.w * saturate(shadowed + (1.0 - ndl) * 0.35));
@@ -2746,7 +2758,7 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
     }
     c *= ao;
     // Ambient occlusion also tints toward the sky colour (bounce from the sky dome).
-    c *= lerp(u_SkyColor.rgb / max(luma(u_SkyColor.rgb), 1e-3), float3(1, 1, 1), lerp(1.0, ao, 0.5 * u_SkyColor.w));
+    c *= lerp(skyTint, float3(1, 1, 1), lerp(1.0, ao, 0.5 * u_SkyColor.w));
 
     // Neon light spilling onto nearby surfaces (screen-space, blurred light buffer).
     if (u_Light2.x > 0.0) {
@@ -2760,7 +2772,11 @@ float4 lighting(float2 uv, float2 vpos, uniform bool engine, uniform bool gameLi
         float3 r = reflect(rd, nRefl);
         float NdotV = saturate(dot(nRefl, -rd));
         float smoothness = max(max(max(puddle, water), wet * 0.35), polish);
-        float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * 0.04;
+        // Clean water: the mirror image wobbles by a quarter of the waves' slope (as the mirrored
+        // direction above). The full slope (up to 0.13, 0.5 % of the screen) moved every pixel
+        // of the half-res image by its own amount: the banners and stands came out torn into
+        // strips and smeared, with the sky showing through between them.
+        float2 distort = worldToViewDir(float3(slope.x, 0.0, slope.y)).xy * float2(1, -1) * (0.04 - water * u_Water2.x * 0.03);
         float4 ssr = tex2Dlod(s8, float4(uv + distort, 0, 0));
         // Rough wet asphalt and the polished dry track blur the reflection (5 taps): no
         // speckles from the half-res ray hits. Puddles and water stay sharp.
@@ -3403,6 +3419,83 @@ float4 PS_NeonAdd(float2 uv : TEXCOORD0) : COLOR0 {
     return float4(glow * (1.0 - 0.6 * fog), 0);
 }
 
+// CarHeadlights: two spotlights on the car, added to the lit image (blend one, one). s0 = the game's
+// image (the surface's colour, for what the light falls on), s1 = full normal/depth. u_Head0..3 (c64..c67).
+//   - the surfaces: each lamp lights what is in its cone, by distance and the angle of the surface to it
+//   - the haze: 16 samples along the view ray, each in the lamps' cones, scattered toward the eye (the
+//     beams show in thick fog and as a faint cone in clear air)
+//   - the glare: looking into a lamp (the camera in front of the car) a core and a halo, covered where
+//     the lamp's pixel is hidden behind something nearer
+// No shadows: the light goes through walls and the car's own body (a lamp inside the cone of a wall
+// beside the road lights it); the road and walls ahead are what it is for.
+static const float HEAD_SURFACE = 1.2;
+static const float HEAD_BEAM = 90.0;
+float headSpot(float3 q, float3 lamp) {
+    float3 v = q - lamp;
+    float d2 = dot(v, v);
+    float cone = smoothstep(u_Head0.y, u_Head0.z, dot(v, u_Head3.xyz) * rsqrt(max(d2, 1e-4)));
+    // Inverse square past a fifth of the range (so Headlight range moves how far it carries: at 90 m
+    // a wall 50 m out still gets about an eighth of the light near the car), a smooth end at the range.
+    float r2 = d2 / (u_Head0.w * u_Head0.w);
+    float reach = saturate(1.0 - r2 * r2);
+    return cone * reach * reach / (1.0 + r2 * 24.0);
+}
+float headGlare(float3 rd, float3 cam, float3 lamp) {
+    float3 w = lamp - cam;
+    float dl = length(w);
+    float3 wd = w / dl;
+    float3 lv = worldToViewDir(w);
+    float2 luv = projectToUV(lv);
+    // Hidden behind something nearer (the car's own nose is within a metre of the lamp).
+    float seen = lv.z > 0.1 && all(luv > 0.0) && all(luv < 1.0) ? saturate(tex2Dlod(s1, float4(luv, 0, 0)).w - lv.z + 1.0) : (lv.z > 0.1 ? 1.0 : 0.0);
+    // Strong only in front of the beam, near its axis; a point of light far away: its angle shrinks
+    // with the distance (a lamp 1 m wide at 10 m), its brightness falls and is mostly gone past 60-100 m.
+    float onAxis = saturate(dot(u_Head3.xyz, -wd));
+    float facing = smoothstep(u_Head0.y, 1.0, onAxis);
+    facing *= facing;
+    float k = max(dl * 0.1, 1.0);
+    float x = 1.0 - saturate(dot(rd, wd));
+    float fade = lerp(1.0, 0.08, smoothstep(40.0, 100.0, dl)) / (1.0 + dl * dl * 0.0004);
+    float glare = exp(-x * 12000.0 * k * k) * 4.0 + 2.0 / pow(1.0 + x * 800.0 * k * k, 1.5);
+    return min(glare, 8.0) * facing * seen * fade;
+}
+float4 PS_Headlights(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
+    float3 rdView = normalize(viewPosition(uv, 1.0));
+    float3 rd = viewToWorldDir(rdView);
+    float3 cam = cameraWorld();
+    bool sky = nd.w >= SKY_Z;
+    float dist = sky ? 1e5 : nd.w / max(rdView.z, 1e-3);
+    float3 lampL = u_Head1.xyz, lampR = u_Head2.xyz;
+    float3 add = 0;
+    if (!sky) {
+        float3 world = cam + rd * dist;
+        float3 n = viewToWorldDir(nd.xyz);
+        float3 colour = min(toLinear(tex2Dlod(s0, float4(uv, 0, 0)).rgb), 1.0);
+        float3 albedo = sqrt(colour) * 0.65 + 0.04; // the game's night is dark: its colours, lifted
+        // The lamps sit low: a road is lit at a grazing angle, and in a game it should not be black. The angle is taken from lamps 3 m higher.
+        float3 raise = float3(0.0, 3.0, 0.0);
+        float3 toL = normalize(lampL + raise - world), toR = normalize(lampR + raise - world);
+        float lit = headSpot(world, lampL) * (saturate(dot(n, toL)) * 0.7 + 0.3) + headSpot(world, lampR) * (saturate(dot(n, toR)) * 0.7 + 0.3);
+        add = albedo * lit * HEAD_SURFACE * float3(1.0, 0.93, 0.8) * u_Head0.x * (1.0 - 0.6 * hazeAmount(rd, dist));
+    }
+    // The beams: the haze in the cones, forward-scattering toward the lamps.
+    float reach = min(dist, u_Head0.w * 1.2);
+    float noise = ign(vpos);
+    float scatter = 0.0;
+    [loop] for (int i = 0; i < 16; i++) {
+        float f = (i + noise) / 16.0;
+        float t = f * f * reach;
+        float3 q = cam + rd * t;
+        scatter += (headSpot(q, lampL) + headSpot(q, lampR)) * (f * 2.0 * reach / 16.0);
+    }
+    float density = (u_Atmo.x * 0.0009 + 0.0008) * u_Sky3.w;
+    float phase = henyeyGreenstein(dot(u_Head3.xyz, -rd), 0.7) * 0.9 + 0.02;
+    add += scatter * density * phase * HEAD_BEAM * float3(1.0, 0.93, 0.8) * u_Head2.w * u_Head0.x;
+    add += (headGlare(rd, cam, lampL) + headGlare(rd, cam, lampR)) * float3(1.0, 0.92, 0.8) * u_Head1.w * u_Head0.x;
+    return float4(add, 0);
+}
+
 // The strips' glow over frames: s0 = this frame's PS_NeonGlow (point), s1 = the history (rgb its
 // glow, a its depth; bilinear), s2 = full normal/depth, u_Pass0.x = history valid. Without the
 // game's MSAA a strip 1-2 px high far away is drawn all or nothing per row: as the camera creeps,
@@ -3519,7 +3612,8 @@ float4 PS_Adapt(float2 uv : TEXCOORD0) : COLOR0 {
 //   s0 = HDR, s1 = bloom (1/2 res), s2 = light shafts (half), s3 = adapted log lum (1x1),
 //   s4 = full normal/depth (debug), s5 = AO/shadow (debug), s6 = bloom 1/8 (lens flare)
 // ---------------------------------------------------------------------------------
-float3 shoulderCurve(float3 x) {
+// top: where the shoulder ends, 1 = white; the HDR10 video ends it at its peak (in whites).
+float3 shoulderCurve(float3 x, float top) {
     // Linear below the knee (the game's mid-tones stay as they were), then a long
     // exponential shoulder that only reaches white for real light sources.
     const float knee = u_Mat.w > 0.0 ? clamp(u_Mat.w, 0.2, 0.95) : 0.5;
@@ -3527,16 +3621,17 @@ float3 shoulderCurve(float3 x) {
     // GameHdr: light above the game's white is real, not guessed. A longer shoulder spreads it
     // (1..3 linear) over visible steps instead of pressing it all just under white.
     const float width = u_Clean.y > 0.5 ? 3.0 : 1.7;
-    float3 shoulder = knee + (1.0 - knee) * (1.0 - exp(-over / ((1.0 - knee) * width)));
+    float3 shoulder = knee + (top - knee) * (1.0 - exp(-over / ((top - knee) * width)));
     return x < knee ? x : shoulder;
 }
-float3 tonemap(float3 x) {
+float3 tonemap(float3 x, float top) {
     // Half per channel (bright lights desaturate toward white), half on the brightest
     // channel (keeps the hue of sunlit surfaces and neon instead of bleaching them).
     float peak = max(x.r, max(x.g, x.b));
-    float3 hue = x * (shoulderCurve(peak.xxx).x / max(peak, 1e-5));
-    return lerp(shoulderCurve(x), hue, 0.5);
+    float3 hue = x * (shoulderCurve(peak.xxx, top).x / max(peak, 1e-5));
+    return lerp(shoulderCurve(x, top), hue, 0.5);
 }
+float3 tonemap(float3 x) { return tonemap(x, 1.0); }
 
 float3 grade(float3 c) {
     // White balance (simple temperature / tint gains).
@@ -3634,13 +3729,18 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     c *= u_Grade0.x * exp2(autoEv);
 
     c = grade(c);
-    c = tonemap(c);
+    // u_Pass0.w above 1: the HDR10 video, the curve runs on up to its peak (in the game's whites).
+    const bool hdr = u_Pass0.w > 1.0;
+    c = tonemap(c, hdr ? u_Pass0.w : 1.0);
 
     // Vignette.
     float vig = 1.0 - dot(d, d) * u_Grade2.w * 1.6;
     c *= saturate(vig);
 
-    float3 srgb = toSRGB(c);
+    // HDR10: the light above white skips the display steps below (the LUT, the night lamps, the
+    // grain work on 0..1) and is added back to the linear result at the end.
+    float3 above = max(c - 1.0, 0.0);
+    float3 srgb = toSRGB(c - above);
     // A .cube look works on display (sRGB) values, red = x, green = y, blue = z.
     if (u_Lut.x > 0.0) srgb = lerp(srgb, tex3D(s12, saturate(srgb) * u_Lut.y + u_Lut.z).rgb, u_Lut.x);
     // Night maps: what the game drew (nearly) white - lamps and what they light up close by -
@@ -3675,7 +3775,8 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     // Film grain + dithering (also hides banding of the 8-bit output).
     float grain = hash12(vpos + frac(u_Proj2.z) * 1000.0) - 0.5;
     float grainAmount = u_Post.x * smoothstep(0.0, 0.45, luma(srgb)) * (1.2 - luma(srgb));
-    srgb += grain * (grainAmount + 1.0 / 255.0);
+    // u_Pass0.y 1: the video export's float frame (its own dither comes with its 8 or 10 bits).
+    srgb += grain * (grainAmount + (1.0 - u_Pass0.y) / 255.0);
     srgb = saturate(srgb);
     // Debug view 8: the game's materials over the image (lamps yellow, cars red, glass cyan,
     // grass green, water blue, light added on top magenta).
@@ -3686,6 +3787,8 @@ float4 PS_Final(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
                       m.b * float3(0.1, 0.3, 1.0) + m.a * float3(1.0, 0.2, 1.0);
         srgb = lerp(srgb, saturate(tint), 0.6 * saturate(m.r + car + glass + grassM + m.b + m.a));
     }
+    // HDR10: linear light, 1 = the game's white (PS_ExportLuma makes PQ of it).
+    if (hdr) return float4(toLinear(srgb) + above, luma(srgb));
     return float4(srgb, luma(srgb));
 }
 
@@ -4274,4 +4377,255 @@ float4 PS_RainSplash(float4 data : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
     float hit = exp(-q.y * 14.0 - q.x * q.x * 5.0) * saturate(1.0 - p * 2.5);
     float a = (wall * 0.7 + drops * 0.8 + hit) * (1.0 - p) * u_Pass0.x;
     return float4(rainLight(uv) * a * 0.7, 0);
+}
+
+// ---------------------------------------------------------------------------------
+// Water splash (WaterSplash): droplets, mist, rings, foam and the car's wake, geometry from
+// waterVS (pipeline.cpp), blended over the finished image: premultiplied, so alpha 0 adds.
+//   s0 = full normal/depth, s1 = scene colour (sRGB), s2 = sky average (1x1), s3 = neon light,
+//   s4 = adapted exposure (1x1), s5 = the water pictures (waterfx.h: r droplet, g foam,
+//   b and a the ripple's slope), u_Pass0.x = amount
+//   data.xy = position in the quad (-1..1), data.z = view z, data.w = age (0..1)
+//   data2.x = kind (0 droplet, 1 mist, 2 ring, 3 foam, 4 wake), data2.y = opacity, data2.zw = random
+// ---------------------------------------------------------------------------------
+float4 PS_WaterSplash(float4 data : TEXCOORD0, float4 data2 : TEXCOORD1, float2 vpos : VPOS) : COLOR0 {
+    float2 uv = (vpos + 0.5) * u_Screen.zw;
+    clip(tex2Dlod(s0, float4(uv, 0, 0)).w - (data.z * 0.985 - 0.05));
+    float kind = data2.x;
+    float2 q = data.xy;
+    float r = length(q);
+    float3 light = rainLight(uv);
+    float amount = data2.y * u_Pass0.x;
+    if (kind < 0.5) {
+        // A droplet: a lens that mirrors the sky, with a bright spot.
+        clip(1.0 - r);
+        float d = tex2Dlod(s5, float4(q * 0.5 + 0.5, 0, 0)).r;
+        float a = d * amount;
+        return float4(light * a * 1.5 + a * 0.05, a * 0.4);
+    }
+    if (kind < 1.5) {
+        // Mist: soft puffs that thin out as they spread.
+        float puff = saturate(1.0 - r * r);
+        float a = puff * puff * amount * 0.22;
+        return float4(light * a * 1.1, a * 0.6);
+    }
+    if (kind < 2.5) {
+        // A ring on the surface: a ridge that spreads and flattens, its far side catching the sky, its near
+        // side dark, and a lip of foam on it. The ripple picture bends it so it is no perfect circle.
+        float2 w = tex2Dlod(s5, float4(frac(q * 0.8 + data2.zw), 0, 0)).ba * 2.0 - 1.0;
+        float rr = r + dot(w, q / max(r, 1e-3)) * 0.035;
+        float width = 0.07 + 0.1 * data.w;
+        float band = exp(-pow((rr - 0.86) / width, 2.0));
+        float side = 0.5 + 0.5 * dot(normalize(q + 1e-4), float2(0.0, -1.0)); // the far side lights up
+        float foam = tex2Dlod(s5, float4(frac(q * 1.3 + data2.zw), 0, 0)).g;
+        float a = band * amount * smoothstep(0.0, 0.25, r);
+        float3 colour = light * (0.45 + 1.1 * side) + light * foam * 0.8;
+        return float4(colour * a * 0.7, a * 0.5);
+    }
+    // Foam (3) and the wake (4): a lace picture that frays away as it ages, soft at its edge.
+    float f = tex2Dlod(s5, float4(frac(q * 0.5 + data2.zw), 0, 0)).g;
+    float edge = smoothstep(1.0, 0.45, r);
+    float erode = data.w * (kind < 3.5 ? 0.7 : 0.55);
+    float cover = smoothstep(erode, erode + 0.3, f * edge * 1.25);
+    float a = cover * amount;
+    float3 colour = light * 1.35 + 0.02;
+    return float4(colour * a, a);
+}
+
+// ---------------------------------------------------------------------------------
+// Clear water (WaterClarity). The game draws its water as an opaque grey texture: nothing
+// of the bottom, no depth. This pass runs before the lighting and puts a model of clear water
+// into the game's image on the water's pixels (the lighting then shades it like the rest and
+// adds the reflection with its Fresnel). What it knows is the surface (the exact plane, the
+// waves) and what stands at its edges; the bottom's depth is not in the depth buffer, so it
+// is guessed from the distance to the nearest edge: a ring of taps around the point on the
+// surface sees the land, a wall or a pier above the water's level, and shallows and foam
+// follow from them. Beer-Lambert: light that goes down and comes back up through `depth`
+// metres keeps exp(-k depth) of each colour, red going first.
+//   s0 = the game's image (sRGB, as the lighting reads it), s1 = full normal/depth, s13 = materials
+//   u_Pass0.x = clarity
+// ---------------------------------------------------------------------------------
+float causticLines(float2 p, float t) {
+    float2 q = p;
+    float v = 0.0;
+    [unroll] for (int i = 0; i < 3; i++) {
+        q += 0.55 * float2(sin(q.y * 1.7 + t * 0.8 + i * 1.9), cos(q.x * 1.4 - t * 0.7 + i * 2.7));
+        v += 1.0 - abs(sin(q.x * 1.3 + q.y * 0.9 + i));
+    }
+    return pow(saturate(v * 0.3333), 3.0);
+}
+
+// `footprint` = a pixel's length on the surface (m): each octave fades out once its cells are
+// under about 3 pixels (the 4 and 9 cm octaves aliased into fine streaks along the view from
+// 20 m on), to the octave's mean.
+float3 poolFloor(float2 xz, float footprint) {
+    float f1 = saturate(1.0 - footprint * 11.0 * 0.5), f2 = saturate(1.0 - footprint * 23.0 * 0.5);
+    float v = 0.55 * noise2(xz * 0.9) + 0.3 * noise2(xz * 3.1 + 7.3) + 0.15 * lerp(0.5, noise2(xz * 11.0 + 2.1), f1);
+    float3 sand = lerp(float3(0.46, 0.40, 0.30), float3(0.70, 0.63, 0.48), v);
+    return sand * (0.8 + 0.4 * lerp(0.5, noise2(xz * 23.0), f2));
+}
+
+float4 PS_ClearWater(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float4 src = tex2Dlod(s0, float4(uv, 0, 0));
+    [branch] if (tex2Dlod(s13, float4(uv, 0, 0)).b < 0.5 || u_Water.z < 0.5) return src;
+    float4 nd = tex2Dlod(s1, float4(uv, 0, 0));
+    float clarity = u_Pass0.x;
+    // Far away (230 - 350 m) the edge taps stop (a tap ring of 5 m is a few pixels there, and the
+    // depth beside an edge is too coarse to tell land from water): the depth stays the deep
+    // average, and the bottom's detail (waves, sand, caustics) gives way to its average. The
+    // water keeps its clear tint at any distance, with nothing that switches on or off.
+    float reach = saturate((350.0 - nd.w) / 120.0);
+    float distant = saturate((nd.w - 150.0) / 250.0);
+    float3 rd = viewToWorldDir(normalize(viewPosition(uv, 1.0)));
+    float3 cam = cameraWorld();
+    float3 world = worldPosition(viewPosition(uv, nd.w));
+    float level;
+    waterLevelMatch(world, level);
+    // The materials already say this is water, so the plane test only has to keep out what
+    // stands at its edge (the ground is 1 m higher). It has to allow for the depth's steps:
+    // with the plain tolerance (15 - 40 cm) rows of pixels failed it by a few centimetres,
+    // and the game's grey water showed through them as pale streaks (20 - 150 m from a camera
+    // high above the pool; the reflection pass allows a pixel the same way).
+    float allow = 0.5 + nd.w / (abs(u_Proj.y) * u_Screen.y) * 1.5;
+    float onPlane = 1.0 - smoothstep(allow * 0.7, allow, abs(world.y - level));
+    float blend = saturate(clarity * 2.0) * onPlane;
+    [branch] if (blend <= 0.0 || rd.y > -0.01) return src;
+    float3 surf = waterSurface(rd, level, world);
+    float t = u_Proj2.z;
+
+    // The edges: three rings of six taps (0.9, 2.4 and 5.5 m around the point), each tap asks what the
+    // camera sees there: something above the water's level but under 5 m is land, a wall or a pier.
+    float turn = ign(vpos) * 1.0471976;
+    float3 hit = 0;
+    [branch] if (reach > 0.0) [unroll] for (int ring = 0; ring < 3; ring++) {
+        float radius = ring == 0 ? 0.9 : (ring == 1 ? 2.4 : 5.5);
+        float count = 0.0;
+        [loop] for (int k = 0; k < 6; k++) {
+            float a = turn + (k + ring * 0.5) * 1.0471976;
+            float3 qv = worldToViewDir(surf + float3(cos(a), 0.0, sin(a)) * radius - cam);
+            if (qv.z < 0.3) continue;
+            float2 quv = projectToUV(qv);
+            if (any(quv < 0.003) || any(quv > 0.997)) continue;
+            float zq = tex2Dlod(s1, float4(quv, 0, 0)).w;
+            float yq = worldPosition(viewPosition(quv, zq)).y;
+            count += (zq < SKY_Z && yq > level + 0.3 && yq < level + 5.0) ? 1.0 : 0.0;
+        }
+        hit[ring] = saturate(count / 3.0) * reach; // half the ring on land counts as all of it
+    }
+    float depth = 2.6 * (1.0 - 0.92 * hit.x) * (1.0 - 0.7 * hit.y) * (1.0 - 0.4 * hit.z) + 0.05;
+
+    // Through the surface: refracted by the waves (the same slope the lighting gives them).
+    float footprint = nd.w / (abs(u_Proj.y) * 0.5 * u_Screen.y * max(abs(rd.y), 0.05));
+    // The bottom seen through the waves wobbles by decimetres: at a few centimetres a pixel that
+    // is a pattern of wavy bands (the sand moves with every wave), so the refraction fades with
+    // the pixel size (gone at 12 cm, 40 m away from a camera 25 m up) and with distance.
+    float2 slope = waveSlope(surf.xz, t, footprint) * (1.0 - distant) * (1.0 - saturate((footprint - 0.03) / 0.09));
+    float3 refracted = refract(rd, normalize(float3(-slope.x * 0.8, 1.0, -slope.y * 0.8)), 0.752);
+    float cosT = max(-refracted.y, 0.25);
+    float2 floorXZ = surf.xz + refracted.xz * (depth / cosT);
+    float3 k = float3(0.30, 0.06, 0.04) * lerp(1.5, 0.4, clarity);
+    float3 through = exp(-k * 2.0 * depth / cosT);
+
+    // The light on the water is what the game lit its surface with (shadows of the stands stay).
+    float lit = clamp(luma(toLinear(src.rgb)), 0.02, 1.2);
+    float3 bottom = float3(0.42, 0.37, 0.28);
+    [branch] if (distant < 1.0) {
+        bottom = lerp(poolFloor(floorXZ, footprint), bottom, distant);
+        bottom *= 1.0 + causticLines(floorXZ, t) * 1.6 * u_SunWorld.w * exp(-0.18 * depth) * (1.0 - distant);
+    }
+    float3 deep = float3(0.015, 0.13, 0.16);
+    float3 colour = (bottom * through * 1.5 + deep * (1.0 - through.g) * 2.4) * lit * 1.5;
+
+    // Foam where the water meets an edge, and a faint lacy band further out.
+    float lace = tex2Dlod(s5, float4(frac(surf.xz * 0.45 + float2(t * 0.011, -t * 0.007)), 0, 0)).g;
+    float foam = saturate(hit.x * (0.55 + 0.7 * lace) + hit.y * 0.25 * lace * lace);
+    colour = lerp(colour, float3(0.9, 0.95, 1.0) * lit * 1.7, foam * 0.8);
+
+    float3 water = toSRGB(lerp(toLinear(src.rgb), colour, blend));
+    return float4(water, src.a);
+}
+
+// ---------------------------------------------------------------------------------
+// Video export (the mod's own frames). Every sample of a video frame (the game's supersamples
+// and the sub-frames of its motion blur) is lit as usual and its HDR image added into a float
+// sum; the frame's last sample grades the average once. Averaging before the tone curve is
+// what a camera does: a lamp streaking past stays a bright streak instead of a grey smear, and
+// bloom, exposure and the grade run once a frame instead of once a sample.
+// ---------------------------------------------------------------------------------
+// s0 = the sum so far (A32B32G32R32F), s1 = this sample (the lit HDR scene); u_Pass0.x its
+// weight, u_Pass0.y 1: the first sample of the frame (the sum starts over). Point sampled.
+float4 PS_Accumulate(float2 uv : TEXCOORD0) : COLOR0 {
+    // A NaN or an endless value from one sample would spoil the whole frame (max() drops NaN).
+    float4 s = min(max(tex2Dlod(s1, float4(uv, 0, 0)), 0.0), 60000.0) * u_Pass0.x;
+    return u_Pass0.y > 0.5 ? s : tex2Dlod(s0, float4(uv, 0, 0)) + s;
+}
+
+// The sum (s0) back into the HDR image the grade reads: times u_Pass0.x (1 / the weights).
+float4 PS_AccumResolve(float2 uv : TEXCOORD0) : COLOR0 {
+    return tex2Dlod(s0, float4(uv, 0, 0)) * u_Pass0.x;
+}
+
+// The finished frame (s0: sRGB values in a float target, bilinear) into the encoder's planes,
+// BT.709 studio range: Y (4 pixels per output pixel) and interleaved Cb Cr (2 pairs per output
+// pixel, each the average of its 2 x 2 pixels). u_Pass0.xy = 1 / the video's size, zw = where
+// the video's top left corner lies in s0 (uv), u_Pass1.xy = how much of s0 the video covers
+// (uv; letterbox crops), u_Pass1.z 1: 16-bit unorm target holding P010 codes (value << 6), 0:
+// 8-bit A8R8G8B8 holding NV12 bytes, u_Pass1.w the dither (8-bit only). u_Pass1.z above 1:
+// HDR10, s0 holds linear light (PS_Final with u_Pass0.w), its 1.0 at u_Pass1.z nits, and the
+// planes are PQ in BT.2020 (P010 codes).
+static const float3x3 k709To2020 = {0.6274, 0.3293, 0.0433, 0.0691, 0.9195, 0.0114, 0.0164, 0.0880, 0.8956};
+
+// SMPTE ST 2084: light (1 = 10000 nits) to its PQ signal.
+float3 pq(float3 light) {
+    float3 y = pow(max(light, 0.0), 0.1593017578125);
+    return pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), 78.84375);
+}
+
+float3 exportRgb(float2 pixel) {
+    float2 uv = u_Pass0.zw + pixel * u_Pass0.xy * u_Pass1.xy;
+    float3 c = tex2Dlod(s0, float4(uv, 0, 0)).rgb;
+    if (u_Pass1.z > 1.5) return pq(mul(k709To2020, max(c, 0.0)) * (u_Pass1.z / 10000.0));
+    return saturate(c);
+}
+
+// A value (0..1 luma, -0.5..0.5 chroma) as the code the encoder takes. 8 bits: with triangular
+// noise of one step, the same in every frame (noise that changes every frame costs the encoder
+// bits for nothing; a fixed pattern it predicts), which turns the steps of a dark sky into
+// grain instead of bands. 10 bits: rounded, the steps are four times finer.
+float exportCode(float v, float range, float offset, float2 p) {
+    if (u_Pass1.z > 0.5) return clamp(floor((v * range + offset) * 4.0 + 0.5), 0.0, 1023.0) * (64.0 / 65535.0);
+    float dither = (hash12(p) + hash12(p + float2(71.3, 19.7)) - 1.0) * u_Pass1.w;
+    return clamp(floor(v * range + offset + dither + 0.5), 0.0, 255.0) / 255.0;
+}
+
+// The luma weights: BT.709, or BT.2020 (non-constant luminance) for HDR10.
+float3 exportLumaWeights() { return u_Pass1.z > 1.5 ? float3(0.2627, 0.6780, 0.0593) : float3(0.2126, 0.7152, 0.0722); }
+
+float4 PS_ExportLuma(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 cell = floor(vpos);
+    float4 y;
+    const float3 weights = exportLumaWeights();
+    [unroll] for (int k = 0; k < 4; k++) {
+        float2 p = float2(cell.x * 4.0 + k + 0.5, cell.y + 0.5);
+        y[k] = exportCode(dot(exportRgb(p), weights), 219.0, 16.0, p);
+    }
+    // A8R8G8B8 lies in memory as B G R A, A16B16G16R16 as R G B A.
+    return u_Pass1.z > 0.5 ? y : y.zyxw;
+}
+
+float4 PS_ExportChroma(float2 uv : TEXCOORD0, float2 vpos : VPOS) : COLOR0 {
+    float2 cell = floor(vpos);
+    float4 c;
+    const float3 weights = exportLumaWeights();
+    // Cb = (B - Y) / (2 (1 - Kb)), Cr = (R - Y) / (2 (1 - Kr)).
+    const float2 scale = 2.0 - 2.0 * weights.br;
+    [unroll] for (int k = 0; k < 2; k++) {
+        // The middle of the chroma sample's 2 x 2 pixels: the bilinear tap there is their average.
+        float2 p = float2(cell.x * 4.0 + k * 2.0 + 1.0, cell.y * 2.0 + 1.0);
+        float3 rgb = exportRgb(p);
+        float l = dot(rgb, weights);
+        c[k * 2] = exportCode((rgb.b - l) / scale.x, 224.0, 128.0, p);
+        c[k * 2 + 1] = exportCode((rgb.r - l) / scale.y, 224.0, 128.0, p + float2(37.0, 11.0));
+    }
+    return u_Pass1.z > 0.5 ? c : c.zyxw;
 }

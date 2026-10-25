@@ -1,0 +1,195 @@
+#pragma once
+#include "misc/misc.h"
+#include "misc/replay.h"
+#include "imgui.h"
+#include <string>
+#include <vector>
+
+// Shared by the Misc page's parts (misc.cpp: settings, page, window placing, dispatch; mapview.cpp;
+// splits.cpp; tmx.cpp; confetti.cpp).
+namespace tmshaders {
+namespace misc {
+
+// What the split times compare with.
+enum Compare : int { kCompareRecord = 0, kCompareGhost = 1, kCompareBest = 2, kCompareReplay = 3 };
+
+// [Misc] in settings.ini. Machine settings, not part of a look (no preset or share code has them).
+// Sizes are pixels on a 1440 pixel high screen (scaled with the screen's height).
+struct Settings {
+    bool minimap = false;             // in exported videos only (top right), never while you drive
+    float mapSize = 260.0f;
+    float mapOpacity = 0.85f;
+    bool mapAutoZoom = true;          // follows the car, closer the slower; off: the whole map
+    float mapZoom = 1.0f;             // the auto zoom's scale: more is closer (0.5 - 2)
+    bool mapRotate = true;            // the car's heading up instead of a fixed north
+    bool mapTextured = true;          // "Real look": the blocks' meshes from above; off: squares
+    bool splits = false;
+    bool splitAttached = true;        // top right; off: at splitX, splitY
+    float splitX = -1.0f, splitY = -1.0f;
+    float splitWidth = 260.0f;
+    int splitCompare = kCompareBest;
+    bool splitBar = true;             // the sector clock
+    bool session = true;              // the Session panel (with the split times)
+    bool sessionAttached = true;      // under the split times; off: at sessionX, sessionY
+    float sessionX = -1.0f, sessionY = -1.0f;
+    int finishEffect = 0;             // 0 off, 1 subtle, 2 big
+};
+Settings& settings();
+void settingsChanged(); // saved a moment later with settings.ini
+
+// Sizes: pixels on this screen for a size given at 1440 pixels of height.
+float screenScale();
+// The panels' text and spacing against the menu's (its font is made once for the screen at start and
+// never below 1080p): 1 on most screens, less in a small window, so everything keeps its proportions.
+float textScale();
+// Pushes the spacing scaled by textScale() for one window (around Begin and End).
+struct PanelStyle {
+    PanelStyle();
+    ~PanelStyle();
+};
+
+// The overlay windows' place and size: from the settings with the menu closed, when it opens and
+// when the page's sliders change them; moved and resized by hand while the menu is open, which
+// goes back into the settings when the mouse is let go. One per window.
+struct WindowPlace {
+    ImVec2 applied{-1.0f, -1.0f}, appliedSize{-1.0f, -1.0f};
+    bool wasOpen = false;
+    bool autoHeight = false;
+    bool lockHeight = false;    // the height is the caller's alone (only the width can be dragged)
+    float contentHeight = 0.0f; // the content's height last frame (autoHeight)
+    // Before Begin. size.y <= 0: only the width is the window's, its height follows the content.
+    void before(const Frame& frame, ImVec2 pos, ImVec2 size);
+    // After Begin: true when the player moved or resized it; pos and size are then the new ones.
+    bool after(const Frame& frame, ImVec2& pos, ImVec2& size);
+    // Before End: notes the content's height (autoHeight).
+    void end();
+};
+// The window flags for an overlay window (movable and resizable only with the menu open).
+int windowFlags(const Frame& frame, bool resizable);
+// With the menu open: a strip at the top with a move symbol and the window's name, and a grip in
+// the lower right corner (resizable): the window can be dragged and resized. Returns the height the
+// strip takes at the top of the content (0 with the menu closed).
+float windowChrome(const Frame& frame, const char* title, bool resizable);
+
+// The minimap's picture from above (topview.cpp).
+namespace topview {
+// Once a frame: the picture is wanted (minimap on, Real look on, a Stadium map). Off: let go.
+void setWanted(bool wanted);
+// The map's area (world metres, x and z), the highest a mesh may reach (m), and its size in grid
+// cells; `map` the map's identity (the same map loaded again, as Shoot video does, keeps the
+// picture); a new map or area starts over.
+void setRegion(uint64_t map, float x0, float z0, float x1, float z1, float top, int cellsX, int cellsZ);
+void clearRegion();
+// misc::sceneDraw: one draw of the main camera.
+void onDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count,
+            const float view[16], const float projection[16]);
+// A mesh read from one of the map's blocks (blockmesh.cpp): the game's own vertex declaration,
+// buffers and draw (as its renderer would make it), its place in the world (row vectors: x' = x
+// world[0] + y world[1] + z world[2] + world[3]) and its material (a CPlugShader). Nothing is held
+// by the caller: addBlockMesh takes its own references.
+struct BlockMesh {
+    IDirect3DVertexDeclaration9* decl = nullptr;
+    IDirect3DVertexBuffer9* vb = nullptr;
+    UINT stride = 0;
+    IDirect3DIndexBuffer9* ib = nullptr;
+    D3DPRIMITIVETYPE type = D3DPT_TRIANGLELIST;
+    INT base = 0;
+    UINT minIndex = 0, vertices = 0, start = 0, count = 0;
+    float world[4][3] = {};
+    const void* shader = nullptr;
+};
+enum class BlockMeshResult { Queued, Known, Outside, Full, Unusable };
+// Queues it like a camera draw (the same placement key: what the camera draws later of it is
+// known, and the other way round), with the material's colour map. Full: the queue is full (try
+// again next frame). Only at Present (it may make the picture's resources).
+BlockMeshResult addBlockMesh(IDirect3DDevice9* device, const BlockMesh& mesh);
+// The camera's draws that found a placement read from the blocks (since the last call), for the log.
+unsigned takeBlockHits();
+// Counts the times the picture forgot placements (a new map or area, a device reset, Real look off).
+unsigned epoch();
+// Draws what is queued into the picture (at Present, outside ImGui's drawing), a share a call.
+void render(IDirect3DDevice9* device);
+// The picture over the map's area (row 0 at z0), null while nothing is in it.
+IDirect3DTexture9* picture();
+int meshes();
+// Once a frame the minimap is drawn: its CPU time (mapview::draw, the redraws included), for the
+// cost lines in the log (also with Real look off).
+void noteFrame(double drawMs);
+void releaseDevice();
+void precompile(); // its shaders, on a thread at startup
+} // namespace topview
+
+// The Real look picture filled from the map's block list at once (blockmesh.cpp): every block's
+// meshes read from the game's memory (read only) and queued with topview::addBlockMesh.
+namespace blockmesh {
+// Once a frame at Present while the picture is wanted, with the map's block list as mapview read
+// it (CGameCtnChallenge +0x54: count, the CGameCtnBlock* array): goes on where it stopped, a share
+// a frame; a new list (another map, the editor's changes) starts over.
+// The picture starting over (topview::epoch changed: a new map or area, a device reset, the
+// setting off and on) starts the reading over too; what the picture holds already is skipped.
+void read(IDirect3DDevice9* device, uint32_t count, uintptr_t data);
+// The map's blocks were read once (or can't be in this build): the camera's draws may come in now.
+// Before, they wait, so every mesh a block has comes from the block (the same texture coordinates and
+// colour everywhere; the camera's grass came out coarser) and the camera only adds what no block has.
+bool firstPassDone();
+} // namespace blockmesh
+
+// Minimap (mapview.cpp), only in the replay editor and the video export's frames.
+namespace mapview {
+// Between NewFrame and Render (the screen's in the replay editor, the video's own): at the top right
+// of the area (pixels).
+void draw(const Frame& frame, ImVec2 areaMin, ImVec2 areaMax);
+bool wanted();
+// At Present while a Stadium map is open with the minimap on (also while you drive, nothing shown):
+// the blocks read and the Real look picture filled in, so a replay starts with it; the cost lines.
+void prepare(IDirect3DDevice9* device);
+std::string describe(); // what the last drawing showed, for the log
+void drawPageInfo(); // a line about the map read
+} // namespace mapview
+
+// Split times and the session (splits.cpp).
+namespace splits {
+// Once a frame (also with the windows hidden): follows the race, notes checkpoints and the finish.
+void update();
+void draw(const Frame& frame);
+bool wanted();
+void drawPage(); // what to compare with (record, ghost, best run, replays) on the Misc page
+// The run just finished (once): its time and whether it beat your best (for the finish effect).
+bool takeFinish(int& time, bool& best);
+} // namespace splits
+
+// TMX (tmx.cpp): the map's world record replay. One request at a time, at least 20 s apart, never
+// twice for a map (the replay is kept; a map that isn't on TMX is noted too).
+namespace tmx {
+enum class State { Idle, Busy, Done, Failed };
+struct Status {
+    State state = State::Idle;
+    std::string message; // for the page
+    std::string uid;     // the map it is about
+    std::wstring file;   // the replay on disk (Done)
+};
+// The replay downloaded before for this map (Documents\TrackMania\TMVS\Replays\<uid>_*.Replay.Gbx), "" none.
+std::wstring cached(const std::string& uid);
+// The map was looked up before and is on neither TMX site.
+bool knownMissing(const std::string& uid);
+// Starts the lookup and download now (the page's button). False: not now (one runs, or too soon).
+bool request(const std::string& uid);
+// For the automatic choice: asked once a frame; requests when allowed (once per map and session,
+// never for a map cached or known missing, 20 s after the last request).
+void want(const std::string& uid);
+Status status();
+} // namespace tmx
+
+// Finish effects (confetti.cpp).
+namespace confetti {
+void start(bool big, bool personalBest);
+void draw(const Frame& frame);
+bool active();
+} // namespace confetti
+
+std::wstring dataFolder(const wchar_t* sub); // Documents\TrackMania\TMVS\<sub> (made if missing)
+std::string utf8(const std::wstring& text);
+std::wstring wide(const std::string& text);
+
+} // namespace misc
+} // namespace tmshaders

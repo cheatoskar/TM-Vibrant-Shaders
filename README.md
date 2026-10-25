@@ -18,6 +18,8 @@ A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (Trac
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Share a look](#your-own-presets-and-sharing-them) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
 
+**New in 1.4.2: a new video export** (Nations / United). *Shoot video* in the replay editor renders its frames through the mod (every sample and motion blur sub-frame summed in float, then graded once), encodes them with NVENC directly on NVIDIA cards at a quality I measured with VMAF, can write HDR10, and records the game's own sound. Presets for YouTube, editing, Discord and HDR on the menu's *Video* page. Details in the [changelog](CHANGELOG.md).
+
 **New in 1.4.1: TrackMania 2 (ManiaPlanet 4).** The same mod for ManiaPlanet's Direct3D 11 renderer: download `TM-Vibrant-Shaders.zip` from the [release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases) (one zip for both games), close the game, run `TM-Vibrant-Shaders-Setup.exe`. `F8` menu, `F5` on/off. Details in [maniaplanet/README.md](maniaplanet/README.md).
 
 ![TrackMania 2 Stadium, photo mode's compare split: left the game, right with the mod and the black hole sky](docs/images/tm2-black-hole-split.jpg)
@@ -73,6 +75,7 @@ By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `M
 | **Water** | Pools, rivers and the TMUF seas get waves, refraction and reflections, with the stands and ramps around a pool mirrored in it. The mod knows water by the game's own water surface, so dirt, grass or roads at the same height stay what they are. |
 | **Sky** | Volumetric clouds. Clear sky, starry night with shooting stars, aurora, a black hole that bends light and lights the scene, and the Ring World: Saturn, Jupiter, an ice giant or an exotic planet, seen from far away, next to the rings or right above them. Night skies work on day maps. |
 | **Camera** | HDR bloom, auto exposure, filmic tone curve, colour looks from `.cube` LUT files. SMAA or FXAA, temporal anti-aliasing, AMD CAS sharpening, a render scale with AMD FSR 1 upscaling. Motion blur and depth of field that switch on by themselves in replays and the video export. |
+| **Video** | MP4 export from the replay editor's *Shoot video* (Nations / United): the mod renders and sums every sample and motion blur sub-frame, H.264, HEVC or AV1 on the graphics card (NVENC driven directly on NVIDIA) or through your own ffmpeg, 10 bits and HDR10, film shutter, lens depth of field and cinema crop, the game's own sound. |
 | **Extras** | A neon light trail behind your car for the whole run. Track reflections up to a mirror finish. Grass detail and mowing stripes. |
 | **Comfort** | `F8` menu with a gallery of every preset: a picture of each, its GPU load, and a live preview in the game while you point at it. *Customize* for the main settings, *Studio* for every setting in panels side by side, with a search box and a reset arrow for every changed setting. The menu tells you when a new version is out (one request to GitHub per game start, can be switched off). Auto quality holds your frame rate. A live per-effect cost panel. A preset per map mood (day, sunset, night). Your own presets as files, or any look as one line of text to paste into a chat (*Copy share code*). Map authors can ship a look inside their map ([Author's Shader](#authors-shader)). |
 
@@ -94,6 +97,7 @@ By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `M
 | **Rainy** | Overcast, wet track, puddles, rain. |
 | **Storm** | Low clouds, pouring rain, deep puddles, lightning and thunder. |
 | **Snowstorm** | A blizzard: driving snow, thick haze close around you and the howl of the wind. Snow on the ground is off (*Snow on the ground* in the menu; a snow texture pack looks better on the road). |
+| **Horror** | Black night: every lamp and neon strip off, thick fog, and only your car's two headlights light the road (beams in the fog, glare when you look into them). Both games (TrackMania 2: not tested in the game yet). |
 | **Replay Cinema** | Film look with motion blur and depth of field, for replays and the video export. |
 | **Competition** | Clarity first: AO and contact shadows, no haze or lens effects. |
 | **Performance** | Vibrant with the expensive parts off. |

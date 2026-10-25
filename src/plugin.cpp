@@ -14,14 +14,22 @@
 #include "keys.h"
 #include "log.h"
 #include "lut.h"
+#include "misc/misc.h"
+#include "modpack.h"
 #include "overlay.h"
 #include "pipeline.h"
 #include "autoquality.h"
+#include "blockorder.h"
 #include "photo.h"
+#include "planeread.h"
 #include "thumbnails.h"
 #include "tracer.h"
 #include "videofile.h"
+#include "soundcapture.h"
+#include "videoencoder.h"
 #include "tm_shaders_version.h"
+#include <set>
+#include <tuple>
 #include <d3d9.h>
 #include <algorithm>
 #include <array>
@@ -30,6 +38,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <numeric>
 #include <utility>
 #include <vector>
 
@@ -53,8 +62,10 @@ struct DevOptions {
     float captureAt = 0.0f;      // start writing .tmcap captures (0 = off)
     float captureInterval = 2.0f;
     int captureCount = 1;
+    bool fakeBlockRank = false;  // "FakeBlockRank=1": OverlapFix takes a rank from the vertex buffer's address (0..7) instead of blockorder, to test the bias without the engine side
     float exitAt = 0.0f;         // terminate the game (0 = off)
     float hardExitAt = 0.0f;     // terminate even if no gameplay camera appeared (absolute time)
+    int waterSplashTest = 0;     // "WaterSplashTest=1": every 8 s a car that isn't there enters the water 12 m ahead of the camera (24 m/s, 40 degrees); 2: it drives through, 3: it drips after coming out (WaterSplash on, a map with water)
     // "Keys=4:13,7:a13,9:min,12:restore": post VK 13 at 4 s, Alt+Enter at 7 s, minimize / restore.
     // Photo mode: "photomode" (like F6), "photo" / "photohires" (like F12 / Shift+F12 in it).
     std::vector<std::pair<float, std::wstring>> keys;
@@ -91,6 +102,7 @@ struct SceneState {
     int mainRenders = 0;  // main camera renders this frame (shaded or not)
     int otherRenders = 0; // other cameras into a target of the video's size this frame (export only)
 } g_scene;
+float g_depthUlp = 1.0f / 16777216.0f; // step of the main camera's depth buffer (OverlapFix), set at its begin
 
 bool g_captureRequested = false;
 bool g_capturePending = false; // F12 pressed, taken when the writer is free (g_captureRequested)
@@ -233,6 +245,277 @@ struct ExportStats {
 } g_exportStats;
 bool g_frameStepped = false; // the frame being rendered is on the video's clock
 
+// The video export's own frames (VideoOwnFrames, src/videofile.h). Every sample of a video frame
+// (the game's supersamples inside one engine frame, or the sub-frames of its motion blur, one per
+// engine frame) is lit by the pipeline and added to a float sum; the frame's last sample grades
+// the average into `frame` and converts it into the encoder's planes on the GPU. The game's next
+// write of a video frame hands those planes to the encoder (ownDeliver), so the video has exactly
+// the game's frames and stays in sync with its sound. The game's own target only gets the last
+// finished frame, as the preview on screen. The planes reach the encoder a write or two later
+// (PlaneReadback: the read-back no longer waits for the GPU), in order; before the game's own
+// image goes in, and when the frames on the video's clock end, the ones on their way go first.
+struct OwnExport {
+    int framesSinceWrite = 0;  // sub-frame mode: frames on the video's clock since the game's last write
+    int subIndex = 0;          // this frame's sub-frame within its video frame
+    int lensSamples = 0;       // samples over the lens this video frame (accumulation depth of field), 0 = none
+    float lensFocus = 0.0f;    // the auto focus's distance (m), read back with each frame handed over
+    bool lensSet = false;      // the engine has a lens offset set
+    unsigned videoFrame = 0;   // frames finished (turns the lens pattern between frames)
+    bool fresh = false;        // a finished frame waits in the planes for the game's write
+    bool haveFrame = false;    // a frame was finished in this export
+    bool tenBit = false;       // the planes hold P010
+    int tenBitOk = -1;         // 16-bit unorm targets (P010 planes): -1 not asked yet
+    gfx::Target frame;         // the finished frame (float, the shaded size)
+    gfx::Target luma, chroma;  // its planes
+    PlaneReadback read;        // their way into system memory (lives through a device reset)
+    // For the log: frames finished, handed over (fresh), handed over again (no new one since the
+    // game's last write), finished and replaced before a write, sub-frames past the shutter,
+    // samples summed, handed over but lost on the way (a failed lock, the encoder gone); the time
+    // the game spent handing frames over and the time between two finished frames.
+    unsigned finished = 0, delivered = 0, repeated = 0, dropped = 0, skipped = 0, samples = 0, lensFrames = 0, lost = 0;
+    double readMs = 0.0, betweenMs = 0.0;
+    LARGE_INTEGER lastFinish{};
+} g_own;
+
+// A device reset takes the render targets (and the read-back's queries); the frames on their way
+// stay in system memory. The export's end takes everything.
+void releaseOwnExport(bool exportOver) {
+    g_own.frame.destroy();
+    g_own.luma.destroy();
+    g_own.chroma.destroy();
+    g_own.read.releaseQueries();
+    if (exportOver) {
+        if (g_own.read.pending() > 0) {
+            g_own.lost += static_cast<unsigned>(g_own.read.pending());
+            TMVS_LOG("video export: %d of the mod's frames were still on their way to the encoder when it ended: lost", g_own.read.pending());
+        }
+        g_own.read.release();
+    }
+    g_own.fresh = false;
+    g_own.haveFrame = false;
+}
+
+// What this sample of the export does for the mod's own frame (Pipeline::Inputs::accumulate).
+struct OwnSample {
+    int accumulate = 0;  // 0 not the mod's frame, 1 summed, 2 summed and the frame finished
+    bool first = false;  // the video frame's first sample
+    bool skip = false;   // a sub-frame past the shutter: nothing to do
+    int index = 0;       // which sample of the frame
+    int count = 1;       // samples summed per frame
+};
+OwnSample ownSample(int sampleIndex, bool part) {
+    OwnSample o;
+    const Settings& s = Config::get().settings;
+    videofile::OwnFormat format;
+    if (!g_exporting || !g_frameStepped || part || !s.enabled || !s.videoOwnFrames || !videofile::ownFormat(format)) return o;
+    if (g_export.samplesPerFrame > 1) {
+        // The supersamples, all in this engine frame.
+        o.count = g_export.samplesPerFrame;
+        o.index = std::min(sampleIndex, o.count - 1);
+        o.first = sampleIndex == 0;
+        o.accumulate = sampleIndex >= o.count - 1 ? 2 : 1;
+    } else if (g_export.subFrames && g_export.samplesPerVideoFrame > 1) {
+        // The motion blur's sub-frames, one per engine frame; the shutter keeps the first part of
+        // the frame's time (180 degrees: half of them) and the rest is skipped.
+        const int n = g_export.samplesPerVideoFrame;
+        const int shutter = std::clamp(static_cast<int>(lroundf(n * s.videoShutter / 360.0f)), 1, n);
+        o.index = g_own.subIndex % n;
+        o.count = shutter;
+        if (o.index >= shutter) {
+            o.skip = true;
+            return o;
+        }
+        o.first = o.index == 0;
+        o.accumulate = o.index == shutter - 1 ? 2 : 1;
+    } else {
+        o.first = true;
+        o.accumulate = 2;
+    }
+    return o;
+}
+
+// The finished frame (or the last one) onto the game's target: the preview on screen.
+void showOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT width, UINT height) {
+    if (!g_own.haveFrame || !g_own.frame.valid() || g_own.frame.width != width || g_own.frame.height != height) return;
+    const RECT all = {0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    videofile::OwnFormat format;
+    if (videofile::ownFormat(format) && format.hdrWhite > 0.0f) {
+        g_pipeline.showLinear(device, g_own.frame.texture, target, all);
+    } else {
+        g_pipeline.resolveScene(device, g_own.frame.texture, target, all);
+    }
+}
+
+// The frame's last sample is shaded into g_own.frame: preview, then the encoder's planes.
+void finishOwnFrame(IDirect3DDevice9* device, IDirect3DSurface9* target, UINT width, UINT height) {
+    videofile::OwnFormat format;
+    if (!videofile::ownFormat(format)) return;
+    if (g_own.tenBitOk < 0) g_own.tenBitOk = Pipeline::tenBitPlanesSupported(device) ? 1 : 0;
+    // P010 wanted but no 16-bit target: NV12 planes, the encoder takes those too.
+    const bool tenBit = format.tenBit && g_own.tenBitOk == 1;
+    // The Misc page's minimap: only here, in the video's frames.
+    misc::drawIntoVideo(device, g_own.frame.surface, g_own.frame.width, g_own.frame.height, format.crop,
+                        g_export.fps > 0.0f ? 1.0f / g_export.fps : 0.0f);
+    // Half a step of dither: enough to break the bands of a dark sky, while a full step of noise
+    // on every pixel cost the encoder bits everywhere.
+    if (!g_pipeline.exportPlanes(device, g_own.frame.texture, static_cast<UINT>(format.width), static_cast<UINT>(format.height), format.crop, tenBit,
+                                 0.5f, tenBit ? format.hdrWhite : 0.0f, g_own.luma, g_own.chroma)) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            TMVS_LOG("video export: the frame's planes could not be made (%dx%d): the game's image goes in", format.width, format.height);
+        }
+        return;
+    }
+    if (g_own.fresh) g_own.dropped++;
+    g_own.fresh = true;
+    g_own.tenBit = tenBit;
+    g_own.finished++;
+    g_own.videoFrame++;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (g_own.haveFrame) g_own.betweenMs += static_cast<double>(now.QuadPart - g_own.lastFinish.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+    g_own.lastFinish = now;
+    g_own.haveFrame = true;
+    showOwnFrame(device, target, width, height);
+}
+
+// The oldest frame on its way back into the encoder (waits for its copy if need be). Every frame
+// handed over comes out here exactly once, so the video keeps the game's frame count.
+void ownSubmitOldest(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    bool copied = false;
+    const bool locked = g_own.read.pop([&](const PlaneReadback::Frame& frame) {
+        if (static_cast<int>(frame.width) * 4 != format.width || static_cast<int>(frame.height) != format.height) return;
+        uint8_t* out = encoder.acquire(frame.tenBit ? venc::Pixels::P010 : venc::Pixels::NV12);
+        if (!out) return;
+        PlaneReadback::pack(frame, out);
+        encoder.submit();
+        copied = true;
+        // The auto focus for a coming frame's lens (copied back with these planes).
+        if (frame.focus > 0.0f) g_own.lensFocus = frame.focus;
+    });
+    if (!copied) {
+        if (g_own.lost++ == 0)
+            TMVS_LOG("video export: one of the mod's frames was lost on its way to the encoder (%s)",
+                     locked ? "the encoder took no frame, or the size changed" : "its system memory copy could not be locked");
+    }
+}
+
+// Every frame on its way, in order (before the game's own image goes in, and at the end).
+void ownFlush(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    while (g_own.read.pending() > 0) ownSubmitOldest(encoder, format);
+}
+
+// The planes finished last start their way back (or the frame queued last once more).
+bool ownQueue(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    IDirect3DDevice9* device = g_device;
+    if (!device || !g_own.haveFrame || !g_own.luma.valid() || !g_own.chroma.valid()) return false;
+    if (static_cast<int>(g_own.luma.width) * 4 != format.width || static_cast<int>(g_own.luma.height) != format.height) return false;
+    if (g_own.fresh) {
+        // Every slot taken: the oldest goes in first (the GPU is a frame or more past it).
+        while (!g_own.read.canQueue() && g_own.read.pending() > 0) ownSubmitOldest(encoder, format);
+        if (!g_own.read.queue(device, g_own.luma, g_own.chroma, g_pipeline.focusTarget(), g_own.tenBit)) return false;
+    } else if (!g_own.read.queueAgain()) {
+        return false;
+    }
+    (g_own.fresh ? g_own.delivered : g_own.repeated)++;
+    g_own.fresh = false;
+    return true;
+}
+
+// videofile: the game writes a video frame; the planes finished last go to the encoder. They are
+// copied to system memory without waiting, and the frames whose copies are done (normally the
+// one before) go into the encoder. False: the game's image goes in, after every frame on its way.
+bool ownDeliver(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    const bool queued = ownQueue(encoder, format);
+    if (queued) {
+        while (g_own.read.pending() > 0 && g_own.read.oldestDone()) ownSubmitOldest(encoder, format);
+    } else {
+        ownFlush(encoder, format);
+    }
+    QueryPerformanceCounter(&end);
+    g_own.readMs += static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+    return queued;
+}
+
+// videofile: the export's file closes, or the frames on the video's clock ended.
+void ownFlushAll(venc::Encoder& encoder, const videofile::OwnFormat& format) {
+    if (g_own.read.pending() <= 0) return;
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    ownFlush(encoder, format);
+    QueryPerformanceCounter(&end);
+    g_own.readMs += static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+}
+
+// videofile: will ownDeliver have a frame for the game's coming write? (Its own checks, before
+// the read-backs; then the game needn't read its image back.)
+bool ownReady(const videofile::OwnFormat& format) {
+    return g_device && g_own.haveFrame && g_own.luma.valid() && g_own.chroma.valid() && static_cast<int>(g_own.luma.width) * 4 == format.width &&
+           static_cast<int>(g_own.luma.height) == format.height;
+}
+
+// videofile: the game wrote a video frame; the next sub-frame starts the next one.
+void ownWritten() {
+    g_own.framesSinceWrite = 0;
+}
+
+// Accumulation depth of field: each sample of a video frame sees the scene from another point of
+// the lens (a disc in the camera's plane), sheared so the focus plane stays put: what is out of
+// focus lands somewhere else in each sample and the sum blurs it, with the lens's own bokeh and no
+// halos at edges. With few samples the copies would stay apart: 16 at least, else the usual blur.
+// The engine makes a camera's projection before the camera begins, so the offsets go to it as a
+// table at the start of each video frame (engine::setLensSamples), indexed by the game's own
+// sample number (docs/engine-video-export.md). Called once a frame, after updateVideoExport.
+void updateLens() {
+    const Settings& s = Config::get().settings;
+    const OwnSample sample = ownSample(0, false); // supersampling: this frame starts a video frame
+    const auto off = [] {
+        if (g_own.lensSet) engine::setLensSamples(nullptr, 0, 0.0f);
+        g_own.lensSet = false;
+        g_own.lensSamples = 0;
+    };
+    if (sample.accumulate == 0 && !sample.skip) {
+        off();
+        return;
+    }
+    if (!sample.first) return; // the video frame's table is set
+    const float focus = s.focusDistance > 0.0f ? s.focusDistance : g_own.lensFocus;
+    const float p11 = g_scene.haveEngine ? g_scene.engineProjection[5] : 0.0f;
+    if (!s.videoLensDof || s.depthOfField <= 0.0f || sample.count < 16 || focus <= 0.1f || p11 <= 0.0f) {
+        off();
+        return;
+    }
+    // The lens's radius: a point at infinity blurs as far as the usual depth of field takes it
+    // (circleOfConfusion in the shader: BokehSize px at 1080p, times DepthOfField x 2.5 up to 1).
+    // Its image moves P11 a / F in NDC, half the screen's height per unit.
+    const float blurPx = std::min(s.depthOfField * 2.5f, 1.0f) * s.bokehSize;
+    const float radius = blurPx / 1080.0f * 2.0f * focus / p11;
+    // One entry per sample of the game's video frame; the ones past the shutter are never summed.
+    // The game's sub-pixel raster runs column by column: the k-th sample takes the lens point
+    // k x stride (a stride coprime to the count), so lens and raster don't move in step. The points
+    // lie on a Vogel spiral (even over the disc for any count), turned from frame to frame.
+    const int total = std::min(g_export.samplesPerFrame > 1 ? g_export.samplesPerFrame : g_export.samplesPerVideoFrame, 128);
+    const int used = std::min(sample.count, total);
+    int stride = std::max(1, static_cast<int>(used * 0.618034f));
+    while (std::gcd(stride, used) != 1) stride++;
+    float table[2 * 128] = {};
+    const float turn = static_cast<float>(g_own.videoFrame) * 0.618034f * 6.2831853f;
+    for (int j = 0; j < used; j++) {
+        const int k = static_cast<int>((static_cast<long long>(j) * stride) % used);
+        const float r = radius * sqrtf((k + 0.5f) / used);
+        const float angle = k * 2.39996323f + turn;
+        table[2 * j] = r * cosf(angle);
+        table[2 * j + 1] = r * sinf(angle);
+    }
+    engine::setLensSamples(table, total, focus);
+    g_own.lensSet = true;
+    g_own.lensSamples = used;
+    g_own.lensFrames++;
+}
+
 // The time the effects see (s).
 float effectTime() {
     return g_videoClock >= 0.0 ? static_cast<float>(g_videoClock) : seconds() + g_clockOffset;
@@ -297,7 +580,9 @@ void loadDevOptions() {
     g_dev.captureInterval = iniFloat(ini, L"CaptureInterval", 2.0f);
     g_dev.captureCount = GetPrivateProfileIntW(L"dev", L"CaptureCount", 1, ini);
     g_dev.exitAt = iniFloat(ini, L"ExitAt", 0.0f);
+    g_dev.fakeBlockRank = GetPrivateProfileIntW(L"dev", L"FakeBlockRank", 0, ini) != 0;
     g_dev.hardExitAt = iniFloat(ini, L"HardExitAt", 0.0f);
+    g_dev.waterSplashTest = GetPrivateProfileIntW(L"dev", L"WaterSplashTest", 0, ini);
     wchar_t buffer[MAX_PATH] = {};
     GetPrivateProfileStringW(L"dev", L"ShaderDir", L"", buffer, MAX_PATH, ini);
     g_dev.shaderDir = buffer;
@@ -1633,7 +1918,10 @@ void onDrawAdded(IDirect3DDevice9* device) {
     g_hdrAddedBound = true;
 }
 
+void overlapBiasDone(IDirect3DDevice9* device);
+
 void onDrawDone(IDirect3DDevice9* device) {
+    overlapBiasDone(device);
     screenDrawDone(device); // RenderScale: the game's vertex state back after a draw in screen pixels
     if (!g_hdrAddedBound) return;
     hook::InternalScope internal;
@@ -2080,6 +2368,7 @@ void processScene(IDirect3DDevice9* device) {
         }
         s_wasPart = part;
     }
+    if (temporal) photo::setView(part, area, desc.Width, desc.Height);
     if (!g_pipeline.ready() && (g_pipelineFailed || !g_pipeline.init(device, g_dev.shaderDir))) {
         g_pipelineFailed = true;
         target->Release();
@@ -2176,6 +2465,11 @@ void processScene(IDirect3DDevice9* device) {
     inputs.time = effectTime();
     inputs.temporal = temporal;
     inputs.video = g_exporting;
+    if (g_dev.waterSplashTest > 0) {
+        const float cycle = fmodf(inputs.time, 8.0f);
+        const float test[4] = {cycle, 24.0f, 40.0f, static_cast<float>(g_dev.waterSplashTest)};
+        memcpy(inputs.splashTest, test, sizeof(test));
+    }
     inputs.repeat = repeat;
     {
         float lo = 0.0f, hi = 0.0f;
@@ -2193,6 +2487,64 @@ void processScene(IDirect3DDevice9* device) {
     const bool cinematic = engine::cinematicActive() || g_exporting;
     inputs.driving = !cinematic;
     inputs.carKnown = engine::carLocation(inputs.carPosition, inputs.carUp);
+    {
+        // The spray's car: its axes and tyres. Once per export the log says how often they were known.
+        engine::CarPose pose;
+        inputs.carPoseKnown = engine::carPose(pose);
+        if (inputs.carPoseKnown) {
+            memcpy(inputs.carPosePosition, pose.position, sizeof(inputs.carPosePosition));
+            memcpy(inputs.carForward, pose.forward, sizeof(inputs.carForward));
+            memcpy(inputs.carRight, pose.right, sizeof(inputs.carRight));
+            memcpy(inputs.carPoseUp, pose.up, sizeof(inputs.carPoseUp));
+            const float wheels[4] = {pose.frontAxle, pose.rearAxle, pose.halfTrack, pose.contactHeight};
+            memcpy(inputs.carWheels, wheels, sizeof(inputs.carWheels));
+        }
+        static bool s_exporting = false, s_measured = false;
+        static unsigned s_frames = 0, s_known = 0, s_onScreen = 0;
+        static double s_screen[3] = {};
+        if (g_exporting) {
+            if (!s_exporting) {
+                s_frames = s_known = s_onScreen = 0;
+                memset(s_screen, 0, sizeof(s_screen));
+                g_pipeline.takeSprayStats();
+            }
+            s_frames++;
+            if (inputs.carPoseKnown) {
+                s_known++;
+                // Where the engine's car lands on screen (row vectors: p V P): the chase camera keeps
+                // the drawn car low in the middle, a few metres ahead.
+                const float* p = inputs.carPosePosition;
+                const float* V = inputs.view;
+                const float* P = inputs.projection;
+                float v[4], c[4];
+                for (int j = 0; j < 4; j++) v[j] = p[0] * V[j] + p[1] * V[4 + j] + p[2] * V[8 + j] + V[12 + j];
+                for (int j = 0; j < 4; j++) c[j] = v[0] * P[j] + v[1] * P[4 + j] + v[2] * P[8 + j] + v[3] * P[12 + j];
+                if (c[3] > 0.1f) {
+                    const float u = c[0] / c[3] * 0.5f + 0.5f, w = 0.5f - c[1] / c[3] * 0.5f;
+                    if (u > -0.5f && u < 1.5f && w > -0.5f && w < 1.5f) {
+                        s_onScreen++;
+                        s_screen[0] += u;
+                        s_screen[1] += w;
+                        s_screen[2] += v[2];
+                    }
+                }
+            }
+            if (inputs.carPoseKnown && pose.wheelsMeasured) s_measured = true;
+        } else if (s_exporting) {
+            TMVS_LOG("video export: the spray had the car's axes from the engine in %u of %u shaded cameras%s", s_known, s_frames,
+                     s_known == 0 ? " (none: it found the car in the depth buffer, behind the screen's centre)"
+                                  : (s_measured ? " (its tyres as measured standing)" : " (its tyres: the Stadium car's estimates)"));
+            if (s_onScreen)
+                TMVS_LOG("video export: the engine's car on screen in %u of %u cameras, on average at %.2f %.2f (0..1 across, down), %.1f m ahead",
+                         s_onScreen, s_known, s_screen[0] / s_onScreen, s_screen[1] / s_onScreen, s_screen[2] / s_onScreen);
+            const Pipeline::SprayStats spray = g_pipeline.takeSprayStats();
+            if (spray.frames)
+                TMVS_LOG("video export: spray in %u of %u frames (speed %.1f m/s on average, at most %.1f; amount at most %.2f)", spray.throwing,
+                         spray.frames, spray.speedSum / spray.frames, spray.topSpeed, spray.topAmount);
+            s_measured = false;
+        }
+        s_exporting = g_exporting;
+    }
     // A clip of the map (in-game trigger) while the player drives: the trail goes on recording.
     inputs.clipInRace = !g_exporting && engine::clipInRace() && inputs.carKnown;
     {
@@ -2329,12 +2681,47 @@ void processScene(IDirect3DDevice9* device) {
             effective.depthOfField = 0.0f;
         }
         photo::adjust(effective);
+        // The video export's own frames: this sample into the float sum, the last one finishes the
+        // frame into g_own.frame (see OwnExport).
+        OwnSample own = ownSample(g_scene.processedCount - 1, part || scaledPath);
+        // Several samples a frame are the anti-aliasing (FXAA or SMAA over them only softened the
+        // textures: my previewer test, capture_134), and the frame stays float to the planes. A
+        // single sample keeps SMAA, which needs an 8-bit frame, unless 10 bits are wanted.
+        videofile::OwnFormat ownFormat;
+        const bool ownFormatKnown = videofile::ownFormat(ownFormat);
+        const bool ownFloat = own.count > 1 || (ownFormatKnown && ownFormat.tenBit);
+        if (own.accumulate == 2 && !g_own.frame.create(device, width, height, ownFloat ? D3DFMT_A16B16G16R16F : D3DFMT_A8R8G8B8)) own = OwnSample();
+        if (own.accumulate) {
+            inputs.accumulate = own.accumulate;
+            inputs.accumulateFirst = own.first;
+            inputs.floatOutput = own.accumulate == 2 && ownFloat;
+            // HDR10: P010 planes only (no 16-bit targets: SDR, the frame is cut at white anyway).
+            if (ownFormatKnown && ownFormat.hdrWhite > 0.0f) {
+                if (g_own.tenBitOk < 0) g_own.tenBitOk = Pipeline::tenBitPlanesSupported(device) ? 1 : 0;
+                if (g_own.tenBitOk == 1) inputs.hdrPeak = ownFormat.hdrPeak / ownFormat.hdrWhite;
+            }
+            if (own.count > 1) effective.fxaa = false;
+            inputs.lensDof = g_own.lensSamples > 0;
+            effective.filmGrain *= settings.videoGrain;
+            // The sub-frames are the motion blur: the screen-space one would blur it twice.
+            if (g_export.subFrames) effective.motionBlur = 0.0f;
+            g_own.samples++;
+        }
         LARGE_INTEGER renderStart, renderEnd;
         QueryPerformanceCounter(&renderStart);
         // RenderScale: switching between the scaled and the full size (photo mode, captures) keeps
         // the height map, the neon trail and the exposure.
         g_pipeline.keepWorldOnResize(settings.renderScale < 0.99f);
-        if (g_pipeline.render(device, inputs, effective, shaded) && scaledPath) g_rs.pending = false;
+        if (own.skip) {
+            g_own.skipped++;
+            showOwnFrame(device, shaded, width, height);
+        } else if (own.accumulate == 2) {
+            if (g_pipeline.render(device, inputs, effective, g_own.frame.surface)) finishOwnFrame(device, shaded, width, height);
+        } else if (g_pipeline.render(device, inputs, effective, shaded) && scaledPath) {
+            g_rs.pending = false;
+        }
+        // A sample only summed wrote nothing: the screen keeps showing the last finished frame.
+        if (own.accumulate == 1) showOwnFrame(device, shaded, width, height);
         LARGE_INTEGER captureStart, captureEnd;
         QueryPerformanceCounter(&captureStart);
         if (capture) writeCapture(device, inputs, idFrame);
@@ -2392,6 +2779,17 @@ void updateVideoExport() {
     // are logged when the stepping starts (and again if they change).
     if (on && !g_exporting) {
         stats = ExportStats();
+        g_own.framesSinceWrite = g_own.subIndex = 0;
+        g_own.fresh = g_own.haveFrame = false;
+        g_own.tenBitOk = -1;
+        g_own.lensFocus = 0.0f;
+        g_own.videoFrame = 0;
+        g_own.finished = g_own.delivered = g_own.repeated = g_own.dropped = g_own.skipped = g_own.samples = g_own.lensFrames = g_own.lost = 0;
+        g_own.readMs = g_own.betweenMs = 0.0;
+        g_own.read.release(); // nothing left from an earlier export (it flushes at its end)
+        g_own.read.lockMs = 0.0;
+        g_own.read.waited = 0;
+        g_own.read.pendingPeak = 0;
         TMVS_LOG("video export: started (its dialog; the settings follow when it shoots)");
     }
     const bool shooting = on && v.step > 0.0;
@@ -2414,6 +2812,8 @@ void updateVideoExport() {
                      v.samplesPerFrame, v.samplesPerVideoFrame, v.stereo);
     }
     if (!on && g_exporting) {
+        // The frames still on their way to the encoder (normally gone when the stepping ended).
+        videofile::flushOwnFrames();
         // Expected: n x n samples a frame with the supersampling inside a frame, else one (the
         // sub-frames are frames of their own). Frames before and after the video's: its dialog,
         // and DoShoot playing the clip again in real time to record the sound.
@@ -2426,17 +2826,40 @@ void updateVideoExport() {
                  "target; the last shaded target %ux%u format %d",
                  stats.engineMatrices, stats.noneSet, stats.floatCopies, stats.targetWidth, stats.targetHeight,
                  static_cast<int>(stats.targetFormat));
+        if (g_own.finished > 0) {
+            // Reading back: the game's time in handing frames over (the copies start without
+            // waiting; locking them a write later, the copy into the encoder's buffer). Of it the
+            // wait in the locks: a copy the GPU had not done yet.
+            const unsigned handed = g_own.delivered + g_own.repeated;
+            TMVS_LOG("video export: the mod's own frames: %u finished from %u samples (%u sub-frames past the shutter skipped), %u handed over, "
+                     "%u handed over again, %u replaced before the game wrote them; %u with lens depth of field; %s planes; %.1f ms a frame, "
+                     "reading back %.1f ms a frame (%.1f of it waiting for the copy; %u frames found it unfinished, at most %d on the way)%s",
+                     g_own.finished, g_own.samples, g_own.skipped, g_own.delivered, g_own.repeated, g_own.dropped, g_own.lensFrames,
+                     g_own.tenBit ? "P010" : "NV12", g_own.finished > 1 ? g_own.betweenMs / (g_own.finished - 1) : 0.0,
+                     handed > 0 ? g_own.readMs / handed : 0.0, handed > 0 ? g_own.read.lockMs / handed : 0.0, g_own.read.waited,
+                     g_own.read.pendingPeak, g_own.lost || g_own.read.pending() > 0
+                         ? (", " + std::to_string(g_own.lost + static_cast<unsigned>(g_own.read.pending())) + " lost on the way").c_str()
+                         : "");
+        }
+        if (g_own.lensSet) engine::setLensSamples(nullptr, 0, 0.0f);
+        g_own.lensSet = false;
+        g_own.lensSamples = 0;
+        releaseOwnExport(true); // a 4K frame and its planes: some 100 MB of video memory
     }
     g_exporting = on;
     if (on) {
         g_export = v;
         stats.frames++;
     }
+    // The frames on the video's clock ended (the sound pass or the file's close follow): the
+    // game wrote its last one, the mod's frames still on their way go into the encoder now.
+    if (g_frameStepped && !shooting) videofile::flushOwnFrames();
     g_frameStepped = on && v.step > 0.0;
     if (on && !g_frameStepped) (stats.stepped ? stats.after : stats.before)++;
     if (on && v.step > 0.0) {
         g_videoClock = g_videoClock < 0.0 ? static_cast<double>(effectTime()) : g_videoClock + v.step;
         stats.stepped++;
+        g_own.subIndex = g_own.framesSinceWrite++;
         // dev.ini TraceVideoFrame=n: a trace of one frame of the video (written at its Present).
         if (g_dev.traceVideoFrame > 0 && stats.stepped == static_cast<unsigned>(g_dev.traceVideoFrame)) {
             TMVS_LOG("video export: tracing frame %u of the video", stats.stepped);
@@ -2504,6 +2927,7 @@ void onFrameBegin() {
         if (g_gameplayLastFrame && s.enabled) engine::keepNight(true);
     }
     updateVideoExport();
+    updateLens();
     updateJitter();
     g_cameraIndex = 0;
     g_scene.lastFrameCount = g_scene.processedCount;
@@ -2526,6 +2950,14 @@ void onCameraBegin(void* camera) {
                              g_scene.engineProjection[14] != 0.0f;
         g_scene.mainRenders++;
         engine::setMainCamera(camera);
+        {
+            // The step of its depth buffer (OverlapFix): 2^-16 for 16 bits, else 2^-24 (D24, INTZ becomes D24S8).
+            IDirect3DSurface9* ds = nullptr;
+            D3DSURFACE_DESC dsDesc{};
+            if (SUCCEEDED(g_device->GetDepthStencilSurface(&ds)) && ds) ds->GetDesc(&dsDesc);
+            if (ds) ds->Release();
+            g_depthUlp = dsDesc.Format == D3DFMT_D16 || dsDesc.Format == D3DFMT_D15S1 ? 1.0f / 65536.0f : 1.0f / 16777216.0f;
+        }
         // Material masks: nothing left from the last frame where nothing is drawn (the sky).
         if (materialsWanted()) g_device->Clear(0, nullptr, D3DCLEAR_STENCIL, 0, 1.0f, 0);
         g_idFrame = g_captureRequested && materialsWanted();
@@ -2669,9 +3101,182 @@ void onDraw(IDirect3DDevice9* device) {
     else untagStencil(device);
 }
 
+// OverlapFix: TMUnlimiter maps put blocks inside each other, and two blocks with a face in the
+// same plane z-fight (stripes that flicker with the camera). blockorder gives each block draw a
+// rank among the blocks overlapping at its spot (1..7, placed later = higher); that draw gets a
+// small depth bias toward the camera, rank times one step, so the block placed last wins.
+//
+// Where: the game's own opaque draws of the main camera (depth test and depth writes on, no
+// blending). Not the shadow and reflection cameras (not the main camera, the shadows of a block
+// come from its geometry anyway), not the mod's passes (hook::InternalScope: casters.cpp, the
+// light passes, ImGui never reach these callbacks), not blended draws (glass, glows).
+//
+// The bias is in depth units (0..1) added to the depth the draw writes, so the step is a number
+// of depth buffer steps (ULP) at every distance. Two coplanar faces differ by about 1 to 2 ULP
+// (each rasterises the plane from its own vertices); one rank step is 4 ULP: 2.4e-7 on a 24 bit
+// buffer. In metres that is z^2 * (far - near) / (far * near) * ULP: with near 0.5 m, 0.12 mm per
+// step at 10 m, 1.2 cm at 100 m, 12 cm at 1 km, which is where the buffer itself resolves 12 cm
+// anyway. The seven steps together (28 ULP) stay below 1 mm at 10 m and 8 cm at 100 m: well
+// under a road's decals and the car's gap above the road, and further away the buffer cannot
+// tell such gaps apart either. The slope term (0.25 of the depth change over a pixel, per rank)
+// covers the interpolation error of tilted faces, which grows with the slope; at most 1.75
+// pixels' worth of depth, far less than a block's thickness. LESS and LESSEQUAL both work.
+// Sign: negative = toward the camera. The previous values are put back after the draw.
+bool g_overlapBiasActive = false;
+DWORD g_overlapSavedBias = 0, g_overlapSavedSlope = 0;
+
+constexpr float kOverlapUlpPerRank = 4.0f;
+constexpr float kOverlapSlopePerRank = 0.25f;
+
+DWORD floatBits(float v) {
+    DWORD bits;
+    memcpy(&bits, &v, sizeof(bits));
+    return bits;
+}
+
+float bitsFloat(DWORD bits) {
+    float v;
+    memcpy(&v, &bits, sizeof(v));
+    return v;
+}
+
+bool overlapBiasSupported(IDirect3DDevice9* device) {
+    static int s_state = -1; // -1 not asked yet, 0 no, 1 yes
+    if (s_state < 0) {
+        D3DCAPS9 caps{};
+        const bool ok = SUCCEEDED(device->GetDeviceCaps(&caps)) && (caps.RasterCaps & D3DPRASTERCAPS_DEPTHBIAS) &&
+                        (caps.RasterCaps & D3DPRASTERCAPS_SLOPESCALEDEPTHBIAS);
+        s_state = ok ? 1 : 0;
+        if (!ok) TMVS_LOG("overlap fix: the graphics card has no depth bias, OverlapFix stays off");
+    }
+    return s_state == 1;
+}
+
+int overlapRank(IDirect3DDevice9* device) {
+    if (!g_dev.fakeBlockRank) return blockorder::currentDrawRank();
+    IDirect3DVertexBuffer9* vb = nullptr;
+    UINT offset = 0, stride = 0;
+    device->GetStreamSource(0, &vb, &offset, &stride);
+    if (!vb) return 0;
+    const int rank = static_cast<int>((reinterpret_cast<uintptr_t>(vb) >> 4) & 7);
+    vb->Release();
+    return rank;
+}
+
+void overlapBiasBegin(IDirect3DDevice9* device) {
+    const Settings& s = Config::get().settings;
+    // Not tied to Settings::enabled: the flicker is the game's own, so the fix also works with the
+    // shaders off (F7). Everything it reads runs then too: engine hooks (blockorder, onCameraBegin
+    // with inMainCamera and the depth step) are unconditional, and the readable game depth that
+    // isMainTarget needs depends on readableGameDepth alone.
+    if (!g_scene.inMainCamera || !s.overlapFix) return;
+    const int rank = overlapRank(device);
+    if (rank <= 0) return;
+    if (!overlapBiasSupported(device)) return;
+    DWORD z = FALSE, zwrite = FALSE, blend = FALSE;
+    device->GetRenderState(D3DRS_ZENABLE, &z);
+    device->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+    device->GetRenderState(D3DRS_ALPHABLENDENABLE, &blend);
+    if (!z || !zwrite || blend) return;
+    device->GetRenderState(D3DRS_DEPTHBIAS, &g_overlapSavedBias);
+    device->GetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, &g_overlapSavedSlope);
+    const int r = rank > 7 ? 7 : rank;
+    // On top of what the game set itself (its decals may use a bias of their own).
+    hook::InternalScope internal;
+    device->SetRenderState(D3DRS_DEPTHBIAS, floatBits(bitsFloat(g_overlapSavedBias) - r * kOverlapUlpPerRank * g_depthUlp));
+    device->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, floatBits(bitsFloat(g_overlapSavedSlope) - r * kOverlapSlopePerRank));
+    g_overlapBiasActive = true;
+}
+
+void overlapBiasDone(IDirect3DDevice9* device) {
+    if (!g_overlapBiasActive) return;
+    g_overlapBiasActive = false;
+    hook::InternalScope internal;
+    device->SetRenderState(D3DRS_DEPTHBIAS, g_overlapSavedBias);
+    device->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, g_overlapSavedSlope);
+}
+
 // CasterShadows: the main camera's opaque draws of static materials go to casters.cpp (which
 // keeps the meshes that stay put). Not the car (it moves), glass or water (light passes).
+// Hide car, the passes under other shaders: a car's own colour draws (a Vehicles shader, engine::carDrawNow)
+// are left out here and their vertex buffer, offset, base and index range remembered; any other draw of the
+// same mesh (its shadow in the game's shadow map, a depth pass) matches and is left out too. The log says
+// under which shader the first of those came. Forgotten with the map.
+bool g_hideCarDiag = false; // the 1.5 s listing of the draws is running
+
+bool onSkipDraw(IDirect3DDevice9* device, INT base, UINT start, UINT count) {
+    if (!engine::hidingCars()) {
+        g_hideCarDiag = false;
+        return false;
+    }
+    static std::set<std::tuple<uintptr_t, UINT, UINT, INT, UINT, UINT>> s_meshes;
+    static int s_map = -1;
+    if (s_map != engine::mapLoads()) {
+        s_map = engine::mapLoads();
+        s_meshes.clear();
+    }
+    const bool own = engine::carDrawNow();
+    // The first 1.5 s of each Hide car: every distinct shader file with its render target's size, so the log
+    // names a draw that is the car's shadow (60 lines at most).
+    {
+        static DWORD s_since = 0;
+        static int s_lines = 0;
+        static std::set<std::pair<std::wstring, unsigned>> s_seen;
+        if (!g_hideCarDiag) {
+            g_hideCarDiag = true;
+            s_since = GetTickCount();
+            s_seen.clear();
+        }
+        if (s_lines < 60 && GetTickCount() - s_since < 1500) {
+            wchar_t file[512] = {};
+            if (!engine::materialFile(engine::currentShader(), file, 512)) wcscpy_s(file, L"(no shader file)");
+            unsigned size = 0;
+            {
+                hook::InternalScope internal;
+                IDirect3DSurface9* target = nullptr;
+                if (SUCCEEDED(device->GetRenderTarget(0, &target)) && target) {
+                    D3DSURFACE_DESC desc{};
+                    target->GetDesc(&desc);
+                    size = desc.Width << 16 | desc.Height;
+                    target->Release();
+                }
+            }
+            if (s_seen.insert({file, size}).second) {
+                s_lines++;
+                TMVS_LOG("engine: hide car: draw under %ls into %ux%u (%u primitives%s)", file, size >> 16, size & 0xffff, count, own ? ", the car's own" : "");
+            }
+        }
+    }
+    if (!own && s_meshes.empty()) return false;
+    IDirect3DVertexBuffer9* vb = nullptr;
+    UINT offset = 0, stride = 0;
+    {
+        hook::InternalScope internal;
+        if (FAILED(device->GetStreamSource(0, &vb, &offset, &stride)) || !vb) return own;
+    }
+    vb->Release();
+    const auto key = std::make_tuple(reinterpret_cast<uintptr_t>(vb), offset, stride, base, start, count);
+    if (own) {
+        if (s_meshes.size() < 4096) s_meshes.insert(key);
+        return true;
+    }
+    if (s_meshes.count(key) == 0) return false;
+    static int s_logged = 0;
+    if (s_logged < 6) {
+        s_logged++;
+        wchar_t file[512] = {};
+        if (!engine::materialFile(engine::currentShader(), file, 512)) wcscpy_s(file, L"(no shader file)");
+        TMVS_LOG("engine: hide car: a draw of a car's mesh under %ls left out (%u meshes known)", file, static_cast<unsigned>(s_meshes.size()));
+    }
+    return true;
+}
+
 void onDrawIndexed(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices, UINT start, UINT count) {
+    overlapBiasBegin(device); // blocks are indexed draws; restored in onDrawDone
+    // The Misc page's minimap takes the map's blocks for its picture from above (queued, drawn at Present).
+    if (misc::kAvailable && g_scene.inMainCamera && g_scene.haveView && g_scene.haveProjection) {
+        misc::sceneDraw(device, type, base, minIndex, vertices, start, count, g_scene.view, g_scene.projection);
+    }
     if (!g_castersOn || !g_scene.inMainCamera || !g_scene.haveView || !g_scene.haveProjection) return;
     if (!casters::takeTurn()) return; // most draws of a big map wait for a later frame
     DWORD z = FALSE, zwrite = FALSE, blend = FALSE, alphaTest = FALSE, colorWrite = 0;
@@ -2802,6 +3407,7 @@ void onPreReset() {
     perflog::release();
     g_pipeline.setProfiling(true, false); // perflog's bracket is gone until the next Present
     g_pipeline.releaseForReset(); // the shaders stay (they live through the reset)
+    releaseOwnExport(false);
     releaseSideB();
     g_sceneCopy.destroy();
     g_partDepth.destroy();
@@ -2826,6 +3432,7 @@ void onPreReset() {
     g_screenSaved.active = false;
     releaseScreenLayouts(); // made again when needed (the shader from the compile cache)
     casters::releaseDevice();
+    misc::releaseDevice(); // the minimap's picture from above (default pool)
     depth::onPreReset();
     overlay::preReset();
 }
@@ -2989,7 +3596,22 @@ void onPresent(IDirect3DDevice9* device) {
     if (!photo::active() && !g_exporting) g_autoQuality.onFrame(seconds(), g_gameplayThisFrame, g_pipeline, settings);
     D3DDEVICE_CREATION_PARAMETERS cp{};
     device->GetCreationParameters(&cp);
-    audio::update(settings, seconds(), g_gameplayThisFrame, cp.hFocusWindow);
+    // The weather sound follows the effects' clock, so its thunder follows the flashes on screen
+    // (the real clock drifted from them by the export's offset). In the export's sound pass the
+    // game replays the clip in real time from 0 for its recording: the video's clock at the clip
+    // time it plays, so the thunder in the video's sound comes after the flashes in its frames.
+    // During an export the rain is not faded out when the game is in the background (the export
+    // runs on, and so does its sound pass).
+    {
+        double passed = 0.0;
+        const bool pass = g_exporting && soundcapture::passClock(passed);
+        const float soundTime = pass ? static_cast<float>(g_exportStats.clockStart + passed - g_export.clipStart) : effectTime();
+        audio::setAlwaysInFront(g_exporting);
+        // The sound pass shades no gameplay frames: counted as a race only by those, the rain
+        // faded out at its start (a short hiss at the video's start, my test) and the thunder
+        // stayed silent. The whole export counts, so nothing fades between frames and pass.
+        audio::update(settings, soundTime, g_gameplayThisFrame || g_exporting, cp.hFocusWindow);
+    }
     {
         static float s_waterMin = 1e30f, s_waterMax = 1e30f;
         float lo = 0.0f, hi = 0.0f;
@@ -3027,6 +3649,8 @@ void onPresent(IDirect3DDevice9* device) {
     status.engineHooks = engine::active();
     status.sunKnown = sunDirection(Config::get().settings, status.sunDirection);
     status.shaderError = g_pipeline.lastError().empty() ? nullptr : g_pipeline.lastError().c_str();
+    // The F12 screenshot reads the back buffer after the overlay: the Misc page's windows stay out of it.
+    status.hideTools = g_exporting || g_captureRequested || g_screenshotNumber >= 0;
     overlay::setStatus(status);
     overlay::draw(device);
     // overlay::draw polled the hotkeys (keys::poll, once a frame).
@@ -3054,6 +3678,18 @@ void onPresent(IDirect3DDevice9* device) {
                     TMVS_LOG("capture: not enough memory for the screenshot");
                 }
                 QueryPerformanceCounter(&end);
+                // The replay editor: only the 3D view (between its panels), as the capture's own images are.
+                RECT view{};
+                if (read && pixels->pitch == pixels->width * 4 && photo::viewArea(pixels->width, pixels->height, view)) {
+                    const size_t w = static_cast<size_t>(view.right - view.left) * 4;
+                    std::vector<unsigned char> cut(w * (view.bottom - view.top));
+                    for (LONG y = view.top; y < view.bottom; y++)
+                        memcpy(&cut[w * (y - view.top)], &pixels->bytes[pixels->pitch * y + static_cast<size_t>(view.left) * 4], w);
+                    pixels->bytes.swap(cut);
+                    pixels->width = static_cast<UINT>(view.right - view.left);
+                    pixels->height = static_cast<UINT>(view.bottom - view.top);
+                    pixels->pitch = static_cast<UINT>(w);
+                }
                 if (read) {
                     wchar_t name[64];
                     swprintf(name, 64, L"screen_%03d.bmp", g_screenshotNumber);
@@ -3173,6 +3809,30 @@ bool nightAtLoad(float dayTime) {
     return nightFor(dayTime, true);
 }
 
+// Resource packs, at map load (the load screen, then the decoration): the environment mod the
+// menu chose for this environment and mood. A map with its own mod keeps it unless "Also
+// replace a map's own mod" is on (also for None). Works with the effects off too: it is the
+// game's own texture swap.
+engine::ModPackAnswer modPackAnswer(const engine::ModPackAsk& ask) {
+    engine::ModPackAnswer answer;
+    const Config& config = Config::get();
+    const std::string choice = modpack::choiceFor(config, ask.environment, ask.decoration, answer.note);
+    if (choice.empty()) return answer;
+    if (ask.mapMod && !config.packReplaceMapMod) {
+        answer.note = (answer.note.empty() ? "" : answer.note + ", ") + "kept: \"Also replace a map's own mod\" is off";
+        return answer;
+    }
+    if (choice == modpack::kNone) {
+        answer.kind = engine::ModPackAnswer::None;
+        return answer;
+    }
+    answer.kind = engine::ModPackAnswer::Pack;
+    const int n = MultiByteToWideChar(CP_UTF8, 0, choice.c_str(), static_cast<int>(choice.size()), nullptr, 0);
+    answer.file.assign(n > 0 ? n : 0, L'\0');
+    if (n > 0) MultiByteToWideChar(CP_UTF8, 0, choice.c_str(), static_cast<int>(choice.size()), &answer.file[0], n);
+    return answer;
+}
+
 // EngineMoon, at map load: on a night map (its own night or lit at midnight) whose look has the
 // black hole, the game's own moon (its baked light and shadows, glints, the car) shines from the
 // black hole instead of from the side, or is off. Decided with the look of the map's mood, as
@@ -3242,6 +3902,7 @@ void bootOnce() {
     TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
     loadDevOptions();
     Config::get().load();
+    misc::boot();
     lut::writeBuiltInLooks();
     gameshaders::install();
 
@@ -3255,7 +3916,14 @@ void bootOnce() {
     engine::install(engineCallbacks);
     engine::setNightAtLoad(nightAtLoad);
     videofile::install();
+    videofile::FrameSource frames;
+    frames.deliver = ownDeliver;
+    frames.written = ownWritten;
+    frames.ready = ownReady;
+    frames.flush = ownFlushAll;
+    videofile::setFrameSource(frames);
     engine::setMoonAtLoad(moonAtLoad);
+    engine::setModPackChooser(modPackAnswer);
 
     hook::DeviceCallbacks deviceCallbacks;
     deviceCallbacks.adjustPresentParams = onAdjustPresentParams;
@@ -3273,6 +3941,7 @@ void bootOnce() {
     deviceCallbacks.draw = onDraw;
     deviceCallbacks.drawDone = onDrawDone;
     deviceCallbacks.drawIndexed = onDrawIndexed;
+    deviceCallbacks.skipDraw = onSkipDraw;
     deviceCallbacks.setViewport = onSetViewport;
     deviceCallbacks.getViewport = onGetViewport;
     deviceCallbacks.setScissorRect = onSetScissorRect;

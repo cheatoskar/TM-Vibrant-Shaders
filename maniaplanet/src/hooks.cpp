@@ -21,6 +21,7 @@
 #include "maplook.h"
 #include "shaderdb.h"
 #include "softshadow.h"
+#include "water11.h"
 #include <windows.h>
 #include <atomic>
 #include <dxgi1_2.h>
@@ -406,6 +407,8 @@ void releaseTextures() {
 EngineShadow g_shadow;
 // The mod's soft shadow shader is bound for the engine's shadow draw (softshadow::end after it).
 bool g_softShadowBound = false;
+// The engine's water fog draw goes into the mod's buffer (water::endFog after it).
+bool g_waterFogBound = false;
 
 void releaseShadow() {
     if (g_shadow.constants) g_shadow.constants->Release();
@@ -556,6 +559,8 @@ bool scenePRaster(ID3D11Buffer* buffer, float out[4]) {
 EngineCar g_car;
 CarTracker g_carTracker;
 float g_carCandidates[8][12] = {};
+CarWheels g_carWheels[8] = {}; // each candidate's wheels from its bones (the spray)
+int g_carBoneLogs = 0;          // bone origins logged (a few cars, to check findWheels in the game)
 int g_carCount = 0;
 // The car of the last frames, for captures (car.txt): does it move evenly from frame to frame,
 // and where are the other cars (ghosts) in the camera's view?
@@ -624,6 +629,19 @@ void takeCar(ID3D11DeviceContext* ctx) {
         return;
     }
     if (found) {
+        // Its wheels: bone origins that lie like a car's wheels (read from the same copy).
+        const int bones = std::clamp(static_cast<int>(found->size > kObjectVBones ? (found->size - kObjectVBones) / 48 : 0), 0, kObjectVBoneCount);
+        const float* bone = reinterpret_cast<const float*>(found->data + kObjectVBones);
+        findWheels(bone, bones, g_carWheels[g_carCount]);
+        if (g_carBoneLogs < 2 && bones > 0) {
+            // The bone origins of the first cars (x y z in the car's axes), to check the wheels found.
+            g_carBoneLogs++;
+            char line[2048];
+            int n = snprintf(line, sizeof(line), "hooks: the car's %d bone origins:", bones);
+            for (int i = 0; i < bones && n < static_cast<int>(sizeof(line)) - 40; i++)
+                n += snprintf(line + n, sizeof(line) - n, " %.2f,%.2f,%.2f", bone[i * 12 + 3], bone[i * 12 + 7], bone[i * 12 + 11]);
+            TMVS_LOG("%s", line);
+        }
         memcpy(g_carCandidates[g_carCount++], found->data + kObjectVVisualToCamera, sizeof(float) * 12);
     } else if (!cbs[0] || sceneVCopy(cbs[0], false)) {
         // Not an upload we saw: what is bound instead (a few times), to learn the engine's scheme.
@@ -677,6 +695,23 @@ void resolveCar() {
         toWorld(m[1], m[5], m[9], g_car.up);
         toWorld(m[2], m[6], m[10], g_car.forward);
         g_car.track = g_carTracker.track();
+        g_car.wheels = g_carWheels[index[pick]];
+        // Once per change: whether its bones gave the wheels (the spray's tyres), and where.
+        static int s_wheelsLogged = 0;
+        static float s_last[4] = {-1.0f, 0.0f, 0.0f, 0.0f};
+        const CarWheels& wh = g_car.wheels;
+        const float now4[4] = {wh.known ? 1.0f : 0.0f, wh.zA, wh.zB, wh.halfTrack};
+        bool changed = false;
+        for (int i = 0; i < 4; i++) changed = changed || std::fabs(now4[i] - s_last[i]) > 0.05f;
+        if (changed && s_wheelsLogged < 12) {
+            s_wheelsLogged++;
+            memcpy(s_last, now4, sizeof(s_last));
+            if (wh.known)
+                TMVS_LOG("hooks: the car's wheels from its bones: axles at z %+.2f and %+.2f m, half track %.2f m, centres %.2f / %.2f m over its origin",
+                         wh.zA, wh.zB, wh.halfTrack, wh.heightA, wh.heightB);
+            else
+                TMVS_LOG("hooks: the car's bones hold no wheels like a car's: the spray takes the Stadium car's estimates");
+        }
     }
     CarLogEntry& e = g_carLog[g_carLogNext++ % 240];
     e.time = now;
@@ -952,6 +987,12 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     Frame& f = g_frame;
     f.draws++;
     f.light = lights::Draw{};
+    // Clear water: the fog draws went into the mod's buffer; it goes into the image before the next
+    // other draw (the engine's copy of the image for its refraction).
+    if (water::pending() && !(f.phase == Phase::Scene && water::isFogShader(f.ps.name))) {
+        water::compose(ctx, g_tex[kTexDiffuse], g_tex[kTexNormal], g_tex[kTexLightMask]);
+        if (capture::active()) capture::traceNote("water: the mod's fog buffer put into the image (before the next draw)");
+    }
     if (capture::active()) capture::traceDraw(ctx, f.ps.name, f.ps.role, f.draws);
     // Only the effects' tone maps are the tone map: the editor draws Engines/CopyColor0_ToneMapT3
     // into the HDR image in the middle of the scene (with depth), and the effects ran there, on
@@ -992,6 +1033,7 @@ bool onDraw(ID3D11DeviceContext* ctx) {
         f.toneMapSeen = true;
         videoTick(f.rtW, f.rtH);
         f.toneMapped = replaceToneMap(ctx);
+        water::endRender(); // the effects have used this render's water
         return f.toneMapped;
     }
     if (role == Role::ToneMap && f.rt) {
@@ -1044,6 +1086,16 @@ bool onDraw(ID3D11DeviceContext* ctx) {
                 for (auto* v : rtv)
                     if (v) v->Release();
             }
+        }
+        // The engine's water fog (WaterClarity, WaterSplash): drawn into the mod's buffer.
+        if (role == Role::Scene && water::isFogShader(f.ps.name) && f.rt && screenSized(f.rtW, f.rtH)) {
+            const bool on = g_lookSettings.enabled && g_rendererReady;
+            water::Params wp;
+            wp.clarity = on ? std::clamp(g_lookSettings.waterClarity, 0.0f, 1.0f) : 0.0f;
+            wp.splash = on && g_lookSettings.waterSplash > 0.0f && options::current().hdrStage;
+            wp.time = effectTime();
+            g_waterFogBound = water::beginFog(g_device, ctx, f.ps, wp);
+            if (g_waterFogBound && capture::active()) capture::traceNote("water: drawn into the mod's fog buffer");
         }
         return false;
     }
@@ -1100,6 +1152,7 @@ HRESULT STDMETHODCALLTYPE createPixelShaderDetour(ID3D11Device* device, const vo
         ShaderInfo info = shaderdb::identify(code, size);
         if (info.role == Role::Scene) info.lightSlot = shaderdb::lightTextureSlot(code, size);
         if (info.name && !strcmp(info.name, "Tech3/DeferredShadowPssm_p")) softshadow::noteEngineShader(*out, code, size);
+        if (water::isFogShader(info.name)) info.depthSlot = shaderdb::textureSlot(code, size, "TMapDepth");
         {
             std::unique_lock<std::shared_mutex> lock(g_shaderLock);
             g_shaders[*out] = info;
@@ -1170,6 +1223,10 @@ void STDMETHODCALLTYPE omSetRenderTargetsAndUAVsDetour(ID3D11DeviceContext* ctx,
 
 // After a draw of the game: the engine's shader back where the mod's soft shadows drew.
 void afterDraw(ID3D11DeviceContext* ctx) {
+    if (g_waterFogBound) {
+        g_waterFogBound = false;
+        water::endFog(ctx);
+    }
     if (!g_softShadowBound) return;
     g_softShadowBound = false;
     softshadow::end(ctx);
@@ -1596,6 +1653,7 @@ bool onPresent(IDXGISwapChain* sc) {
     }
     capture::endFrame();
     lights::endFrame();
+    water::endFrame();
 
     // The map's time of day from the engine's light (day, sunset, night presets, as in TMNF):
     // only in frames with a scene, and only once it holds for a second.
@@ -1669,6 +1727,7 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
         releaseTextures();
         releaseShadow();
         lights::release();
+        water::release();
         g_isSceneV.clear();
         g_frame = Frame{};
         TMVS_LOG("hooks: ResizeBuffers %ux%u", w, h);

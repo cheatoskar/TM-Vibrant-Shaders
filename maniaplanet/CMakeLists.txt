@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.21)
 # Separate project from the TMNF plugin (that one is 32-bit D3D9):
 #   cmake -S maniaplanet -B build-mp -A x64
 #   cmake --build build-mp --config Release
-project(tmvs_maniaplanet VERSION 1.4.1 LANGUAGES CXX RC ASM_MASM)
+project(tmvs_maniaplanet VERSION 1.4.2 LANGUAGES CXX RC ASM_MASM)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "Build the ManiaPlanet proxy for ManiaPlanet.exe (64-bit): configure with -A x64.")
@@ -111,6 +111,9 @@ add_library(tmvs_mp_core STATIC
   src/effects_weather.cpp
   src/effects_cinema.cpp
   src/effects_trail.cpp
+  src/effects_headlights.cpp
+  src/effects_water.cpp
+  src/water11.cpp
   src/maplook.cpp
   src/autoquality11.cpp
   src/photo11.cpp
@@ -131,6 +134,8 @@ add_library(tmvs_mp_core STATIC
   # The TMNF mod's weather sound (rain, thunder, the snow storm's wind), shared.
   ${TMVS_ROOT}/src/audio.cpp
   ${TMVS_ROOT}/src/noise.cpp
+  # The TMNF mod's water pictures (droplet, foam, ripple), shared.
+  ${TMVS_ROOT}/src/waterfx.cpp
   ${MP_SHADER_HEADERS}
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp

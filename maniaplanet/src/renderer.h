@@ -18,7 +18,9 @@ struct StateBackup {
     void restore(ID3D11DeviceContext* ctx);
 
 private:
-    static constexpr UINT kSrvs = 17, kCbs = 5, kSamplers = 5; // as many as the mod's passes use
+    // As many as the mod's passes use. Constant buffers: all 14 slots, since the engine keeps SceneP at
+    // b13 for its later passes (FXAA reads its pixel size from it) and the water passes use b5 - b13.
+    static constexpr UINT kSrvs = 17, kCbs = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, kSamplers = 5;
     UINT scissorCount = 0, viewportCount = 0;
     D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
     D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};

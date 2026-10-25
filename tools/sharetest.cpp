@@ -32,8 +32,10 @@ static bool isMachine(const Field& f) {
     static const char* const kMachine[] = {"NeonTrail", "TrailColor", "TrailWidth", "TrailTyres", "TrailDuration", "TrailKeepRuns",
                                            "DisableGameMSAA", "ReadableGameDepth", "AutoQuality", "DisableGameFX", "GameMaterials",
                                            "TargetFPS", "WeatherSound", "CinematicOnlyInReplays", "VideoExportBest", "VideoCodec",
-                                           "VideoBitrate", "TAAJitter", "GameNight", "EngineMoon", "GameSkyClouds", "CleanHighlights",
-                                           "GameHdr", "EngineLights", "CasterShadows", "CasterAlphaTest", "CleanWater", "WaterFarReflections", "GameGBuffer", "GameLight", "ShadeMenuBars",
+                                           "VideoBitrate", "VideoQuality", "Video10Bit", "VideoEncoder", "VideoFfmpegPreset", "VideoOwnFrames",
+                                           "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
+                                           "TAAJitter", "GameNight", "EngineMoon", "GameSkyClouds", "CleanHighlights",
+                                           "GameHdr", "EngineLights", "CasterShadows", "CasterAlphaTest", "CleanWater", "WaterFarReflections", "OverlapFix", "GameGBuffer", "GameLight", "ShadeMenuBars",
                                            "RenderScale", "FsrSharpness"};
     for (const char* key : kMachine) {
         if (!strcmp(key, f.key)) return true;
@@ -46,7 +48,7 @@ static bool isMachine(const Field& f) {
 // changed default of an older field still fails the fingerprint below. (Version 1 ships with 1.4.1, so until
 // then the defaults of these may still change: LampGlare and LampHaze got theirs from my test.)
 static bool isAddedSinceV1(const Field& f) {
-    static const char* const kAdded[] = {"LampGlare", "LampHaze", "LampSkyHalos", "Floodlights", "DofAutofocus", "SMAA"};
+    static const char* const kAdded[] = {"LampGlare", "LampHaze", "LampSkyHalos", "Floodlights", "DofAutofocus", "SMAA", "WaterSplash", "WaterClarity", "CarHeadlights", "CarHeadlightRange", "CarHeadlightBeam"};
     for (const char* key : kAdded) {
         if (!strcmp(key, f.key)) return true;
     }

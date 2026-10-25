@@ -1,11 +1,13 @@
 // TM Vibrant Shaders for ManiaPlanet: the weather stage's passes (shader model 5), ported from the
 // TMNF mod (shaders/tmvs.hlsl, src/pipeline.cpp kRainVS):
 //   PS_Reflect: screen-space reflections (half res) for wet roads, puddles and the polished track
-//   VS/PS_RainDrop, VS/PS_RainSplash, VS/PS_SnowFlake: particles drawn into the HDR image
+//   VS/PS_RainDrop, VS/PS_RainSplash, VS/PS_Spray, VS/PS_SnowFlake: particles drawn into the HDR image
 //   PS_LensDrops: drops and flakes on the lens
+//   PS_WaterLevel, VS/PS_WaterSplash: the water near the car and what the car throws up in it
+//   (WaterSplash, effects_water.cpp; TMNF: PS_WaterSplash, kRainVS waterVS)
 // Particles have no vertex buffer: every particle is 6 vertices (two triangles), its seed is a
 // hash of its index (SV_VertexID / 6), its corner SV_VertexID % 6.
-// entries: PS_Reflect:ps_5_0 VS_RainDrop:vs_5_0 PS_RainDrop:ps_5_0 VS_RainSplash:vs_5_0 PS_RainSplash:ps_5_0 VS_SnowFlake:vs_5_0 PS_SnowFlake:ps_5_0 PS_LensDrops:ps_5_0
+// entries: PS_Reflect:ps_5_0 VS_RainDrop:vs_5_0 PS_RainDrop:ps_5_0 VS_RainSplash:vs_5_0 PS_RainSplash:ps_5_0 VS_Spray:vs_5_0 PS_Spray:ps_5_0 VS_SnowFlake:vs_5_0 PS_SnowFlake:ps_5_0 PS_LensDrops:ps_5_0 PS_WaterLevel:ps_5_0 VS_WaterSplash:vs_5_0 PS_WaterSplash:ps_5_0
 #include "common.hlsli"
 
 // The particles' own constants (effects_weather.cpp), vertex and pixel shaders.
@@ -16,7 +18,15 @@ cbuffer WeatherParams : register(b4)
     float4 w_Wind;   // wind x, z (m/s), splashes per second per particle, splash box size (m)
     float4 w_Motion; // shutter (frames), previous frame valid, frame time (s), longest streak (ndc)
     float4 w_Snow;   // snow wind x, z (m/s), fall speed (m/s), 0
-    float4 w_Light;  // 0, 0, 0, intensity of the particles drawn
+    float4 w_Light;  // splashes: this layer's box (m), the near box inside it (m, 0 = none), splash scale; intensity of the particles drawn
+    // The spray (VS_Spray): the car the camera follows, from the engine (w_Car.w = 1), else found in
+    // the depth buffer (w_CarVel then holds the camera's velocity).
+    float4 w_Car;      // its position (world, its origin), 1 = from the engine
+    float4 w_CarFwd;   // its forward (unit, world), w: the front axle (m along it)
+    float4 w_CarRight; // its side, w: the rear axle (m along forward, < 0)
+    float4 w_CarUp;    // its up, w: half the track (m)
+    float4 w_CarVel;   // its velocity (world, m/s), w: the road under the tyres (m along up from its position)
+    float4 w_Spray;    // speed along the road (m/s), amount, 0, 0
 };
 
 // ---------------------------------------------------------------------------------
@@ -226,12 +236,24 @@ ParticleOut VS_RainSplash(uint id : SV_VertexID)
     float k = floor(cycle), age = frac(cycle) / 0.3;
     if (age > 1.0) return o;
     float2 r = frac(sin(float2(k * 12.9898 + seed.x * 78.233, k * 39.3468 + seed.y * 11.135)) * 43758.5453);
-    float size = w_Wind.w;
+    // Two layers, as in TMNF: the near box, and a far one four times its size, reaching about
+    // 110 m ahead, with larger splashes; it takes over where the near one thins out (it ended in
+    // a hard line on the road). Each fades over half its box, so neither edge shows.
+    float size = w_Light.x > 0.0 ? w_Light.x : w_Wind.w;
     float3 cam = cameraWorld();
-    float2 ahead = cam.xz + normalize(u_ViewToW2.xz + 1e-4) * size * 0.4;
+    float2 forward = normalize(u_ViewToW2.xz + 1e-4);
+    float2 ahead = cam.xz + forward * size * (w_Light.y > 0.0 ? 0.45 : 0.4);
     float2 xz = ahead + (frac((r * size - ahead) / size) - 0.5) * size;
+    float2 edge = abs(xz - ahead) / (size * 0.5);
+    float fade = 1.0 - smoothstep(0.5, 1.0, max(edge.x, edge.y));
+    if (w_Light.y > 0.0)
+    {
+        float2 near = abs(xz - (cam.xz + forward * w_Light.y * 0.4)) / (w_Light.y * 0.5);
+        fade *= smoothstep(0.45, 1.0, max(near.x, near.y));
+    }
+    if (fade <= 0.02) return o;
     // Down from above the camera: the first step that ends behind the visible surface.
-    float top = cam.y + 2.0, bottom = cam.y - 60.0;
+    float top = cam.y + 2.0, bottom = cam.y - (w_Light.y > 0.0 ? 90.0 : 60.0);
     float found = -1e5;
     float yPrev = top;
     [loop] for (int s = 1; s <= 20; s++)
@@ -266,7 +288,7 @@ ParticleOut VS_RainSplash(uint id : SV_VertexID)
     // Only where this spot is the surface you see (not a wall seen from the side) and it faces up.
     if (abs(sceneZAt(suv) - v.z) > 0.25 + v.z * 0.02) return o;
     if (viewToWorldDir(sceneNormalAt(suv)).y < 0.7) return o;
-    float sz = 0.08 + 0.06 * seed.w;
+    float sz = (0.08 + 0.06 * seed.w) * (w_Light.z > 0.0 ? w_Light.z : 1.0) * fade;
     float3 up = u_UpView.xyz;
     float3 right = normalize(float3(1.0, 0.0, 0.0) - up * up.x);
     o.pos = toClip(v + right * corner.x * sz * 1.7 + up * corner.y * sz * 1.6);
@@ -297,6 +319,141 @@ float4 PS_RainSplash(ParticleOut i) : SV_Target
     float hit = exp(-q.y * 14.0 - q.x * q.x * 5.0) * saturate(1.0 - p * 2.5);
     float a = (wall * 0.7 + drops * 0.8 + hit) * (1.0 - p) * w_Light.w;
     return float4(airLight(uv) * a * 0.7, 0);
+}
+
+// Spray: water thrown up by the tyres on a wet road (or powder snow), as in TMNF (src/pipeline.cpp
+// kRainVS sprayTyres). With the engine's car (w_Car.w = 1: the car the camera follows, from its
+// draw's constants) from its four tyres along its own axes; without, the car is found in the depth
+// buffer where the chase camera keeps it (low in the middle of the screen) and its rear tyres throw
+// it. Every particle leaves a tyre, rises, falls and hangs in the air while the car drives on.
+
+// Whether the road is where a tyre touches it: the surface seen just outside the tyre (where the
+// camera looks past the wheel) lies near the contact's height. 0 at 1.2 m off or more: in the air,
+// or something else in the way (car body, barrier, off screen). dh: how far above the contact it
+// is (the spray stands on the road the camera sees, whatever height the car's origin has).
+float roadAt(float3 contact, float3 outward, float3 up, out float dh)
+{
+    dh = 0.0;
+    float3 v = toView(contact + outward * 0.55);
+    if (v.z < 0.5) return 0.0;
+    float2 uv = ndcToUV(toNdc(v));
+    if (any(uv < 0.0) || any(uv > 1.0)) return 0.0;
+    float3 road = worldPosition(viewPosition(uv, sceneZAt(uv)));
+    dh = dot(road - contact, up);
+    return saturate(1.0 - (abs(dh) - 0.8) / 0.4);
+}
+
+// One particle from the tyres. `road`: the road under the car's origin; the axles along `fwd`
+// (front > 0, rear < 0); rearOnly: the depth search's car (only its tail is known); maxLift: how
+// far the road the camera sees may lie from `road` (m).
+ParticleOut sprayFromTyres(float4 seed, float2 corner, float3 road, float3 fwd, float3 right, float3 up, float frontAxle,
+                           float rearAxle, float halfTrack, bool rearOnly, float maxLift)
+{
+    ParticleOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    o.len = 0;
+    // Only with the tyres on the road (slopes, banks, walls and loops included; jumps not): any of
+    // them will do, a barrier may hide the road beside the others.
+    float grounded = 0.0, lift = 0.0, weights = 0.0;
+    [unroll] for (int k = 0; k < 4; k++)
+    {
+        if (rearOnly && k < 2) continue;
+        float s = (k == 1 || k == 3) ? 1.0 : -1.0;
+        float3 contact = road + fwd * (k < 2 ? frontAxle : rearAxle) + right * s * halfTrack;
+        float dh;
+        float w = roadAt(contact, right * s, up, dh);
+        grounded = max(grounded, w);
+        lift += w * dh;
+        weights += w;
+    }
+    lift /= max(weights, 1e-3);
+    if (grounded <= 0.0 || abs(lift) > maxLift) return o;
+    road += up * lift; // onto the road the camera sees
+    // Seven of ten particles leave the rear tyres, which throw most (the front ones run on the
+    // water the car pushes aside and throw less, with smaller puffs).
+    bool rear = rearOnly || seed.x < 0.7;
+    float side = rearOnly ? (seed.x < 0.5 ? -1.0 : 1.0) : (rear ? (seed.x < 0.35 ? -1.0 : 1.0) : (seed.x < 0.85 ? -1.0 : 1.0));
+    float strength = rear ? 1.0 : 0.55;
+    float life = 0.6;
+    float t = w_Streak.w;
+    float age = frac(t / life * (0.85 + 0.3 * seed.w) + seed.z);
+    float ts = age * life;
+    // Gusts: each tyre throws more or less water as it rolls through wetter and drier patches (two
+    // slow waves per tyre); fewer particles where it is drier.
+    float wheel = side + (rear ? 0.0 : 3.0);
+    float gust = 0.6 + 0.2 * sin(t * (1.7 + 0.6 * side) + wheel) + 0.15 * sin(t * (4.3 - 1.1 * side) + 2.0 * wheel);
+    if (frac(seed.w * 5.31 + seed.z * 2.7) > gust * grounded * strength) return o;
+    float3 contact = road + fwd * (rear ? rearAxle : frontAxle) + right * side * halfTrack;
+    // The car's motion in its own axes: rolling along fwd, sliding along right.
+    float3 v = w_CarVel.xyz;
+    float rolling = dot(v, fwd), sliding = dot(v, right);
+    float back = rolling >= 0.0 ? 1.0 : -1.0; // the tread throws to the back of the way it rolls
+    float3 tyre = contact - fwd * back * 0.3 + up * 0.1;
+    // Relative to the car: thrown off the tread backwards along the car's own axis and swept along
+    // in its wake (keeping 3/4 of its rolling speed, so it trails close behind); sideways a sliding
+    // tyre pushes the water out the way it slides (between a little behind and a third ahead of the
+    // tyre: the spray flies off the leading side); fanning out, rising.
+    float3 rel = -fwd * (back * (1.5 + 3.0 * seed.y) + rolling * 0.25) +
+                 right * (sliding * (-0.1 + 0.45 * frac(seed.z * 9.7)) + side * (0.3 + 1.5 * frac(seed.x * 13.3))) +
+                 up * (1.2 + 2.8 * frac(seed.y * 7.1));
+    float3 p = tyre + rel * ts;
+    p.y -= 4.9 * ts * ts;
+    float h = dot(p - contact, up); // not below the road
+    p += up * max(-0.05 - h, 0.0);
+    float3 view = toView(p);
+    if (view.z < 0.5) return o;
+    float size = lerp(0.15, 1.1, sqrt(age)) * (0.7 + 0.6 * frac(seed.w * 3.7)) * (0.6 + 0.4 * gust) * (rear ? 1.0 : 0.75);
+    o.pos = toClip(view + float3(corner.x, corner.y * 2.0 - 1.0, 0.0) * size);
+    o.data = float4(corner.x, corner.y * 2.0 - 1.0, view.z, age);
+    return o;
+}
+
+ParticleOut VS_Spray(uint id : SV_VertexID)
+{
+    ParticleOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    o.len = 0;
+    if (w_Spray.x < 4.0 || w_Spray.y <= 0.0) return o;
+    float4 seed = particleSeed(id / 6u + 150000u);
+    float2 corner = particleCorner(id);
+    if (w_Car.w > 0.5)
+    {
+        float3 up = w_CarUp.xyz;
+        return sprayFromTyres(seed, corner, w_Car.xyz + up * w_CarVel.w, w_CarFwd.xyz, w_CarRight.xyz, up, w_CarFwd.w, w_CarRight.w,
+                              w_CarUp.w, false, 2.0);
+    }
+    // No car from the engine: the closest surface on three points below the screen centre (the
+    // road right below the car would be closer still: stay above it).
+    float z0 = sceneZAt(float2(0.5, 0.6));
+    float z1 = sceneZAt(float2(0.5, 0.65));
+    float z2 = sceneZAt(float2(0.5, 0.7));
+    float bestZ = min(z0, min(z1, z2));
+    float2 bestUV = float2(0.5, bestZ == z0 ? 0.6 : (bestZ == z1 ? 0.65 : 0.7));
+    if (bestZ < 1.5 || bestZ > 16.0) return o;  // no car in front of the camera
+    if (abs(u_ViewToW2.y) > 0.45) return o;      // camera pitched up/down: quarter pipe, loop, wall ride
+    float3 car = worldPosition(viewPosition(bestUV, bestZ));
+    float3 fwd = normalize(float3(u_ViewToW2.x, 0.0, u_ViewToW2.z) + 1e-5); // the camera's forward, level
+    float3 up = float3(0.0, 1.0, 0.0);
+    float3 right = float3(fwd.z, 0.0, -fwd.x);
+    // The point found is the car's tail (rear wing, engine cover), about 0.85 m over the road
+    // (capture 034: 1.0 m); the rear tyres sit a little ahead of it. roadAt puts the spray onto the
+    // road the camera sees. The road beside it 0.5 m or more off that: no car there (the road
+    // itself, a camera that doesn't draw the car: the cockpit).
+    return sprayFromTyres(seed, corner, car - up * 0.85, fwd, right, up, 0.0, -0.2, 0.8, true, 0.5);
+}
+
+// Each puff a soft disc, fading as it ages; lit like the rain (hundreds overlap: each is faint).
+float4 PS_Spray(ParticleOut i) : SV_Target
+{
+    float2 uv = i.pos.xy * u_Screen.zw;
+    clip(engineZ(uv) - (i.data.z * 0.985 - 0.05));
+    float puff = saturate(1.0 - dot(i.data.xy, i.data.xy));
+    puff *= puff;
+    float fade = 1.0 - i.data.w;
+    float a = puff * fade * fade * w_Spray.y * 0.05;
+    return float4(airLight(uv) * a * w_Light.w, 0);
 }
 
 // Snow: a box mostly ahead of the camera, fixed in the world (wrapped like the rain), each flake
@@ -499,4 +656,301 @@ float4 PS_LensDrops(VSOut i) : SV_Target
         c.rgb = lerp(c.rgb, colour, flake);
     }
     return c;
+}
+
+// ---------------------------------------------------------------------------------
+// Water (WaterSplash, effects_water.cpp)
+// ---------------------------------------------------------------------------------
+cbuffer WaterParams : register(b5)
+{
+    float4 wl_Level;    // water height (world y), the setting (0..1), wake (0..1: the car is in the water), drips (0..1)
+    float4 wl_Ev[8];    // per entry [2e] where (world xyz), seconds since (< 0 none); [2e+1] its velocity (m/s), strength (0..1)
+    float4 wl_Kind;     // x kind, y which entry, z seconds since the car left the water (< 0 none), w which ring
+    float4 wl_Car;      // the car (as w_Car .. w_CarVel): position, 1 = known
+    float4 wl_CarFwd;   // its forward (unit), w: the front axle (m along it)
+    float4 wl_CarRight; // its side, w: the rear axle (m along forward, < 0)
+    float4 wl_CarUp;    // its up, w: half the track (m)
+    float4 wl_CarVel;   // its velocity (m/s), w: the road under the tyres (m along up from its position)
+};
+
+// The planes of this frame's water (water11.cpp: each fog draw's WorldToWaterDepth, depth under the
+// surface = dot(world, 1)).
+cbuffer WaterPlane0 : register(b6) { float4 g_wplane0; };
+cbuffer WaterPlane1 : register(b7) { float4 g_wplane1; };
+cbuffer WaterPlane2 : register(b8) { float4 g_wplane2; };
+cbuffer WaterPlane3 : register(b9) { float4 g_wplane3; };
+cbuffer WaterPlane4 : register(b10) { float4 g_wplane4; };
+cbuffer WaterPlane5 : register(b11) { float4 g_wplane5; };
+cbuffer WaterPlane6 : register(b12) { float4 g_wplane6; };
+cbuffer WaterPlane7 : register(b13) { float4 g_wplane7; };
+
+// The water near the car, one texel per plane: rings of points (1.6, 3.4 and 5.2 m) around the spot
+// on the plane over (or under) the car. A point counts when the camera sees the plane there (the
+// depth after the engine drew its surface) with the engine's water fog behind it (t0: its cover).
+//   u_Pass0 = the car (world xyz), planes; u_Pass1.x = 1: the car is known
+//   out: x points on the surface, y points tried, z the plane's height at the car, w the car's depth under it
+float4 PS_WaterLevel(VSOut i) : SV_Target
+{
+    int k = (int)i.pos.x;
+    if (k >= (int)u_Pass0.w || u_Pass1.x < 0.5) return 0;
+    float4 planes[8] = {g_wplane0, g_wplane1, g_wplane2, g_wplane3, g_wplane4, g_wplane5, g_wplane6, g_wplane7};
+    float4 pl = planes[min(k, 7)];
+    float len = length(pl.xyz);
+    if (len < 1e-4) return 0;
+    float3 up = -pl.xyz / len;
+    float3 car = u_Pass0.xyz;
+    float under = dot(float4(car, 1.0), pl) / len;
+    float3 spot = car + up * under;
+    float3 side = normalize(cross(up, abs(up.y) < 0.9 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
+    float3 side2 = cross(up, side);
+    float hits = 0.0, tried = 0.0;
+    float3 cam = cameraWorld();
+    [loop] for (int ring = 0; ring < 3; ring++)
+    {
+        float radius = 1.6 + ring * 1.8;
+        [loop] for (int j = 0; j < 8; j++)
+        {
+            float a = (j + ring * 0.5) * 0.7853982;
+            float3 q = spot + (side * cos(a) + side2 * sin(a)) * radius;
+            float3 v = worldToViewDir(q - cam);
+            if (v.z < 0.3) continue;
+            float2 uv = projectToUV(v);
+            if (any(uv < 0.002) || any(uv > 0.998)) continue;
+            tried += 1.0;
+            float z = engineZ(uv);
+            float3 w = worldPosition(viewPosition(uv, z));
+            float off = abs(dot(float4(w, 1.0), pl)) / len;
+            float cover = g_in0.SampleLevel(g_point, uv, 0).a;
+            hits += (z < SKY_Z && off < 0.2 + z * 0.004 && cover > 1e-4) ? 1.0 : 0.0;
+        }
+    }
+    return float4(hits, tried, spot.y, under);
+}
+
+// What the car throws up in the water (TMNF's waterVS, kRainVS): drawn per kind (wl_Kind.x),
+// kinds 0-1 and 5-6 as camera-facing quads, 2-4 as quads lying on the water.
+//   0 droplets of an entry's fountain, 1 its mist, 2 a ring spreading over the surface (wl_Kind.w:
+//   which of three), 3 its foam, 4 the wake's foam, 5 the bow's droplets, 6 the dripping when the
+//   car comes out. Events are the entries still young (the newest four); the wake, the bow and the
+//   drips follow the engine's car and run on the effects' clock.
+struct WaterOut
+{
+    float4 pos : SV_Position;
+    float4 data : TEXCOORD0;  // position in the quad (-1..1), view z, age (0..1)
+    float4 data2 : TEXCOORD1; // kind, opacity, random
+};
+
+WaterOut waterHidden()
+{
+    WaterOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    o.data2 = 0;
+    return o;
+}
+
+// A camera-facing quad at world point p, `size` m from its middle to its edge.
+WaterOut waterBillboard(float3 p, float2 corner, float size, float age, float kind, float opacity, float2 rnd)
+{
+    WaterOut o = waterHidden();
+    float3 view = toView(p);
+    if (view.z < 0.5 || opacity <= 0.0) return o;
+    float2 c = float2(corner.x, corner.y * 2.0 - 1.0);
+    o.pos = toClip(view + float3(c, 0.0) * size);
+    o.data = float4(c, view.z, age);
+    o.data2 = float4(kind, opacity, rnd);
+    return o;
+}
+
+// A quad lying on the water around `centre`, `size` m from its middle to its edge, turned by `turn`.
+WaterOut waterFlat(float3 centre, float2 corner, float size, float turn, float age, float kind, float opacity, float2 rnd)
+{
+    WaterOut o = waterHidden();
+    if (opacity <= 0.0) return o;
+    float2 c = float2(corner.x, corner.y * 2.0 - 1.0);
+    float cs = cos(turn), sn = sin(turn);
+    float3 view = toView(centre + float3(c.x * cs - c.y * sn, 0.0, c.x * sn + c.y * cs) * size);
+    if (view.z < 0.5) return o;
+    o.pos = toClip(view);
+    o.data = float4(c, view.z, age);
+    o.data2 = float4(kind, opacity, rnd);
+    return o;
+}
+
+WaterOut VS_WaterSplash(uint id : SV_VertexID)
+{
+    float4 seed = particleSeed(id / 6u + 200000u);
+    float2 corner = particleCorner(id);
+    int kind = (int)(wl_Kind.x + 0.5);
+    float level = wl_Level.x;
+    float time = u_Proj2.z;
+    // The setting thins every kind out (and the shader fades it by the same amount).
+    if (kind != 2 && frac(seed.w * 7.31 + seed.z * 3.7) > saturate(wl_Level.y * 1.5)) return waterHidden();
+    if (kind <= 3)
+    {
+        int e = (int)(wl_Kind.y + 0.5);
+        float4 where = wl_Ev[e * 2], motion = wl_Ev[e * 2 + 1];
+        float age = where.w, strength = motion.w;
+        if (age < 0.0 || strength <= 0.0) return waterHidden();
+        float4 sd = frac(seed + e * 0.3819 + float4(0.1, 0.7, 0.3, 0.9));
+        float3 vh = float3(motion.x, 0.0, motion.z);
+        float phi = sd.x * 6.2831853;
+        float3 radial = float3(cos(phi), 0.0, sin(phi));
+        float lean = dot(radial, normalize(vh + 1e-4)) * 0.5 + 0.5; // 1: the way the car went
+        float3 spot = float3(where.x, level, where.z);
+        if (kind == 0)
+        {
+            // The fountain: a crown of drops out and up, more of them in the car's direction, carried on by its speed.
+            float t = age - sd.w * 0.12;
+            if (t < 0.0) return waterHidden();
+            float up = (2.0 + 6.5 * sd.y * sd.y) * (0.35 + 0.65 * strength) * (0.6 + 0.4 * lean);
+            float out2 = (0.8 + 3.2 * sd.z) * (0.3 + 0.7 * strength);
+            float3 v = radial * out2 + float3(0.0, up, 0.0) + vh * (0.15 + 0.35 * lean * sd.z);
+            float3 p = spot + radial * 0.5 + v * t;
+            p.y -= 4.9 * t * t;
+            if (p.y < level) return waterHidden(); // back in the water
+            float size = (0.035 + 0.075 * sd.w) * (0.7 + 0.5 * strength);
+            return waterBillboard(p, corner, size, t, 0.0, 1.0, 0.0);
+        }
+        if (kind == 1)
+        {
+            // The mist: puffs that rise, spread and thin out.
+            float life = 1.7;
+            float t = age - sd.w * 0.2;
+            if (t < 0.0 || t > life) return waterHidden();
+            float k = t / life;
+            float drag = (1.0 - exp(-2.0 * t)) * 0.5;
+            float3 p = spot + radial * 0.4 + (radial * (1.0 + 2.5 * sd.z) + float3(0.0, 1.5 + 3.5 * sd.y, 0.0)) * (0.4 + 0.6 * strength) * drag + vh * 0.25 * t;
+            float size = lerp(0.4, 2.0, sqrt(k)) * (0.6 + 0.8 * sd.x) * (0.6 + 0.6 * strength);
+            return waterBillboard(p, corner, size, k, 1.0, strength * (1.0 - k) * (1.0 - k) * smoothstep(0.0, 0.1, k), 0.0);
+        }
+        if (kind == 2)
+        {
+            // Three rings, a fifth of a second apart, the first the largest and brightest.
+            float ring = wl_Kind.w;
+            float t = age - ring * 0.2;
+            float life = 2.4;
+            if (t < 0.0 || t > life) return waterHidden();
+            float k = t / life;
+            float radius = 0.7 + t * (2.2 + 3.5 * strength);
+            float opacity = strength * pow(saturate(1.0 - k), 1.5) * smoothstep(0.0, 0.06, k) * (1.0 - ring * 0.25);
+            return waterFlat(spot + float3(0.0, 0.03, 0.0), corner, radius / 0.86, 0.0, k, 2.0, opacity, frac(sd.zw + ring * 0.37));
+        }
+        // The foam: patches thrown out around the spot, drifting apart and fraying over a few seconds.
+        float life = 4.0;
+        float t = age - 0.05 - sd.w * 0.15;
+        if (t < 0.0 || t > life) return waterHidden();
+        float k = t / life;
+        float reach = (0.4 + 2.2 * sd.y) * (0.5 + 0.8 * strength);
+        float3 centre = spot + radial * reach * (0.55 + 0.45 * saturate(t * 1.2)) + vh * 0.1 * t + float3(0.0, 0.02, 0.0);
+        float size = (0.5 + 0.9 * sd.z) * (0.6 + 0.6 * strength) * (0.8 + 0.4 * k);
+        float opacity = strength * smoothstep(0.0, 0.08, k) * pow(saturate(1.0 - k), 1.2) * 0.9;
+        return waterFlat(centre, corner, size, sd.w * 6.2831853, k, 3.0, opacity, sd.xy);
+    }
+    // The car in the water: the wake, the bow's droplets, the drips. Needs the engine's car.
+    if (wl_Car.w < 0.5) return waterHidden();
+    float3 fwdH = normalize(float3(wl_CarFwd.x, 0.0, wl_CarFwd.z) + 1e-5);
+    float3 rightH = float3(fwdH.z, 0.0, -fwdH.x);
+    float3 velH = float3(wl_CarVel.x, 0.0, wl_CarVel.z);
+    float speed = length(velH);
+    float4 sd = frac(seed + float4(0.45, 0.15, 0.85, 0.55));
+    float wake = wl_Level.z;
+    float3 bow = wl_Car.xyz + fwdH * (wl_CarFwd.w + 0.3);
+    bow.y = level;
+    float halfTrack = wl_CarUp.w;
+    float side = sd.x < 0.5 ? -1.0 : 1.0;
+    if (kind == 4)
+    {
+        if (wake <= 0.0 || speed < 1.5) return waterHidden();
+        float life = 3.0;
+        float age = frac(time / life * (0.85 + 0.3 * sd.w) + sd.z);
+        float t = age * life;
+        // From the bow in a V (a third of it from the rear, behind the car's middle), at rest on the water.
+        bool rear = sd.y < 0.3;
+        float3 origin = rear ? float3(wl_Car.x, level, wl_Car.z) + fwdH * wl_CarRight.w : bow;
+        float spread = rear ? (sd.x - 0.5) * halfTrack * 2.0 * (1.0 + t) : side * (halfTrack * 0.8 + t * 0.45 * (0.5 + speed / 25.0));
+        float3 centre = origin - velH * t + rightH * spread + float3(0.0, 0.02, 0.0);
+        float size = lerp(0.45, 1.3, sqrt(age)) * (0.7 + 0.6 * sd.z);
+        float opacity = wake * saturate((speed - 1.5) / 6.0) * pow(1.0 - age, 1.5) * smoothstep(0.0, 0.08, age) * 0.8;
+        return waterFlat(centre, corner, size, sd.w * 6.2831853, age, 4.0, opacity, sd.xy);
+    }
+    if (kind == 5)
+    {
+        // The bow wave: droplets leaving the front of the car, to the sides, up and with it.
+        if (wake <= 0.0 || speed < 3.0) return waterHidden();
+        float life = 0.7;
+        float age = frac(time / life * (0.85 + 0.3 * sd.w) + sd.z);
+        float t = age * life;
+        float f = saturate(speed / 18.0);
+        float3 v = rightH * side * (1.0 + 3.0 * sd.y) * f + float3(0.0, (1.5 + 3.5 * sd.x) * f, 0.0) + velH * 0.4;
+        float3 p = bow - velH * t + rightH * side * halfTrack * 0.8 + v * t;
+        p.y -= 4.9 * t * t;
+        if (p.y < level) return waterHidden();
+        float size = 0.03 + 0.04 * sd.w;
+        return waterBillboard(p, corner, size, age, 0.0, wake * saturate((speed - 3.0) / 8.0) * (1.0 - age * 0.5), 0.0);
+    }
+    // 6: drips off the car's underside and sides after it left the water, for three seconds, fewer and fewer.
+    float since = wl_Kind.z;
+    if (since < 0.0 || wl_Level.w <= 0.0) return waterHidden();
+    float released = 2.5 * sd.z * sd.z;
+    float age = since - released;
+    if (age < 0.0 || age > 1.5) return waterHidden();
+    float3 local = wl_CarFwd.xyz * lerp(wl_CarRight.w, wl_CarFwd.w, sd.x) + wl_CarRight.xyz * (sd.y - 0.5) * 2.2 * halfTrack +
+                   wl_CarUp.xyz * (-0.1 + 0.6 * sd.w);
+    float3 p = wl_Car.xyz + local - wl_CarVel.xyz * age * 0.5;
+    p.y -= 4.9 * age * age;
+    float3 road = wl_Car.xyz + wl_CarUp.xyz * wl_CarVel.w;
+    if (p.y < road.y) return waterHidden();
+    return waterBillboard(p, corner, 0.025 + 0.025 * sd.w, age, 0.0, wl_Level.w * (1.0 - age / 1.5) * (1.0 - since / 3.2), 0.0);
+}
+
+// Droplets, mist, rings, foam and the wake (TMNF's PS_WaterSplash), premultiplied over the image.
+//   t0 = the image behind (half res, exposed: airLight), t1 = the water pictures (r droplet, g foam,
+//   b and a the ripple's slope)
+float4 PS_WaterSplash(WaterOut i) : SV_Target
+{
+    float2 uv = i.pos.xy * u_Screen.zw;
+    clip(engineZ(uv) - (i.data.z * 0.985 - 0.05));
+    float kind = i.data2.x;
+    float2 q = i.data.xy;
+    float r = length(q);
+    float3 light = airLight(uv);
+    float amount = i.data2.y * (0.4 + 0.6 * wl_Level.y);
+    if (kind < 0.5)
+    {
+        // A droplet: a lens that mirrors the sky, with a bright spot.
+        clip(1.0 - r);
+        float d = g_in1.SampleLevel(g_linearWrap, q * 0.5 + 0.5, 0).r;
+        float a = d * amount;
+        return float4(light * a * 1.5 + a * 0.05, a * 0.4);
+    }
+    if (kind < 1.5)
+    {
+        // Mist: soft puffs that thin out as they spread.
+        float puff = saturate(1.0 - r * r);
+        float a = puff * puff * amount * 0.22;
+        return float4(light * a * 1.1, a * 0.6);
+    }
+    if (kind < 2.5)
+    {
+        // A ring on the surface: a ridge that spreads and flattens, its far side catching the sky, its near
+        // side dark, and a lip of foam on it. The ripple picture bends it so it is no perfect circle.
+        float2 w = g_in1.SampleLevel(g_linearWrap, frac(q * 0.8 + i.data2.zw), 0).ba * 2.0 - 1.0;
+        float rr = r + dot(w, q / max(r, 1e-3)) * 0.035;
+        float width = 0.07 + 0.1 * i.data.w;
+        float band = exp(-pow((rr - 0.86) / width, 2.0));
+        float side = 0.5 + 0.5 * dot(normalize(q + 1e-4), float2(0.0, -1.0)); // the far side lights up
+        float foam = g_in1.SampleLevel(g_linearWrap, frac(q * 1.3 + i.data2.zw), 0).g;
+        float a = band * amount * smoothstep(0.0, 0.25, r);
+        float3 colour = light * (0.45 + 1.1 * side) + light * foam * 0.8;
+        return float4(colour * a * 0.7, a * 0.5);
+    }
+    // Foam (3) and the wake (4): a lace picture that frays away as it ages, soft at its edge.
+    float f = g_in1.SampleLevel(g_linearWrap, frac(q * 0.5 + i.data2.zw), 0).g;
+    float edge = smoothstep(1.0, 0.45, r);
+    float erode = i.data.w * (kind < 3.5 ? 0.7 : 0.55);
+    float cover = smoothstep(erode, erode + 0.3, f * edge * 1.25);
+    float a = cover * amount;
+    float3 colour = light * 1.35 + 0.02;
+    return float4(colour * a, a);
 }

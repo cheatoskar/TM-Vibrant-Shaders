@@ -1,6 +1,7 @@
 #include "capture.h"
 #include "hooks.h"
 #include "log.h"
+#include "water11.h"
 #include <windows.h>
 #include <atomic>
 #include <cstdio>
@@ -367,6 +368,38 @@ void onToneMap(ID3D11Device* device, ID3D11DeviceContext* ctx) {
         cb->Release();
     }
     if (g_trace) fprintf(g_trace, "      ^ tone map: inputs saved as hdr_t*.dds\n");
+    // The water of this frame (water11.cpp): the fog buffer and each water volume's surface plane.
+    if (ID3D11ShaderResourceView* fog = water::fogView()) {
+        ID3D11Resource* res = nullptr;
+        fog->GetResource(&res);
+        save(device, ctx, res, L"water_fog");
+        if (res) res->Release();
+        hooks::Inside inside;
+        if (FILE* f = _wfopen((g_folder + L"/water.txt").c_str(), L"w")) {
+            fprintf(f, "# each water volume's WorldToWaterDepth (depth under its surface = x X + y Y + z Z + w)\n");
+            ID3D11Buffer* const* planes = water::planeBuffers();
+            for (int i = 0; i < water::planeCount(); i++) {
+                D3D11_BUFFER_DESC d;
+                planes[i]->GetDesc(&d);
+                d.Usage = D3D11_USAGE_STAGING;
+                d.BindFlags = 0;
+                d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                d.MiscFlags = 0;
+                ID3D11Buffer* staging = nullptr;
+                if (FAILED(device->CreateBuffer(&d, nullptr, &staging))) continue;
+                ctx->CopyResource(staging, planes[i]);
+                D3D11_MAPPED_SUBRESOURCE m;
+                if (SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &m))) {
+                    const float* p = static_cast<const float*>(m.pData);
+                    fprintf(f, "plane %d %.5f %.5f %.5f %.4f\n", i, p[0], p[1], p[2], p[3]);
+                    ctx->Unmap(staging, 0);
+                }
+                staging->Release();
+            }
+            fprintf(f, "status %s\n", water::status());
+            fclose(f);
+        }
+    }
 }
 
 void writeCamera(const Camera& c) {

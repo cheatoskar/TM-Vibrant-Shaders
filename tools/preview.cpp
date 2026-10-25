@@ -16,6 +16,14 @@
 //     --clip                  ... while a clip of the map plays (driving off, clipInRace on)
 //     --drive <x,y,z>         camera motion per frame (camera axes, m) towards the captured
 //                             view, 0.1 s apart (neon trail test)
+//     --splash <t[,speed,angle,mode]>  water test (with --blocks or --water): a car that isn't there
+//                             enters the water 12 m ahead of the camera, t seconds ago (speed m/s, entry
+//                             angle degrees, mode 1 the splash, 2 driving through the water, 3 dripping
+//                             after it came out; default 24, 40, 1)
+//     --carfar <m>            with --carpose: the car this far ahead of the camera, level (the headlights seen from afar)
+//     --carpose <deg>         spray test: the engine's car pose where the depth finder sees the
+//                             car, turned by deg from the camera's level forward (sliding), moving
+//                             with --drive
 //     --bench                 GPU time per pass
 //     --compare <preset>      photo mode's compare split with a preset: that preset's look
 //                             from a second pipeline (its own history, as in game) left of
@@ -30,6 +38,17 @@
 //     --video                 the video export's quality (photo mode's depth of field, moving)
 //     --repeat <n>            n more sub-pixel samples of the last frame (the export's
 //                             supersampling: history read, not advanced); the last is written
+//     --own [10|hdr]          the video export's own frames: the last frame and its repeats summed
+//                             (hdr: HDR10 at 1000 nits, white 203; the P010 planes go to <out>.p010)
+//                             in float and graded once (Inputs::accumulate), then the encoder's
+//                             planes (8 bits NV12, with 10: P010) read back and turned into RGB
+//                             again: <output> is the frame, <output>.yuv.bmp the planes' round trip
+//     --export <n>            with --own: n export frames in a row (each with the --repeat samples),
+//                             their planes read back straight after each frame (as before 1.4.2) and
+//                             through PlaneReadback (a frame later); prints ms a frame for both
+//     --cpu <ms>              ... with that much busy CPU a frame, standing in for the game's work
+//     --plain                 a plain Direct3D 9 device like the game's (default 9Ex, which keeps
+//                             working while a fullscreen game owns the display)
 //     --jitter                with RenderScale 1/n (0.5): TAA jitter as in game (TAAJitter), each
 //                             frame takes another of the n x n capture pixels under a scene pixel
 //                             (a raster shifted by sub-pixels, with its aliasing), Halton (2, 3)
@@ -58,6 +77,8 @@
 #include "log.h"
 #include "lut.h"
 #include "pipeline.h"
+#include "planeread.h"
+#include <algorithm>
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
@@ -376,6 +397,11 @@ int main(int argc, char** argv) {
     bool photoMode = false;              // the photo mode's look (3x reach, full-res blur)
     bool videoMode = false;              // --video: the video export's quality (the same paths, moving)
     int repeats = 0;                     // --repeat n: n more sub-pixel samples of the last frame (export supersampling)
+    int ownBits = 0;                     // --own [10]: the export's own frame and its planes (8 or 10 bits), 0 = off
+    bool ownHdr = false;                 // --own hdr: the planes in HDR10 (10 bits)
+    int exportFrames = 0;                // --export n: n export frames in a row, read back straight and pipelined
+    double cpuMs = 0.0;                  // --cpu ms: busy CPU a frame in --export (the game's own work)
+    bool plainDevice = false;            // --plain: a plain Direct3D 9 device as the game's (not 9Ex)
     bool jitterRaster = false;           // --jitter: TAA jitter emulated by RenderScale's point sampling
     int jitterIndex = 0;                 // its Halton index, on across batch jobs (keep=1) as in game
     bool useHdr = true;                  // capture_NNN.hdr16 next to the capture (--nohdr: the 8-bit image only)
@@ -386,6 +412,13 @@ int main(int argc, char** argv) {
     float focus[2] = {-1.0f, -1.0f};     // the photo mode's focus point (uv)
     float refocus[2] = {-2.0f, -2.0f};   // --refocus: the point clicked before (first half of the frames)
     float carAt[2] = {-1.0f, -1.0f};     // --car: where the car is on screen (uv), as the engine would report it
+    // --carpose yaw: the engine's car pose for the spray (Inputs::carPose*): where the depth search
+    // finds the car (as --trail), turned by yaw degrees from the camera's level forward (a car
+    // sliding sideways), moving with the camera's --drive.
+    float carPoseYaw = 0.0f;
+    bool carPoseSet = false;
+    float carFar = 0.0f;                 // --carfar d: with --carpose, the car d metres ahead of the camera (level), not where the depth finder sees it
+    float splash[4] = {-1.0f, 24.0f, 40.0f, 1.0f}; // --splash: a car that isn't there enters the water (Inputs::splashTest)
     const char* compare = nullptr;       // --compare: the preset on the split's other side
     float splitAt = 0.5f;
     const char* labels = nullptr;        // --labels "left|right": the names in a photo of the split
@@ -434,6 +467,17 @@ int main(int argc, char** argv) {
             videoMode = true;
         } else if (!strcmp(argv[i], "--repeat") && i + 1 < argc) {
             repeats = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--own")) {
+            ownBits = 8;
+            if (i + 1 < argc && !strcmp(argv[i + 1], "10")) ownBits = (++i, 10);
+            if (i + 1 < argc && !strcmp(argv[i + 1], "hdr")) ownBits = (++i, ownHdr = true, 10);
+        } else if (!strcmp(argv[i], "--export") && i + 1 < argc) {
+            exportFrames = atoi(argv[++i]);
+            if (!ownBits) ownBits = 8;
+        } else if (!strcmp(argv[i], "--cpu") && i + 1 < argc) {
+            cpuMs = atof(argv[++i]);
+        } else if (!strcmp(argv[i], "--plain")) {
+            plainDevice = true;
         } else if (!strcmp(argv[i], "--jitter")) {
             jitterRaster = true;
         } else if (!strcmp(argv[i], "--focus") && i + 1 < argc) {
@@ -446,6 +490,13 @@ int main(int argc, char** argv) {
             labels = argv[++i];
         } else if (!strcmp(argv[i], "--car") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &carAt[0], &carAt[1]);
+        } else if (!strcmp(argv[i], "--splash") && i + 1 < argc) {
+            sscanf(argv[++i], "%f,%f,%f,%f", &splash[0], &splash[1], &splash[2], &splash[3]);
+        } else if (!strcmp(argv[i], "--carfar") && i + 1 < argc) {
+            carFar = static_cast<float>(atof(argv[++i]));
+        } else if (!strcmp(argv[i], "--carpose") && i + 1 < argc) {
+            carPoseYaw = static_cast<float>(atof(argv[++i]));
+            carPoseSet = true;
         } else if (!strcmp(argv[i], "--refocus") && i + 1 < argc) {
             sscanf(argv[++i], "%f,%f", &refocus[0], &refocus[1]);
         } else if (!strcmp(argv[i], "--lut") && i + 1 < argc) {
@@ -504,9 +555,20 @@ int main(int argc, char** argv) {
     pp.BackBufferWidth = 64;
     pp.BackBufferHeight = 64;
     pp.BackBufferFormat = D3DFMT_UNKNOWN;
-    IDirect3DDevice9Ex* device = nullptr;
-    if (!d3d || FAILED(d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
-                                           D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE, &pp, nullptr, &device))) {
+    IDirect3DDevice9* device = nullptr;
+    if (plainDevice) {
+        // --plain: a device like the game's (no 9Ex), for timings that depend on the driver's path.
+        IDirect3DDevice9* plain = nullptr;
+        if (d3d && SUCCEEDED(d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window, D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
+                                               &pp, &plain)))
+            device = plain;
+    } else {
+        IDirect3DDevice9Ex* ex = nullptr;
+        if (d3d && SUCCEEDED(d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window, D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
+                                                 &pp, nullptr, &ex)))
+            device = ex;
+    }
+    if (!device) {
         fprintf(stderr, "cannot create Direct3D 9 device\n");
         return 1;
     }
@@ -667,6 +729,7 @@ int main(int argc, char** argv) {
     for (const Job& job : jobs) {
         LoadedCapture* loaded = loadCapture(job.capture);
         gfx::Target output;
+        gfx::Target ownFrame, ownLuma, ownChroma; // --own: the export's frame and its planes
         if (!loaded || !loaded->color || !loaded->depth || !output.create(device, loaded->cap.width, loaded->cap.height, D3DFMT_A8R8G8B8)) {
             failures++;
             continue;
@@ -735,6 +798,7 @@ int main(int argc, char** argv) {
             in.sunColorKnown = cap.sunColor[3] > 0.5f;
         }
         in.moonReplaced = moonReplaced;
+        memcpy(in.splashTest, splash, sizeof(splash));
         if (g_casterDepth >= 0.0f) in.casterMap = previewCasters;
         // The previous frame's camera, moved by job.move (world space): view translation
         // t' = t - move * R.
@@ -782,8 +846,8 @@ int main(int argc, char** argv) {
         // centre, lowered to the wheel centres), driving there along the line from 1.6 m below
         // the camera (the road it came along).
         float carEnd[3] = {}, carDir[3] = {};
-        bool trail = false;
-        if (job.trail > 0.0f && cap.depth.size() == static_cast<size_t>(cap.width) * cap.height) {
+        bool trail = false, posed = false;
+        if ((job.trail > 0.0f || carPoseSet) && cap.depth.size() == static_cast<size_t>(cap.width) * cap.height) {
             const float* V = cap.view;
             const float* P = cap.projection;
             float best = 1e9f, bestV = 0.6f;
@@ -805,8 +869,38 @@ int main(int argc, char** argv) {
                 for (int j = 0; j < 3; j++) len += (anchor[j] - carEnd[j]) * (anchor[j] - carEnd[j]);
                 len = sqrtf(len);
                 for (int j = 0; j < 3; j++) carDir[j] = (anchor[j] - carEnd[j]) / len;
-                trail = true;
-                printf("%s: trail test, car at %.1f %.1f %.1f, %.1f m/s\n", job.output.c_str(), carEnd[0], carEnd[1], carEnd[2], job.trail);
+                trail = job.trail > 0.0f;
+                posed = carPoseSet;
+                if (trail) printf("%s: trail test, car at %.1f %.1f %.1f, %.1f m/s\n", job.output.c_str(), carEnd[0], carEnd[1], carEnd[2], job.trail);
+            }
+        }
+        if (carPoseSet && carFar > 0.0f) {
+            const float* V = cap.view;
+            float fl = sqrtf(V[2] * V[2] + V[10] * V[10]);
+            for (int j = 0; j < 3; j++) {
+                const float camera = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
+                carEnd[j] = camera + (j == 0 ? V[2] : j == 2 ? V[10] : 0.0f) / fl * carFar - (j == 1 ? 1.6f : 0.0f);
+            }
+            posed = true;
+        }
+        // --carpose: the car's axes, and how far the camera (and the car with it) moves each frame.
+        float poseForward[3] = {}, poseRight[3] = {}, poseStep[3] = {};
+        if (posed) {
+            const float* V = cap.view;
+            float f[3] = {V[0 * 4 + 2], 0.0f, V[2 * 4 + 2]};
+            const float fl = sqrtf(f[0] * f[0] + f[2] * f[2]);
+            if (fl < 1e-4f) posed = false;
+            else {
+                f[0] /= fl;
+                f[2] /= fl;
+                const float a = carPoseYaw * 3.14159265f / 180.0f;
+                const float r[3] = {f[2], 0.0f, -f[0]};
+                for (int j = 0; j < 3; j++) poseForward[j] = f[j] * cosf(a) + r[j] * sinf(a);
+                poseRight[0] = poseForward[2];
+                poseRight[2] = -poseForward[0];
+                for (int j = 0; j < 3; j++) poseStep[j] = job.drive[0] * V[j * 4 + 0] + job.drive[1] * V[j * 4 + 1] + job.drive[2] * V[j * 4 + 2];
+                printf("%s: car pose at %.1f %.1f %.1f, turned %.0f degrees from the camera, %.2f m a frame\n", job.output.c_str(), carEnd[0], carEnd[1],
+                       carEnd[2], carPoseYaw, sqrtf(poseStep[0] * poseStep[0] + poseStep[1] * poseStep[1] + poseStep[2] * poseStep[2]));
             }
         }
 
@@ -856,6 +950,20 @@ int main(int argc, char** argv) {
                 const float step = job.trail * (job.time >= 0.0f ? 0.02f : 0.1f);
                 for (int j = 0; j < 3; j++) driven.carPosition[j] = carEnd[j] + carDir[j] * back * step;
             }
+            if (posed) {
+                driven.carPoseKnown = true;
+                // The depth finder hits the car's tail: its middle (between the axles) is about
+                // 1.6 m ahead of that (and carEnd is 0.25 m towards the camera).
+                const float* V = cap.view;
+                float level[3] = {V[0 * 4 + 2], 0.0f, V[2 * 4 + 2]};
+                const float ll = sqrtf(level[0] * level[0] + level[2] * level[2]);
+                for (int j = 0; j < 3; j++) {
+                    driven.carPosePosition[j] = carEnd[j] + level[j] / ll * 1.85f - poseStep[j] * back;
+                    driven.carForward[j] = poseForward[j];
+                    driven.carRight[j] = poseRight[j];
+                    driven.carPoseUp[j] = j == 1 ? 1.0f : 0.0f;
+                }
+            }
             if (jitterGrid > 0) {
                 // TAA jitter as plugin.cpp updateJitter: Halton (2, 3) over 8 frames, here picking
                 // one of the n x n capture pixels under each scene pixel: the raster moves by
@@ -887,6 +995,100 @@ int main(int argc, char** argv) {
             if (frame == frames - 1) QueryPerformanceCounter(&t0);
             LARGE_INTEGER renderStart;
             QueryPerformanceCounter(&renderStart);
+            if (ownBits && frame == frames - 1) {
+                // The export's own frame: every sample summed, the last one grades the sum.
+                if (!ownFrame.create(device, cap.width, cap.height, D3DFMT_A16B16G16R16F)) fprintf(stderr, "own frame target failed\n");
+                for (int r = 0; r <= repeats; r++) {
+                    Pipeline::Inputs sample = driven;
+                    if (r > 0) {
+                        sample.temporal = false;
+                        sample.repeat = true;
+                    }
+                    sample.accumulate = r == repeats ? 2 : 1;
+                    sample.accumulateFirst = r == 0;
+                    sample.floatOutput = r == repeats;
+                    if (ownHdr) sample.hdrPeak = 1000.0f / 203.0f;
+                    pipeline.render(device, sample, job.settings, r == repeats ? ownFrame.surface : output.surface);
+                }
+                const UINT vw = cap.width & ~7u, vh = cap.height & ~7u;
+                const float crop[4] = {0.0f, 0.0f, static_cast<float>(vw) / cap.width, static_cast<float>(vh) / cap.height};
+                if (!pipeline.exportPlanes(device, ownFrame.texture, vw, vh, crop, ownBits == 10, 1.0f, ownHdr ? 203.0f : 0.0f, ownLuma, ownChroma))
+                    fprintf(stderr, "exportPlanes failed\n");
+                if (exportFrames > 0) {
+                    // --export: frames of the video export in a row, their planes read back as
+                    // before (straight after each frame: the CPU waits for the GPU) and through
+                    // PlaneReadback (locked a frame later), with `--cpu` ms of busy CPU a frame
+                    // standing in for the game's own work. The planes are packed into a buffer
+                    // as for the encoder.
+                    auto drawFrame = [&]() {
+                        for (int r = 0; r <= repeats; r++) {
+                            Pipeline::Inputs sample = driven;
+                            if (r > 0) {
+                                sample.temporal = false;
+                                sample.repeat = true;
+                            }
+                            sample.accumulate = r == repeats ? 2 : 1;
+                            sample.accumulateFirst = r == 0;
+                            sample.floatOutput = r == repeats;
+                            if (ownHdr) sample.hdrPeak = 1000.0f / 203.0f;
+                            pipeline.render(device, sample, job.settings, r == repeats ? ownFrame.surface : output.surface);
+                        }
+                        pipeline.exportPlanes(device, ownFrame.texture, vw, vh, crop, ownBits == 10, 1.0f, ownHdr ? 203.0f : 0.0f, ownLuma, ownChroma);
+                    };
+                    std::vector<uint8_t> packed;
+                    unsigned packedFrames = 0;
+                    const auto take = [&](const PlaneReadback::Frame& f) {
+                        packed.resize(PlaneReadback::packedBytes(f));
+                        PlaneReadback::pack(f, packed.data());
+                        packedFrames++;
+                    };
+                    const auto now = [&]() {
+                        LARGE_INTEGER t;
+                        QueryPerformanceCounter(&t);
+                        return 1000.0 * static_cast<double>(t.QuadPart) / static_cast<double>(freq.QuadPart);
+                    };
+                    for (int pipelined = 0; pipelined < 2; pipelined++) {
+                        PlaneReadback read;
+                        packedFrames = 0;
+                        double readMs = 0.0;
+                        drawFrame(); // warm up, then an idle GPU
+                        if (read.queue(device, ownLuma, ownChroma, pipeline.focusTarget(), ownBits == 10)) read.pop(take);
+                        read.lockMs = 0.0;
+                        packedFrames = 0;
+                        const double start = now();
+                        for (int f = 0; f < exportFrames; f++) {
+                            for (const double busy = now() + cpuMs; now() < busy;) {
+                            }
+                            drawFrame();
+                            const double readStart = now();
+                            if (!pipelined) {
+                                if (read.queue(device, ownLuma, ownChroma, pipeline.focusTarget(), ownBits == 10)) read.pop(take);
+                            } else {
+                                while (!read.canQueue() && read.pending() > 0) read.pop(take);
+                                read.queue(device, ownLuma, ownChroma, pipeline.focusTarget(), ownBits == 10);
+                                while (read.pending() > 0 && read.oldestDone()) read.pop(take);
+                            }
+                            readMs += now() - readStart;
+                        }
+                        const double readStart = now();
+                        while (read.pending() > 0) read.pop(take);
+                        readMs += now() - readStart;
+                        const double total = now() - start;
+                        printf("export %s: %d frames (%u packed), %.1f ms a frame, reading back %.1f ms a frame (%.1f of it waiting in the "
+                               "lock; %u found the copy unfinished, at most %d on the way), %.1f ms of CPU work a frame\n",
+                               pipelined ? "pipelined" : "straight", exportFrames, packedFrames, total / exportFrames, readMs / exportFrames,
+                               read.lockMs / exportFrames, read.waited, read.pendingPeak, cpuMs);
+                        read.release();
+                    }
+                }
+                const RECT all = {0, 0, static_cast<LONG>(cap.width), static_cast<LONG>(cap.height)};
+                if (ownHdr) {
+                    pipeline.showLinear(device, ownFrame.texture, output.surface, all);
+                } else {
+                    pipeline.resolveScene(device, ownFrame.texture, output.surface, all);
+                }
+                continue;
+            }
             pipeline.render(device, driven, job.settings, output.surface);
             if (firstFrame) printf("CPU: pipeline created in %.1f ms, its first frame %.1f ms\n", initMs, msSince(renderStart));
             // The export's supersampling: the same moment again (the output is the last one).
@@ -949,6 +1151,70 @@ int main(int argc, char** argv) {
             fprintf(stderr, "readback failed\n");
             failures++;
             continue;
+        }
+        if (ownBits && ownLuma.valid() && ownChroma.valid()) {
+            // The planes back to RGB (BT.709 studio range), next to the frame, and how far apart.
+            const UINT vw = ownLuma.width * 4, vh = ownLuma.height;
+            const bool ten = ownBits == 10;
+            std::vector<uint8_t> y, uv;
+            auto readPlane = [&](const gfx::Target& t, std::vector<uint8_t>& out) {
+                IDirect3DSurface9* sys = nullptr;
+                if (FAILED(device->CreateOffscreenPlainSurface(t.width, t.height, t.format, D3DPOOL_SYSTEMMEM, &sys, nullptr))) return false;
+                D3DLOCKED_RECT lr{};
+                bool ok = SUCCEEDED(device->GetRenderTargetData(t.surface, sys)) && SUCCEEDED(sys->LockRect(&lr, nullptr, D3DLOCK_READONLY));
+                if (ok) {
+                    const size_t row = static_cast<size_t>(t.width) * (ten ? 8 : 4);
+                    out.resize(row * t.height);
+                    for (UINT r = 0; r < t.height; r++) memcpy(&out[row * r], static_cast<const uint8_t*>(lr.pBits) + static_cast<size_t>(lr.Pitch) * r, row);
+                    sys->UnlockRect();
+                }
+                sys->Release();
+                return ok;
+            };
+            if (ownHdr && readPlane(ownLuma, y) && readPlane(ownChroma, uv)) {
+                // HDR10: the planes as they are (P010, Y then interleaved Cb Cr), for ffmpeg; the
+                // brightest luma code in nits as a check of the PQ curve.
+                FILE* f = fopen((job.output + ".p010").c_str(), "wb");
+                if (f) {
+                    fwrite(y.data(), 1, y.size(), f);
+                    fwrite(uv.data(), 1, uv.size(), f);
+                    fclose(f);
+                }
+                int top = 0;
+                for (size_t i = 0; i < y.size() / 2; i++) top = (std::max)(top, (y[2 * i] | (y[2 * i + 1] << 8)) >> 6);
+                const double e = std::clamp((top / 4.0 - 16.0) / 219.0, 0.0, 1.0), p = pow(e, 1.0 / 78.84375);
+                const double nits = 10000.0 * pow((std::max)(p - 0.8359375, 0.0) / (18.8515625 - 18.6875 * p), 1.0 / 0.1593017578125);
+                printf("own frame: HDR10 planes %ux%u -> %s.p010, brightest luma code %d (%.0f nits)\n", vw, vh, job.output.c_str(), top, nits);
+            } else if (readPlane(ownLuma, y) && readPlane(ownChroma, uv)) {
+                auto code = [ten](const std::vector<uint8_t>& p, size_t i) {
+                    return ten ? ((p[2 * i] | (p[2 * i + 1] << 8)) >> 6) / 4.0f : static_cast<float>(p[i]);
+                };
+                std::vector<uint32_t> back(static_cast<size_t>(vw) * vh);
+                double diff = 0.0, worst = 0.0;
+                for (UINT py = 0; py < vh; py++) {
+                    for (UINT px = 0; px < vw; px++) {
+                        const float Y = (code(y, static_cast<size_t>(py) * vw + px) - 16.0f) / 219.0f;
+                        const size_t c = static_cast<size_t>(py / 2) * vw + (px & ~1u);
+                        const float cb = (code(uv, c) - 128.0f) / 224.0f, cr = (code(uv, c + 1) - 128.0f) / 224.0f;
+                        const float r = Y + 1.5748f * cr, b = Y + 1.8556f * cb, g = (Y - 0.2126f * r - 0.0722f * b) / 0.7152f;
+                        auto to8 = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+                        back[static_cast<size_t>(py) * vw + px] = 0xFF000000u | (to8(r) << 16) | (to8(g) << 8) | to8(b);
+                        const uint32_t o = pixels[static_cast<size_t>(py) * cap.width + px];
+                        const double dy = fabs((0.2126 * ((o >> 16) & 255) + 0.7152 * ((o >> 8) & 255) + 0.0722 * (o & 255)) / 255.0 - Y);
+                        diff += dy;
+                        worst = (std::max)(worst, dy);
+                    }
+                }
+                writeBmp((job.output + ".yuv.bmp").c_str(), back, vw, vh);
+                printf("own frame: %u samples, %s planes %ux%u, luma round trip off by %.4f on average, %.4f at most (of 1)\n", repeats + 1,
+                       ten ? "P010" : "NV12", vw, vh, diff / (static_cast<double>(vw) * vh), worst);
+            } else {
+                fprintf(stderr, "planes readback failed\n");
+                failures++;
+            }
+            ownLuma.destroy();
+            ownChroma.destroy();
+            ownFrame.destroy();
         }
         if (labels) {
             // As photo.cpp's save: the names on the finished image (left|right of the line).

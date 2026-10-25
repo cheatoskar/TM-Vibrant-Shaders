@@ -265,6 +265,32 @@ int main() {
         CHECK(fn(1) == 2);
     }
 
+    // Another hooker first with an absolute jump (jmp [slot], the form some hook libraries write):
+    // ours chains onto it the same way.
+    {
+        unsigned char* stub = static_cast<unsigned char*>(VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        CHECK(stub != nullptr);
+        if (stub) {
+            void* slot = reinterpret_cast<void*>(&foreignDetour);
+            const unsigned slotAddress = static_cast<unsigned>(reinterpret_cast<uintptr_t>(stub + 32));
+            memcpy(stub + 32, &slot, sizeof(slot));
+            stub[0] = 0xFF;
+            stub[1] = 0x25;
+            memcpy(stub + 2, &slotAddress, 4);
+            auto fn = reinterpret_cast<Fn>(stub);
+            g_foreignOriginal = reinterpret_cast<Fn>(&plusOne);
+            CHECK(fn(1) == 1002);
+            inlinehook::Hook ours;
+            CHECK(inlinehook::install(stub, reinterpret_cast<void*>(&afterForeignDetour), ours, &why));
+            g_afterForeign = reinterpret_cast<Fn>(ours.trampoline);
+            CHECK(ours.chained && ours.previous == reinterpret_cast<void*>(&foreignDetour));
+            CHECK(fn(1) == 1102);
+            CHECK(inlinehook::remove(ours));
+            CHECK(fn(1) == 1002);
+            VirtualFree(stub, 0, MEM_RELEASE);
+        }
+    }
+
     // A short conditional jump among the moved instructions becomes a long one in the trampoline.
     {
         inlinehook::Hook hook;

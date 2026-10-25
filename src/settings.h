@@ -36,6 +36,7 @@ struct Settings {
     bool casterAlphaTest = true;   // CasterShadows also keeps alpha-tested meshes (fences, grids) and draws them with the game's alpha test: lattice shadows; off = they cast none
     bool shadeMenuBars = true;     // replay menu: the rows under its bars show the shaded image (mirrored); off = black (never leftovers of earlier frames)
     bool cleanWater = true;        // the game's water mirrors only what it can see, unblurred (no blotches of the ramps over it); off = as before
+    bool overlapFix = true;        // TMUnlimiter maps: of blocks overlapping at the same height the one placed last wins (a depth bias in plugin.cpp), no flickering stripes
     bool waterFarReflections = true; // with CleanWater: the water's reflection is traced to the screen's edge (stands, masts and gates across a pool), not 40-120 m; off = as up to 1.4.0-preview
     bool gameGBuffer = false;      // the game's material shaders also write their normal (gbufpatch.cpp): AO, shadows, reflections and light on the real normal (needs GameHdr; patched from the start)
     bool gameLight = false;        // ... and the light they lit each surface with (COLOR2): under a night sky the darkening and tint step back where the game's lamps light a surface, by that light, not by the image (needs GameHdr and EngineLights; patched from the start)
@@ -49,8 +50,20 @@ struct Settings {
     bool taaJitter = true;          // TAA samples a different sub-pixel spot every frame (sharper, smoother)
     bool cinematicOnlyInReplays = true; // motion blur and DOF only in replays, intros and the video export
     bool videoExportBest = true;   // the game's video export: full quality, effects on the video's clock, every supersample shaded
-    int videoCodec = 1;            // the export's file: 0 the game's AVI (its codec dialog), 1 MP4 H.264, 2 MP4 HEVC (Media Foundation)
-    float videoBitrate = 0.0f;     // MP4: Mbit/s, 0 = from the size and frame rate (4K 30 fps: 50 H.264, 30 HEVC)
+    int videoCodec = 1;            // the export's file: 0 the game's AVI (its codec dialog), 1 MP4 H.264, 2 MP4 HEVC, 3 MP4 AV1
+    float videoBitrate = 0.0f;     // MP4: Mbit/s, 0 = constant quality (VideoQuality) instead of a bitrate
+    int videoQuality = 80;         // MP4: 0..100; NVENC: its CQ (80 = 24.5), other cards: average bitrate (80 = 0.31 bit per pixel and frame), ffmpeg: CRF (80 = 20.5)
+    bool video10Bit = false;       // HEVC and AV1 in 10 bits (no banding in skies and fog); H.264 stays 8 bits with dither
+    int videoEncoder = 0;          // 0 the graphics card's encoder (Media Foundation), 1 a software encoder through your own ffmpeg.exe
+    int videoFfmpegPreset = 1;     // ffmpeg: 0 fast, 1 balanced, 2 best (slowest)
+    bool videoOwnFrames = true;    // the mod renders the video's frames: every sample summed in float, graded once a frame
+    float videoShutter = 360.0f;   // the game's motion blur: degrees of the frame its sub-frames cover (180 = film)
+    bool videoLensDof = true;      // depth of field from the samples themselves (the camera moves over the lens), with enough of them
+    float videoGrain = 0.5f;       // the look's film grain in the video (grain costs the encoder much of its bits)
+    int videoAspect = 0;           // 0 as shot, 1 2:1, 2 2.39:1 (cropped: the file holds only the picture)
+    bool videoHdr = false;         // HDR10 video (PQ, BT.2020; HEVC or AV1 in 10 bits, the mod's own frames)
+    float videoHdrPeak = 1000.0f;  // HDR10: the brightest light in nits (the tone curve's top, the file's metadata)
+    float videoHdrWhite = 203.0f;  // HDR10: the game's white (the SDR image's 1.0) in nits; 203 is BT.2408's reference white
     bool autoQuality = true;       // lower the effect quality when the frame rate drops below the target
     float targetFps = 60.0f;
     // The game's 3D image and every effect at this fraction of the screen's resolution, brought back
@@ -118,6 +131,9 @@ struct Settings {
     float lampHaze = 1.0f;         // EngineLights: the light the haze takes from the lamps glows in the air around them (1 = all of it, 0 = off)
     bool lampSkyHalos = false;     // EngineLights at night: the lamps' halos also over the sky, not cut at the edge of what the lamp sits on
     float floodlights = 1.0f;      // EngineLights: the strength of floodlights and lamps (the game's glows) and the light they spill, apart from the neon borders and HighlightBoost (1 = as before)
+    float carHeadlights = 0.0f;    // two spotlights from the front of the car the camera follows, lighting the road, the walls and the haze (0 = off, 1 = full; needs the engine's car)
+    float carHeadlightRange = 90.0f; // CarHeadlights: how far the light reaches (m)
+    float carHeadlightBeam = 0.5f;   // CarHeadlights: how strongly the cone shows in the air (0 = only the light on surfaces)
     float lensFlare = 0.25f;
     float chromaticAberration = 0.05f;
     float vignette = 0.25f;
@@ -147,6 +163,8 @@ struct Settings {
     float snowCover = 0.0f;        // snow lying on the ground, the grass and everything facing up
     float puddles = 0.0f;          // standing water on flat ground
     float waterSurfaces = 1.0f;   // waves, reflections and refraction on the game's water (pools, sea)
+    float waterSplash = 0.6f;      // the car's splash, wake and drips where it enters, drives through and leaves the game's water (pools, sea)
+    float waterClarity = 0.5f;     // the game's water clear: the bottom shows through, depth tints it, foam at the edges (0 = the game's own murk)
     float lightning = 0.0f;        // lightning flashes (how often)
     bool lensDrops = false;        // rain drops on the lens (only while it rains)
     bool weatherShelter = true;    // no rain or snow under roofs, bridges and in buildings

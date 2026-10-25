@@ -14,6 +14,12 @@ IDirect3DTexture9* get(IDirect3DDevice9* device, const std::string& preset);
 // until the size or the device changes. nullptr = none.
 IDirect3DTexture9* icon(IDirect3DDevice9* device, int size);
 
+// A resource pack's picture (its load screen, at most kPackPreviewWidth wide): made once per
+// zip and write time, on a thread of its own, one at a time. nullptr = none, or not made yet
+// (asked again next frame). width / height: the picture's size.
+constexpr int kPackPreviewWidth = 256;
+IDirect3DTexture9* packPreview(IDirect3DDevice9* device, const std::wstring& zip, unsigned long long written, int& width, int& height);
+
 // Saves the middle of the finished frame (before the HUD) as a preset's picture.
 bool savePicture(IDirect3DDevice9* device, IDirect3DSurface9* frame, const std::wstring& path);
 

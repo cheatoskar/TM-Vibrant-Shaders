@@ -1,6 +1,8 @@
 #include "engine.h"
+#include "blockorder.h"
 #include "gbx.h"
 #include "hook.h"
+#include "inlinehook.h"
 #include "log.h"
 #include <windows.h>
 #include <cstring>
@@ -25,7 +27,7 @@ namespace {
 constexpr uintptr_t kPreferredBase = 0x00400000;
 
 enum SlotId { kFrameBegin, kCameraBegin, kCameraEnd, kOverlayZones, kFrameEnd, kViewMatrix, kProjection, kShadowsSet, kSlotCount };
-enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kBaseRgb, kSiteCount };
+enum SiteId { kClipTracks, kClipCams, kVideoShoot, kTileHeight, kRaceReset, kRespawn, kWaterPlane, kLoadDecoration, kSetChallenge, kFreeCam, kZClip, kDrawShader, kDrawPass, kLensFlare, kReadInput, kInterfaceSet, kLoadScene, kClipTriggers, kJumpTime, kRaceTriggers, kCacheUpToDate, kCacheSave, kAviOpen, kAviVideoOpen, kAviVideoWrite, kAviAudioOpen, kAviAudioWrite, kAviDestroy, kRemoveBlock, kBaseRgb, kModPackDesc, kLoadProgress, kMediaInterface, kSiteCount };
 
 struct GameBuild {
     const char* name;
@@ -50,6 +52,25 @@ struct GameBuild {
     // moon's direction) and GxLight::SetBaseRGB (its colour), and those two functions.
     uintptr_t moonDirectionCall, setDov, moonColorCall, setBaseRgb;
     uintptr_t shaderApplyVTable;   // ??_7CPlugShaderApply@@6B@ (the materials whose textures are read)
+    // RenderFrameEnd's phase of its spread-out video read-back (a global, see kViewportVideoAsync);
+    // RenderFrameEnd + kReadPhaseCheck writes it (mov [phase], ebp), checked before use.
+    uintptr_t videoReadPhase;
+    // CSceneVehicleCar's WheelGetCount, WheelGetAsyncGroundContactPos and VehicleAsyncWorldSpeedGet
+    // (vtable slots 98, 101, 78): the car's mobil is checked against them before its wheels are
+    // read (see kVehicleWheels).
+    uintptr_t wheelCount, wheelContact, asyncSpeed;
+    uintptr_t packManager;         // CSystemPackManager* CSystemEngine::s_PackManager (the game's packs: mods, skins, ...)
+    // Resource packs switched live (applyModPackNow): CGameCtnCatalog::GetArticleFromIdent,
+    // CSystemPackManager::SimpleGetPackElem, CPlugBitmap::OnPackAvailable (checked in each bitmap's
+    // vtable before it is called); CGameCtnCollection::s_GlobalCatalog, and the loaded articles'
+    // cache key CGameCtnArticle::s_LoadedArticles_DecoSkin / _DecoIdent.
+    uintptr_t articleFromIdent, packElem, bitmapPackAvailable;
+    uintptr_t globalCatalog, decoSkin, decoIdent;
+    // ??_7CGameCtnMediaTracker@@6B@: the replay editor, told from the app's editor pointer (+0x414).
+    uintptr_t mediaTrackerVTable;
+    // CHmsItem::SetCountShadowTexCasted(uchar, int) and SetShadowFakeEnable(int): the game's own setters of an
+    // item's shadow (what CTrackMania::VehicleSetVisibility calls to take a hidden car's shadow away).
+    uintptr_t itemSetShadowTex, itemSetShadowFake;
 };
 
 // Same in both builds: CGameCtnApp holds the current map (a reference), the map its comments.
@@ -60,17 +81,23 @@ constexpr GameBuild kBuilds[] = {
     {"Nations Forever", 0x00bd10bc,
      {0x009a0990, 0x0099d750, 0x0099fe80, 0x009a2390, 0x009a4070, 0x0095ab40, 0x0095d530, 0x0095acc0},
      {0x00693e20, 0x00673e50, 0x006f4510, 0x0054e100, 0x004bedd0, 0x0047c0d0, 0x00991e30, 0x005a4f60, 0x005f6ed0, 0x00690d10, 0x0053fc80, 0x00971b10, 0x0096fd20, 0x00959260, 0x008fb190, 0x005e1d00, 0x007158e0, 0x00673cd0, 0x00574170, 0x005dee70, 0x005425a0, 0x00542eb0,
-      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0},
-     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
+      0x0095a150, 0x00959d80, 0x0095a0f0, 0x00959fb0, 0x00959c40, 0x00959d50, 0x005a5ff0, 0x00834ec0, 0x005abea0, 0x0072aab0, 0x00664040},
+     {0, 0x00aaf4e8, 0, 0, 0, 0, 0, 0x00a9cc20, 0x00aa3da8, 0, 0x00d731e0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9cd20, 0, 0, 0x00ac1e72, 0}, 0x00d123ba, 0x00935400, 0x0041be40, 0x0042b590, 0x00bbf7dc,
      0x00903280, {0x00ba90e4, 0x00ba1cd4}, {0x00821c10, 0x007ea7d0}, 0x00d54380, 0x006736d0, 0x005de270, 0x007b38f0, 0x00d731e0,
-     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc},
+     0x00573324, 0x008e17c0, 0x00573368, 0x00834ec0, 0x00baf1bc, 0x00d77c78, 0x007bf6b0, 0x007bf720, 0x007bff70, 0x00d54250,
+     0x005a0db0, 0x0043d360, 0x00845f00, 0x00d69674, 0x00d69e48, 0x00d69e94,
+     0x00b78bd4,
+     0x0053d7b0, 0x0053b760},
     {"United Forever", 0x00bd109c,
      {0x009a0710, 0x0099d4d0, 0x0099fc00, 0x009a2110, 0x009a3df0, 0x0095aad0, 0x0095d440, 0x0095ac50},
      {0x00693ff0, 0x00673f70, 0x006f44e0, 0x0054e030, 0x004bea30, 0x0047bed0, 0x00991bd0, 0x005a5100, 0x005f7010, 0x00690ee0, 0x0053fab0, 0x009719e0, 0x0096fbf0, 0x009591f0, 0x008fb9c0, 0x005e1da0, 0x00715780, 0x00673df0, 0x005741f0, 0x005deef0, 0x00542450, 0x00542d60,
-      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0},
-     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
+      0x0095a0e0, 0x00959d10, 0x0095a080, 0x00959f40, 0x00959bd0, 0x00959ce0, 0x005a6190, 0x00834ce0, 0x005ac030, 0x0072a970, 0x00664070},
+     {0, 0x00aaeee8, 0, 0, 0, 0, 0, 0x00a9c620, 0x00aa37a8, 0, 0x00d74840, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00a9c720, 0, 0, 0x00ac1872, 0}, 0x00d1442a, 0x00935290, 0x0041be50, 0x0042b680, 0x00bbf7bc,
      0x00903a90, {0x00ba90c4, 0x00ba1cb4}, {0x00821ab0, 0x007ea3b0}, 0x00d559e0, 0x006737f0, 0x005de340, 0x007b3500, 0x00d74840,
-     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c},
+     0x005733a4, 0x008e2010, 0x005733e8, 0x00834ce0, 0x00baf19c, 0x00d792d8, 0x007bf1d0, 0x007bf240, 0x007bfa70, 0x00d558b0,
+     0x005a0f90, 0x0043d3e0, 0x00846020, 0x00d6acd4, 0x00d6b4a8, 0x00d6b4f4,
+     0x00b78bcc,
+     0x0053d5e0, 0x0053b5d0},
 };
 const GameBuild* g_build = nullptr;
 
@@ -105,13 +132,18 @@ constexpr InlineSite kClipViewerCams = {kClipCams, {0x6a, 0xff, 0x68, 0, 0, 0, 0
 constexpr InlineSite kVideoShootSite = {kVideoShoot, {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8}, 6, -1, "CGameCtnMediaVideoShooter::DoShoot"};
 // The export's settings (the same in both builds, from DoShoot): the shooter holds the dialog's
 // CGameCtnMediaVideoParams at +0x4c (Fps +0x14, Width +0x18, Height +0x1c, Hq +0x20,
-// HqSampleSize +0x24, HqMB +0x28, Stereo3d +0x38, from its parameter table); +0x14 set means
+// HqSampleSize +0x24, HqMB +0x28, IsAudioStream +0x34, Stereo3d +0x38, from its parameter table); +0x14 set means
 // this run opens no video output. With Hq and a sample size n > 1 the camera gets a
 // CSceneFxSuperSample of n x n (n at most 11). With HqMB and n x n >= 9 the samples are spread
 // over time ("external loop"): every rendered frame is one sample, the clock advances by
 // 1 / (fps n n), and only the last of them is written. Otherwise its FxRender renders the
 // camera n x n times within the frame, each with a sub-pixel offset, into the same texture.
 constexpr size_t kShooterNoVideo = 0x14;
+// The clip's start and end (ms, CMwTimer::SecondsToMwTime of the clip's StartTimeGet / StopTimeGet).
+// The frames run from the start; the sound pass sets the clip's time from 0 instead (DoShoot,
+// state 0x184: tick - tick at the capture's start), so with a start above 0 its sound begins earlier.
+constexpr size_t kShooterClipStart = 0x30;
+constexpr size_t kShooterClipStop = 0x38;
 constexpr size_t kShooterParams = 0x4c;
 constexpr size_t kVideoParamsSize = 0x3c;
 // CMwCmdBufferCore::EnableFixedTickTime(enable, ms, fraction): while +0x38 or +0x3c is set,
@@ -162,6 +194,15 @@ constexpr InlineSite kReadInputSite = {kReadInput, {0x57, 0x8b, 0x7c, 0x24, 0x08
 // The game's own switch for the race / replay interface (HUD): the playground interface
 // shows or hides its 2D scene (CScene2d::SetVisibleInterface). Called with the visibility the
 // game wants; the photo mode answers 0 there.
+// The replay editor (MediaTracker): CGameCtnMediaTracker::SetVisibleInterface(visible), what its Tab key
+// (ButSwitchInterface, from OnInputEvent) calls: the editor's 2D panels (+0xc4, CScene2d::SetVisibleInterface)
+// show or hide, and the clips' draw rect goes to the whole screen (hidden) or back to the tracker's
+// own rectangle (+0xe0, shown): hidden, the 3D view fills the screen. +0xdc keeps the wish. The game's own
+// F10 key in the editor is another action (CGameCtnEditor::SetStatus(0x13)), not this.
+// The app (CTrackMania) holds its editor at +0x414 (CTrackMania::SetEditor, the same in both builds); in the
+// replay editor that is the CGameCtnMediaTracker (told by its vtable).
+constexpr size_t kAppEditorPointer = 0x414;
+constexpr InlineSite kMediaInterfaceSite = {kMediaInterface, {0x8b, 0x44, 0x24, 0x04, 0x83, 0xec, 0x20}, 7, -1, "CGameCtnMediaTracker::SetVisibleInterface"};
 constexpr InlineSite kInterfaceSetSite = {kInterfaceSet, {0x8b, 0x44, 0x24, 0x04, 0x3b, 0x41, 0x20}, 7, -1, "CGamePlaygroundInterface::InterfaceVisibleInternalSet"};
 constexpr InlineSite kLensFlareSite = {kLensFlare, {0x83, 0xec, 0x48, 0x53, 0x55}, 5, -1, "CVisionViewport::LensFlareAdd"};
 // Map load (also from CGameCtnDecoration::Init): the decoration jumps its day-time animation
@@ -186,9 +227,77 @@ constexpr size_t kPlayerTriggered = 0x48;
 // is not in the scene. The vehicle's vtable slot 32 is GetInterpolatedLocation(sector): with
 // no sector, the location of its first corpus, the one it is drawn with (between physics steps).
 constexpr size_t kPlayerMobil = 0x28;
+// The race's clock and checkpoint times (the Misc page's split times; Ghidra, TMNF names, the same
+// offsets in TMUF: GetCurrentStandardTime, OnCheckpoint, InternalOnCheckpoint and the
+// CTrackManiaPlayerInfo accessors ported over 256 bytes). CGameRace::MediaClipCheckInGameTriggers'
+// `this` is the CTrackManiaRace itself (single inheritance: CTrackManiaRace's override calls it with
+// its own this). The race's clock is +0x274 (ms); +0xf4 set: the times count from the lap's start.
+// The player's CTrackManiaPlayerInfo is at +0x1c (it points back at the player at +0x238): the
+// run's start +0x2ac (lap start +0x2b8), finished +0x33c with the final time at +0x2b0 (+0x2bc),
+// checkpoints passed this run +0x334, and the race time at each checkpoint (SetTimeAndScoreAtCheckpoint:
+// a CFastArray at +0x2f8, {time, score} each, time -1 = not yet).
+constexpr size_t kRaceClock = 0x274;
+constexpr size_t kRaceLapTimes = 0xf4;
+constexpr size_t kPlayerInfo = 0x1c;
+constexpr size_t kInfoPlayer = 0x238;
+constexpr size_t kInfoStart = 0x2ac, kInfoLapStart = 0x2b8;
+constexpr size_t kInfoFinalTime = 0x2b0, kInfoLapFinalTime = 0x2bc;
+constexpr size_t kInfoFinished = 0x33c;
+constexpr size_t kInfoPassed = 0x334;
+constexpr size_t kInfoCheckpoints = 0x2f8;
+// The race's opponent ghosts (CTrackManiaRace::Ghosts_GetBestCurrentOpponent, Ghosts_Restart: a
+// CFastBuffer<CGameCtnGhost*> at +0x520); a ghost's race time at +0xe8 (CGameCtnGhost::SetRaceTime,
+// -1 none) and its checkpoint times at +0x94 (SetCheckpoint: {time, score} each). Ported to TMUF over
+// 256 bytes, the same offsets.
+constexpr size_t kRaceGhosts = 0x520;
+constexpr size_t kGhostRaceTime = 0xe8;
+constexpr size_t kGhostCheckpoints = 0x94;
+// The map's identifier (CGameCtnChallenge::GenerateUid writes the UID's CMwId here; the
+// environment at +0xe0 and the author at +0xe4 follow).
+constexpr size_t kChallengeUid = 0xdc;
 constexpr size_t kGameMobilScene = 0x14;
 constexpr size_t kGameMobilSceneId = 0x1c;
 constexpr int kInterpolatedLocationSlot = 32;
+// The car's axes in that location (a GmIso4, row-major 3x3, p' = M p + t): its columns are the
+// car's x, y, z. Forward is +z: CSceneVehicleCar::VehicleFrontSpeedGet (TMNF 0x008148a0, TMUF
+// 0x007bcd40) returns the z of CHmsDyna::GetLocalLinearSpeed (the world speed times the
+// transposed matrix) as the car's speed in km/h. Up is y (the model's), x the side.
+constexpr int kForwardColumn = 2;
+// The replay editor, its video export and replays run no race (raceTriggersDetour stays silent:
+// my export logs never had the car), only clip players (CGameCtnMediaClipPlayer::TracksUpdate,
+// already hooked). The car their cameras show, the same in both builds (Ghidra, TMNF names,
+// ported to TMUF over 256 bytes: GameMobilGetFromGhostId, GhostIdToGameMobilId,
+// LocalPlayerGameMobilGet, CGameCtnMediaBlockCameraGame::Update, PlayerGameMobilIdSet,
+// CGameScene::GameMobilGetFromId):
+// - clip player +0x18 its context: +0x20 the CGameScene (its CGameMobils: CFastBuffer at +0x1c,
+//   {count, data}; each mobil's id at +0x18), +0x28 the CGamePlayerCameraSet, whose +0x14 is the
+//   id of the mobil the game cameras follow (set every frame by a game camera block from its
+//   ghost: CameraGame::Update -> PlayerGameMobilIdSet).
+// - clip player +0x60 the local player's CGameCtnGhost (ghost id 0; +0x90 its CGameMobil), else
+//   +0x5c the local player's mobil id (-1 none); +0x98 the ghost blocks (CFastBuffer of
+//   CGameCtnMediaBlockGhost, +0x30 each one's CGameCtnGhost).
+constexpr size_t kClipContext = 0x18;
+constexpr size_t kClipLocalMobilId = 0x5c;
+constexpr size_t kClipLocalGhost = 0x60;
+constexpr size_t kClipGhostBlocks = 0x98;
+constexpr size_t kContextScene = 0x20;
+constexpr size_t kContextCameraSet = 0x28;
+constexpr size_t kSceneMobils = 0x1c;
+constexpr size_t kCameraSetFollowed = 0x14;
+constexpr size_t kGameMobilId = 0x18;
+constexpr size_t kBlockGhost = 0x30;
+constexpr size_t kGhostMobil = 0x90;
+// CSceneVehicleCar (the vehicle of every car, the same layout in both builds, found by pattern):
+// its SSimulationWheels are a CFastBuffer at +0x2e8 (0x2fc bytes each), each one's async ground
+// contact (world, the physics state: up to a step behind the drawn car) at +0x2bc; the car's
+// async world speed at +0x4b4 (m/s). The vtable slots of their getters identify the class.
+constexpr size_t kVehicleWheels = 0x2e8;
+constexpr size_t kWheelSize = 0x2fc;
+constexpr size_t kWheelContact = 0x2bc;
+constexpr size_t kVehicleAsyncSpeed = 0x4b4;
+constexpr int kWheelCountSlot = 98;
+constexpr int kWheelContactSlot = 101;
+constexpr int kAsyncSpeedSlot = 78;
 // Every jump of a weather animation to a time of day (LoadScene3d at map load, and a time
 // set as a parameter later, e.g. when the race starts): 0 = midnight. Real night forces 0
 // here too, or the later jump puts the map's own time back.
@@ -217,7 +326,11 @@ constexpr InlineSite kCacheSaveSite = {kCacheSave, {0x55, 0x8b, 0xec, 0x83, 0xe4
 // size rounded up to 8 and written back, AVISaveOptions - the codec dialog -, a BI_RGB header
 // at +0x0c of its data [this+4], the image size at +0x20 for GetImageByteSize, the frame
 // counter at +0x40) and writes every finished frame (VideoStreamWrite: bottom-up BGR, 3 bytes
-// a pixel, with supersampling only the averaged frame). DoShoot opens the sound
+// a pixel, with supersampling only the averaged frame). The frame is the one DoShoot flagged
+// (CHmsViewport::VideoAddCurrentFrame, +0x54c) before this render: GetRenderTargetData of the
+// viewport's colour surface, then the write, then EndScene and Present - and while the stream
+// is open only flagged frames are presented: the sub-frames between them never reach Present
+// (docs/engine-video-export.md). DoShoot opens the sound
 // (AudioStreamOpen, an SWaveFormat = WAVEFORMATEX without cbSize) and writes it in pieces
 // between the frames (AudioStreamWrite, a count of blocks). Close and the destructor end it.
 constexpr InlineSite kAviOpenSite = {kAviOpen, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04}, 6, -1, "CVisionVideoAvi::OpenToWrite"};
@@ -237,6 +350,23 @@ constexpr InlineSite kRemoveBlockSite = {kRemoveBlock, {0x6a, 0xff, 0x68, 0, 0, 
 // fld [eax]) run unchanged in the trampoline. GxLight: +0x14 flags, +0x18 base rgb, +0x24 and
 // +0x28 the intensity factors, +0x2c rgb * both (what the shaders get).
 constexpr InlineSite kBaseRgbSite = {kBaseRgb, {0x8b, 0x44, 0x24, 0x04, 0xd9, 0x00}, 6, -1, "GxLight::SetBaseRGB"};
+// Environment mods (resource packs): CGameCtnChallenge::GetModPackDesc(forcedMods) picks
+// the mod a map loads with: the server's forced mod for the map's environment (challenge +0xe0),
+// if any and the map has none or the server overrides it, else the map's own (+0x13c, what the
+// map's file holds). Its callers: LoadDecorationAndCollection (the decoration's skin: every
+// texture the collection loads by name comes from the zip when it has one), the load screen
+// (CGameCtnLoadProgress::Start), and GetPackDescList (the map's header when it is saved, the
+// network's downloads): the mod answers only inside the first two. Prologue: five pushes and
+// mov edi, [esp+0x18], all position independent.
+constexpr InlineSite kModPackDescSite = {kModPackDesc, {0x51, 0x53, 0x55, 0x56, 0x57, 0x8b, 0x7c, 0x24, 0x18}, 9, -1, "CGameCtnChallenge::GetModPackDesc"};
+constexpr InlineSite kLoadProgressSite = {kLoadProgress, {0x6a, 0xff, 0x68, 0, 0, 0, 0}, 7, 3, "CGameCtnLoadProgress::Start"};
+constexpr size_t kChallengeDecoration = 0xc4;  // SGameCtnIdentifier: id (the decoration), collection, author
+constexpr size_t kChallengeCollection = 0xe0;  // CMwId of the map's environment (GetModPackDesc compares it)
+constexpr size_t kChallengeMod = 0x13c;        // CSystemPackDesc*: the map's own mod (saved with the map)
+constexpr size_t kAppForcedMods = 0x310;       // CGameCtnApp: SCtnForcedMods (a server's forced mods)
+constexpr size_t kPackManagerPacks = 0x44;     // CFastBuffer<CSystemPackDesc*> {count, data}
+constexpr size_t kPackDescName = 0x1c;         // CFastStringInt: "Skins\Stadium\Mod\X.zip" (relative)
+constexpr size_t kPackDescFile = 0x48;         // CSystemFidFile*: the file on disk (0: not there)
 constexpr size_t kMoodDayTime = 0x28;    // RemappedStartDayTime: 0..1 of a day, night outside (0.25, 0.75]
 constexpr size_t kZClipCuts = 0x174;
 
@@ -287,6 +417,17 @@ SetChallengeFn g_setChallenge = nullptr;
 void* g_app = nullptr;          // CGameCtnApp (holds the current map)
 RespawnFn g_respawn = nullptr;
 RemoveBlockFn g_removeBlock = nullptr;
+using ModPackDescFn = void*(__fastcall*)(void*, void*, const void*);
+using LoadProgressFn = void(__fastcall*)(void*, void*, void*);
+ModPackDescFn g_modPackDesc = nullptr;
+LoadProgressFn g_loadProgress = nullptr;
+ModPackAnswer (*g_chooseModPack)(const ModPackAsk&) = nullptr;
+// Inside the load screen's start or the decoration's load (the only callers the mod answers):
+// the thread and how deep (both run on the game's main thread, one inside the other never).
+DWORD g_modScopeThread = 0;
+int g_modScopeDepth = 0;
+bool g_modScopeLoadScreen = false;
+std::string g_modPackStatus;
 volatile LONG g_raceResets = 0; // counters: the plugin compares them every frame
 volatile LONG g_respawns = 0;
 volatile LONG g_blocksRemoved = 0;
@@ -303,6 +444,24 @@ float g_zoom = 1.0f;             // photo mode zoom (>= 1: the engine culls with
 // the reflection cameras (water planes, the cube maps of the car, which need their 90 degrees).
 const void* g_mainCamera = nullptr;
 bool g_loggedMainProjection = false;
+// Accumulation depth of field: the eye of the main camera moves by a lens offset (metres, view
+// space) and the projection is sheared so the plane at g_lensFocus stays put. One offset per
+// render, from a table: by the game's own supersampling sample when the camera has it (the
+// video export: CSceneFxSuperSample::FxRender writes the sample index into the CHmsCamera before
+// each render, also for the sub-frames of its motion blur), else one entry per main camera
+// projection in turn. count 0 = off.
+constexpr int kMaxLensSamples = 128; // the game takes at most 11 x 11 samples
+float g_lensXY[kMaxLensSamples][2] = {};
+int g_lensCount = 0;
+float g_lensFocus = 0.0f;
+unsigned g_lensRenders = 0;   // main camera projections since the table was set (without game samples)
+int g_lensUsed = -1;          // the entry the last main camera projection got (-1 none)
+int g_gameSample[2] = {-1, 0}; // the game's sample index and count of that projection (-1: none)
+bool g_loggedLens = false;
+// CHmsCamera, while CSceneFxSuperSample::FxRender renders it (CHmsCamera::ZClipCompute shifts the
+// render frustum by a sub-pixel from them, in both builds): +0x180 on, +0x184 / +0x188 the
+// sample's column and row, +0x18c / +0x190 the columns and rows (n, n).
+constexpr size_t kCameraSuperSample = 0x180;
 // The matrices the engine computed last (ComputeDriverViewMatrix / ComputeDriverProjection), as
 // it hands them to SetTransform, and those it had computed when a camera began. A camera drawn
 // into a texture (TexRender_RenderTexture: TransformStackCameraPush, then RenderCameraBegin; the
@@ -329,6 +488,8 @@ bool g_shaderCensus = false;           // log every material once (dev: finding 
 using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
 LensFlareFn g_lensFlare = nullptr;
 bool g_hideSunFlare = false;           // a night sky replaces the sun: its halo fades out
+volatile bool g_carDrawNow = false;    // inside a car's own colour draw (a Vehicles shader), Hide car on
+volatile bool g_hideCars = false;      // photo mode's Hide car: the cars' draws are skipped (shader level, like the horizon)
 volatile bool g_hideGameSky = false;   // a night sky replaces the game's: its painted horizon isn't drawn
 using LoadSceneFn = void(__fastcall*)(void*, void*);
 LoadSceneFn g_loadScene = nullptr;
@@ -369,7 +530,10 @@ ClipTriggersFn g_clipTriggers = nullptr;
 using RaceTriggersFn = void(__fastcall*)(void*, void*, void*, void*);
 RaceTriggersFn g_raceTriggers = nullptr;
 void* g_racePlayer = nullptr;                  // the player the race checked last (its car)
+void* g_race = nullptr;                        // the race that checked it (CTrackManiaRace, the Misc page's split times)
 DWORD g_racePlayerTick = 0;                    // when (a player of a race that ended is gone)
+void* g_clipPlayer = nullptr;                  // the clip player whose tracks ran last (replay editor, export)
+unsigned g_clipPlayerFrame = 0;                // in which frame (g_engineFrames)
 float g_mapDayTime = -1.0f;                   // the loaded map's own time of day (-1 unknown)
 bool g_nightForced = false;                   // the game lights it at midnight instead
 void* g_weather = nullptr;                    // this map's weather (the last to jump in time)
@@ -396,8 +560,14 @@ using ReadInputFn = int(__cdecl*)(void*, void*, unsigned long);
 ReadInputFn g_readInput = nullptr;
 volatile bool g_swallowEscape = false; // the menu or photo mode took this Esc press
 using InterfaceSetFn = void(__fastcall*)(void*, void*, int);
+using MediaInterfaceFn = void(__fastcall*)(void*, void*, int);
 InterfaceSetFn g_interfaceSet = nullptr;
 void* g_interface = nullptr;     // the playground interface that last set its visibility
+MediaInterfaceFn g_mediaInterface = nullptr;
+void* g_mediaTracker = nullptr;  // the MediaTracker last used (set by its interface call or read from the app's editor)
+void* g_mediaApplied = nullptr;  // the one photo mode has hidden (null: none)
+int g_mediaWanted = 1;           // what the game wants for it
+bool g_hideEditor = false;       // photo mode: the editor's panels stay hidden, the 3D view fills the screen
 int g_interfaceWanted = 1;       // what the game wants for it
 LONG g_interfaceLoads = -1;      // the map it belongs to (gone with the next one)
 void* g_freeCam = nullptr;       // the free camera last switched on (null: off)
@@ -460,10 +630,47 @@ bool prologueMatches(const InlineSite& site) {
     return readable(target, site.length) && memcmp(target, expected, site.length) == 0;
 }
 
+void describeCode(uintptr_t address, char* out, size_t size);
+
+// The function starts with another mod's jump instead of the expected bytes (TMUnlimiter hooks
+// CGameCtnChallenge::RemoveBlock, among others): the hooker of inlinehook.cpp chains onto it, so
+// the call runs us, then them, then the function. False when the start is no jump we know.
+bool chainOntoJump(const InlineSite& site, BYTE* target, void* detour, void** trampoline) {
+    static inlinehook::Hook s_hooks[kSiteCount];
+    BYTE head[16] = {};
+    if (!readable(target, sizeof(head))) return false;
+    memcpy(head, target, sizeof(head));
+    const bool jump = head[0] == 0xE9 || head[0] == 0xEB || (head[0] == 0xFF && head[1] == 0x25) || (head[0] == 0x68 && head[5] == 0xC3);
+    if (!jump) return false;
+    inlinehook::Hook& hook = s_hooks[site.id];
+    const char* why = "";
+    if (!inlinehook::install(target, detour, hook, &why)) {
+        TMVS_LOG("engine: %s starts with a jump (%02x %02x %02x %02x %02x %02x) that can't be chained: %s", site.name,
+                 head[0], head[1], head[2], head[3], head[4], head[5], why);
+        return false;
+    }
+    char where[96] = "?";
+    describeCode(reinterpret_cast<uintptr_t>(hook.previous), where, sizeof(where));
+    TMVS_LOG("engine: %s starts with another mod's jump (to %s): chained, ours runs first, then theirs", site.name, where);
+    *trampoline = hook.trampoline;
+    return true;
+}
+
 void* inlineHook(const InlineSite& site, void* detour) {
     BYTE* target = reinterpret_cast<BYTE*>(rebase(g_build->sites[site.id]));
     if (!prologueMatches(site)) {
-        TMVS_LOG("engine: %s does not match this executable, not hooked", site.name);
+        void* chained = nullptr;
+        if (chainOntoJump(site, target, detour, &chained)) return chained;
+        BYTE found[12] = {};
+        if (readable(target, sizeof(found))) {
+            memcpy(found, target, sizeof(found));
+            TMVS_LOG("engine: %s does not match this executable, not hooked (found %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x, expected %02x %02x %02x %02x %02x %02x %02x%s)", site.name,
+                     found[0], found[1], found[2], found[3], found[4], found[5], found[6], found[7], found[8], found[9], found[10], found[11],
+                     site.prologue[0], site.prologue[1], site.prologue[2], site.prologue[3], site.prologue[4], site.prologue[5], site.prologue[6],
+                     site.length > 7 ? " ..." : "");
+        } else {
+            TMVS_LOG("engine: %s does not match this executable, not hooked (code not readable)", site.name);
+        }
         return nullptr;
     }
     BYTE* trampoline = static_cast<BYTE*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
@@ -696,6 +903,8 @@ void markCinematic(unsigned source) {
 
 void __fastcall tracksUpdateDetour(void* self, void* edx, float time, float delta) {
     markCinematic(1);
+    g_clipPlayer = self; // the car its cameras show (carPose)
+    g_clipPlayerFrame = g_engineFrames;
     g_tracksUpdate(self, edx, time, delta);
 }
 
@@ -984,6 +1193,65 @@ bool textureFiles(const void* shader, wchar_t* out, size_t size) {
     return used > 0;
 }
 
+// The colour map among a material's textures: by its file, as the game's texture names go
+// ("StadiumRoadBorderD": D the colour, N the normal map, S the specular map, L the lightmap; my
+// material captures name no other kind). The grass has no D: StadiumGrass1, StadiumGrass2. The
+// Direct3D texture is the one CDx9StateBlock::Apply hands to SetTexture (device vtable +0x104)
+// for a stage: CPlugBitmap +0x14 its CDx9TextureKeeper, that +0xc the IDirect3DBaseTexture9
+// (TMNF 0x00980740, TMUF 0x00980440: the same offsets in both). Null while the keeper isn't made.
+constexpr size_t kBitmapKeeper = 0x14;
+constexpr size_t kKeeperTexture = 0xc;
+// One look per material and map (the file names come through the game's fid calls).
+struct DiffuseOf {
+    const void* bitmap;
+    std::wstring file;
+};
+const void* findDiffuse(const void* shader, wchar_t* file, size_t size);
+const void* diffuseBitmap(const void* shader, wchar_t* file, size_t size) {
+    static std::unordered_map<const void*, DiffuseOf> known;
+    static LONG knownLoads = -1;
+    if (knownLoads != g_mapLoads) {
+        known.clear();
+        knownLoads = g_mapLoads;
+    }
+    auto it = known.find(shader);
+    if (it == known.end()) {
+        wchar_t name[96] = {};
+        const void* bitmap = findDiffuse(shader, name, 96);
+        if (known.size() >= 8192) known.clear();
+        it = known.emplace(shader, DiffuseOf{bitmap, name}).first;
+    }
+    if (file && size) wcsncpy_s(file, size, it->second.file.c_str(), _TRUNCATE);
+    return it->second.bitmap;
+}
+const void* findDiffuse(const void* shader, wchar_t* file, size_t size) {
+    const void* bitmaps[16] = {};
+    const int n = shaderBitmaps(shader, bitmaps, 16);
+    const void* best = nullptr;
+    int bestRank = 0;
+    for (int i = 0; i < n; i++) {
+        wchar_t path[512] = {};
+        if (!nodFilePath(bitmaps[i], path, 512)) continue;
+        const wchar_t* name = wcsrchr(path, L'\\');
+        name = name ? name + 1 : path;
+        const wchar_t* dot = wcschr(name, L'.');
+        const size_t length = dot ? static_cast<size_t>(dot - name) : wcslen(name);
+        int rank = 0;
+        if (length > 1 && name[length - 1] == L'D') rank = 2;
+        else if (length > 12 && !_wcsnicmp(name, L"StadiumGrass", 12) && iswdigit(name[12])) rank = 1;
+        if (rank > bestRank) {
+            bestRank = rank;
+            best = bitmaps[i];
+            if (file && size) {
+                const size_t keep = length < size - 1 ? length : size - 1;
+                wmemcpy(file, name, keep);
+                file[keep] = L'\0';
+            }
+        }
+    }
+    return best;
+}
+
 Material materialOf(const void* shader) {
     static std::unordered_map<const void*, Material> known;
     static LONG knownLoads = -1;
@@ -1035,11 +1303,92 @@ void censusShader(const void* shader) {
     else TMVS_LOG("shader %p: (no file)", shader);
 }
 
+// The cars' own materials (Vehicles\..., the glass and rear lights included; not their smoke, chunks and
+// wheel marks): what photo mode's Hide car leaves out, from the shader file like classify().
+bool isVehicle(const void* shader) {
+    static std::unordered_map<const void*, bool> known;
+    static LONG knownLoads = -1;
+    if (!shader) return false;
+    if (knownLoads != g_mapLoads) {
+        known.clear();
+        knownLoads = g_mapLoads;
+    }
+    const auto it = known.find(shader);
+    if (it != known.end()) return it->second;
+    wchar_t path[512] = {};
+    bool vehicle = false;
+    if (nodFilePath(shader, path, 512) && !wcsstr(path, L"\\Menu")) {
+        const wchar_t* file = wcsrchr(path, L'\\');
+        file = file ? file + 1 : path;
+        vehicle = (wcsstr(path, L"Vehicles\\") || wcsstr(path, L"Vehicles/")) && _wcsnicmp(file, L"Particle", 8) && _wcsnicmp(file, L"WheelMarks", 10);
+    }
+    if (known.size() < 8192) known.emplace(shader, vehicle);
+    return vehicle;
+}
+
+// Hide car, every pass: the cars' colour draws use Vehicles shaders, but the same visuals are drawn again
+// by passes with other shaders (the shadow maps, volumes and depth passes: a car-shaped black patch stayed
+// where the car was). A draw is the car's when its shader is a vehicle's or its corpus's item (CHmsCorpus
+// +0x48, the one blockorder reads) is one a vehicle shader drew: the items are learned from the colour
+// draws, which are skipped like all the others, and forgotten with the map.
+constexpr size_t kCorpusItemOffset = 0x48;
+constexpr size_t kDelayedCorpusOffset = 0x00;
+std::unordered_set<uintptr_t> g_vehicleItems;
+LONG g_vehicleItemsMap = -1;
+
+uintptr_t corpusItem(const void* corpus) {
+    if (!corpus) return 0;
+    __try {
+        return *reinterpret_cast<const uintptr_t*>(static_cast<const BYTE*>(corpus) + kCorpusItemOffset);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+uintptr_t delayedItem(const void* delayed) {
+    if (!delayed) return 0;
+    __try {
+        return corpusItem(*reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedCorpusOffset));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// 0 = draw, 1 = skip here (a draw of a known car item under another shader), 2 = a car's own colour draw:
+// it goes on to the device hook (carDrawNow), which skips it and learns the draw's vertex buffer, so the
+// passes that draw the same mesh under other shaders (shadows, depth) are found there.
+int skipCarDraw(const void* shader, uintptr_t item) {
+    if (!g_hideCars) return 0;
+    if (g_vehicleItemsMap != g_mapLoads) {
+        g_vehicleItems.clear();
+        g_vehicleItemsMap = g_mapLoads;
+    }
+    if (isVehicle(shader)) {
+        if (item && g_vehicleItems.size() < 512 && g_vehicleItems.insert(item).second) {
+            static int s_lines = 0;
+            if (s_lines < 10) {
+                s_lines++;
+                TMVS_LOG("engine: hide car: %u item(s) of the cars known", static_cast<unsigned>(g_vehicleItems.size()));
+            }
+        }
+        return 2;
+    }
+    return item && g_vehicleItems.count(item) != 0 ? 1 : 0;
+}
+
 void __fastcall drawShaderDetour(void* self, void* edx, void* shader, void* corpus, void* tree, void* visual) {
     const void* previous = g_currentShader;
     g_currentShader = shader;
     if (g_shaderCensus) censusShader(shader);
-    if (!(g_hideGameSky && isPaintedHorizon(shader))) g_drawShader(self, edx, shader, corpus, tree, visual);
+    // The block this draw belongs to gives the device wrapper its depth bias rank (blockorder.h).
+    const int previousRank = blockorder::beginDraw(corpus, false);
+    const int car = g_hideCars ? skipCarDraw(shader, corpusItem(corpus)) : 0;
+    if (!(g_hideGameSky && isPaintedHorizon(shader)) && car != 1) {
+        g_carDrawNow = car == 2;
+        g_drawShader(self, edx, shader, corpus, tree, visual);
+        g_carDrawNow = false;
+    }
+    blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
 
@@ -1047,7 +1396,14 @@ void __fastcall drawPassDetour(void* self, void* edx, void* delayed) {
     const void* previous = g_currentShader;
     g_currentShader = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(delayed) + kDelayedRenderShader);
     if (g_shaderCensus) censusShader(g_currentShader);
-    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader))) g_drawPass(self, edx, delayed);
+    const int previousRank = blockorder::beginDraw(delayed, true);
+    const int car = g_hideCars ? skipCarDraw(g_currentShader, delayedItem(delayed)) : 0;
+    if (!(g_hideGameSky && isPaintedHorizon(g_currentShader)) && car != 1) {
+        g_carDrawNow = car == 2;
+        g_drawPass(self, edx, delayed);
+        g_carDrawNow = false;
+    }
+    blockorder::endDraw(previousRank);
     g_currentShader = previous;
 }
 
@@ -1109,6 +1465,51 @@ void applyInterfaceVisibility() {
     }
 }
 
+void __fastcall mediaInterfaceDetour(void* self, void* edx, int visible) {
+    g_mediaTracker = self;
+    g_mediaWanted = visible;
+    if (g_hideEditor) g_mediaApplied = self;
+    g_mediaInterface(self, edx, g_hideEditor ? 0 : visible);
+}
+
+// The open replay editor: the app's editor when it is a MediaTracker (its vtable), null otherwise. Not
+// depending on the game having called the interface setter before.
+void* currentMediaTracker() {
+    if (!g_build || !g_app) return nullptr;
+    __try {
+        const BYTE* app = static_cast<const BYTE*>(g_app);
+        if (!readable(app + kAppEditorPointer, sizeof(void*))) return nullptr;
+        void* editor = *reinterpret_cast<void* const*>(app + kAppEditorPointer);
+        if (!editor || !readable(editor, 0xe0 + sizeof(int))) return nullptr;
+        return *reinterpret_cast<const uintptr_t*>(editor) == rebase(g_build->mediaTrackerVTable) ? editor : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+// Calls the game's own SetVisibleInterface on the open MediaTracker now (photo mode hides it, or gives
+// it back what the game wanted): the game only calls it when its own state changes, which may be never
+// while photo mode is on.
+void applyEditorVisibility() {
+    if (!g_mediaInterface) return;
+    void* tracker = currentMediaTracker();
+    if (!tracker) tracker = g_mediaTracker;
+    if (!tracker) return;
+    __try {
+        if (tracker != g_mediaTracker) {
+            g_mediaTracker = tracker;
+            g_mediaWanted = *reinterpret_cast<const int*>(static_cast<const BYTE*>(tracker) + 0xdc); // its wish (+0xdc)
+        }
+        const int visible = g_hideEditor ? 0 : g_mediaWanted;
+        g_mediaInterface(tracker, nullptr, visible);
+        g_mediaApplied = g_hideEditor ? tracker : nullptr;
+        TMVS_LOG("engine: the replay editor's interface %s (photo mode): SetVisibleInterface(%d) on %p", g_hideEditor ? "hidden" : "given back", visible, tracker);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_mediaTracker = nullptr;
+        g_mediaApplied = nullptr;
+    }
+}
+
 void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
     InterlockedIncrement(&g_respawns);
     g_respawn(self, edx, player, flag);
@@ -1116,6 +1517,7 @@ void __fastcall respawnDetour(void* self, void* edx, void* player, int flag) {
 
 int __fastcall removeBlockDetour(void* self, void* edx, void* block) {
     InterlockedIncrement(&g_blocksRemoved);
+    blockorder::invalidate();
     return g_removeBlock(self, edx, block);
 }
 
@@ -1195,7 +1597,11 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
     // Another map (or none: back to the menu): the objects of the last one go with it. Not the
     // weather, time of day and forced midnight of the map just loaded (its load came first).
     g_freeCam = nullptr;
+    g_mediaTracker = nullptr; // freed with its editor
+    g_mediaApplied = nullptr;
     g_racePlayer = nullptr;
+    g_race = nullptr;
+    g_clipPlayer = nullptr;
     if (!challenge || challenge != g_sceneChallenge) {
         reportNightJumps();
         g_weather = nullptr;
@@ -1204,6 +1610,7 @@ void __fastcall setChallengeDetour(void* self, void* edx, void* challenge) {
         g_sceneChallenge = nullptr;
     }
     g_setChallenge(self, edx, challenge);
+    blockorder::setChallenge(challenge);
     if (!challenge) InterlockedIncrement(&g_mapCloses);
 }
 
@@ -1230,10 +1637,396 @@ bool writeComments(void* challenge, const wchar_t* text, uint32_t length) {
     }
 }
 
+// The two map-load calls of GetModPackDesc the mod answers (the decoration's and the load
+// screen's); the others (the map's header when it is saved, the network's downloads) get the
+// game's own answer. Also left when the game's code throws through it.
+struct ModPackScope {
+    bool loadScreen;
+    explicit ModPackScope(bool screen) : loadScreen(g_modScopeLoadScreen) {
+        if (g_modScopeDepth++ == 0) g_modScopeThread = GetCurrentThreadId();
+        g_modScopeLoadScreen = screen;
+    }
+    ~ModPackScope() {
+        g_modScopeDepth--;
+        g_modScopeLoadScreen = loadScreen;
+    }
+};
+
+// A pack's name as the game keeps it ("Skins\Stadium\Mod\X.zip"). Guarded: a pack the game
+// freed must not take it down.
+bool packName(const void* pack, wchar_t* out, size_t size) {
+    out[0] = L'\0';
+    __try {
+        const FastStringInt* s = reinterpret_cast<const FastStringInt*>(static_cast<const BYTE*>(pack) + kPackDescName);
+        if (!s->text || s->size >= size) return false;
+        memcpy(out, s->text, s->size * sizeof(wchar_t));
+        out[s->size] = L'\0';
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out[0] = L'\0';
+        return false;
+    }
+}
+
+// The map's environment and decoration (names) and its own mod, read from the map as the game
+// loads it. False when the map doesn't look as expected (then the game's answer stays).
+bool readModPackAsk(const void* challenge, char* environment, char* decoration, size_t size, const void** own) {
+    environment[0] = decoration[0] = '\0';
+    *own = nullptr;
+    __try {
+        const BYTE* c = static_cast<const BYTE*>(challenge);
+        const IdGetStringFn name = reinterpret_cast<IdGetStringFn>(rebase(g_build->idGetString));
+        if (*reinterpret_cast<const uint32_t*>(c + kChallengeCollection) == 0xffffffffu) return false;
+        const char* e = name(c + kChallengeCollection, nullptr);
+        if (!e || !e[0]) return false;
+        strncpy_s(environment, size, e, _TRUNCATE);
+        if (*reinterpret_cast<const uint32_t*>(c + kChallengeDecoration) != 0xffffffffu) {
+            const char* d = name(c + kChallengeDecoration, nullptr);
+            if (d) strncpy_s(decoration, size, d, _TRUNCATE);
+        }
+        *own = *reinterpret_cast<const void* const*>(c + kChallengeMod);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The game's pack whose name ends in `tail` ("\Stadium\Mod\X.zip") and that is on disk: the
+// packs it found at start under Skins (CGameCtnApp::ScanDiskForSkins, the same objects a map
+// linking that file gets). Only read; null when it has none (a zip added while it runs).
+const void* findPack(const wchar_t* tail, size_t tailLength) {
+    __try {
+        const BYTE* manager = *reinterpret_cast<const BYTE* const*>(rebase(g_build->packManager));
+        if (!manager) return nullptr;
+        const uint32_t count = *reinterpret_cast<const uint32_t*>(manager + kPackManagerPacks);
+        const BYTE* const* packs = *reinterpret_cast<const BYTE* const* const*>(manager + kPackManagerPacks + 4);
+        if (!packs || count > 100000) return nullptr;
+        for (uint32_t i = 0; i < count; i++) {
+            const BYTE* pack = packs[i];
+            if (!pack || !*reinterpret_cast<const void* const*>(pack + kPackDescFile)) continue;
+            const FastStringInt* name = reinterpret_cast<const FastStringInt*>(pack + kPackDescName);
+            if (!name->text || name->size < tailLength) continue;
+            if (_wcsnicmp(name->text + (name->size - tailLength), tail, tailLength) == 0) return pack;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return nullptr;
+}
+
+std::wstring modTail(const char* environment, const std::wstring& file) {
+    std::wstring tail = L"\\";
+    for (const char* c = environment; *c; c++) tail += static_cast<wchar_t>(static_cast<unsigned char>(*c));
+    return tail + L"\\Mod\\" + file;
+}
+
+// "Skins\Stadium\Mod\X.zip" -> "X.zip" (UTF-8), for the log.
+std::string shortPackName(const wchar_t* name) {
+    const wchar_t* slash = wcsrchr(name, L'\\');
+    const wchar_t* start = slash ? slash + 1 : name;
+    return toUtf8(start, static_cast<int>(wcslen(start)));
+}
+
+// The pack the chooser wants for this map: `gamePack` is the game's own answer (the map's mod,
+// or the server's forced one). line: for the log ("Stadium: DarkBlue.zip (instead of ...)"),
+// wanted: the pack's short name ("none"). False when the map doesn't look as expected.
+bool decideModPack(void* challenge, void* gamePack, bool loadScreen, void** result, std::string& line, std::string& environmentName,
+                   std::string& wanted) {
+    char environment[64], decoration[64];
+    const void* own = nullptr;
+    *result = gamePack;
+    if (!readModPackAsk(challenge, environment, decoration, sizeof(environment), &own)) return false;
+    environmentName = environment;
+    wchar_t ownName[512] = {}, gameName[512] = {};
+    if (own) packName(own, ownName, 512);
+    if (gamePack) packName(gamePack, gameName, 512);
+    ModPackAsk ask;
+    ask.environment = environment;
+    ask.decoration = decoration;
+    ask.mapMod = own ? ownName : nullptr;
+    ask.loadScreen = loadScreen;
+    const ModPackAnswer answer = g_chooseModPack(ask);
+    const std::string instead = own ? " (instead of the map's " + shortPackName(ownName) + ")" : " (the map has none)";
+    const std::string game = gamePack ? shortPackName(gameName) : std::string("none");
+    line = std::string(environment) + ": ";
+    wanted = game;
+    if (answer.kind == ModPackAnswer::None) {
+        *result = nullptr;
+        wanted = "none";
+        line += "none" + (own ? instead : std::string());
+    } else if (answer.kind == ModPackAnswer::Pack) {
+        const std::wstring tail = modTail(environment, answer.file);
+        const std::string file = toUtf8(answer.file.c_str(), static_cast<int>(answer.file.size()));
+        if (void* pack = const_cast<void*>(findPack(tail.c_str(), tail.size()))) {
+            *result = pack;
+            wanted = file;
+            line += file + instead;
+        } else {
+            line += file + " is not loaded yet (restart TrackMania), map's own: " + game;
+        }
+    } else {
+        line += "map's own: " + game;
+    }
+    if (!answer.note.empty()) line += "; " + answer.note;
+    return true;
+}
+
+void* chooseModPack(void* challenge, void* gamePack) {
+    void* result = gamePack;
+    std::string line, environment, wanted;
+    if (!decideModPack(challenge, gamePack, g_modScopeLoadScreen, &result, line, environment, wanted)) return gamePack;
+    // Once a map: the load screen asks the same just before.
+    if (!g_modScopeLoadScreen) {
+        TMVS_LOG("modpack: %s", line.c_str());
+        g_modPackStatus = line;
+    }
+    return result;
+}
+
+void* __fastcall modPackDescDetour(void* challenge, void* edx, const void* forcedMods) {
+    void* const pack = g_modPackDesc(challenge, edx, forcedMods);
+    if (!g_chooseModPack || g_modScopeDepth <= 0 || g_modScopeThread != GetCurrentThreadId()) return pack;
+    return chooseModPack(challenge, pack);
+}
+
+// --- Resource packs switched while a map is loaded ------------------------------------------
+// The engine's own path for a mod file that arrives while a map runs (a map's mod downloaded
+// during a race): CSystemPackManager::UpdatePacksAvailabilityAndUse calls the waiting nod's
+// OnPackAvailable(old fid, new fid); CPlugBitmap::OnPackAvailable loads the image of the new fid
+// (CSystemArchiveNod::LoadFromFid) and gives it to the bitmap (SetImage: SetDirty, the renderer
+// makes its texture again). The live switch does the same for every texture of the environment:
+// the decoration's skin (the decoration article's CGameSkin, +0x58) lists the game's folders a
+// mod replaces (+0x34, CSystemFids), the folder's name in the zip (+0x40, CFastString) and the
+// file class (+0x4c); a file there is looked up in a pack as <name>\<path without extension>
+// (CSystemFidParameters::DoOneRemap, CSystemPackManager::SimpleGetPackElem), as at map load.
+// Nothing of the map, the network or the race is touched: only bitmaps' images, and the loaded
+// articles' cache key (s_LoadedArticles_DecoSkin), so that the next map knows what they show.
+constexpr size_t kArticleSkin = 0x58;          // CGameSkin*
+constexpr size_t kSkinFolders = 0x34;          // CFastBuffer<CMwNod*>: the game's folders (CSystemFids) a pack replaces
+constexpr size_t kSkinNames = 0x40;            // CFastBuffer<CFastString>: their names in a pack ("Image")
+constexpr size_t kSkinClassIds = 0x4c;         // CFastBuffer<ulong>: the class of their files
+constexpr size_t kFidsFiles = 0x1c;            // CSystemFids: CFastBuffer<CSystemFid*>
+constexpr size_t kFidsFolders = 0x28;          // CSystemFids: CFastBuffer<CSystemFids*>
+constexpr size_t kFidsName = 0x40;             // CSystemFids: CFastStringInt
+constexpr size_t kFidNod = 0x20;               // CSystemFid: the nod loaded from it
+constexpr size_t kFidVariants = 0x24;          // CSystemFid: CFastBuffer<CSystemFid*>, loaded with other fid parameters
+constexpr size_t kFidBase = 0x30;              // CSystemFid: a variant's base fid (0: none)
+constexpr size_t kFidFileName = 0x74;          // CSystemFidFile: CFastStringInt
+constexpr size_t kNodFid = 0x08;               // CMwNod: its fid
+constexpr size_t kImageBitmap = 0x14;          // CPlugFileImg: the bitmap it was last given to
+constexpr size_t kBitmapImage = 0x48;          // CPlugBitmap: its CPlugFileImg
+constexpr unsigned kClassFids = 0x0b009000, kClassFidFile = 0x0b00a000, kClassFileImg = 0x09025000;
+constexpr int kOnPackAvailableSlot = 0x50 / 4;
+using IsKindFn = int(__fastcall*)(const void*, void*, unsigned);
+using ArticleFromIdentFn = void*(__fastcall*)(void*, void*, const void*);
+using PackElemFn = void*(__fastcall*)(void*, void*, void*, const void*, unsigned, int*, int);
+using PackAvailableFn = void(__fastcall*)(void*, void*, void*, void*);
+struct FastString {
+    uint32_t size;
+    const char* text;
+};
+
+bool isKind(const void* nod, unsigned classId) {
+    if (!nod) return false;
+    void* const* table = *reinterpret_cast<void* const* const*>(nod);
+    return reinterpret_cast<IsKindFn>(table[4])(nod, nullptr, classId) != 0;
+}
+
+struct LiveSwap {
+    void* manager = nullptr;
+    void* from = nullptr;     // the pack the textures show now (null: the game's own)
+    void* to = nullptr;       // the one they get
+    unsigned classId = 0;
+    int files = 0, swapped = 0, unchanged = 0, failed = 0;
+};
+
+void* packFile(LiveSwap& s, void* pack, const char* path) {
+    if (!pack) return nullptr;
+    const FastString name = {static_cast<uint32_t>(strlen(path)), path};
+    int pending = 0;
+    return reinterpret_cast<PackElemFn>(rebase(g_build->packElem))(s.manager, nullptr, pack, &name, s.classId, &pending, 0);
+}
+
+// The bitmap showing `image` (null: none, or not a plain CPlugBitmap).
+void* bitmapOf(const void* image) {
+    if (!image || !isKind(image, kClassFileImg)) return nullptr;
+    void* bitmap = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(image) + kImageBitmap);
+    if (!bitmap || *reinterpret_cast<void* const*>(static_cast<const BYTE*>(bitmap) + kBitmapImage) != image) return nullptr;
+    void* const* table = *reinterpret_cast<void* const* const*>(bitmap);
+    if (reinterpret_cast<uintptr_t>(table[kOnPackAvailableSlot]) != rebase(g_build->bitmapPackAvailable)) return nullptr;
+    return bitmap;
+}
+
+// One file of a skin folder: every bitmap showing it (from the game's file, a variant of it, or
+// the pack shown now) gets the file of the new pack, or the game's own.
+// The nods loaded from a fid and from its variants (the same file loaded with other fid
+// parameters, as a skinned load does), up to the array's end.
+void addLoaded(void* fid, void** images, int& count, int size) {
+    if (!fid) return;
+    if (count < size) images[count++] = *reinterpret_cast<void**>(static_cast<BYTE*>(fid) + kFidNod);
+    const uint32_t variants = *reinterpret_cast<const uint32_t*>(static_cast<BYTE*>(fid) + kFidVariants);
+    void* const* variant = *reinterpret_cast<void* const* const*>(static_cast<BYTE*>(fid) + kFidVariants + 4);
+    for (uint32_t i = 0; variant && i < variants && count < size; i++) {
+        if (variant[i]) images[count++] = *reinterpret_cast<void**>(static_cast<BYTE*>(variant[i]) + kFidNod);
+    }
+}
+
+void swapFile(LiveSwap& s, void* fid, const char* path) {
+    void* target = packFile(s, s.to, path);
+    if (!target) target = fid;
+    constexpr int kMax = 24;
+    void* images[kMax] = {};
+    int count = 0;
+    addLoaded(fid, images, count, kMax);
+    addLoaded(packFile(s, s.from, path), images, count, kMax);
+    if (target != fid) addLoaded(target, images, count, kMax);
+    void* done[kMax] = {};
+    int doneCount = 0;
+    for (int i = 0; i < count; i++) {
+        void* bitmap = bitmapOf(images[i]);
+        if (!bitmap) continue;
+        bool seen = false;
+        for (int k = 0; k < doneCount; k++) seen |= done[k] == bitmap;
+        if (seen) continue;
+        done[doneCount++] = bitmap;
+        void* shown = *reinterpret_cast<void**>(static_cast<BYTE*>(images[i]) + kNodFid);
+        // A variant of the file is the file (other fid parameters, the same pixels).
+        if (shown == target || (shown && *reinterpret_cast<void**>(static_cast<BYTE*>(shown) + kFidBase) == target)) {
+            s.unchanged++;
+            continue;
+        }
+        __try {
+            void* const* table = *reinterpret_cast<void* const* const*>(bitmap);
+            reinterpret_cast<PackAvailableFn>(table[kOnPackAvailableSlot])(bitmap, nullptr, shown, target);
+            void* now = *reinterpret_cast<void**>(static_cast<BYTE*>(bitmap) + kBitmapImage);
+            void* nowFid = now ? *reinterpret_cast<void**>(static_cast<BYTE*>(now) + kNodFid) : nullptr;
+            if (nowFid && (nowFid == target || *reinterpret_cast<void**>(static_cast<BYTE*>(nowFid) + kFidBase) == target)) s.swapped++;
+            else s.failed++;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            s.failed++;
+        }
+    }
+}
+
+// A CFastStringInt as ASCII (file and folder names of the game's data are), false if too long.
+bool asciiName(const BYTE* fastString, char* out, size_t size) {
+    const FastStringInt* name = reinterpret_cast<const FastStringInt*>(fastString);
+    if (!name->text || name->size == 0 || name->size >= size) return false;
+    for (uint32_t i = 0; i < name->size; i++) out[i] = name->text[i] < 128 ? static_cast<char>(name->text[i]) : '_';
+    out[name->size] = '\0';
+    return true;
+}
+
+// The files of a game folder and its sub-folders, `prefix` their path in a pack so far
+// ("Image\" , "Image\Sub\").
+void swapFolder(LiveSwap& s, const BYTE* folder, const char* prefix, int depth) {
+    if (depth > 4) return;
+    const uint32_t files = *reinterpret_cast<const uint32_t*>(folder + kFidsFiles);
+    void* const* file = *reinterpret_cast<void* const* const*>(folder + kFidsFiles + 4);
+    for (uint32_t i = 0; file && i < files && i < 100000; i++) {
+        void* fid = file[i];
+        if (!fid || !isKind(fid, kClassFidFile) || *reinterpret_cast<void* const*>(static_cast<BYTE*>(fid) + kFidBase)) continue;
+        char name[260], path[600];
+        if (!asciiName(static_cast<BYTE*>(fid) + kFidFileName, name, sizeof(name))) continue;
+        if (char* dot = strrchr(name, '.')) *dot = '\0'; // the pack is searched by base name and class
+        snprintf(path, sizeof(path), "%s%s", prefix, name);
+        s.files++;
+        swapFile(s, fid, path);
+    }
+    const uint32_t folders = *reinterpret_cast<const uint32_t*>(folder + kFidsFolders);
+    const BYTE* const* sub = *reinterpret_cast<const BYTE* const* const*>(folder + kFidsFolders + 4);
+    for (uint32_t i = 0; sub && i < folders && i < 10000; i++) {
+        char name[260], path[600];
+        if (!sub[i] || !asciiName(sub[i] + kFidsName, name, sizeof(name))) continue;
+        snprintf(path, sizeof(path), "%s%s%s", prefix, name, name[strlen(name) - 1] == '\\' ? "" : "\\");
+        swapFolder(s, sub[i], path, depth + 1);
+    }
+}
+
+// Every folder of the decoration's skin. False: no skin, or the game's memory is not as expected.
+bool swapSkin(void* challenge, LiveSwap& s, char* why, size_t whySize) {
+    __try {
+        void* catalog = *reinterpret_cast<void* const*>(rebase(g_build->globalCatalog));
+        s.manager = *reinterpret_cast<void* const*>(rebase(g_build->packManager));
+        if (!catalog || !s.manager) {
+            strncpy_s(why, whySize, "no catalog or pack manager", _TRUNCATE);
+            return false;
+        }
+        void* article = reinterpret_cast<ArticleFromIdentFn>(rebase(g_build->articleFromIdent))(catalog, nullptr, static_cast<BYTE*>(challenge) + kChallengeDecoration);
+        const BYTE* skin = article ? *reinterpret_cast<const BYTE* const*>(static_cast<BYTE*>(article) + kArticleSkin) : nullptr;
+        if (!skin) {
+            strncpy_s(why, whySize, article ? "the decoration has no skin" : "the decoration was not found", _TRUNCATE);
+            return false;
+        }
+        const uint32_t count = *reinterpret_cast<const uint32_t*>(skin + kSkinFolders);
+        const BYTE* const* folders = *reinterpret_cast<const BYTE* const* const*>(skin + kSkinFolders + 4);
+        const FastString* names = *reinterpret_cast<const FastString* const*>(skin + kSkinNames + 4);
+        const unsigned* classes = *reinterpret_cast<const unsigned* const*>(skin + kSkinClassIds + 4);
+        if (count > 64 || *reinterpret_cast<const uint32_t*>(skin + kSkinNames) != count || *reinterpret_cast<const uint32_t*>(skin + kSkinClassIds) != count) {
+            strncpy_s(why, whySize, "the skin's folder lists don't match", _TRUNCATE);
+            return false;
+        }
+        for (uint32_t i = 0; i < count; i++) {
+            if (!folders[i] || !isKind(folders[i], kClassFids) || !names[i].text) continue;
+            char prefix[300];
+            const size_t n = names[i].size < 250 ? names[i].size : 250;
+            memcpy(prefix, names[i].text, n);
+            prefix[n] = '\0';
+            if (n && prefix[n - 1] != '\\') strcat_s(prefix, "\\");
+            s.classId = classes[i];
+            swapFolder(s, folders[i], prefix, 0);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        strncpy_s(why, whySize, "the game's memory is not as expected", _TRUNCATE);
+        return false;
+    }
+}
+
+// The pack the loaded articles were skinned with, if they are this map's decoration's (same
+// environment); false otherwise.
+bool shownPack(void* challenge, void** pack) {
+    __try {
+        const uint32_t* ident = reinterpret_cast<const uint32_t*>(rebase(g_build->decoIdent));
+        if (ident[1] != *reinterpret_cast<const uint32_t*>(static_cast<BYTE*>(challenge) + kChallengeDecoration + 4)) return false;
+        *pack = *reinterpret_cast<void* const*>(rebase(g_build->decoSkin));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void setShownPack(void* pack) {
+    __try {
+        *reinterpret_cast<void**>(rebase(g_build->decoSkin)) = pack;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void* gameModPack(void* challenge) {
+    __try {
+        const void* forced = g_app ? static_cast<const BYTE*>(g_app) + kAppForcedMods : nullptr;
+        return g_modPackDesc(challenge, nullptr, forced);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+bool liveSwitchReady() {
+    return g_modPackDesc && g_chooseModPack && g_build->articleFromIdent && !g_loadingChallenge && g_modScopeDepth == 0;
+}
+
+void __fastcall loadProgressDetour(void* self, void* edx, void* challenge) {
+    ModPackScope scope(true);
+    g_loadProgress(self, edx, challenge);
+}
+
 // SGameCtnIdentifier of the decoration at +0xc4: id, collection (the environment), author.
 void __fastcall loadDecorationDetour(void* self, void* edx, const void* forcedMods) {
     g_loadingChallenge = self;
-    g_loadDecoration(self, edx, forcedMods);
+    {
+        ModPackScope scope(false);
+        g_loadDecoration(self, edx, forcedMods);
+    }
     g_loadingChallenge = nullptr;
     readMapComments(self);
     const void* collection = static_cast<const BYTE*>(self) + 0xc8;
@@ -1292,6 +2085,7 @@ void __fastcall jumpTimeDetour(void* self, void* edx, float time) {
 void __fastcall raceTriggersDetour(void* self, void* edx, void* player, void* group) {
     // Called every frame of a race with the local (or watched) player: the neon trail's car.
     g_racePlayer = player;
+    g_race = self;
     g_racePlayerTick = GetTickCount();
     g_raceTriggers(self, edx, player, group);
 }
@@ -1480,9 +2274,50 @@ void __fastcall overlayZonesDetour(void* self, void* edx, void* zones, int flags
     if (g_callbacks.overlayEnd) g_callbacks.overlayEnd();
 }
 
+// The game's read-back of a video frame (CVisionViewportDx9::RenderFrameEnd, the same code in both
+// builds): when DoShoot flagged the frame (+0x54c) and the stream is open (+0x554) it copies its
+// colour surface to system memory (GetRenderTargetData: the GPU's whole frame must be done first,
+// 4 bytes a pixel over the bus, 33 MB at 4K), converts it on the CPU into the bottom-up BGR buffer
+// (CopySurfaceToImage) and hands that to VideoStreamWrite. With +0x150 set it spreads the three
+// steps over three flagged frames by a global phase: 0 read-back, 1 convert, 2 write. When the
+// mod hands over its own frame the game's pixels go nowhere: +0x150 and phase 2 for that one call
+// skip straight to the write (aviVideoWriteDetour takes the mod's frame), both restored after.
+// The .dds path (+0x558) and a frame without the stream are left alone.
+constexpr size_t kViewportVideoAsync = 0x150;
+constexpr size_t kViewportVideoFile = 0x160;   // CVisionVideoAvi*
+constexpr size_t kViewportVideoAdd = 0x54c;    // VideoAddCurrentFrame
+constexpr size_t kViewportVideoStream = 0x554; // the stream is open
+constexpr size_t kViewportVideoDds = 0x558;
+constexpr size_t kReadPhaseCheck = 0x322;      // mov dword ptr [phase], ebp (stream open)
+volatile LONG* g_readPhase = nullptr;          // checked at install, null: never skipped
+unsigned g_readbacksSkipped = 0;
+
+bool skipGameReadback(void* viewport) {
+    if (!g_readPhase || !g_videoFile.ownFrameReady) return false;
+    BYTE* v = static_cast<BYTE*>(viewport);
+    if (!readable(v + kViewportVideoAsync, kViewportVideoDds + sizeof(int) - kViewportVideoAsync)) return false;
+    const auto at = [v](size_t offset) { return reinterpret_cast<int*>(v + offset); };
+    if (*at(kViewportVideoAdd) == 0 || *at(kViewportVideoStream) == 0 || *at(kViewportVideoDds) != 0 || *at(kViewportVideoAsync) != 0 ||
+        *g_readPhase != 0)
+        return false;
+    void* file = *reinterpret_cast<void**>(v + kViewportVideoFile);
+    if (!file || !g_videoFile.ownFrameReady(file)) return false;
+    *at(kViewportVideoAsync) = 1;
+    *g_readPhase = 2;
+    if (g_readbacksSkipped++ == 0)
+        TMVS_LOG("engine: the game's read-back of its video frames skipped (GetRenderTargetData and the CPU conversion): the mod hands over its own");
+    return true;
+}
+
 void __fastcall frameEndDetour(void* self, void* edx) {
     if (g_callbacks.frameEnd) g_callbacks.frameEnd();
+    // After the plugin's frameEnd: its frame for this write is finished by then.
+    const bool skipped = skipGameReadback(self);
     g_frameEnd(self, edx);
+    if (skipped) {
+        *reinterpret_cast<int*>(static_cast<BYTE*>(self) + kViewportVideoAsync) = 0;
+        *g_readPhase = 0; // the write wrapped it to 0 already
+    }
 }
 
 // SHmsCameraLocation: +0x00 GmIso4 camera location, +0x60 GmMat4 driver view matrix.
@@ -1494,6 +2329,55 @@ void __fastcall viewMatrixDetour(void* self, void* edx, void* location) {
     g_camera.hasView = true;
     memcpy(&g_lastView, base + 0x60, sizeof(Matrix4)); // what SetTransform(D3DTS_VIEW) gets
     g_lastViewSet = true;
+}
+
+// The game's supersampling sample this camera is being rendered for (index, count), false when
+// it has none. The projection is computed after CHmsCamera::ZClipCompute and before the render's
+// RenderCameraBegin (RenderCameraNormal, TransformStackCameraPush), so the fields are those of
+// the render about to start.
+bool gameSampleOf(const void* camera, int& index, int& count) {
+    const BYTE* c = static_cast<const BYTE*>(camera);
+    if (!c || !readable(c + kCameraSuperSample, 5 * sizeof(int))) return false;
+    const int* s = reinterpret_cast<const int*>(c + kCameraSuperSample);
+    if (s[0] == 0 || s[3] < 1 || s[4] < 1 || s[3] > 11 || s[4] > 11 || s[1] < 0 || s[2] < 0 || s[1] >= s[3] || s[2] >= s[4]) return false;
+    index = s[2] * s[3] + s[1];
+    count = s[3] * s[4];
+    return true;
+}
+
+// The lens offset on a perspective projection (after zoom, tiles and jitter, so with their
+// scale). D3D row vectors, clip = [x y z 1] P, view space z forward in metres (P23 = 1 makes
+// w = z). The eye moved by a and the image re-aimed so the plane z = F stays put means
+// x -> x + a.x (z / F - 1), y likewise: row 2 gains (a.x row 0 + a.y row 1) / F, row 3 loses
+// a.x row 0 + a.y row 1. Every column, so nothing is assumed about the other terms.
+void applyLens(float* m, const void* camera) {
+    int index = -1, count = 0;
+    g_gameSample[0] = -1;
+    g_gameSample[1] = 0;
+    const bool game = gameSampleOf(camera, index, count);
+    if (game) {
+        g_gameSample[0] = index;
+        g_gameSample[1] = count;
+    }
+    g_lensUsed = -1;
+    if (g_lensCount <= 0 || !(g_lensFocus > 0.0f)) return;
+    const int entry = game ? index % g_lensCount : static_cast<int>(g_lensRenders++ % static_cast<unsigned>(g_lensCount));
+    const float ax = g_lensXY[entry][0], ay = g_lensXY[entry][1];
+    g_lensUsed = entry;
+    if (ax == 0.0f && ay == 0.0f) return;
+    if (!g_loggedLens) {
+        g_loggedLens = true;
+        TMVS_LOG("engine: lens offsets on the main camera's projection (%d of them, focus %.2f m, %s)", g_lensCount, g_lensFocus,
+                 game ? "one per sample of the game's supersampling" : "one per render in turn");
+    }
+    float* p = m + 16;
+    for (int c = 0; c < 4; c++) {
+        const float shift = ax * p[c] + ay * p[4 + c];
+        p[8 + c] += shift / g_lensFocus;
+        p[12 + c] -= shift;
+        m[c * 4 + 2] = p[8 + c]; // the engine's GmMat4 (the transpose) at m[0]
+        m[c * 4 + 3] = p[12 + c];
+    }
 }
 
 // SHmsCameraProjection: +0x00 GmMat4 projection, +0x40 transposed copy.
@@ -1536,7 +2420,9 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
         m[16 + 8] += g_jitter[0];
         m[16 + 9] += g_jitter[1];
     }
-    memcpy(&g_camera.projection, projection, sizeof(Matrix4));
+    if (main && m[14] == 1.0f && m[16 + 11] == 1.0f) applyLens(m, camera);
+    // The D3D layout, as the header says (m[0] holds the engine's GmMat4, its transpose).
+    memcpy(&g_camera.projection, m + 16, sizeof(Matrix4));
     g_camera.hasProjection = true;
     memcpy(&g_lastProjection, m + 16, sizeof(Matrix4)); // the D3D layout SetTransform(D3DTS_PROJECTION) gets
     g_lastProjectionSet = true;
@@ -1593,10 +2479,21 @@ bool install(const Callbacks& callbacks) {
     g_freeCamSet = reinterpret_cast<FreeCamFn>(inlineHook(kFreeCamSite, reinterpret_cast<void*>(&freeCamDetour)));
     g_zclip = reinterpret_cast<ZClipFn>(inlineHook(kZClipSite, reinterpret_cast<void*>(&zclipDetour)));
     g_drawShader = reinterpret_cast<DrawShaderFn>(inlineHook(kDrawShaderSite, reinterpret_cast<void*>(&drawShaderDetour)));
+    blockorder::setIdNameFunction(rebase(g_build->idGetString));
     g_drawPass = reinterpret_cast<DrawPassFn>(inlineHook(kDrawPassSite, reinterpret_cast<void*>(&drawPassDetour)));
     g_lensFlare = reinterpret_cast<LensFlareFn>(inlineHook(kLensFlareSite, reinterpret_cast<void*>(&lensFlareDetour)));
     g_readInput = reinterpret_cast<ReadInputFn>(inlineHook(kReadInputSite, reinterpret_cast<void*>(&readInputDetour)));
     g_interfaceSet = reinterpret_cast<InterfaceSetFn>(inlineHook(kInterfaceSetSite, reinterpret_cast<void*>(&interfaceSetDetour)));
+    g_mediaInterface = reinterpret_cast<MediaInterfaceFn>(inlineHook(kMediaInterfaceSite, reinterpret_cast<void*>(&mediaInterfaceDetour)));
+    if (g_mediaInterface) {
+        TMVS_LOG("engine: the replay editor's interface hook installed (Hide editor)");
+    } else {
+        const BYTE* code = reinterpret_cast<const BYTE*>(rebase(g_build->sites[kMediaInterface]));
+        BYTE bytes[8] = {};
+        if (readable(code, 8)) memcpy(bytes, code, 8);
+        TMVS_LOG("engine: the replay editor's interface hook does not match this executable (bytes %02x %02x %02x %02x %02x %02x %02x %02x): Hide editor off",
+                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]);
+    }
     g_loadScene = reinterpret_cast<LoadSceneFn>(inlineHook(kLoadSceneSite, reinterpret_cast<void*>(&loadSceneDetour)));
     g_clipTriggers = reinterpret_cast<ClipTriggersFn>(inlineHook(kClipTriggersSite, reinterpret_cast<void*>(&clipTriggersDetour)));
     g_jumpTime = reinterpret_cast<JumpTimeFn>(inlineHook(kJumpTimeSite, reinterpret_cast<void*>(&jumpTimeDetour)));
@@ -1604,6 +2501,32 @@ bool install(const Callbacks& callbacks) {
     g_cacheUpToDate = reinterpret_cast<CacheFn>(inlineHook(kCacheUpToDateSite, reinterpret_cast<void*>(&cacheUpToDateDetour)));
     g_cacheSave = reinterpret_cast<CacheFn>(inlineHook(kCacheSaveSite, reinterpret_cast<void*>(&cacheSaveDetour)));
     g_baseRgb = reinterpret_cast<BaseRgbFn>(inlineHook(kBaseRgbSite, reinterpret_cast<void*>(&baseRgbDetour)));
+    // Environment mods: the answer and the load screen's scope together, or neither (the
+    // decoration's scope is the hook above).
+    // A site another mod (TMUnlimiter) already jumps away from is fine: inlineHook chains onto it.
+    {
+        const auto hookable = [](const InlineSite& site) {
+            if (prologueMatches(site)) return true;
+            const BYTE* code = reinterpret_cast<const BYTE*>(rebase(g_build->sites[site.id]));
+            return readable(code, 6) && (code[0] == 0xE9 || code[0] == 0xEB || (code[0] == 0xFF && code[1] == 0x25) || (code[0] == 0x68 && code[5] == 0xC3));
+        };
+        const bool desc = hookable(kModPackDescSite), progress = hookable(kLoadProgressSite);
+        const bool manager = readable(reinterpret_cast<const void*>(rebase(g_build->packManager)), 4);
+        if (g_loadDecoration && desc && progress && manager) {
+            g_modPackDesc = reinterpret_cast<ModPackDescFn>(inlineHook(kModPackDescSite, reinterpret_cast<void*>(&modPackDescDetour)));
+            g_loadProgress = reinterpret_cast<LoadProgressFn>(inlineHook(kLoadProgressSite, reinterpret_cast<void*>(&loadProgressDetour)));
+            if (!g_modPackDesc || !g_loadProgress) TMVS_LOG("modpack: hooking failed (GetModPackDesc %s, LoadProgress %s): resource packs off", g_modPackDesc ? "ok" : "no", g_loadProgress ? "ok" : "no");
+        } else {
+            const BYTE* a = reinterpret_cast<const BYTE*>(rebase(g_build->sites[kModPackDesc]));
+            const BYTE* b = reinterpret_cast<const BYTE*>(rebase(g_build->sites[kLoadProgress]));
+            BYTE fa[8] = {}, fb[8] = {};
+            if (readable(a, 8)) memcpy(fa, a, 8);
+            if (readable(b, 8)) memcpy(fb, b, 8);
+            TMVS_LOG("modpack: the game's mod code is not where expected: resource packs off (decoration hook %s, GetModPackDesc %s [%02x %02x %02x %02x %02x %02x %02x %02x], LoadProgress %s [%02x %02x %02x %02x %02x %02x %02x %02x], pack manager %s)",
+                     g_loadDecoration ? "ok" : "missing", desc ? "ok" : "differs", fa[0], fa[1], fa[2], fa[3], fa[4], fa[5], fa[6], fa[7],
+                     progress ? "ok" : "differs", fb[0], fb[1], fb[2], fb[3], fb[4], fb[5], fb[6], fb[7], manager ? "ok" : "unreadable");
+        }
+    }
     // The export's file: all six or none (a frame written without the open would go nowhere).
     {
         const struct {
@@ -1620,6 +2543,13 @@ bool install(const Callbacks& callbacks) {
         for (const auto& a : avi) all = all && prologueMatches(*a.site);
         if (all) {
             for (const auto& a : avi) *a.original = inlineHook(*a.site, a.detour);
+            // The read-back's phase: only where RenderFrameEnd writes exactly this global.
+            const BYTE* check = reinterpret_cast<const BYTE*>(rebase(g_build->slots[kFrameEnd]) + kReadPhaseCheck);
+            const uint32_t phase = static_cast<uint32_t>(rebase(g_build->videoReadPhase));
+            if (readable(check, 6) && check[0] == 0x89 && check[1] == 0x2d && memcmp(check + 2, &phase, 4) == 0)
+                g_readPhase = reinterpret_cast<volatile LONG*>(rebase(g_build->videoReadPhase));
+            else
+                TMVS_LOG("engine: RenderFrameEnd's read-back phase not where expected: the game's read-back stays");
         } else {
             TMVS_LOG("engine: the video export's file writer does not match this executable: MP4 export off");
         }
@@ -1637,6 +2567,91 @@ bool install(const Callbacks& callbacks) {
 
 bool active() {
     return g_active;
+}
+
+void setModPackChooser(ModPackAnswer (*choose)(const ModPackAsk& ask)) {
+    g_chooseModPack = choose;
+}
+
+bool modPacksHooked() {
+    return g_modPackDesc != nullptr;
+}
+
+std::string modPackStatus() {
+    return g_modPackStatus;
+}
+
+bool modPackKnown(const char* environment, const std::wstring& file) {
+    if (!g_modPackDesc) return false;
+    const std::wstring tail = modTail(environment, file);
+    return findPack(tail.c_str(), tail.size()) != nullptr;
+}
+
+ModPackLive modPackLive() {
+    ModPackLive live;
+    void* challenge = currentChallenge();
+    if (!challenge || !liveSwitchReady()) return live;
+    void* shown = nullptr;
+    if (!shownPack(challenge, &shown)) return live;
+    void* wanted = nullptr;
+    std::string line;
+    if (!decideModPack(challenge, gameModPack(challenge), false, &wanted, line, live.environment, live.wanted)) return live;
+    wchar_t name[512] = {};
+    live.shown = shown && packName(shown, name, 512) ? shortPackName(name) : std::string("none");
+    live.possible = true;
+    live.differs = wanted != shown;
+    return live;
+}
+
+bool applyModPackNow(std::string& status) {
+    void* challenge = currentChallenge();
+    if (!challenge || !liveSwitchReady()) {
+        status = challenge ? "Not now (a map is loading)." : "No map loaded.";
+        return false;
+    }
+    void* shown = nullptr;
+    if (!shownPack(challenge, &shown)) {
+        status = "The loaded textures are not this map's.";
+        TMVS_LOG("modpack: live: the loaded articles belong to another environment, nothing switched");
+        return false;
+    }
+    void* wanted = nullptr;
+    std::string line, environment, wantedName;
+    if (!decideModPack(challenge, gameModPack(challenge), false, &wanted, line, environment, wantedName)) {
+        status = "The map doesn't look as expected.";
+        return false;
+    }
+    wchar_t name[512] = {};
+    const std::string shownName = shown && packName(shown, name, 512) ? shortPackName(name) : std::string("none");
+    if (wanted == shown) {
+        status = environment + ": " + shownName + " already.";
+        return true;
+    }
+    LiveSwap swap;
+    swap.from = shown;
+    swap.to = wanted;
+    char why[128] = "";
+    const DWORD start = GetTickCount();
+    const bool ok = swapSkin(challenge, swap, why, sizeof(why));
+    const DWORD ms = GetTickCount() - start;
+    if (!ok) {
+        TMVS_LOG("modpack: live: %s: %s -> %s failed: %s (%d textures swapped before)", environment.c_str(), shownName.c_str(), wantedName.c_str(), why,
+                 swap.swapped);
+        status = std::string("Failed: ") + why + ".";
+        if (swap.swapped == 0) return false;
+    }
+    // The loaded articles show the new pack now: the next map with it keeps them, one with
+    // another pack loads them again (CGameCtnArticle::PrepareCacheForLoading compares this).
+    setShownPack(wanted);
+    TMVS_LOG("modpack: live: %s: %s -> %s: %d textures swapped, %d already right, %d failed (%d files in the skin's folders, %lu ms)",
+             environment.c_str(), shownName.c_str(), wantedName.c_str(), swap.swapped, swap.unchanged, swap.failed, swap.files,
+             static_cast<unsigned long>(ms));
+    char text[256];
+    snprintf(text, sizeof(text), "%s: %s, %d textures switched%s.", environment.c_str(), wantedName.c_str(), swap.swapped,
+             swap.failed ? (", " + std::to_string(swap.failed) + " failed").c_str() : "");
+    status = text;
+    g_modPackStatus = line + " (switched live)";
+    return ok;
 }
 
 void setNightAtLoad(bool (*decide)(float dayTime)) {
@@ -1727,6 +2742,30 @@ void flareCounts(unsigned& other, unsigned& sun, unsigned& hidden) {
 
 const CameraInfo& currentCamera() {
     return g_camera;
+}
+
+// The minimap's block reading (misc/blockmesh.cpp). TMNF from its map file's symbols (Ghidra);
+// TMUF ported with tools/port_address.py (each function confirmed over 256 bytes; the two tree
+// vtables ported by their GetChild slot, slot 31 read from the TMUF vtable; s_Declarations from
+// StaticSetStream01Decl's mov ecx, imm32 at the same place in the ported function).
+constexpr MeshReadAddresses kMeshReadAddresses[] = {
+    {0x0075d060, 0x00848790, 0x0086aac0, 0x0086aea0, 0x0097c0d0, 0x0097c190, 0x0097be50, 0x00d75ae4}, // Nations Forever
+    {0x00849580, 0x008488e0, 0x0086b260, 0x0086b5e0, 0x0097bdc0, 0x0097be80, 0x0097bb40, 0x00d77144}, // United Forever
+};
+static_assert(sizeof(kMeshReadAddresses) / sizeof(kMeshReadAddresses[0]) == sizeof(kBuilds) / sizeof(kBuilds[0]), "one entry per build");
+
+bool meshReadAddresses(MeshReadAddresses& out) {
+    if (!g_build) return false;
+    const MeshReadAddresses& a = kMeshReadAddresses[g_build - kBuilds];
+    out.treeChildCount = rebase(a.treeChildCount);
+    out.treeGetChild = rebase(a.treeGetChild);
+    out.mipChildCount = rebase(a.mipChildCount);
+    out.mipGetChild = rebase(a.mipGetChild);
+    out.geometryStatic = rebase(a.geometryStatic);
+    out.geometrySplits = rebase(a.geometrySplits);
+    out.geometrySubVisuals = rebase(a.geometrySubVisuals);
+    out.declarations = rebase(a.declarations);
+    return true;
 }
 
 bool stadium() {
@@ -1835,8 +2874,409 @@ bool carLocation(float position[3], float up[3]) {
     }
 }
 
+namespace {
+
+// The location a CGameMobil is drawn at (GmIso4: 9 floats, then the position), or null: not in
+// the scene, or its vehicle's slot 32 is not this build's GetInterpolatedLocation. vehicle: its
+// CSceneMobil. Inside __try (the pointers may be stale).
+const float* drawnLocation(const BYTE* gameMobil, void*& vehicle) {
+    if (!gameMobil || *reinterpret_cast<const int*>(gameMobil + kGameMobilSceneId) == -1) return nullptr;
+    vehicle = *reinterpret_cast<void* const*>(gameMobil + kGameMobilScene);
+    if (!vehicle) return nullptr;
+    void* const* table = *reinterpret_cast<void* const* const*>(vehicle);
+    if (!table || reinterpret_cast<uintptr_t>(table[kInterpolatedLocationSlot]) != rebase(g_build->interpolatedLocation)) return nullptr;
+    using LocationFn = const float*(__fastcall*)(void*, void*, void*);
+    const float* iso = reinterpret_cast<LocationFn>(table[kInterpolatedLocationSlot])(vehicle, nullptr, nullptr);
+    if (!iso) return nullptr;
+    for (int i = 0; i < 12; i++) {
+        if (!(fabsf(iso[i]) < 1e5f)) return nullptr;
+    }
+    return iso;
+}
+
+// The CGameMobil with this id in the clip's scene, or null.
+const BYTE* sceneMobil(const BYTE* scene, DWORD id) {
+    if (!scene || id == 0xffffffffu) return nullptr;
+    const DWORD count = *reinterpret_cast<const DWORD*>(scene + kSceneMobils);
+    const BYTE* const* mobils = *reinterpret_cast<const BYTE* const* const*>(scene + kSceneMobils + 4);
+    for (DWORD i = 0; mobils && i < count && i < 4096; i++) {
+        if (mobils[i] && *reinterpret_cast<const DWORD*>(mobils[i] + kGameMobilId) == id) return mobils[i];
+    }
+    return nullptr;
+}
+
+// The car a clip player's cameras show: the mobil the game cameras follow, else the local
+// player's ghost (ghost id 0), else the first ghost of the clip. Inside __try.
+const BYTE* clipCar(const BYTE* clip, int& which) {
+    const BYTE* context = *reinterpret_cast<const BYTE* const*>(clip + kClipContext);
+    const BYTE* scene = context ? *reinterpret_cast<const BYTE* const*>(context + kContextScene) : nullptr;
+    const BYTE* cameras = context ? *reinterpret_cast<const BYTE* const*>(context + kContextCameraSet) : nullptr;
+    which = 0;
+    if (cameras) {
+        if (const BYTE* m = sceneMobil(scene, *reinterpret_cast<const DWORD*>(cameras + kCameraSetFollowed))) return m;
+    }
+    which = 1;
+    if (const BYTE* ghost = *reinterpret_cast<const BYTE* const*>(clip + kClipLocalGhost)) {
+        if (const BYTE* m = *reinterpret_cast<const BYTE* const*>(ghost + kGhostMobil)) return m;
+    }
+    if (const BYTE* m = sceneMobil(scene, *reinterpret_cast<const DWORD*>(clip + kClipLocalMobilId))) return m;
+    which = 2;
+    const DWORD blocks = *reinterpret_cast<const DWORD*>(clip + kClipGhostBlocks);
+    const BYTE* const* block = *reinterpret_cast<const BYTE* const* const*>(clip + kClipGhostBlocks + 4);
+    if (blocks && block && block[0]) {
+        if (const BYTE* ghost = *reinterpret_cast<const BYTE* const*>(block[0] + kBlockGhost)) {
+            return *reinterpret_cast<const BYTE* const*>(ghost + kGhostMobil);
+        }
+    }
+    return nullptr;
+}
+
+// The wheels' contact points of a CSceneVehicleCar in the car's axes (right, up, forward; m from
+// its drawn position), only while it stands (async speed below 0.5 m/s: the physics state is a
+// step behind the drawn car, at speed that would move them). False: not that class in this
+// build, not standing, not 4 wheels. Inside __try.
+// model: the model's axis for right, up, forward (columns of the car's matrix) and forward's sign.
+bool standingWheels(void* vehicle, const float* iso, const float axes[3][3], const int model[3], float forwardSign, float local[4][3]) {
+    void* const* table = *reinterpret_cast<void* const* const*>(vehicle);
+    if (!g_build->wheelCount || reinterpret_cast<uintptr_t>(table[kWheelCountSlot]) != rebase(g_build->wheelCount) ||
+        reinterpret_cast<uintptr_t>(table[kWheelContactSlot]) != rebase(g_build->wheelContact) ||
+        reinterpret_cast<uintptr_t>(table[kAsyncSpeedSlot]) != rebase(g_build->asyncSpeed))
+        return false;
+    const BYTE* car = static_cast<const BYTE*>(vehicle);
+    const float* speed = reinterpret_cast<const float*>(car + kVehicleAsyncSpeed);
+    if (!(speed[0] * speed[0] + speed[1] * speed[1] + speed[2] * speed[2] < 0.25f)) return false;
+    if (*reinterpret_cast<const DWORD*>(car + kVehicleWheels) != 4) return false;
+    const BYTE* wheels = *reinterpret_cast<const BYTE* const*>(car + kVehicleWheels + 4);
+    if (!wheels) return false;
+    // The contact points are in the car's own frame (my test: read as world points they came out
+    // as the car's position, 686 / -90 / -170 m, with the track and wheelbase swapped); world
+    // points (far from the origin) are still taken as such.
+    bool own = true;
+    for (int k = 0; k < 4; k++) {
+        const float* p = reinterpret_cast<const float*>(wheels + k * kWheelSize + kWheelContact);
+        own = own && fabsf(p[0]) < 10.0f && fabsf(p[1]) < 10.0f && fabsf(p[2]) < 10.0f;
+    }
+    for (int k = 0; k < 4; k++) {
+        const float* p = reinterpret_cast<const float*>(wheels + k * kWheelSize + kWheelContact);
+        if (own) {
+            local[k][0] = p[model[0]];
+            local[k][1] = p[model[1]];
+            local[k][2] = p[model[2]] * forwardSign;
+        } else {
+            const float d[3] = {p[0] - iso[9], p[1] - iso[10], p[2] - iso[11]};
+            for (int a = 0; a < 3; a++) local[k][a] = d[0] * axes[a][0] + d[1] * axes[a][1] + d[2] * axes[a][2];
+        }
+    }
+    return true;
+}
+
+// The Stadium car's tyres (estimates from its model: a long car, the front wheels far ahead of
+// the cockpit; the drawn position is about the height of the wheel centres): until the map's own
+// car was measured standing at a start.
+constexpr float kFrontAxle = 1.7f;     // m ahead of the drawn position
+constexpr float kRearAxle = -1.2f;     // m behind it (wheelbase 2.9 m)
+constexpr float kHalfTrack = 0.86f;    // half the track (1.72 m)
+constexpr float kContactHeight = -0.35f; // the road under the tyres (wheel radius)
+
+} // namespace
+
+bool carPose(CarPose& pose) {
+    pose = CarPose();
+    if (!g_build || !g_build->interpolatedLocation) return false;
+    const bool race = g_racePlayer && GetTickCount() - g_racePlayerTick <= 300;
+    // Counted in frames (one frame of a 4K export with supersampling takes seconds).
+    const bool clip = !race && g_clipPlayer && g_engineFrames - g_clipPlayerFrame <= 3;
+    if (!race && !clip) return false;
+    const float* iso = nullptr;
+    void* vehicle = nullptr;
+    int which = -1;
+    __try {
+        const BYTE* mobil = race ? *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(g_racePlayer) + kPlayerMobil)
+                                 : clipCar(static_cast<const BYTE*>(g_clipPlayer), which);
+        iso = drawnLocation(mobil, vehicle);
+        if (!iso) return false;
+        memcpy(pose.position, iso + 9, sizeof(pose.position));
+        float column[3][3], length[3];
+        for (int c = 0; c < 3; c++) {
+            for (int r = 0; r < 3; r++) column[c][r] = iso[r * 3 + c];
+            length[c] = sqrtf(column[c][0] * column[c][0] + column[c][1] * column[c][1] + column[c][2] * column[c][2]);
+            if (!(length[c] > 1e-3f && length[c] < 1e3f)) return false;
+            for (int r = 0; r < 3; r++) column[c][r] /= length[c];
+        }
+        // My check of the forward axis from the car's motion: the column the car moves along
+        // (within 25 degrees) while it moves 0.3 m or more from one call to the next, counted in
+        // races and exports (the replay editor's clock also runs backwards). After 120 such
+        // calls, the column with 90 % of them is logged, and taken if it is not +z (my reading
+        // of the engine above would be wrong then).
+        static float s_last[3] = {};
+        static bool s_haveLast = false;
+        static int s_votes[6] = {}, s_total = 0;
+        static int s_forward = kForwardColumn * 2; // column * 2 + (negated)
+        static bool s_decided = false;
+        const bool counted = race || g_engineFrames - g_shootFrame <= 3;
+        if (s_haveLast && counted && !s_decided) {
+            const float d[3] = {pose.position[0] - s_last[0], pose.position[1] - s_last[1], pose.position[2] - s_last[2]};
+            const float moved = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            if (moved > 0.3f && moved < 20.0f) {
+                for (int c = 0; c < 3; c++) {
+                    const float along = (d[0] * column[c][0] + d[1] * column[c][1] + d[2] * column[c][2]) / moved;
+                    if (fabsf(along) > 0.906f) {
+                        s_votes[c * 2 + (along < 0.0f ? 1 : 0)]++;
+                        s_total++;
+                    }
+                }
+                if (s_total >= 120) {
+                    int best = 0;
+                    for (int k = 1; k < 6; k++) best = s_votes[k] > s_votes[best] ? k : best;
+                    s_decided = true;
+                    if (s_votes[best] * 10 >= s_total * 9) s_forward = best;
+                    TMVS_LOG("engine: the car's forward from its motion: column %d%s in %d of %d moves (the engine's VehicleFrontSpeedGet: column %d)%s",
+                             best / 2, (best & 1) ? " negated" : "", s_votes[best], s_total, kForwardColumn,
+                             s_forward == kForwardColumn * 2 ? ", the same: kept"
+                                                             : (s_forward == best ? ", NOT the same: the spray takes the measured one"
+                                                                                  : ", no clear winner: kept the engine's"));
+                }
+            }
+        }
+        memcpy(s_last, pose.position, sizeof(s_last));
+        s_haveLast = true;
+        const int f = s_forward / 2;
+        const float sign = (s_forward & 1) ? -1.0f : 1.0f;
+        const int u = f == 1 ? 2 : 1; // the model's y (when it isn't forward)
+        const int r = 3 - f - u;
+        for (int k = 0; k < 3; k++) {
+            pose.forward[k] = column[f][k] * sign;
+            pose.up[k] = column[u][k];
+            pose.right[k] = column[r][k];
+        }
+        // The map's car standing (at the start of a race): its tyres' contact points, kept per
+        // environment for the session (the export's replays then have them too). Each wheel
+        // within 3 cm over 15 calls, and like a car: two ahead, two behind, a pair on each side.
+        pose.frontAxle = kFrontAxle;
+        pose.rearAxle = kRearAxle;
+        pose.halfTrack = kHalfTrack;
+        pose.contactHeight = kContactHeight;
+        static char s_measuredFor[32] = {};
+        static float s_measured[4] = {};
+        static float s_sum[4][3] = {}, s_first[4][3] = {};
+        static int s_samples = 0;
+        static char s_rejectedFor[32] = {};
+        if (s_measuredFor[0] && !strcmp(s_measuredFor, g_environment)) {
+            memcpy(&pose.frontAxle, s_measured, sizeof(s_measured));
+            pose.wheelsMeasured = true;
+        } else if (race && g_environment[0]) {
+            const float axes[3][3] = {{pose.right[0], pose.right[1], pose.right[2]},
+                                      {pose.up[0], pose.up[1], pose.up[2]},
+                                      {pose.forward[0], pose.forward[1], pose.forward[2]}};
+            float local[4][3];
+            const int model[3] = {r, u, f};
+            if (standingWheels(vehicle, iso, axes, model, sign, local)) {
+                bool steady = true;
+                for (int k = 0; k < 4 && s_samples > 0; k++) {
+                    for (int a = 0; a < 3; a++) steady = steady && fabsf(local[k][a] - s_first[k][a]) < 0.03f;
+                }
+                if (!steady || s_samples == 0) {
+                    memcpy(s_first, local, sizeof(s_first));
+                    memset(s_sum, 0, sizeof(s_sum));
+                    s_samples = 0;
+                }
+                for (int k = 0; k < 4; k++) {
+                    for (int a = 0; a < 3; a++) s_sum[k][a] += local[k][a];
+                }
+                if (++s_samples >= 15) {
+                    float m[4][3];
+                    for (int k = 0; k < 4; k++) {
+                        for (int a = 0; a < 3; a++) m[k][a] = s_sum[k][a] / s_samples;
+                    }
+                    s_samples = 0;
+                    // Front: the two farthest ahead.
+                    int order[4] = {0, 1, 2, 3};
+                    for (int i = 0; i < 4; i++) {
+                        for (int j = i + 1; j < 4; j++) {
+                            if (m[order[j]][2] > m[order[i]][2]) {
+                                const int t = order[i];
+                                order[i] = order[j];
+                                order[j] = t;
+                            }
+                        }
+                    }
+                    const float* a0 = m[order[0]];
+                    const float* a1 = m[order[1]];
+                    const float* b0 = m[order[2]];
+                    const float* b1 = m[order[3]];
+                    const float front = (a0[2] + a1[2]) * 0.5f, rear = (b0[2] + b1[2]) * 0.5f;
+                    const float track = (fabsf(a0[0] - a1[0]) + fabsf(b0[0] - b1[0])) * 0.25f;
+                    const float height = (a0[1] + a1[1] + b0[1] + b1[1]) * 0.25f;
+                    const bool sides = a0[0] * a1[0] < 0.0f && b0[0] * b1[0] < 0.0f;
+                    const bool like = sides && front > 0.3f && front < 3.5f && rear < -0.2f && rear > -3.5f && track > 0.4f && track < 1.5f &&
+                                      height < 0.2f && height > -1.2f;
+                    if (like) {
+                        strncpy(s_measuredFor, g_environment, sizeof(s_measuredFor) - 1);
+                        s_measured[0] = front;
+                        s_measured[1] = rear;
+                        s_measured[2] = track;
+                        s_measured[3] = height;
+                        memcpy(&pose.frontAxle, s_measured, sizeof(s_measured));
+                        pose.wheelsMeasured = true;
+                    }
+                    if (like || strcmp(s_rejectedFor, g_environment)) {
+                        if (!like) strncpy(s_rejectedFor, g_environment, sizeof(s_rejectedFor) - 1);
+                        TMVS_LOG("engine: the %s car's tyres touch the road (standing, in its axes right/up/forward): %.2f %.2f %.2f, %.2f %.2f %.2f, "
+                                 "%.2f %.2f %.2f, %.2f %.2f %.2f -> front axle %+.2f m, rear %+.2f m, half track %.2f m, %.2f m below its "
+                                 "position%s",
+                                 g_environment, m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], m[3][0],
+                                 m[3][1], m[3][2], front, rear, track, -height,
+                                 like ? "" : ": not like a car, the spray keeps the Stadium car's estimates");
+                    }
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (race) g_racePlayer = nullptr;
+        else g_clipPlayer = nullptr;
+        return false;
+    }
+    pose.source = race ? 1 : 2;
+    // Once per change: where the pose comes from (the clip's: which car).
+    static int s_logged = -1, s_lines = 0;
+    const int state = race ? 0 : 1 + which;
+    if (state != s_logged && s_lines < 20) {
+        s_logged = state;
+        s_lines++;
+        static const char* const kFrom[] = {"the race's player", "the clip's camera follows (replay editor, export)",
+                                            "the clip's local player (no game camera followed one)", "the clip's first ghost"};
+        TMVS_LOG("engine: the car's axes come from the car %s; forward %.2f %.2f %.2f, up %.2f %.2f %.2f", kFrom[state], pose.forward[0],
+                 pose.forward[1], pose.forward[2], pose.up[0], pose.up[1], pose.up[2]);
+    }
+    return true;
+}
+
 int mapCloses() {
     return static_cast<int>(g_mapCloses);
+}
+
+const void* currentMap() {
+    return currentChallenge();
+}
+
+namespace {
+// CMwId::GetString into `text` (inside __try: no objects to unwind here).
+void idTextInto(const void* id, char* text, size_t size) {
+    __try {
+        if (*static_cast<const uint32_t*>(id) == 0xffffffffu) return;
+        const char* name = reinterpret_cast<IdGetStringFn>(rebase(g_build->idGetString))(id, nullptr);
+        for (size_t i = 0; name && i + 1 < size && name[i]; i++) text[i] = name[i];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        text[0] = 0;
+    }
+}
+} // namespace
+
+std::string idText(const void* id) {
+    if (!g_build || !id) return std::string();
+    char text[128] = {};
+    idTextInto(id, text, sizeof(text));
+    return text;
+}
+
+bool raceGhostTimes(std::vector<int>& checkpoints, int& raceTime) {
+    checkpoints.clear();
+    raceTime = -1;
+    if (!g_build || !g_race || GetTickCount() - g_racePlayerTick > 5000) return false;
+    int times[RaceTimes::kMax];
+    int count = 0, best = -1;
+    __try {
+        const BYTE* race = static_cast<const BYTE*>(g_race);
+        const DWORD n = *reinterpret_cast<const DWORD*>(race + kRaceGhosts);
+        const BYTE* const* ghosts = *reinterpret_cast<const BYTE* const* const*>(race + kRaceGhosts + 4);
+        if (n > 64 || (n && !ghosts)) return false;
+        for (DWORD i = 0; i < n; i++) {
+            const BYTE* g = ghosts[i];
+            if (!g) continue;
+            const DWORD time = *reinterpret_cast<const DWORD*>(g + kGhostRaceTime);
+            const DWORD cps = *reinterpret_cast<const DWORD*>(g + kGhostCheckpoints);
+            const DWORD* entries = *reinterpret_cast<const DWORD* const*>(g + kGhostCheckpoints + 4);
+            if (time == 0xffffffffu || time == 0 || time > 24u * 3600u * 1000u || cps == 0 || cps > static_cast<DWORD>(RaceTimes::kMax) || !entries) continue;
+            if (best >= 0 && static_cast<int>(time) >= best) continue;
+            best = static_cast<int>(time);
+            count = static_cast<int>(cps);
+            for (DWORD k = 0; k < cps; k++) times[k] = static_cast<int>(entries[k * 2]);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    if (best < 0) return false;
+    raceTime = best;
+    checkpoints.assign(times, times + count);
+    return true;
+}
+
+namespace {
+// The vehicle's async world speed (inside __try): only a CSceneVehicleCar of this build.
+bool vehicleSpeed(const BYTE* player, float& speed) {
+    __try {
+        const BYTE* gameMobil = *reinterpret_cast<const BYTE* const*>(player + kPlayerMobil);
+        if (!gameMobil || *reinterpret_cast<const int*>(gameMobil + kGameMobilSceneId) == -1) return false;
+        const BYTE* vehicle = *reinterpret_cast<const BYTE* const*>(gameMobil + kGameMobilScene);
+        if (!vehicle) return false;
+        void* const* table = *reinterpret_cast<void* const* const*>(vehicle);
+        if (!table || reinterpret_cast<uintptr_t>(table[kAsyncSpeedSlot]) != rebase(g_build->asyncSpeed)) return false;
+        const float* v = reinterpret_cast<const float*>(vehicle + kVehicleAsyncSpeed);
+        speed = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        return speed < 1000.0f;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool carSpeed(float& metresPerSecond) {
+    metresPerSecond = 0.0f;
+    if (!g_build || !g_build->asyncSpeed || !g_racePlayer || GetTickCount() - g_racePlayerTick > 300) return false;
+    return vehicleSpeed(static_cast<const BYTE*>(g_racePlayer), metresPerSecond);
+}
+
+std::string currentMapUid() {
+    const BYTE* challenge = static_cast<const BYTE*>(currentChallenge());
+    return challenge ? idText(challenge + kChallengeUid) : std::string();
+}
+
+bool raceTimes(RaceTimes& out) {
+    out = RaceTimes();
+    // A few seconds after the race last checked its player: after the finish it soon stops, and
+    // the finish's time is read in that moment (setChallengeDetour forgets the race with its map).
+    if (!g_build || !g_race || !g_racePlayer || GetTickCount() - g_racePlayerTick > 5000) return false;
+    __try {
+        const BYTE* race = static_cast<const BYTE*>(g_race);
+        const BYTE* info = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(g_racePlayer) + kPlayerInfo);
+        if (!info || *reinterpret_cast<void* const*>(info + kInfoPlayer) != g_racePlayer) {
+            static bool s_logged = false;
+            if (!s_logged) {
+                s_logged = true;
+                TMVS_LOG("engine: race times: the player's info (%p) doesn't point back at the player: no split times", info);
+            }
+            return false;
+        }
+        const bool lap = *reinterpret_cast<const DWORD*>(race + kRaceLapTimes) != 0;
+        const DWORD start = *reinterpret_cast<const DWORD*>(info + (lap ? kInfoLapStart : kInfoStart));
+        out.finished = *reinterpret_cast<const DWORD*>(info + kInfoFinished) != 0;
+        out.started = start != 0 || out.finished;
+        if (out.finished) out.time = *reinterpret_cast<const int*>(info + (lap ? kInfoLapFinalTime : kInfoFinalTime));
+        else if (start != 0) out.time = static_cast<int>(*reinterpret_cast<const DWORD*>(race + kRaceClock) - start);
+        out.passed = *reinterpret_cast<const int*>(info + kInfoPassed);
+        const DWORD count = *reinterpret_cast<const DWORD*>(info + kInfoCheckpoints);
+        const DWORD* entries = *reinterpret_cast<const DWORD* const*>(info + kInfoCheckpoints + 4);
+        if (count > static_cast<DWORD>(RaceTimes::kMax) || (count && !entries)) return false;
+        out.count = static_cast<int>(count);
+        for (DWORD i = 0; i < count; i++) out.times[i] = static_cast<int>(entries[i * 2]);
+        out.race = g_race;
+        // Not the HUD's numbers (another build): no race as far as we know.
+        if (out.time < 0 || out.time > 24 * 3600 * 1000 || out.passed < 0 || out.passed > 100000) return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out = RaceTimes();
+        return false;
+    }
+    return true;
 }
 
 bool mapOpen() {
@@ -1871,7 +3311,8 @@ int respawns() {
 }
 
 int blocksRemoved() {
-    return static_cast<int>(g_blocksRemoved);
+    // The hook's count, plus the removals the block array's count showed (when RemoveBlock isn't hooked).
+    return static_cast<int>(g_blocksRemoved) + blockorder::countDrops();
 }
 
 void setProjectionJitter(float x, float y) {
@@ -1890,6 +3331,38 @@ void setMainCamera(const void* camera) {
     g_mainCamera = camera;
 }
 
+void setLensOffset(float x, float y, float focusDistance) {
+    const float xy[2] = {x, y};
+    setLensSamples(x == 0.0f && y == 0.0f ? nullptr : xy, 1, focusDistance);
+}
+
+void setLensSamples(const float* xy, int count, float focusDistance) {
+    if (!xy || count <= 0 || !(focusDistance > 0.0f) || !std::isfinite(focusDistance)) {
+        if (g_lensCount > 0) TMVS_LOG("engine: lens offsets off");
+        g_lensCount = 0;
+        g_loggedLens = false;
+        g_lensUsed = -1;
+        return;
+    }
+    count = (std::min)(count, kMaxLensSamples);
+    for (int i = 0; i < count; i++) {
+        const bool ok = std::isfinite(xy[2 * i]) && std::isfinite(xy[2 * i + 1]);
+        g_lensXY[i][0] = ok ? xy[2 * i] : 0.0f;
+        g_lensXY[i][1] = ok ? xy[2 * i + 1] : 0.0f;
+    }
+    g_lensCount = count;
+    // Nearer than about the near plane the shear would throw the image about.
+    g_lensFocus = (std::max)(focusDistance, 0.05f);
+    g_lensRenders = 0;
+}
+
+bool mainCameraSample(int& index, int& count, int& lensEntry) {
+    index = g_gameSample[0];
+    count = g_gameSample[1];
+    lensEntry = g_lensUsed;
+    return index >= 0;
+}
+
 bool cameraMatrices(float view[16], float projection[16]) {
     if (!g_beginMatrices) return false;
     memcpy(view, &g_beginView, sizeof(g_beginView));
@@ -1899,6 +3372,91 @@ bool cameraMatrices(float view[16], float projection[16]) {
 
 void setProjectionZoom(float zoom) {
     g_zoom = zoom < 1.0f ? 1.0f : zoom;
+}
+
+bool hidingCars() {
+    return g_hideCars;
+}
+
+bool carDrawNow() {
+    return g_carDrawNow;
+}
+
+// The car's shadow. A hidden car's shadow is not a draw of its mesh (the log of a hidden car showed no
+// such draw): the game gives an item a shadow texture count (CHmsItem +0x18, low byte, with bit 23) and a
+// fake shadow (bit 27), and CTrackMania::VehicleSetVisibility takes both away from the car it hides with
+// the item's own setters. The same setters on the cars' items (the ones their colour draws came from),
+// the words kept and put back with them; looked at every frame while hiding, since the game sets them
+// again when it shows a car (a camera change). The items go with the map: nothing is called on them after.
+std::unordered_map<uintptr_t, uint32_t> g_shadowSaved;
+LONG g_shadowSavedMap = -1, g_shadowSavedCloses = -1;
+constexpr size_t kItemShadowWord = 0x18;
+using ItemShadowTexFn = void(__fastcall*)(void*, void*, unsigned char, int);
+using ItemShadowFakeFn = void(__fastcall*)(void*, void*, int);
+
+void carShadowsSet(uintptr_t item, uint32_t word) {
+    __try {
+        reinterpret_cast<ItemShadowTexFn>(rebase(g_build->itemSetShadowTex))(reinterpret_cast<void*>(item), nullptr, static_cast<unsigned char>(word & 0xff), (word >> 23) & 1);
+        reinterpret_cast<ItemShadowFakeFn>(rebase(g_build->itemSetShadowFake))(reinterpret_cast<void*>(item), nullptr, (word >> 27) & 1);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void carShadows(bool hide) {
+    if (!g_build) return;
+    const bool gone = g_shadowSavedMap != g_mapLoads || g_shadowSavedCloses != g_mapCloses;
+    if (gone) {
+        g_shadowSaved.clear(); // the items were freed with their map: not touched
+        g_shadowSavedMap = g_mapLoads;
+        g_shadowSavedCloses = g_mapCloses;
+    }
+    if (!hide) {
+        for (const auto& kept : g_shadowSaved) carShadowsSet(kept.first, kept.second);
+        if (!g_shadowSaved.empty()) TMVS_LOG("engine: hide car: the cars' shadows back (%u item(s))", static_cast<unsigned>(g_shadowSaved.size()));
+        g_shadowSaved.clear();
+        return;
+    }
+    if (g_vehicleItemsMap != g_mapLoads) return; // none learned on this map yet
+    for (const uintptr_t item : g_vehicleItems) {
+        uint32_t word = 0;
+        __try {
+            word = *reinterpret_cast<const uint32_t*>(item + kItemShadowWord);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            continue;
+        }
+        if (!(word & 0xff) && !((word >> 23) & 1) && !((word >> 27) & 1)) continue; // no shadow now
+        g_shadowSaved.emplace(item, word); // the first word seen is the game's (not ours, which has none)
+        carShadowsSet(item, word & ~0x88000ffu);
+        static int s_lines = 0;
+        if (s_lines < 10) {
+            s_lines++;
+            TMVS_LOG("engine: hide car: shadow of item %p switched off (shadow textures %u, flag %u, fake shadow %u)", reinterpret_cast<void*>(item), word & 0xff,
+                     (word >> 23) & 1, (word >> 27) & 1);
+        }
+    }
+}
+
+void hideCars(bool hide) {
+    if (hide != g_hideCars) TMVS_LOG("engine: the cars' draws %s", hide ? "skipped (photo mode)" : "back");
+    g_hideCars = hide;
+    carShadows(hide);
+}
+
+void hideEditor(bool hide) {
+    if (hide != g_hideEditor) {
+        g_hideEditor = hide;
+        applyEditorVisibility();
+        return;
+    }
+    // Every frame while hidden: an editor opened (or replaced) since is hidden too.
+    if (hide && g_mediaInterface) {
+        void* tracker = currentMediaTracker();
+        if (tracker && tracker != g_mediaApplied) applyEditorVisibility();
+    }
+}
+
+bool replayEditorOpen() {
+    return currentMediaTracker() != nullptr;
 }
 
 void hideOverlay(bool hide) {
@@ -1945,6 +3503,19 @@ bool materialFile(const void* shader, wchar_t* out, size_t size) {
 
 bool materialTextures(const void* shader, wchar_t* out, size_t size) {
     return shader && size > 0 && textureFiles(shader, out, size);
+}
+
+IDirect3DBaseTexture9* materialDiffuse(const void* shader, wchar_t* file, size_t size) {
+    if (file && size) file[0] = L'\0';
+    if (!shader) return nullptr;
+    const void* bitmap = diffuseBitmap(shader, file, size);
+    if (!bitmap) return nullptr;
+    __try {
+        const BYTE* keeper = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(bitmap) + kBitmapKeeper);
+        return keeper ? *reinterpret_cast<IDirect3DBaseTexture9* const*>(keeper + kKeeperTexture) : nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
 }
 
 bool neonMaterialsKnown() {
@@ -2003,7 +3574,7 @@ bool videoExport(VideoExport& out) {
     if (!g_doShoot || !g_shooter || g_engineFrames - g_shootFrame > 3) return false;
     const BYTE* shooter = static_cast<const BYTE*>(g_shooter);
     __try {
-        if (!readable(shooter, kShooterParams + sizeof(void*))) return false;
+        if (!readable(shooter, kShooterParams + sizeof(void*))) return false; // covers the clip times too
         const BYTE* params = *reinterpret_cast<const BYTE* const*>(shooter + kShooterParams);
         if (!params || !readable(params, kVideoParamsSize)) return false;
         const auto at = [params](size_t offset) { return *reinterpret_cast<const int*>(params + offset); };
@@ -2014,7 +3585,10 @@ bool videoExport(VideoExport& out) {
         out.hqSamples = out.hq && at(0x24) > 1 ? (at(0x24) > 11 ? 11 : at(0x24)) : 1;
         out.hqMotionBlur = at(0x28) != 0;
         out.stereo = at(0x38);
+        out.sound = at(0x34) != 0;
         out.writesVideo = *reinterpret_cast<const int*>(shooter + kShooterNoVideo) == 0;
+        out.clipStart = *reinterpret_cast<const DWORD*>(shooter + kShooterClipStart) / 1000.0;
+        out.clipStop = *reinterpret_cast<const DWORD*>(shooter + kShooterClipStop) / 1000.0;
         // Not the dialog's numbers (another build, a patched game): no export as far as we know.
         if (out.fps < 1.0f || out.fps > 1000.0f || out.width < 16 || out.height < 16 || out.width > 16384 || out.height > 16384) return false;
         const int samples = out.hqSamples * out.hqSamples;

@@ -14,9 +14,25 @@ namespace photo {
 bool active();
 void toggle();
 
+// The compact panel (exposure, aperture, zoom, vignette, grain, focus, hide car / HUD): drawn by
+// the overlay while photo mode is on; its key (PhotoPanel, F10) hides it for a clean view.
+bool panelShown();
+void togglePanel();
+float& zoom();     // Shift+wheel's zoom, 1..8
+void clearFocus(); // back to the automatic focus
+
 // Once per frame before the game renders (RenderFrameBegin): follows the free camera, hides
 // the HUD, and sets the projection of the hi-res tile being taken.
 void beginFrame();
+
+// Where the game draws its 3D view this frame: the whole back buffer, or a part of it (the replay
+// editor's MediaTracker between its panels; `area` in back buffer pixels). Photos and hi-res tiles
+// are of that part (the image the pipeline shades is the part's), so the focus click is taken
+// inside it only and mapped to its own UV; the automatic focus is the part's middle as it is the
+// image's. A change of the view forgets the clicked focus.
+void setView(bool part, const RECT& area, UINT bufferWidth, UINT bufferHeight);
+// The part in pixels of a back buffer of that size; false while the game draws the whole screen.
+bool viewArea(UINT bufferWidth, UINT bufferHeight, RECT& out);
 
 // From the window procedure (after the menu had its turn): middle click = focus there,
 // Ctrl + middle click = no focus, Ctrl + wheel = more or less depth of field. True = used.

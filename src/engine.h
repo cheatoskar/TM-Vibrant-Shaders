@@ -1,6 +1,7 @@
 #pragma once
 #include <d3d9.h>
 #include <string>
+#include <vector>
 
 // Hooks into the TrackMania Forever "Vision" engine (CVisionViewportDx9).
 //
@@ -61,6 +62,26 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 // The camera (CHmsCamera) the plugin shades: zoom and tiles apply to its projection only.
 void setMainCamera(const void* camera);
 
+// Accumulation depth of field: moves the main camera's eye by (x, y) metres in view space and shears
+// the projection so the plane at focusDistance metres (view-space z, the depth the shaders use)
+// stays put. Applied to every main camera projection until cleared (0, 0), after zoom, tiles and
+// jitter. The engine computes a camera's projection BEFORE its RenderCameraBegin (both for the
+// screen and for the export's samples rendered into textures), so a change made in the
+// cameraBegin callback only reaches the next render: set it in frameBegin, or use the table below.
+// cameraMatrices() and the SetTransform the plugin sees carry the offset matrix.
+void setLensOffset(float x, float y, float focusDistance);
+// The same with a table of offsets (count pairs x, y; at most 128): while the game supersamples
+// the main camera (the video export's "high quality", sub-frames of its motion blur included)
+// the render of its sample k (0 .. n n - 1 within one video frame, the game's own order) gets entry
+// k % count; other main camera renders take the entries in turn from the call on. count 0 = off.
+// One call before the export's first stepped frame is enough; calling it again restarts the turn.
+void setLensSamples(const float* xy, int count, float focusDistance);
+// The main camera's last projection (computed just before its RenderCameraBegin, so in the
+// cameraBegin callback: the render that begins): the game's supersampling sample it was for
+// (index 0 .. count - 1 within its video frame; false and -1 when the game didn't supersample it)
+// and the lens table entry it got (-1 none).
+bool mainCameraSample(int& index, int& count, int& lensEntry);
+
 // The view and projection (D3D layout, as SetTransform gets them) the engine computed for the
 // camera that began last, before its RenderCameraBegin. False when it computed none.
 bool cameraMatrices(float view[16], float projection[16]);
@@ -71,6 +92,18 @@ void setProjectionZoom(float zoom);
 
 // Hides the race / replay interface (HUD) while true: the photo mode. Through the game's own
 // switch (CGamePlaygroundInterface), so menus and the 3D view are drawn as always.
+// Photo mode's Hide car: the game's draws of the cars (not their smoke or tyre marks) are skipped.
+void hideCars(bool hide);
+// Hide car is on / the game is inside a car's own colour draw (the device hook skips it and learns
+// its vertex buffer, so the passes that draw the same mesh under other shaders are found).
+bool hidingCars();
+bool carDrawNow();
+// Photo mode's Hide editor: the replay editor's (MediaTracker's) panels stay hidden, by the game's own
+// interface switch (its Tab key), and its 3D view fills the screen; back with photo mode. Without the hook or
+// an open editor nothing happens.
+void hideEditor(bool hide);
+// The replay editor (MediaTracker) is open: the app's editor is one (read only).
+bool replayEditorOpen();
 void hideOverlay(bool hide);
 
 // Skips the game's own FX post-processing (bloom and colour filter, the launcher's "FX"
@@ -135,6 +168,20 @@ Material materialClass(const void* shader);
 bool materialFile(const void* shader, wchar_t* out, size_t size);
 // Its textures' files, "; " between them (false: none read).
 bool materialTextures(const void* shader, wchar_t* out, size_t size);
+// Its colour map: the Direct3D texture the game binds for it (null: none known or not loaded),
+// with the file's name in `file` (the Real look picture of the minimap).
+IDirect3DBaseTexture9* materialDiffuse(const void* shader, wchar_t* file, size_t size);
+// The game's code addresses (rebased to this process) the minimap's block reading compares its
+// reads against: never called, only compared (a mesh tree's class by its vtable's child functions,
+// a visual's geometry kind by its keeper's loader). False on an unknown build.
+struct MeshReadAddresses {
+    uintptr_t treeChildCount, treeGetChild; // CPlugTree's vtable slots 31 and 32 (its children at +0x28)
+    uintptr_t mipChildCount, mipGetChild;   // CPlugTreeVisualMip's (children at +0x28, then its levels at +0xac)
+    // CDx9VisualKeeper::LoadAndPrepareGeometry_Static, _StaticVisualSplits, _StaticSubVisuals
+    uintptr_t geometryStatic, geometrySplits, geometrySubVisuals;
+    uintptr_t declarations; // CDx9VertexDeclaration::s_Declarations: CFastBuffer of {SStreamDecl, SStreamDecl, IDirect3DVertexDeclaration9*}
+};
+bool meshReadAddresses(MeshReadAddresses& out);
 // The draws' materials are known and their textures can be read: the neon strips are told by
 // their material (Material::Neon), not by their colour. False on an unknown build, without the
 // draw hooks, or while no texture had a file name yet.
@@ -174,6 +221,48 @@ bool mapOpen();
 // up axis in the world (unit length), its roof's way: on a banked curve, a wall or in a loop
 // the road's up under the car.
 bool carLocation(float position[3], float up[3] = nullptr);
+// The car's whole pose, for the spray from its tyres: while a race runs the player's car (as
+// carLocation), in the replay editor, its video export and replays the car the clip's cameras
+// show. False otherwise.
+struct CarPose {
+    float position[3] = {};               // as carLocation's (about the height of the wheel centres)
+    float forward[3] = {0.0f, 0.0f, 1.0f}; // the car's axes in the world, unit length
+    float right[3] = {1.0f, 0.0f, 0.0f};  // (the side: its sign is the model's, the tyres are symmetric)
+    float up[3] = {0.0f, 1.0f, 0.0f};
+    // Where its tyres touch the road, in its axes from `position` (m): the front and the rear
+    // axle along forward, half the track, the height along up (negative). Measured on the
+    // environment's car standing at a start (wheelsMeasured), else the Stadium car's estimates.
+    float frontAxle = 0.0f, rearAxle = 0.0f, halfTrack = 0.0f, contactHeight = 0.0f;
+    bool wheelsMeasured = false;
+    int source = 0; // 1 the race's player, 2 a clip's car
+};
+bool carPose(CarPose& pose);
+// For the Misc page (src/misc), read only. The map open now (CGameCtnChallenge), null: none; the
+// text of a CMwId in the game's memory (a block info's name, the map's UID), "" unreadable.
+const void* currentMap();
+std::string idText(const void* id);
+// The map's UID (its CMwId at challenge +0xdc), "" none.
+std::string currentMapUid();
+// The local player's race as the game's HUD keeps it (CTrackManiaPlayerInfo, the same layout in
+// both builds): its clock and the race time at each checkpoint. False when no race checked its
+// player within the last few seconds (a finished race stops checking soon after the finish).
+struct RaceTimes {
+    static constexpr int kMax = 128;
+    int time = 0;          // race time now (ms): 0 before the start, the final time once finished
+    bool started = false;  // the clock runs or ran
+    bool finished = false;
+    int passed = 0;        // checkpoints passed in this run, the finish included
+    int count = 0;         // entries in times (checkpoints and finish; with laps, of all laps)
+    int times[kMax] = {};  // race time at each of them (ms), -1 not yet
+    const void* race = nullptr; // identifies the race (a new one: a new map or mode)
+};
+bool raceTimes(RaceTimes& out);
+// The opponent ghost of the race with the best time (a solo race's ghosts: your best, a medal's, a
+// replay's): its race time and the race time at each of its checkpoints. False: none.
+bool raceGhostTimes(std::vector<int>& checkpoints, int& raceTime);
+// The race's car speed now (m/s, the physics' world speed). False without a race or another build.
+bool carSpeed(float& metresPerSecond);
+
 // The comments of the map that is open now (race, replay or editor), read and written in the
 // game's memory. Written comments are saved into the file when the author saves the map.
 bool currentMapComments(std::string& comments);
@@ -200,8 +289,12 @@ struct VideoExport {
     int samplesPerVideoFrame = 1;
     bool writesVideo = true;   // false: a run that writes no video (DoShoot skipped the output)
     int stereo = 0;            // the dialog's 3D stereo mode (0 off)
+    bool sound = false;        // the dialog's sound button (IsAudioStream, off by default): without it
+                               // DoShoot skips its sound pass, the file gets no sound stream at all
     double step = 0.0;         // seconds the game's clock advances per rendered frame, 0 = real time
     double gameClock = 0.0;    // the game's clock (s), for the log
+    double clipStart = 0.0, clipStop = 0.0; // the clip (s): the frames cover start .. stop, the sound
+                               // pass 0 .. stop (it sets the clip's time from 0)
 };
 // The video export's file (the game's AVI writer, CVisionVideoAvi): the mod can write the
 // frames and the sound into a file of its own. `file` identifies one export.
@@ -214,6 +307,10 @@ struct VideoFileHooks {
     void (*audioOpen)(void* file, const void* waveFormat) = nullptr; // WAVEFORMATEX without cbSize (16 bytes)
     void (*audioData)(void* file, const void* data, unsigned long blocks) = nullptr;
     void (*closed)(void* file) = nullptr; // the game is done with it (its .avi closed)
+    // Asked at the end of a frame the game is about to write, after the frameEnd callback: true =
+    // videoFrame will take the mod's own frame, so the game skips reading its image back
+    // (GetRenderTargetData and the conversion); videoFrame then gets the last image it did read.
+    bool (*ownFrameReady)(void* file) = nullptr;
 };
 void setVideoFileHooks(const VideoFileHooks& hooks);
 bool videoFileHooked(); // false: another build, the game's AVI as always
@@ -221,6 +318,44 @@ bool videoFileHooked(); // false: another build, the game's AVI as always
 // True while the export runs (its fiber ran this frame or the one before), with its settings.
 // False without the hook or when the game's memory doesn't look as expected.
 bool videoExport(VideoExport& out);
+
+// Environment mods ("resource packs", Skins\<Environment>\Mod\*.zip): which one a map loads
+// with. The game asks CGameCtnChallenge::GetModPackDesc at every map load (the load screen,
+// then the decoration and its textures); the mod answers only there, never writing the map
+// (its saved mod stays: the map's Chunk writes challenge +0x13c, which is never touched) nor the
+// game's forced mods (CGameCtnApp +0x310, which a hosting game sends to its clients).
+struct ModPackAsk {
+    const char* environment = ""; // "Stadium", "Speed", ...
+    const char* decoration = "";  // the map's decoration ("Day", "Sunset", "Night", ...; "" unknown)
+    const wchar_t* mapMod = nullptr; // the map's own mod (the game's name for it), null: none
+    bool loadScreen = false;      // the load screen's question (the decoration's comes right after)
+};
+struct ModPackAnswer {
+    enum Kind { MapOwn, None, Pack } kind = MapOwn;
+    std::wstring file;            // Pack: its file name in Skins\<environment>\Mod
+    std::string note;             // for the log line ("" none)
+};
+void setModPackChooser(ModPackAnswer (*choose)(const ModPackAsk& ask));
+bool modPacksHooked(); // false: another build, or the game's code not where expected
+// What the last map loaded with, as its log line said ("" before the first map).
+std::string modPackStatus();
+// Whether the game has Skins\<environment>\Mod\<file> among its packs (it finds them at start:
+// one added while it runs can't be used before the next start).
+bool modPackKnown(const char* environment, const std::wstring& file);
+// The loaded map's pack, switched without loading the map again: every texture of the
+// environment gets the chosen pack's file (or the game's own) through the engine's path for a
+// mod file that arrives while a map runs (CPlugBitmap::OnPackAvailable).
+struct ModPackLive {
+    bool possible = false;   // a map is loaded (not loading) and this build can
+    bool differs = false;    // the choice now is not what its textures show
+    std::string environment; // "Stadium"
+    std::string shown;       // what its textures show ("DarkBlue.zip", "none")
+    std::string wanted;      // what the choice gives for this map
+};
+ModPackLive modPackLive();
+// Switches now (the game's thread, between frames). False with the reason in `status`; true with
+// what was swapped ("Stadium: DarkBlue.zip -> NEONglowSTICKS.zip, 37 textures").
+bool applyModPackNow(std::string& status);
 
 } // namespace engine
 } // namespace tmshaders

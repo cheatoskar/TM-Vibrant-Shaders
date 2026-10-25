@@ -62,6 +62,14 @@ SIOut VS_SI(uint id : SV_VertexID) {
     o.t3 = float4(0.5, 0.5, 0, 0); o.t4 = 0; o.t5 = 0.5;
     return o;
 }
+// What Tech3/DeferredWaterFog_p (the variant with TMapDepth at t0) reads from its vertex shader:
+// the water's kind (0).
+struct FogOut { float4 pos : SV_Position; nointerpolation uint2 kind : TEXCOORD1; };
+FogOut VS_Fog(uint id : SV_VertexID) {
+    FogOut o; float2 uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(uv * float2(2, -2) + float2(-1, 1), 0.5, 1); o.kind = uint2(0, 0);
+    return o;
+}
 )";
 
 float halfToFloat(uint16_t h) {
@@ -164,7 +172,7 @@ void viewport(ID3D11DeviceContext* ctx, float x, float y, float w, float h) {
 int main(int argc, char** argv) {
     if (argc < 6) {
         printf("usage: mp_harness <d3d11.dll> <tonemap.dxbc> <ui.dxbc> <scene.dxbc> <defread.dxbc> "
-               "[--srgb | --grade in.bmp out.bmp preset | --decomp decomp.dxbc] [--shadow pssm.dxbc]\n");
+               "[--srgb | --grade in.bmp out.bmp preset | --decomp decomp.dxbc] [--shadow pssm.dxbc] [--water fog.dxbc]\n");
         return 2;
     }
     const bool srgb = argc > 6 && strcmp(argv[6], "--srgb") == 0;
@@ -178,6 +186,16 @@ int main(int argc, char** argv) {
     const char* shadowPath = nullptr;
     for (int i = 6; i + 1 < argc; i++)
         if (strcmp(argv[i], "--shadow") == 0) shadowPath = argv[i + 1];
+    // --water: Tech3/DeferredWaterFog_p (gpucache.py --dump ... dfb9866c: TMapDepth at t0), for the
+    // clear water checks (WaterClarity, WaterSplash: the fog draws go into the mod's buffer).
+    const char* waterPath = nullptr;
+    for (int i = 6; i + 1 < argc; i++)
+        if (strcmp(argv[i], "--water") == 0) waterPath = argv[i + 1];
+    // --car: Tech3/CarSkin_DefWrite_p, a car in front of the camera during the water checks (its
+    // constants like the game uploads them), so WaterSplash looks for the water around it.
+    const char* carPath = nullptr;
+    for (int i = 6; i + 1 < argc; i++)
+        if (strcmp(argv[i], "--car") == 0) carPath = argv[i + 1];
     // --selfillum: "Tech3 Block DefReadP1 SelfIllum" (gpucache.py --dump), for the check of
     // EngineLightDraws: its own light goes into the light buffer, its lit surface doesn't, and the
     // engine's image stays as it was.
@@ -342,6 +360,35 @@ int main(int argc, char** argv) {
         }
     }
     bool withSelfIllum = false; // the frames draw it after the light-read pass
+    ID3D11PixelShader* fogPs = nullptr;
+    if (waterPath) {
+        const std::vector<char> code = readFile(waterPath);
+        if (code.empty() || FAILED(device->CreatePixelShader(code.data(), code.size(), nullptr, &fogPs))) {
+            printf("cannot create engine shader %s\n", waterPath);
+            return 2;
+        }
+    }
+    bool withWater = false; // the frames draw the water fog after the light-read pass
+    ID3D11PixelShader* carPs = nullptr;
+    ID3D11Buffer* carCb = nullptr;    // its vertex constants (ObjectV, 2368 bytes, dynamic like the game's)
+    ID3D11Buffer* gameMarker = nullptr; // a constant buffer of the game's at pixel slots 5 and 13 before the tone map
+    if (carPath) {
+        const std::vector<char> code = readFile(carPath);
+        if (code.empty() || FAILED(device->CreatePixelShader(code.data(), code.size(), nullptr, &carPs))) {
+            printf("cannot create engine shader %s\n", carPath);
+            return 2;
+        }
+        D3D11_BUFFER_DESC b = {};
+        b.ByteWidth = 2368;
+        b.Usage = D3D11_USAGE_DYNAMIC;
+        b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        b.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        device->CreateBuffer(&b, nullptr, &carCb);
+        b.ByteWidth = 16;
+        b.Usage = D3D11_USAGE_DEFAULT;
+        b.CPUAccessFlags = 0;
+        device->CreateBuffer(&b, nullptr, &gameMarker);
+    }
 
     // The engine's sun shadow pass (--shadow) into a light mask of its own: a plane facing the light
     // 10 m from the camera, and in every split the left half of it under a caster 20 m nearer the
@@ -615,6 +662,136 @@ int main(int argc, char** argv) {
         siDepth = greaterEqual;
     }
 
+    // --water: the engine's water fog over the image, like at a lake: a camera 5 m above the water
+    // looking straight down (rays to a far plane 100 m below it), the bottom 3 m under the surface on
+    // the left half, ground 1 m above it on the right half. Its fog colour (0.1, 0.3, 0.35), its cover
+    // the path under water x 0.1 (FogMaxDepthInvs 0.1, a 1D texture with cover 0 .. 1).
+    ID3D11VertexShader* vsFog = nullptr;
+    ID3D11Buffer* fogCb[3] = {};              // ShaderP (b0), ObjectP (b1), SceneP (b13)
+    ID3D11ShaderResourceView* fogSrv[2] = {}; // TMapDepth, TMapWaterFogDayTimed
+    ID3D11SamplerState* fogSampler = nullptr;
+    ID3D11BlendState* fogBlend = nullptr;
+    ID3D11DepthStencilState* fogDepth = nullptr;
+    ID3D11Texture2D* hdrStaging = nullptr;
+    bool fogRestored = true; // after each fog draw: the engine's target and blend state bound again
+    if (fogPs) {
+        ID3DBlob* code = compile("VS_Fog", "vs_4_0");
+        if (code) {
+            device->CreateVertexShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &vsFog);
+            code->Release();
+        }
+        float shaderP[9][4] = {{-50, -100, -28, 1}, {100, 0, 0, 0}, {0, 0, 56, 0}};
+        for (int i = 0; i < 4; i++) shaderP[8][i] = 0.1f; // FogMaxDepthInvs
+        const float plane[4] = {0, -1, 0, 0};             // WorldToWaterDepth: the surface at y = 0
+        float sceneP[168] = {};
+        sceneP[4 * 4 + 1] = 5.0f;                         // EyeInWorld (0, 5, 0)
+        sceneP[6 * 4 + 0] = 1.0f / W;                     // RasterPos: pixel to 0..1
+        sceneP[6 * 4 + 1] = 1.0f / H;
+        const void* contents[3] = {shaderP, plane, sceneP};
+        const UINT sizes[3] = {sizeof(shaderP), sizeof(plane), sizeof(sceneP)};
+        for (int i = 0; i < 3; i++) {
+            D3D11_BUFFER_DESC b = {};
+            b.ByteWidth = sizes[i];
+            b.Usage = D3D11_USAGE_DEFAULT;
+            b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            D3D11_SUBRESOURCE_DATA init = {contents[i], 0, 0};
+            device->CreateBuffer(&b, &init, &fogCb[i]);
+        }
+        std::vector<float> depth01(W * H);
+        for (UINT y = 0; y < H; y++)
+            for (UINT x = 0; x < W; x++) depth01[y * W + x] = x < W / 2 ? 0.08f : 0.04f; // y = 5 - 100 d: -3 and +1
+        D3D11_TEXTURE2D_DESC d = {};
+        d.Width = W;
+        d.Height = H;
+        d.MipLevels = d.ArraySize = 1;
+        d.Format = DXGI_FORMAT_R32_FLOAT;
+        d.SampleDesc.Count = 1;
+        d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA init = {depth01.data(), W * 4, 0};
+        ID3D11Texture2D* t = nullptr;
+        device->CreateTexture2D(&d, &init, &t);
+        device->CreateShaderResourceView(t, nullptr, &fogSrv[0]);
+        t->Release();
+        float fog[64][4];
+        for (int i = 0; i < 64; i++) {
+            fog[i][0] = 0.1f;
+            fog[i][1] = 0.3f;
+            fog[i][2] = 0.35f;
+            fog[i][3] = i / 63.0f;
+        }
+        D3D11_TEXTURE1D_DESC d1 = {};
+        d1.Width = 64;
+        d1.MipLevels = d1.ArraySize = 1;
+        d1.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        d1.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA init1 = {fog, sizeof(fog), 0};
+        ID3D11Texture1D* t1 = nullptr;
+        device->CreateTexture1D(&d1, &init1, &t1);
+        D3D11_SHADER_RESOURCE_VIEW_DESC v1 = {};
+        v1.Format = d1.Format;
+        v1.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE1DARRAY;
+        v1.Texture1DArray.MipLevels = 1;
+        v1.Texture1DArray.ArraySize = 1;
+        device->CreateShaderResourceView(t1, &v1, &fogSrv[1]);
+        t1->Release();
+        D3D11_SAMPLER_DESC sd0 = {};
+        sd0.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sd0.AddressU = sd0.AddressV = sd0.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sd0.MaxLOD = D3D11_FLOAT32_MAX;
+        device->CreateSamplerState(&sd0, &fogSampler);
+        D3D11_BLEND_DESC bd = {};
+        bd.RenderTarget[0].BlendEnable = TRUE;
+        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+        bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+        bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        device->CreateBlendState(&bd, &fogBlend);
+        D3D11_DEPTH_STENCIL_DESC dd = {};
+        dd.DepthEnable = TRUE;
+        dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+        dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+        device->CreateDepthStencilState(&dd, &fogDepth);
+        D3D11_TEXTURE2D_DESC sh = {};
+        hdr->GetDesc(&sh);
+        sh.Usage = D3D11_USAGE_STAGING;
+        sh.BindFlags = 0;
+        sh.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        device->CreateTexture2D(&sh, nullptr, &hdrStaging);
+    }
+    auto drawFog = [&] {
+        ctx->OMSetRenderTargets(1, &hdrRtv, dsv);
+        ctx->OMSetBlendState(fogBlend, nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(fogDepth, 0);
+        ctx->PSSetConstantBuffers(0, 2, fogCb);
+        ctx->PSSetConstantBuffers(13, 1, &fogCb[2]);
+        ctx->PSSetShaderResources(0, 2, fogSrv);
+        ctx->PSSetSamplers(0, 1, &fogSampler);
+        ctx->VSSetShader(vsFog, nullptr, 0);
+        ctx->PSSetShader(fogPs, nullptr, 0);
+        viewport(ctx, 0, 0, static_cast<float>(W), static_cast<float>(H));
+        ctx->Draw(3, 0);
+        ID3D11RenderTargetView* bound = nullptr;
+        ID3D11BlendState* blend = nullptr;
+        FLOAT factor[4];
+        UINT mask = 0;
+        ctx->OMGetRenderTargets(1, &bound, nullptr);
+        ctx->OMGetBlendState(&blend, factor, &mask);
+        if (bound != hdrRtv || blend != fogBlend) fogRestored = false;
+        if (bound) bound->Release();
+        if (blend) blend->Release();
+        ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(nullptr, 0);
+        ID3D11ShaderResourceView* none[2] = {};
+        ctx->PSSetShaderResources(0, 2, none);
+        ID3D11Buffer* noCb[2] = {};
+        ctx->PSSetConstantBuffers(0, 2, noCb);
+        ctx->PSSetConstantBuffers(13, 1, noCb);
+        ctx->VSSetShader(vs, nullptr, 0);
+    };
+
     auto frame = [&](bool withInterface, unsigned char* centre, unsigned char* hud) {
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(vs, nullptr, 0);
@@ -627,6 +804,23 @@ int main(int argc, char** argv) {
         viewport(ctx, 0, 0, 1, 1);
         ctx->Draw(3, 0);
         if (shadowPs) drawShadow();
+        if (withWater && carPs) {
+            // The car 6 m ahead of the camera, a little below its eye, facing along its view.
+            D3D11_MAPPED_SUBRESOURCE carMap;
+            if (SUCCEEDED(ctx->Map(carCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &carMap))) {
+                memset(carMap.pData, 0, 2368);
+                const float place[12] = {1, 0, 0, 0, 0, 1, 0, -0.5f, 0, 0, 1, 6};
+                memcpy(static_cast<char*>(carMap.pData) + 112, place, sizeof(place));
+                ctx->Unmap(carCb, 0);
+            }
+            ctx->VSSetConstantBuffers(0, 1, &carCb);
+            ctx->OMSetRenderTargets(1, &hdrRtv, dsv);
+            ctx->PSSetShader(carPs, nullptr, 0);
+            viewport(ctx, 0, 0, 1, 1);
+            ctx->Draw(3, 0);
+            ID3D11Buffer* noCb = nullptr;
+            ctx->VSSetConstantBuffers(0, 1, &noCb);
+        }
         // Light-read pass: camera at vertex slot 13, the buffers at the shader's own slots
         // (Block_DefReadP1: light mask t1, diffuse t2, specular t3, normals t4), motion as target 1.
         D3D11_MAPPED_SUBRESOURCE mapped;
@@ -675,6 +869,14 @@ int main(int argc, char** argv) {
         }
         ID3D11ShaderResourceView* noGbuffer[4] = {};
         ctx->PSSetShaderResources(1, 4, noGbuffer);
+        if (withWater) drawFog();
+        // The game's constants at slots the mod's passes don't keep for themselves: they must still be
+        // bound after the tone map (the engine's FXAA reads its raster position from SceneP, b13).
+        if (withWater && gameMarker) {
+            ctx->PSSetConstantBuffers(5, 1, &gameMarker);
+            ctx->PSSetConstantBuffers(13, 1, &gameMarker);
+            ctx->VSSetConstantBuffers(5, 1, &gameMarker);
+        }
         // Tone map into the back buffer.
         if (grade) ctx->UpdateSubresource(backBuffer, 0, nullptr, picture.data(), W * 4, 0);
         else ctx->ClearRenderTargetView(bbRtv, clear);
@@ -720,7 +922,8 @@ int main(int argc, char** argv) {
     stats(s);
     printf("  stats: placed %d, tone map %d, shaders %d/%d, depth %d, draws %d, camera %d, textures 0x%x; centre %u %u %u, "
            "hud %u %u %u\n", s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], centre[0], centre[1], centre[2], hud[0], hud[1], hud[2]);
-    check(s[2] == 4 + (decomp ? 1 : 0) + (selfIllum ? 1 : 0) + (shadowPs ? 1 : 0), "the engine shaders are recognised (and only those)");
+    check(s[2] == 4 + (decomp ? 1 : 0) + (selfIllum ? 1 : 0) + (shadowPs ? 1 : 0) + (fogPs ? 1 : 0) + (carPs ? 1 : 0),
+          "the engine shaders are recognised (and only those)");
     check(s[6] == 1, "the engine camera is read from its SceneV upload");
     check(s[8] == 1000 && s[9] == 2000 && s[10] == 3000, "the camera's eye is (10, 20, 30)");
     const int wanted = (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7);
@@ -1013,6 +1216,95 @@ int main(int argc, char** argv) {
         printf("  self-illuminated, strict depth test: light buffer %.4f %.4f %.4f\n", lightStrict[0], lightStrict[1], lightStrict[2]);
         check(ownStrict, "a light drawn with a strict depth test that writes its depth is in the light buffer too");
         check(siStateKept, "the engine's depth-stencil state and reference are bound again after the redraws");
+    }
+
+    // Clear water (--water). Both off: the engine's fog draws into its image. Only WaterSplash: the
+    // fog goes through the mod's buffer and the image is the engine's. WaterClarity 1: less murk over
+    // the bottom, red taken first, the dry ground untouched. After each fog draw the engine's target
+    // and blend state are bound again.
+    if (fogPs) {
+        withWater = true;
+        hdrClear = 0.5f;
+        auto hdrTexel = [&](UINT x, UINT y, float out[3]) {
+            ctx->CopyResource(hdrStaging, hdr);
+            D3D11_MAPPED_SUBRESOURCE m;
+            if (FAILED(ctx->Map(hdrStaging, 0, D3D11_MAP_READ, 0, &m))) return;
+            const uint16_t* p = reinterpret_cast<const uint16_t*>(static_cast<unsigned char*>(m.pData) + y * m.RowPitch) + x * 4;
+            for (int i = 0; i < 3; i++) out[i] = halfToFloat(p[i]);
+            ctx->Unmap(hdrStaging, 0);
+        };
+        float engineL[3] = {}, engineR[3] = {}, splashL[3] = {}, splashR[3] = {}, clearL[3] = {}, clearR[3] = {};
+        set("WaterClarity", "0");
+        set("WaterSplash", "0");
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        hdrTexel(W / 4, H / 2, engineL);
+        hdrTexel(3 * W / 4, H / 2, engineR);
+        const float cover = (0.5f - engineL[0]) / 0.4f; // red: 0.5 (1 - a) + 0.1 a
+        printf("  water: the engine's fog over the bottom %.4f %.4f %.4f (cover %.2f), the dry ground %.4f %.4f %.4f\n", engineL[0],
+               engineL[1], engineL[2], cover, engineR[0], engineR[1], engineR[2]);
+        check(cover > 0.2f && cover < 0.45f && std::fabs(engineR[0] - 0.5f) < 0.002f, "the engine's water fog draws over the bottom, not over the ground");
+        fogRestored = true;
+        set("HdrStage", "1");
+        set("WaterSplash", "0.6");
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        hdrTexel(W / 4, H / 2, splashL);
+        hdrTexel(3 * W / 4, H / 2, splashR);
+        bool same = true;
+        for (int i = 0; i < 3; i++) same = same && std::fabs(splashL[i] - engineL[i]) < 0.003f && splashR[i] == engineR[i];
+        printf("  water: through the mod's buffer %.4f %.4f %.4f\n", splashL[0], splashL[1], splashL[2]);
+        check(same, "WaterSplash alone: the fog goes through the mod's buffer, the image stays the engine's");
+        const std::vector<char> logText = readFile((std::string(data) + "\\tmvs-mp.log").c_str());
+        check(std::string(logText.begin(), logText.end()).find("water: the engine's water fog drawn into the mod's buffer") != std::string::npos,
+              "the log says the water fog went into the mod's buffer");
+        set("WaterClarity", "1");
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        hdrTexel(W / 4, H / 2, clearL);
+        hdrTexel(3 * W / 4, H / 2, clearR);
+        printf("  water: WaterClarity 1 over the bottom %.4f %.4f %.4f, the dry ground %.4f %.4f %.4f\n", clearL[0], clearL[1], clearL[2],
+               clearR[0], clearR[1], clearR[2]);
+        check(clearL[0] > engineL[0] + 0.05f && clearL[0] < clearL[2] && clearR[0] == engineR[0],
+              "WaterClarity 1: less murk over the bottom, red taken first, the dry ground unchanged");
+        check(fogRestored, "after each fog draw the engine's target and blend state are bound again");
+        if (carPs) {
+            // With the car the splash looks for the water around it every frame (PS_WaterLevel, its
+            // planes at b6 - b13) and draws: the game's constant buffers stay where they were. (The
+            // car is taken up once it held its place for a few frames.)
+            for (int i = 0; i < 12; i++) frame(true, centre, hud);
+            const std::vector<char> carLog = readFile((std::string(data) + "\\tmvs-mp.log").c_str());
+            const std::string carText(carLog.begin(), carLog.end());
+            ID3D11Buffer* ps5 = nullptr;
+            ID3D11Buffer* ps13 = nullptr;
+            ID3D11Buffer* vs5 = nullptr;
+            ctx->PSGetConstantBuffers(5, 1, &ps5);
+            ctx->PSGetConstantBuffers(13, 1, &ps13);
+            ctx->VSGetConstantBuffers(5, 1, &vs5);
+            check(carText.find("hooks: car found") != std::string::npos, "the car in front of the camera is found");
+            check(ps5 == gameMarker && ps13 == gameMarker && vs5 == gameMarker,
+                  "with the car and the water the game's constant buffers (b5, b13) are still bound after the tone map");
+            for (ID3D11Buffer* b : {ps5, ps13, vs5})
+                if (b) b->Release();
+        }
+        // A capture holds the fog buffer and the water volume's plane.
+        requestCapture();
+        for (int i = 0; i < 3; i++) frame(true, centre, hud);
+        std::string newest;
+        find = FindFirstFileA(pattern.c_str(), &fd);
+        if (find != INVALID_HANDLE_VALUE) {
+            do newest = fd.cFileName;
+            while (FindNextFileA(find, &fd));
+            FindClose(find);
+        }
+        const std::string waterCapture = std::string(data) + "\\captures\\" + newest;
+        const std::vector<char> waterText = readFile((waterCapture + "\\water.txt").c_str());
+        const std::string planes(waterText.begin(), waterText.end());
+        check(GetFileAttributesA((waterCapture + "\\water_fog.dds").c_str()) != INVALID_FILE_ATTRIBUTES &&
+                  planes.find("plane 0 0.00000 -1.00000 0.00000 0.0000") != std::string::npos,
+              "a capture holds the water's fog buffer and its plane");
+        set("WaterClarity", "0");
+        set("WaterSplash", "0");
+        set("HdrStage", "0");
+        withWater = false;
+        hdrClear = 0.0f;
     }
 
     // Resize like a resolution change.

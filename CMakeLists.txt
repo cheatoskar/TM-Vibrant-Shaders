@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(tm_vibrant_shaders VERSION 1.4.1 LANGUAGES CXX RC)
+project(tm_vibrant_shaders VERSION 1.4.2 LANGUAGES CXX RC)
 
 if(NOT DEFINED TM_SHADERS_VERSION)
   set(TM_SHADERS_VERSION "${PROJECT_VERSION}")
@@ -65,7 +65,9 @@ set(TMVS_ENTRIES
   PS_LampSource PS_LampDown PS_LampUp PS_LightingGameLight PS_FsrEasu PS_FsrRcas PS_SpillTemporal
   PS_SpillSource PS_SpillSourceEngine PS_SpillDownSource
   PS_SmaaEdges PS_SmaaWeights PS_SmaaBlend
-  PS_SpillSourceNeon PS_NeonGlow PS_NeonAdd PS_NeonTemporal)
+  PS_SpillSourceNeon PS_NeonGlow PS_NeonAdd PS_NeonTemporal
+  PS_Accumulate PS_AccumResolve PS_ExportLuma PS_ExportChroma
+  PS_ClearWater PS_WaterSplash PS_Headlights)
 
 file(GLOB TMVS_SDK_BINS LIST_DIRECTORIES true "C:/Program Files (x86)/Windows Kits/10/bin/10.*")
 list(SORT TMVS_SDK_BINS ORDER DESCENDING)
@@ -115,6 +117,7 @@ configure_file("${CMAKE_CURRENT_BINARY_DIR}/tmvs_bytecode.h.in" "${CMAKE_CURRENT
 # Rendering core shared by the plugin and the offline previewer.
 add_library(tmvs_core STATIC
   src/pipeline.cpp
+  src/planeread.cpp
   src/gfx.cpp
   src/noise.cpp
   src/framecap.cpp
@@ -127,13 +130,17 @@ add_library(tmvs_core STATIC
   src/log.cpp
   src/weather.cpp
   src/image.cpp
+  src/waterfx.cpp
   src/lut.cpp
-  src/mp4writer.cpp
+  src/modpack.cpp
+  src/videoencoder.cpp
+  src/nvenc.cpp
+  src/loopback.cpp
   src/gbufpatch.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
-target_include_directories(tmvs_core PRIVATE ${stb_SOURCE_DIR})
+target_include_directories(tmvs_core PRIVATE ${stb_SOURCE_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers")
 target_link_libraries(tmvs_core PUBLIC d3d9 d3dcompiler dxguid ole32 oleaut32)
 
 set(TMVS_DEFINITIONS WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -145,6 +152,7 @@ add_library(tm_vibrant_shaders SHARED
   src/dllmain.cpp
   src/plugin.cpp
   src/casters.cpp
+  src/blockorder.cpp
   src/perflog.cpp
   src/engine.cpp
   src/hook.cpp
@@ -161,6 +169,7 @@ add_library(tm_vibrant_shaders SHARED
   src/audio.cpp
   src/proxy.cpp
   src/videofile.cpp
+  src/soundcapture.cpp
   src/exports.def
   "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
   sounds/sounds.rc
@@ -174,6 +183,22 @@ add_library(tm_vibrant_shaders SHARED
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
 )
 target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm shell32 winhttp)
+
+# The Misc page's tools (src/misc, see its README.md): the minimap, split times against your best and
+# a replay, finish effects. OFF removes them all: no page, no overlays, no downloads.
+option(TMVS_MISC_TOOLS "Build the Misc page (minimap, split times, finish effects)" ON)
+if(TMVS_MISC_TOOLS)
+  target_sources(tm_vibrant_shaders PRIVATE
+    src/misc/misc.cpp
+    src/misc/mapview.cpp
+    src/misc/splits.cpp
+    src/misc/replay.cpp
+    src/misc/tmx.cpp
+    src/misc/confetti.cpp
+    src/misc/topview.cpp
+    src/misc/blockmesh.cpp)
+  target_compile_definitions(tm_vibrant_shaders PRIVATE TMVS_MISC_TOOLS=1)
+endif()
 target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR})
 target_compile_options(tm_vibrant_shaders PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
 
@@ -202,6 +227,18 @@ add_executable(tmvs_mp4test tools/mp4test.cpp)
 target_link_libraries(tmvs_mp4test PRIVATE tmvs_core)
 target_compile_options(tmvs_mp4test PRIVATE ${TMVS_OPTIONS})
 
+# Encoder benchmark: a reference video through every encoder variant, scored with VMAF
+# (development tool; needs ffmpeg with libvmaf).
+add_executable(tmvs_encbench tools/encbench.cpp)
+target_link_libraries(tmvs_encbench PRIVATE tmvs_core)
+target_compile_options(tmvs_encbench PRIVATE ${TMVS_OPTIONS})
+
+# Loopback test: a tone played and recorded back from this process's own output, as the video
+# export's sound pass does (development tool).
+add_executable(tmvs_loopbacktest tools/loopbacktest.cpp)
+target_link_libraries(tmvs_loopbacktest PRIVATE tmvs_core winmm)
+target_compile_options(tmvs_loopbacktest PRIVATE ${TMVS_OPTIONS})
+
 # Hotkey table test: key names round-trip, conflicts, the ini (development tool).
 add_executable(tmvs_keystest tools/keystest.cpp)
 target_link_libraries(tmvs_keystest PRIVATE tmvs_core)
@@ -226,6 +263,32 @@ target_compile_options(tmvs_aqtest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_sharetest tools/sharetest.cpp)
 target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)
 target_compile_options(tmvs_sharetest PRIVATE ${TMVS_OPTIONS})
+
+# Resource pack test: DDS decoder, zip reader, choice per mood; reads your packs' pictures (development tool).
+add_executable(tmvs_packtest tools/packtest.cpp)
+target_link_libraries(tmvs_packtest PRIVATE tmvs_core)
+target_compile_options(tmvs_packtest PRIVATE ${TMVS_OPTIONS})
+
+# Replay reader test: LZO1X, the GBX header and the ghost's checkpoint times, on your replays in
+# Documents\TrackMania\Tracks\Replays (development tool; the Misc page's split times read them).
+add_executable(tmvs_replaytest tools/replaytest.cpp src/misc/replay.cpp)
+target_link_libraries(tmvs_replaytest PRIVATE tmvs_core shell32)
+target_compile_options(tmvs_replaytest PRIVATE ${TMVS_OPTIONS})
+
+# The minimap's picture from above (misc/topview.cpp) on a plain D3D9 device: two quads drawn like the
+# game's blocks land at their place, the higher over the lower, and the device state comes back (development tool).
+if(TMVS_MISC_TOOLS)
+  add_executable(tmvs_topviewtest tools/topviewtest.cpp src/misc/topview.cpp src/casters.cpp)
+  target_include_directories(tmvs_topviewtest PRIVATE ${imgui_SOURCE_DIR})
+  target_link_libraries(tmvs_topviewtest PRIVATE tmvs_core)
+  target_compile_options(tmvs_topviewtest PRIVATE ${TMVS_OPTIONS})
+endif()
+
+# Video export read-back test: the frames come out once each and in order, with repeats, flushes
+# and a device reset in between, on a plain D3D9 device (development tool).
+add_executable(tmvs_planereadtest tools/planereadtest.cpp)
+target_link_libraries(tmvs_planereadtest PRIVATE tmvs_core)
+target_compile_options(tmvs_planereadtest PRIVATE ${TMVS_OPTIONS})
 
 # GameGBuffer test: the game's dumped pixel shaders through the compile patch with the game's own
 # compiler, and (--device) drawn next to the game's on a D3D9 device (development tool).

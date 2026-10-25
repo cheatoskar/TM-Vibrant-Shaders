@@ -70,6 +70,17 @@ public:
         // The car's up (its roof's way, unit length): the trail lies flat on banked curves, walls
         // and loops. The world's up when not known (the depth buffer's car).
         float carUp[3] = {0.0f, 1.0f, 0.0f};
+        // The car's whole pose for the spray (engine::carPose: while driving the player's car, in
+        // the replay editor and its export the car the clip's cameras show): its axes (unit, world)
+        // and where its tyres touch the road in them (front axle, rear axle along forward, half
+        // the track, height along up; m from carPosePosition). Unknown: the spray finds the car
+        // in the depth buffer as before.
+        bool carPoseKnown = false;
+        float carPosePosition[3] = {};
+        float carForward[3] = {0.0f, 0.0f, 1.0f};
+        float carRight[3] = {1.0f, 0.0f, 0.0f};
+        float carPoseUp[3] = {0.0f, 1.0f, 0.0f};
+        float carWheels[4] = {1.7f, -1.2f, 0.86f, -0.35f};
         // A clip of the map plays while the player drives (driving is false then): the trail
         // records the car on.
         bool clipInRace = false;
@@ -87,10 +98,30 @@ public:
         // The game's video export: photo mode's depth of field (full resolution, many samples,
         // no noise) for a moving camera.
         bool video = false;
+        // Development (dev.ini WaterSplashTest, the previewer's --splash): a car that is not there
+        // enters the water where the middle of the lower screen meets it. x seconds since it entered (< 0 off), y its
+        // speed (m/s), z entry angle (degrees), w 1 the splash, 2 the car driving through the
+        // water (wake and bow wave), 3 dripping after it came out (x seconds since).
+        float splashTest[4] = {-1.0f, 0.0f, 0.0f, 0.0f};
         // Another sub-pixel sample of the frame just shaded (the export's supersampling, into
         // the same target): looks like that frame, reads its history (motion blur, focus,
         // exposure) but advances none of it. temporal is false.
         bool repeat = false;
+        // The video export's own frames (the plugin hands its encoder what the pipeline made, not
+        // the game's 8-bit average of its samples): 0 off; 1 this sample's lit HDR scene is added
+        // to the frame's float sum and nothing is written; 2 added too, then the average is graded
+        // into `output` once (bloom, exposure and the grade see the frame, not one sample).
+        int accumulate = 0;
+        bool accumulateFirst = false; // the frame's first sample: the sum starts over
+        // `output` is a float target (the export's frame): no 8-bit dither in the final pass, and
+        // FXAA instead of SMAA (which reads and writes 8-bit sRGB).
+        bool floatOutput = false;
+        // HDR10 video (with floatOutput): the tone curve ends at this many times the game's white
+        // instead of at it, and `output` holds linear light (1 = that white); 0 = SDR.
+        float hdrPeak = 0.0f;
+        // Accumulation depth of field (the plugin moves the camera's eye over the lens between the
+        // samples): the screen-space blur stays off, the focus distance is still measured.
+        bool lensDof = false;
         // Focus on this point of the screen (uv), -1 = the usual spot (the car, the road ahead).
         float focusPoint[2] = {-1.0f, -1.0f};
         // Hi-res photo tiles: exposure, focus and the haze colour keep their values (each tile
@@ -215,6 +246,34 @@ public:
     // (not ready, no targets).
     bool render(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, IDirect3DSurface9* output);
 
+    // Video export: the finished frame `frame` (sRGB values in a float target) into the encoder's
+    // planes (PS_ExportLuma, PS_ExportChroma): `luma` videoW / 4 x videoH and `chroma` videoW / 4 x
+    // videoH / 2, A16B16G16R16 holding P010 codes when tenBit, else A8R8G8B8 holding NV12 bytes,
+    // so a plain read of the two gives the encoder's buffer row by row. crop (uv: x, y, w, h): the
+    // part of the frame the video shows. dither: the 8-bit dither in steps (0 none, 1 one step).
+    // hdrWhite > 0 (tenBit only): the frame is linear light (Inputs::hdrPeak), 1.0 = that many nits,
+    // and the planes are PQ in BT.2020 (HDR10).
+    bool exportPlanes(IDirect3DDevice9* device, IDirect3DTexture9* frame, UINT videoW, UINT videoH, const float crop[4], bool tenBit, float dither,
+                      float hdrWhite, gfx::Target& luma, gfx::Target& chroma);
+    // The HDR10 frame (linear light) on the screen during the export: cut to white, in sRGB.
+    bool showLinear(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DSurface9* target, const RECT& area);
+    // The spray since the last call (frames that drew the rain and moved its clock): how fast the
+    // car went for it and how much it threw; for the export's log (my export showed none).
+    struct SprayStats {
+        unsigned frames = 0, throwing = 0; // throwing: above 4 m/s with an amount
+        float topSpeed = 0.0f, speedSum = 0.0f, topAmount = 0.0f;
+    };
+    SprayStats takeSprayStats() {
+        const SprayStats s = m_sprayStats;
+        m_sprayStats = SprayStats();
+        return s;
+    }
+    // The 16-bit unorm render target P010 needs (else 10 bits aren't offered).
+    static bool tenBitPlanesSupported(IDirect3DDevice9* device);
+    // The 1x1 R32F target with the focus distance (metres) the auto focus measured last (0 = none
+    // yet), or null. The export reads it back with each frame's planes (PlaneReadback).
+    const gfx::Target* focusTarget() const { return m_focus[m_focusIndex].valid() ? &m_focus[m_focusIndex] : nullptr; }
+
     // Capture helpers.
     bool readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out);
     bool readDepth(IDirect3DDevice9* device, IDirect3DTexture9* depth, std::vector<float>& out);
@@ -266,9 +325,13 @@ public:
     void resetHistory() {
         m_historyValid = false;
         m_havePrevious = false;
+        m_rainCameraValid = false;
+        m_carPrevValid = false;
         m_heightValid = false;
         m_skyValid = false;
         m_shelterValid = false;
+        m_postTimeValid = false;
+        m_accumWeight = 0.0f;
     }
 
     // The HLSL the pipeline compiles while it runs (vertex shaders of the height map, trail and
@@ -364,6 +427,13 @@ private:
         kNeonGlow,
         kNeonAdd,
         kNeonTemporal,
+        kAccumulate,
+        kAccumResolve,
+        kExportLuma,
+        kExportChroma,
+        kClearWater,
+        kWaterSplash,
+        kHeadlights,
         kPassCount
     };
     // GPU time measured like a pass's: the CasterShadows maps drawn inside render() (in game).
@@ -392,11 +462,21 @@ private:
     bool ensureSmaa(IDirect3DDevice9* device, UINT width, UINT height);
     bool buildMaterialMask(IDirect3DDevice9* device, const Inputs& in);
     bool ensureRain(IDirect3DDevice9* device);
+    bool ensureWaterAtlas(IDirect3DDevice9* device);
+    // WaterSplash: the car's tyres against the water's height (entering, in it, leaving), once per
+    // frame on the effects' clock; drawWater draws what that left (inside drawRain's pass).
+    void updateWater(const Inputs& inputs, const Settings& settings, float dt);
+    void drawWater(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings);
+    bool waterLevelOf(const Inputs& inputs, float y, float& level) const;
     bool ensureTrail(IDirect3DDevice9* device);
     static std::string trailSource();
     void drawTrail(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt);
-    void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool splashes,
+    // advance: a new frame (a temporal one, or the export's finished frame): the camera's speed
+    // is measured over dt.
+    void drawRain(IDirect3DDevice9* device, const Inputs& inputs, const Settings& settings, float dt, bool advance, bool splashes,
                   IDirect3DSurface9* target);
+    // The end of every render(): the camera kept for the next frame, nothing of ours left bound.
+    void finishRender(IDirect3DDevice9* device, const Inputs& in, BOOL softwareVP);
     bool detectCameraCut(const Inputs& inputs) const;
     void keepRepeatCamera();
     void swapRepeatCamera();
@@ -420,7 +500,7 @@ private:
     bool profileResolve(ProfileFrame& frame, bool wait);
     void releaseProfile();
     // resolveScene (cut to 0..1) and addScene (added as it is, one-one blending).
-    bool copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add);
+    bool copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add, bool srgbWrite = false);
 
     bool m_ready = false;
     std::wstring m_shaderDir;
@@ -499,6 +579,18 @@ private:
     gfx::Target m_dofFull2;     // full: its second, smoothing pass
     gfx::Target m_dof2;         // half: the smoothing pass of the normal blur
     gfx::Target m_hdr2;         // full: HDR after DOF / motion blur
+    // The video export's own frames (Inputs::accumulate): the float sum of the frame's samples
+    // (ping-pong, A32B32G32R32F: a hundred samples of fp16 would lose their last bits), and the
+    // final chain's targets in float (Inputs::floatOutput). Made when first used.
+    gfx::Target m_accum[2];
+    int m_accumIndex = 0;
+    float m_accumWeight = 0.0f;
+    gfx::Target m_ldrFloat;
+    gfx::Target m_ldr2Float;
+    // The grade's own clock in the export (exposure, focus): the time between two finished frames,
+    // not between two samples.
+    float m_postLastTime = 0.0f;
+    bool m_postTimeValid = false;
     gfx::Target m_taa[2];       // full: TAA history ping-pong (rgb, view z)
     gfx::Target m_scaled;       // RenderScale: the finished image at the scene's (small) size
     gfx::Target m_fsr;          // RenderScale: EASU's image at the output's size, before RCAS
@@ -574,10 +666,35 @@ private:
     IDirect3DVertexShader9* m_splashVS = nullptr;
     IDirect3DVertexShader9* m_sprayVS = nullptr;
     IDirect3DVertexShader9* m_snowVS = nullptr;
+    IDirect3DVertexShader9* m_waterVS = nullptr;
     IDirect3DVertexDeclaration9* m_rainDecl = nullptr;
     IDirect3DVertexBuffer9* m_rainVB = nullptr; // drops, then splashes
     IDirect3DIndexBuffer9* m_rainIB = nullptr;
     bool m_rainSupported = true;
+    // Water: the pictures (waterfx.h) and the image the lighting starts from with WaterClarity.
+    IDirect3DTexture9* m_waterAtlas = nullptr;
+    gfx::Target m_clearWater;
+    // WaterSplash: the car and the water. An entry is where the tyres went under, its velocity and
+    // strength (0..1) and when (the effects' clock); the newest four are kept and drawn while young.
+    struct WaterEntry {
+        float position[3] = {};
+        float velocity[3] = {};
+        float strength = 0.0f;
+        float time = -1e9f;
+    };
+    WaterEntry m_waterEntries[4];
+    int m_waterNext = 0;
+    bool m_waterIn = false;          // the tyres are under the surface
+    bool m_waterValid = false;       // the last frame's car and level are known (an entry needs both)
+    float m_waterPrev[3] = {};       // the car's place then, and the height of its tyres' bottom
+    float m_waterPrevBottom = 0.0f;
+    float m_waterLevelY = 0.0f;      // the surface the car is judged against (set with m_waterLevelKnown)
+    bool m_waterLevelKnown = false;
+    float m_waterWake = 0.0f;        // 0..1: how far in the water the car is (smoothed)
+    float m_waterInFor = 0.0f;       // seconds in the water this time
+    float m_waterExitTime = -1e9f;   // when the car came out, for the drips, and how much it carried
+    float m_waterDrip = 0.0f;
+    float m_waterLogTime = -1e9f;    // the log says one splash a second
     // Neon trail: the car's positions in a ring buffer texture (xyz, time stamp; < 0 = a new
     // line starts here, 0 = no car found), drawn as a glowing ribbon.
     static constexpr UINT kTrailWidth = 128, kTrailHeight = 128;
@@ -623,7 +740,16 @@ private:
     float m_trailRunStart[kTrailRunsMax + 1] = {};
     UINT m_trailRunFirst[kTrailRunsMax + 1] = {};
     int m_trailLogged = 0;
-    float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks)
+    float m_cameraVelocity[3] = {};             // smoothed, world m/s (rain streaks, the spray's speed)
+    float m_rainCamera[3] = {};                 // the camera at the last frame that measured it
+    bool m_rainCameraValid = false;
+    // The spray's car (Inputs::carPose*): its velocity from its position on the same clock (smoothed).
+    float m_carVelocity[3] = {};
+    float m_carPrev[3] = {};
+    bool m_carPrevValid = false;
+    SprayStats m_sprayStats;
+    int m_sprayFrom = -1;                       // the log's last spray source (1 the engine's car)
+    int m_sprayLogged = 0;
     float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
     int m_boltSlot = -1000000;                  // lightning strike the bolt direction belongs to
     float m_boltAzimuth = 0.0f;

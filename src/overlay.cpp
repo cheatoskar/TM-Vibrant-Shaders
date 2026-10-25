@@ -7,6 +7,8 @@
 #include "pipeline.h"
 #include "log.h"
 #include "lut.h"
+#include "misc/misc.h"
+#include "modpack.h"
 #include "photo.h"
 #include "thumbnails.h"
 #include "update.h"
@@ -41,6 +43,7 @@ Status g_status;
 // The compare split's bar at the bottom (the two looks, the other side switchable) was drawn last
 // frame: it takes the mouse over it, also with the menu closed.
 bool g_splitBar = false;
+bool g_photoPanel = false; // photo mode's panel is on screen this frame (it takes the mouse over itself)
 
 // Sharing the mouse with the other mod that hooks this window (100% TMX + Bingo). The property's
 // value is the HMODULE of the mod that wants the mouse right now; whoever finds it taken by a mod
@@ -180,17 +183,73 @@ int mouseButton(UINT msg, WPARAM wparam, bool& up) {
 // A press we swallowed: its release is swallowed too, and only then (a release the game never
 // saw the press of is harmless, a press it saw whose release is eaten is a stuck button).
 bool g_swallowedButton[5] = {};
+// Detached menu windows kept on screen with the menu closed (menu::pinnedWindows): their mouse is
+// handled like the compare split's bar.
+bool g_pinned = false;
 
 // The mouse for the split's bar with the menu closed: moves always (hover), presses only over it
 // (or while ImGui holds one: its release), so the game keeps every other click and its mouse
 // capture (the backend takes and releases the capture with each press).
 bool splitBarMouse(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (!g_splitBar || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
+    if (!(g_splitBar || g_photoPanel || g_pinned) || msg < WM_MOUSEFIRST || msg > WM_MOUSELAST || !ImGui::GetCurrentContext()) return false;
     ImGuiIO& io = ImGui::GetIO();
     const bool held = io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2];
     if (msg != WM_MOUSEMOVE && !io.WantCaptureMouse && !held) return false;
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam);
     return msg != WM_MOUSEMOVE;
+}
+
+// Photo mode's compact panel, top right: the look's exposure, vignette and grain, the lens (aperture,
+// zoom, focus), the colour look-up table's strength, hide car / HUD. Drawn at
+// Present like the line at the top left: never in the photos. Its key hides it all.
+void drawPhotoPanel() {
+    Config& config = Config::get();
+    const float s = menu::scale();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(size.x - 16.0f * s, 16.0f * s), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.7f);
+    ImGui::Begin("##photoPanel", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+    ImGui::TextDisabled("Photo   %s hides this", keys::name(keys::get(keys::Action::PhotoPanel)).c_str());
+    ImGui::PushItemWidth(170.0f * s);
+    // With the effects off photo mode shows the game's own image (lens and sharpening only): the look has no say.
+    const bool effects = config.settings.enabled;
+    if (!effects) {
+        ImGui::TextDisabled("Effects are off");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Turn on")) {
+            config.settings.enabled = true;
+            config.markDirty();
+        }
+    }
+    ImGui::BeginDisabled(!effects);
+    if (ImGui::SliderFloat("Exposure", &config.settings.exposure, -2.0f, 2.0f, "%+.1f EV")) {
+        config.markDirty();
+        menu::lookEdited(config, config.settings);
+    }
+    char aperture[32];
+    snprintf(aperture, sizeof(aperture), "f/%.1f", photo::fNumber(config.photoDof));
+    if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
+    ImGui::SliderFloat("Zoom", &photo::zoom(), 1.0f, 8.0f, "%.1fx", ImGuiSliderFlags_Logarithmic);
+    if (ImGui::SliderFloat("Vignette", &config.settings.vignette, 0.0f, 1.0f, "%.2f")) {
+        config.markDirty();
+        menu::lookEdited(config, config.settings);
+    }
+    if (ImGui::SliderFloat("Film grain", &config.settings.filmGrain, 0.0f, 0.15f, "%.3f")) {
+        config.markDirty();
+        menu::lookEdited(config, config.settings);
+    }
+    if (!config.lutFile.empty() && ImGui::SliderFloat("Look strength", &config.lutAmount, 0.0f, 1.0f, "%.2f")) config.markDirty();
+    ImGui::EndDisabled();
+    ImGui::PopItemWidth();
+    if (ImGui::Button("Clear focus")) photo::clearFocus();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to automatic focus. Middle click in the picture sets it.");
+    if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
+    if (ImGui::Checkbox("Hide editor", &config.photoHideEditor)) config.markDirty();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The replay editor's panels (the game's Tab key); the 3D view fills the screen.");
+    if (ImGui::Checkbox("Hide HUD", &config.photoHideHud)) config.markDirty();
+    ImGui::End();
 }
 
 // Why the menu opened or closed this frame, for the log (null: its own close button).
@@ -232,6 +291,7 @@ void handleHotkeys() {
     }
     if (keys::take(keys::Action::PhotoSplit)) photo::toggleSplit();
     if (keys::take(keys::Action::Photo)) photo::toggle();
+    if (keys::take(keys::Action::PhotoPanel)) photo::togglePanel();
 }
 
 
@@ -273,6 +333,7 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case keys::Action::Effects:
         case keys::Action::PhotoSplit:
         case keys::Action::Photo:
+        case keys::Action::PhotoPanel:
             hotkeyMessage(static_cast<unsigned>(wparam), action, lparam);
             return true;
         default:
@@ -375,6 +436,79 @@ void init(IDirect3DDevice9* device) {
     g_initialized = true;
 }
 
+// The Resource packs page's packs: the Mod folders read when the page first shows and on
+// Refresh; their pictures are made on a thread (thumbnails::packPreview).
+struct GamePacks : menu::ResourcePacks {
+    IDirect3DDevice9* device = nullptr;
+    std::vector<modpack::Pack> found;
+    std::vector<Pack> shown;
+    bool scanned = false;
+
+    void ensure() {
+        if (!scanned) refresh();
+    }
+    const std::vector<Pack>& packs() override {
+        ensure();
+        return shown;
+    }
+    std::vector<std::string> environments() override {
+        ensure();
+        return modpack::environments(found);
+    }
+    void refresh() override {
+        scanned = true;
+        found = modpack::scan();
+        shown.clear();
+        for (const modpack::Pack& p : found) {
+            Pack s;
+            s.environment = p.environment;
+            s.name = p.name;
+            const int n = WideCharToMultiByte(CP_UTF8, 0, p.file.c_str(), static_cast<int>(p.file.size()), nullptr, 0, nullptr, nullptr);
+            s.file.assign(n > 0 ? n : 0, '\0');
+            if (n > 0) WideCharToMultiByte(CP_UTF8, 0, p.file.c_str(), static_cast<int>(p.file.size()), &s.file[0], n, nullptr, nullptr);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "%.1f MB%s", static_cast<double>(p.size) / (1024.0 * 1024.0), p.linked ? ", downloaded for a map" : "");
+            s.detail = detail;
+            s.usable = !engine::modPacksHooked() || engine::modPackKnown(p.environment.c_str(), p.file);
+            shown.push_back(s);
+        }
+        TMVS_LOG("modpack: %u packs in %ls", static_cast<unsigned>(found.size()), modpack::skinsFolder().c_str());
+    }
+    ImTextureID preview(size_t index, int& width, int& height) override {
+        width = height = 0;
+        if (index >= found.size()) return ImTextureID{};
+        IDirect3DTexture9* texture = thumbnails::packPreview(device, found[index].path, found[index].written, width, height);
+        return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(texture));
+    }
+    void openFolder(const std::string& environment) override {
+        int n = MultiByteToWideChar(CP_UTF8, 0, environment.c_str(), -1, nullptr, 0);
+        std::wstring env(n > 0 ? n - 1 : 0, L'\0');
+        if (n > 1) MultiByteToWideChar(CP_UTF8, 0, environment.c_str(), -1, &env[0], n);
+        const std::wstring folder = modpack::skinsFolder() + L"\\" + env + L"\\Mod";
+        CreateDirectoryW((modpack::skinsFolder() + L"\\" + env).c_str(), nullptr);
+        CreateDirectoryW(folder.c_str(), nullptr);
+        ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    std::string status() override { return engine::modPackStatus(); }
+    Live live() override {
+        const engine::ModPackLive l = engine::modPackLive();
+        Live out;
+        out.possible = l.possible;
+        out.differs = l.differs;
+        out.environment = l.environment;
+        out.shown = l.shown;
+        out.wanted = l.wanted;
+        return out;
+    }
+    std::string applyNow() override {
+        std::string status;
+        engine::applyModPackNow(status);
+        return status;
+    }
+    bool hooked() override { return engine::modPacksHooked(); }
+};
+GamePacks g_packs;
+
 } // namespace
 
 
@@ -410,6 +544,65 @@ void drawSplitBar() {
                        photo::splitSwapped(), photo::splitLightNote());
 }
 
+// The welcome badge: a notch at the top centre with the logo, the mod's name and version and the
+// keys for the menu and the effects (the menu's key is F5 when CenterSpeed has F8, keys.cpp), for
+// 10 s from the first time the game shows its menus or login screen after starting, as TrackMania 2's
+// build greets. Never in a race, a replay, the editor, the video export or photos.
+constexpr DWORD kWelcomeMs = 10000, kWelcomeFadeMs = 800;
+DWORD g_welcomeStart = 0;
+bool g_welcomeDone = false;
+
+bool statusLineWanted() {
+    if (g_welcomeDone) return false;
+    if (!engine::active() || engine::mapOpen() || photo::active() || g_status.hideTools) {
+        if (g_welcomeStart) g_welcomeDone = true; // gone once something else takes the screen
+        return false;
+    }
+    const DWORD now = GetTickCount();
+    if (!g_welcomeStart) g_welcomeStart = now;
+    if (now - g_welcomeStart >= kWelcomeMs) {
+        g_welcomeDone = true;
+        return false;
+    }
+    return true;
+}
+
+void drawStatusLine(IDirect3DDevice9* device) {
+    const float scale = menu::scale();
+    const DWORD shown = GetTickCount() - g_welcomeStart;
+    const float alpha = shown + kWelcomeFadeMs > kWelcomeMs ? static_cast<float>(kWelcomeMs - shown) / kWelcomeFadeMs : 1.0f;
+    const float round = 14.0f * scale;
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, round);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f * scale, 10.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    // Its top edge (with the upper rounding) above the screen: a notch hanging from the top.
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, -round), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.82f);
+    ImGui::Begin("##statusLine", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::Dummy(ImVec2(0.0f, round));
+    ImFont* title = menu::titleFont();
+    const float line = (title ? title->FontSize : ImGui::GetFontSize()) + ImGui::GetFontSize() + ImGui::GetStyle().ItemSpacing.y;
+    const int iconSize = static_cast<int>(line + 0.5f);
+    if (IDirect3DTexture9* logo = thumbnails::icon(device, iconSize)) {
+        ImGui::Image(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(logo)), ImVec2(line, line));
+        ImGui::SameLine(0.0f, 12.0f * scale);
+    }
+    ImGui::BeginGroup();
+    if (title) ImGui::PushFont(title);
+    ImGui::TextColored(ImVec4(1.0f, 0.63f, 0.24f, 1.0f), "TM Vibrant Shaders");
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", TM_SHADERS_VERSION_A);
+    if (title) ImGui::PopFont();
+    const std::string menuKey = keys::name(keys::get(keys::Action::Menu)), effectsKey = keys::name(keys::get(keys::Action::Effects));
+    ImGui::Text("%s menu   %s effects on/off", menuKey.c_str(), effectsKey.c_str());
+    ImGui::EndGroup();
+    ImGui::End();
+    ImGui::PopStyleVar(4);
+}
+
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
     if (!g_initialized) init(device);
@@ -430,10 +623,22 @@ void draw(IDirect3DDevice9* device) {
     }
     const bool menu = Config::get().showOverlay;
     const char* photoHint = photo::status();
+    misc::Frame tools;
+    tools.device = device;
+    tools.menuOpen = menu;
+    tools.hide = g_status.hideTools || photo::active();
+    const bool toolsWanted = misc::wantsOverlay(tools); // once a frame: it also follows the race
+    const bool statusLine = statusLineWanted();
+    // Detached windows: never in a hi-res photo's tiles or the video export's frames.
+    engine::VideoExport exporting;
+    const bool capturing = photo::tiling() || engine::videoExport(exporting);
+    const bool pinned = !capturing && menu::pinnedWindows();
+    g_pinned = pinned && !menu;
     if (!menu) {
         Config::get().previewPreset.clear();
-        if (!*photoHint) {
+        if (!*photoHint && !pinned && !toolsWanted && !statusLine) {
             g_splitBar = false;
+            g_photoPanel = false;
             publishMouseOwner(false);
             removeTop(); // nothing of ours on screen: the other mod is on top
             return;
@@ -445,9 +650,11 @@ void draw(IDirect3DDevice9* device) {
     ImGui_ImplWin32_NewFrame();
     // Draw ImGui's cursor over the menu or the split's bar (the game hides the OS cursor), the game's elsewhere.
     // Only while we own the mouse: with both mods' menus open only one pointer is drawn.
-    ImGui::GetIO().MouseDrawCursor = (menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
+    ImGui::GetIO().MouseDrawCursor = (menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
-    if (menu) {
+    if (statusLine) drawStatusLine(device);
+    if (toolsWanted) misc::drawOverlay(tools); // before the menu: it stays on top
+    if (menu || pinned) {
         // The pipeline's GPU timings for the Performance page.
         struct Timings : menu::PassTimings {
             const Pipeline* p;
@@ -477,10 +684,15 @@ void draw(IDirect3DDevice9* device) {
         host.splitPosition = &photo::splitPosition();
         host.splitSwapped = &photo::splitSwapped();
         host.splitPreset = &photo::splitPreset();
+        host.photoHideCar = true;
         host.photoOn = [] {
             if (!photo::active()) photo::toggle();
         };
         host.supports = [](const Field& f) { return strcmp(f.key, "ToneCurve") != 0; }; // ManiaPlanet only
+        g_packs.device = device;
+        host.resourcePacks = &g_packs;
+        if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
+        host.hideDetached = capturing;
         menu::draw(host);
     }
     if (*photoHint) {
@@ -498,16 +710,21 @@ void draw(IDirect3DDevice9* device) {
     // never in the photos).
     g_splitBar = photo::splitShown() && !photo::tiling() && *photoHint; // not over a hi-res photo's tiles
     if (g_splitBar) drawSplitBar();
+    g_photoPanel = photo::panelShown();
+    if (g_photoPanel) drawPhotoPanel();
     ImGui::EndFrame();
     // Does one of our windows want the mouse (hovered or held)? Then the other mod stays out of it.
-    publishMouseOwner((menu || g_splitBar) && ImGui::GetIO().WantCaptureMouse);
+    publishMouseOwner((menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse);
     if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
         {
             CleanFixedFunction clean(device); // given back to the game at the end of this block
             ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
         }
-        if (ImGui::GetDrawData()->TotalVtxCount > 0) SetPropW(g_hwnd, kTopOverlay, selfHandle()); // drawn last: on top
+        // Drawn last: on top. Only windows that take the mouse count (the Misc page's windows and the
+        // status line ignore it with the menu closed: the other mod keeps its place then).
+        if (ImGui::GetDrawData()->TotalVtxCount > 0 && (menu || pinned || g_splitBar)) SetPropW(g_hwnd, kTopOverlay, selfHandle());
+        else if (!menu && !pinned && !g_splitBar) removeTop();
         device->EndScene();
     }
 }

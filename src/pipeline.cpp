@@ -3,6 +3,7 @@
 #include "log.h"
 #include "config.h"
 #include "noise.h"
+#include "waterfx.h"
 #include "tmvs_bytecode.h"
 #include "smaa/AreaTex.h"
 #include "smaa/SearchTex.h"
@@ -28,6 +29,8 @@ const char* const kEntryPoints[] = {
     "PS_SpillSource", "PS_SpillSourceEngine", "PS_SpillDownSource",
     "PS_SmaaEdges", "PS_SmaaWeights", "PS_SmaaBlend",
     "PS_SpillSourceNeon", "PS_NeonGlow", "PS_NeonAdd", "PS_NeonTemporal",
+    "PS_Accumulate", "PS_AccumResolve", "PS_ExportLuma", "PS_ExportChroma",
+    "PS_ClearWater", "PS_WaterSplash", "PS_Headlights",
 };
 
 bool readFile(const std::wstring& path, std::string& out) {
@@ -180,6 +183,7 @@ void Pipeline::release() {
     gfx::release(m_splashVS);
     gfx::release(m_sprayVS);
     gfx::release(m_snowVS);
+    gfx::release(m_waterVS);
     gfx::release(m_rainDecl);
     gfx::release(m_trailVS);
     gfx::release(m_trailDecl);
@@ -330,6 +334,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     m_depthCopy.destroy();
     m_clouds.destroy();
     m_reflect.destroy();
+    m_clearWater.destroy();
     for (auto& t : m_spill) t.destroy();
     m_spillSource.destroy();
     m_neon.destroy();
@@ -342,6 +347,10 @@ void Pipeline::destroyTargets(bool keepWorld) {
     m_dof2.destroy();
     m_hdr2.destroy();
     for (auto& t : m_taa) t.destroy();
+    for (auto& t : m_accum) t.destroy();
+    m_accumWeight = 0.0f;
+    m_ldrFloat.destroy();
+    m_ldr2Float.destroy();
     m_scaled.destroy();
     m_fsr.destroy();
     m_smaaEdges.destroy();
@@ -360,6 +369,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     gfx::release(m_waterDone);
     m_waterPending = -1;
     for (auto& t : m_focus) t.destroy();
+    m_postTimeValid = false;
     m_heightFrame.destroy();
     for (auto& t : m_heightMap) t.destroy();
     for (auto& t : m_ceilingMap) t.destroy();
@@ -367,6 +377,7 @@ void Pipeline::destroyTargets(bool keepWorld) {
     for (auto& t : m_lightGrid) t.destroy();
     gfx::release(m_heightDepth);
     gfx::release(m_cloudNoise);
+    gfx::release(m_waterAtlas);
     gfx::release(m_lut);
     gfx::release(m_smaaArea);
     gfx::release(m_smaaSearch);
@@ -1293,6 +1304,7 @@ float4 c_Prev2  : register(c12);
 float4 c_PrevP  : register(c13); // previous P00, P11, P20, P21
 float4 c_Motion : register(c14); // shutter (frames), previous frame valid, frame time (s), max streak (ndc)
 float4 c_Spray  : register(c15); // speed (m/s), spray amount, 0, 0
+float4 c_Splash : register(c19); // this layer's box (m), the near box inside it (m, 0 = none), splash scale, how far ahead (of the box)
 sampler2D s_height : register(s0);
 sampler2D s_depth  : register(s1);
 sampler2D s_ceiling : register(s3); // undersides of roofs and bridges (0 = none seen)
@@ -1384,10 +1396,21 @@ VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     float k = floor(cycle), age = frac(cycle) / 0.3;
     if (age > 1.0) return o;
     float2 r = frac(sin(float2(k * 12.9898 + seed.x * 78.233, k * 39.3468 + seed.y * 11.135)) * 43758.5453);
-    // The box sits ahead of the camera, where the ground is in view.
-    float size = c_Wind.w;
-    float2 ahead = c_Cam.xz + normalize(c_V2.xz + 1e-4) * size * 0.4;
+    // The box sits ahead of the camera, where the ground is in view. Two layers: the near box,
+    // and a far one four times its size, reaching farther ahead, with larger splashes; it takes
+    // over where the near one thins out at its edge (it ended in a hard line on the road). Each
+    // fades over half its box, so neither edge shows.
+    float size = c_Splash.x;
+    float2 forward = normalize(c_V2.xz + 1e-4);
+    float2 ahead = c_Cam.xz + forward * size * c_Splash.w;
     float2 xz = ahead + (frac((r * size - ahead) / size) - 0.5) * size;
+    float2 edge = abs(xz - ahead) / (size * 0.5);
+    float fade = 1.0 - smoothstep(0.5, 1.0, max(edge.x, edge.y));
+    if (c_Splash.y > 0.0) {
+        float2 near = abs(xz - (c_Cam.xz + forward * c_Splash.y * 0.4)) / (c_Splash.y * 0.5);
+        fade *= smoothstep(0.45, 1.0, max(near.x, near.y));
+    }
+    if (fade <= 0.02) return o;
     float2 m = (xz - c_Map.xy) * c_Map.z;
     if (any(m < 0.0) || any(m > 1.0)) return o;
     float h = tex2Dlod(s_height, float4(m, 0, 0)).r;
@@ -1401,7 +1424,7 @@ VSOut splashVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     if (any(suv < 0.0) || any(suv > 1.0)) return o;
     float sceneZ = tex2Dlod(s_depth, float4(suv, 0, 0)).r;
     if (abs(sceneZ - v.z) > 0.25 + v.z * 0.02) return o;
-    float s = 0.08 + 0.06 * seed.w;
+    float s = (0.08 + 0.06 * seed.w) * c_Splash.z * fade;
     float3 up = float3(c_V0.y, c_V1.y, c_V2.y);
     float3 right = normalize(float3(1.0, 0.0, 0.0) - up * up.x);
     o.pos = toClip(v + right * corner.x * s * 1.7 + up * corner.y * s * 1.6);
@@ -1478,13 +1501,97 @@ SnowOut snowVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     return o;
 }
 
-// Spray: water thrown up by the rear tyres on a wet road. The car is found in the depth
-// buffer where the chase camera keeps it (low in the middle of the screen); every particle
-// leaves a tyre, rises, falls and hangs in the air while the car drives on.
+// Spray: water thrown up by the tyres on a wet road. With the engine's car (sprayTyres) from
+// its four tyres along its own axes; without, the car is found in the depth buffer where the
+// chase camera keeps it (low in the middle of the screen) and the rear tyres throw it. Every
+// particle leaves a tyre, rises, falls and hangs in the air while the car drives on.
 // uv = texel centre; the game drew that pixel at ndc 2(uv - texel / 2) - 1 (D3D9 pixel centre).
 float3 viewRay(float2 uv, float z) {
     float2 ndc = float2(uv.x * 2.0 - 1.0 - c_Proj2.z * 0.5, 1.0 - uv.y * 2.0 + c_Proj2.w * 0.5);
     return float3((ndc.x - c_Proj.z) / c_Proj.x * z, (ndc.y - c_Proj.w) / c_Proj.y * z, z);
+}
+
+// The engine's car (Inputs::carPose*): the spray leaves its four tyres instead.
+float4 c_Car      : register(c22); // its position (world, about the wheel centres), 1 = known
+float4 c_CarFwd   : register(c23); // its forward (unit, world), w: the front axle (m along it)
+float4 c_CarRight : register(c24); // its side, w: the rear axle (m along forward, < 0)
+float4 c_CarUp    : register(c25); // its up, w: half the track (m)
+float4 c_CarVel   : register(c26); // its velocity (world, m/s), w: the road under the tyres (m along up, < 0)
+
+// Whether the road is where a tyre touches it: the surface seen just outside the tyre (where the
+// camera looks past the wheel) lies near the contact's height. 0 1.2 m off or more: in the air, or
+// something else in the way (car body, barrier, off screen). dh: how far above the contact it is
+// (a replay's car stands its drawn position at another height than the race's: my export threw
+// no spray with half a metre allowed).
+float roadAt(float3 contact, float3 outward, float3 up, out float dh) {
+    dh = 0.0;
+    float3 bv = toView(contact + outward * 0.55);
+    if (bv.z < 0.5) return 0.0;
+    float4 bc = toClip(bv);
+    // toClip shifted it by half a pixel for drawing; the texel centre is a whole pixel over.
+    float2 buv = float2(bc.x / bc.w * 0.5 + 0.5, 0.5 - bc.y / bc.w * 0.5) + c_Proj2.zw * 0.5;
+    if (any(buv < 0.0) || any(buv > 1.0)) return 0.0;
+    float3 rv = viewRay(buv, tex2Dlod(s_depth, float4(buv, 0, 0)).r);
+    float3 road = c_Cam.xyz + c_V0.xyz * rv.x + c_V1.xyz * rv.y + c_V2.xyz * rv.z;
+    dh = dot(road - contact, up);
+    return saturate(1.0 - (abs(dh) - 0.8) / 0.4);
+}
+
+VSOut sprayTyres(float4 seed, float2 corner) {
+    VSOut o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    float3 fwd = c_CarFwd.xyz, right = c_CarRight.xyz, up = c_CarUp.xyz;
+    float3 road = c_Car.xyz + up * c_CarVel.w; // the road under the drawn position
+    // Only with the tyres on the road (slopes, banks, walls and loops included; jumps not): any
+    // of the four will do, a barrier may hide the road beside the others.
+    float grounded = 0.0, lift = 0.0, weights = 0.0;
+    [unroll] for (int k = 0; k < 4; k++) {
+        float s = (k == 1 || k == 3) ? 1.0 : -1.0;
+        float3 contact = road + fwd * (k < 2 ? c_CarFwd.w : c_CarRight.w) + right * s * c_CarUp.w;
+        float dh;
+        float w = roadAt(contact, right * s, up, dh);
+        grounded = max(grounded, w);
+        lift += w * dh;
+        weights += w;
+    }
+    if (grounded <= 0.0) return o;
+    road += up * (lift / max(weights, 1e-3)); // onto the road the camera sees
+    // Seven of ten particles leave the rear tyres, which throw most (the front ones run on
+    // the water the car pushes aside and throw less, with smaller puffs).
+    bool rear = seed.x < 0.7;
+    float side = rear ? (seed.x < 0.35 ? -1.0 : 1.0) : (seed.x < 0.85 ? -1.0 : 1.0);
+    float strength = rear ? 1.0 : 0.55;
+    float life = 0.6;
+    float age = frac(c_Cam.w / life * (0.85 + 0.3 * seed.w) + seed.z);
+    float ts = age * life;
+    float t = c_Cam.w;
+    float wheel = side + (rear ? 0.0 : 3.0);
+    float gust = 0.6 + 0.2 * sin(t * (1.7 + 0.6 * side) + wheel) + 0.15 * sin(t * (4.3 - 1.1 * side) + 2.0 * wheel);
+    if (frac(seed.w * 5.31 + seed.z * 2.7) > gust * grounded * strength) return o;
+    float3 contact = road + fwd * (rear ? c_CarRight.w : c_CarFwd.w) + right * side * c_CarUp.w;
+    // The car's motion in its own axes: rolling along fwd, sliding along right.
+    float3 v = c_CarVel.xyz;
+    float rolling = dot(v, fwd), sliding = dot(v, right);
+    float back = rolling >= 0.0 ? 1.0 : -1.0; // the tread throws to the back of the way it rolls
+    float3 tyre = contact - fwd * back * 0.3 + up * 0.1;
+    // Relative to the car: thrown off the tread backwards along the car's own axis and swept
+    // along in its wake (keeping 3/4 of its rolling speed, so it trails close behind); sideways
+    // a sliding tyre pushes the water out the way it slides (between a little behind and a third
+    // ahead of the tyre: the spray flies off the leading side); fanning out, rising.
+    float3 rel = -fwd * (back * (1.5 + 3.0 * seed.y) + rolling * 0.25)
+               + right * (sliding * (-0.1 + 0.45 * frac(seed.z * 9.7)) + side * (0.3 + 1.5 * frac(seed.x * 13.3)))
+               + up * (1.2 + 2.8 * frac(seed.y * 7.1));
+    float3 p = tyre + rel * ts;
+    p.y -= 4.9 * ts * ts;
+    float h = dot(p - contact, up); // not below the road
+    p += up * max(-0.05 - h, 0.0);
+    float3 view = toView(p);
+    if (view.z < 0.5) return o;
+    float size = lerp(0.15, 1.1, sqrt(age)) * (0.7 + 0.6 * frac(seed.w * 3.7)) * (0.6 + 0.4 * gust) * (rear ? 1.0 : 0.75);
+    o.pos = toClip(view + float3(corner.x, corner.y * 2.0 - 1.0, 0.0) * size);
+    o.data = float4(corner.x, corner.y * 2.0 - 1.0, view.z, age);
+    return o;
 }
 
 VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
@@ -1493,7 +1600,8 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     o.data = 0;
     float speed = c_Spray.x;
     if (speed < 4.0 || c_Spray.y <= 0.0) return o;
-    // The car: the closest surface on three points below the screen centre.
+    if (c_Car.w > 0.5) return sprayTyres(seed, corner);
+    // No car from the engine: the closest surface on three points below the screen centre.
     // (The road right below the car would be closer still: stay above it.)
     float z0 = tex2Dlod(s_depth, float4(0.5, 0.6, 0, 0)).r;
     float z1 = tex2Dlod(s_depth, float4(0.5, 0.65, 0, 0)).r;
@@ -1546,6 +1654,174 @@ VSOut sprayVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
     o.pos = toClip(view + float3(corner.x, corner.y * 2.0 - 1.0, 0.0) * size);
     o.data = float4(corner.x, corner.y * 2.0 - 1.0, view.z, age);
     return o;
+}
+
+// Water splash (WaterSplash): what the car throws up in water. Drawn per kind (c_WKind.x) from
+// the same quads, kinds 0-1 and 5-6 as camera-facing billboards, 2-4 as quads lying on the water.
+//   0 droplets of an entry's fountain, 1 its mist, 2 a ring spreading over the surface (c_WKind.w:
+//   which of three), 3 its foam, 4 the wake's foam, 5 the bow's droplets, 6 the dripping when the
+//   car comes out. Events are the entries still young (the newest four); the wake, the bow and the
+//   drips follow the engine's car (c_Car*) and run on the effects' clock (c_Cam.w).
+float4 c_WLevel : register(c27); // water height (world y), the setting (0..1), wake (0..1: the car is in the water), drips (0..1)
+float4 c_WEv[8] : register(c28); // per entry [2e] where (world xyz), seconds since (< 0 none); [2e+1] its velocity (m/s), strength (0..1)
+float4 c_WKind  : register(c36); // x kind, y which entry, z seconds since the car left the water (< 0 none), w which ring
+struct VSOutW { float4 pos : POSITION; float4 data : TEXCOORD0; float4 data2 : TEXCOORD1; };
+
+VSOutW waterHidden() {
+    VSOutW o;
+    o.pos = float4(0, 0, -2, 1);
+    o.data = 0;
+    o.data2 = 0;
+    return o;
+}
+
+// A camera-facing quad at world point p, `size` m from its middle to its edge.
+VSOutW waterBillboard(float3 p, float2 corner, float size, float age, float kind, float opacity, float2 rnd) {
+    VSOutW o = waterHidden();
+    float3 view = toView(p);
+    if (view.z < 0.5 || opacity <= 0.0) return o;
+    float2 c = float2(corner.x, corner.y * 2.0 - 1.0);
+    o.pos = toClip(view + float3(c, 0.0) * size);
+    o.data = float4(c, view.z, age);
+    o.data2 = float4(kind, opacity, rnd);
+    return o;
+}
+
+// A quad lying on the water around `centre`, `size` m from its middle to its edge, turned by `turn`.
+VSOutW waterFlat(float3 centre, float2 corner, float size, float turn, float age, float kind, float opacity, float2 rnd) {
+    VSOutW o = waterHidden();
+    if (opacity <= 0.0) return o;
+    float2 c = float2(corner.x, corner.y * 2.0 - 1.0);
+    float cs = cos(turn), sn = sin(turn);
+    float3 view = toView(centre + float3(c.x * cs - c.y * sn, 0.0, c.x * sn + c.y * cs) * size);
+    if (view.z < 0.5) return o;
+    o.pos = toClip(view);
+    o.data = float4(c, view.z, age);
+    o.data2 = float4(kind, opacity, rnd);
+    return o;
+}
+
+// The car's horizontal axes and speed, for the wake and the drips.
+void waterCar(out float3 fwdH, out float3 rightH, out float3 velH, out float speed) {
+    fwdH = normalize(float3(c_CarFwd.x, 0.0, c_CarFwd.z) + 1e-5);
+    rightH = float3(fwdH.z, 0.0, -fwdH.x);
+    velH = float3(c_CarVel.x, 0.0, c_CarVel.z);
+    speed = length(velH);
+}
+
+VSOutW waterVS(float4 seed : TEXCOORD0, float2 corner : TEXCOORD1) {
+    int kind = (int)(c_WKind.x + 0.5);
+    float level = c_WLevel.x;
+    // The setting thins every kind out (and the shader fades it by the same amount).
+    if (kind != 2 && frac(seed.w * 7.31 + seed.z * 3.7) > saturate(c_WLevel.y * 1.5)) return waterHidden();
+    if (kind <= 3) {
+        int e = (int)(c_WKind.y + 0.5);
+        float4 where = c_WEv[e * 2], motion = c_WEv[e * 2 + 1];
+        float age = where.w, strength = motion.w;
+        if (age < 0.0 || strength <= 0.0) return waterHidden();
+        float4 sd = frac(seed + e * 0.3819 + float4(0.1, 0.7, 0.3, 0.9));
+        float3 vh = float3(motion.x, 0.0, motion.z);
+        float phi = sd.x * 6.2831853;
+        float3 radial = float3(cos(phi), 0.0, sin(phi));
+        float lean = dot(radial, normalize(vh + 1e-4)) * 0.5 + 0.5; // 1: the way the car went
+        float3 spot = float3(where.x, level, where.z);
+        if (kind == 0) {
+            // The fountain: a crown of drops out and up, more of them in the car's direction, carried on by its speed.
+            float t = age - sd.w * 0.12;
+            if (t < 0.0) return waterHidden();
+            float up = (2.0 + 6.5 * sd.y * sd.y) * (0.35 + 0.65 * strength) * (0.6 + 0.4 * lean);
+            float out2 = (0.8 + 3.2 * sd.z) * (0.3 + 0.7 * strength);
+            float3 v = radial * out2 + float3(0.0, up, 0.0) + vh * (0.15 + 0.35 * lean * sd.z);
+            float3 p = spot + radial * 0.5 + v * t;
+            p.y -= 4.9 * t * t;
+            if (p.y < level) return waterHidden(); // back in the water
+            float size = (0.035 + 0.075 * sd.w) * (0.7 + 0.5 * strength);
+            return waterBillboard(p, corner, size, t, 0.0, 1.0, 0.0);
+        }
+        if (kind == 1) {
+            // The mist: puffs that rise, spread and thin out.
+            float life = 1.7;
+            float t = age - sd.w * 0.2;
+            if (t < 0.0 || t > life) return waterHidden();
+            float k = t / life;
+            float drag = (1.0 - exp(-2.0 * t)) * 0.5;
+            float3 p = spot + radial * 0.4 + (radial * (1.0 + 2.5 * sd.z) + float3(0.0, 1.5 + 3.5 * sd.y, 0.0)) * (0.4 + 0.6 * strength) * drag + vh * 0.25 * t;
+            float size = lerp(0.4, 2.0, sqrt(k)) * (0.6 + 0.8 * sd.x) * (0.6 + 0.6 * strength);
+            return waterBillboard(p, corner, size, k, 1.0, strength * (1.0 - k) * (1.0 - k) * smoothstep(0.0, 0.1, k), 0.0);
+        }
+        if (kind == 2) {
+            // Three rings, a fifth of a second apart, the first the largest and brightest.
+            float ring = c_WKind.w;
+            float t = age - ring * 0.2;
+            float life = 2.4;
+            if (t < 0.0 || t > life) return waterHidden();
+            float k = t / life;
+            float radius = 0.7 + t * (2.2 + 3.5 * strength);
+            float opacity = strength * pow(1.0 - k, 1.5) * smoothstep(0.0, 0.06, k) * (1.0 - ring * 0.25);
+            return waterFlat(spot + float3(0.0, 0.03, 0.0), corner, radius / 0.86, 0.0, k, 2.0, opacity, frac(sd.zw + ring * 0.37));
+        }
+        // The foam: patches thrown out around the spot, drifting apart and fraying over a few seconds.
+        float life = 4.0;
+        float t = age - 0.05 - sd.w * 0.15;
+        if (t < 0.0 || t > life) return waterHidden();
+        float k = t / life;
+        float reach = (0.4 + 2.2 * sd.y) * (0.5 + 0.8 * strength);
+        float3 centre = spot + radial * reach * (0.55 + 0.45 * saturate(t * 1.2)) + vh * 0.1 * t + float3(0.0, 0.02, 0.0);
+        float size = (0.5 + 0.9 * sd.z) * (0.6 + 0.6 * strength) * (0.8 + 0.4 * k);
+        float opacity = strength * smoothstep(0.0, 0.08, k) * pow(1.0 - k, 1.2) * 0.9;
+        return waterFlat(centre, corner, size, sd.w * 6.2831853, k, 3.0, opacity, sd.xy);
+    }
+    // The car in the water: the wake, the bow's droplets, the drips. Needs the engine's car.
+    if (c_Car.w < 0.5) return waterHidden();
+    float3 fwdH, rightH, velH;
+    float speed;
+    waterCar(fwdH, rightH, velH, speed);
+    float4 sd = frac(seed + float4(0.45, 0.15, 0.85, 0.55));
+    float wake = c_WLevel.z;
+    float3 bow = c_Car.xyz + fwdH * (c_CarFwd.w + 0.3);
+    bow.y = level;
+    float halfTrack = c_CarUp.w;
+    float side = sd.x < 0.5 ? -1.0 : 1.0;
+    if (kind == 4) {
+        if (wake <= 0.0 || speed < 1.5) return waterHidden();
+        float life = 3.0;
+        float age = frac(c_Cam.w / life * (0.85 + 0.3 * sd.w) + sd.z);
+        float t = age * life;
+        // From the bow in a V (a third of it from the rear, behind the car's middle), at rest on the water.
+        bool rear = sd.y < 0.3;
+        float3 origin = rear ? float3(c_Car.x, level, c_Car.z) + fwdH * c_CarRight.w : bow;
+        float spread = rear ? (sd.x - 0.5) * halfTrack * 2.0 * (1.0 + t) : side * (halfTrack * 0.8 + t * 0.45 * (0.5 + speed / 25.0));
+        float3 centre = origin - velH * t + rightH * spread + float3(0.0, 0.02, 0.0);
+        float size = lerp(0.45, 1.3, sqrt(age)) * (0.7 + 0.6 * sd.z);
+        float opacity = wake * saturate((speed - 1.5) / 6.0) * pow(1.0 - age, 1.5) * smoothstep(0.0, 0.08, age) * 0.8;
+        return waterFlat(centre, corner, size, sd.w * 6.2831853, age, 4.0, opacity, sd.xy);
+    }
+    if (kind == 5) {
+        // The bow wave: droplets leaving the front of the car, to the sides, up and with it.
+        if (wake <= 0.0 || speed < 3.0) return waterHidden();
+        float life = 0.7;
+        float age = frac(c_Cam.w / life * (0.85 + 0.3 * sd.w) + sd.z);
+        float t = age * life;
+        float f = saturate(speed / 18.0);
+        float3 v = rightH * side * (1.0 + 3.0 * sd.y) * f + float3(0.0, (1.5 + 3.5 * sd.x) * f, 0.0) + velH * 0.4;
+        float3 p = bow - velH * t + rightH * side * halfTrack * 0.8 + v * t;
+        p.y -= 4.9 * t * t;
+        if (p.y < level) return waterHidden();
+        float size = 0.03 + 0.04 * sd.w;
+        return waterBillboard(p, corner, size, age, 0.0, wake * saturate((speed - 3.0) / 8.0) * (1.0 - age * 0.5), 0.0);
+    }
+    // 6: drips off the car's underside and sides after it left the water, for three seconds, fewer and fewer.
+    float since = c_WKind.z;
+    if (since < 0.0 || c_WLevel.w <= 0.0) return waterHidden();
+    float released = 2.5 * sd.z * sd.z;
+    float age = since - released;
+    if (age < 0.0 || age > 1.5) return waterHidden();
+    float3 local = c_CarFwd.xyz * lerp(c_CarRight.w, c_CarFwd.w, sd.x) + c_CarRight.xyz * (sd.y - 0.5) * 2.2 * halfTrack + c_CarUp.xyz * (-0.1 + 0.6 * sd.w);
+    float3 p = c_Car.xyz + local - c_CarVel.xyz * age * 0.5;
+    p.y -= 4.9 * age * age;
+    float3 road = c_Car.xyz + c_CarUp.xyz * c_CarVel.w;
+    if (p.y < road.y) return waterHidden();
+    return waterBillboard(p, corner, 0.025 + 0.025 * sd.w, age, 0.0, c_WLevel.w * (1.0 - age / 1.5) * (1.0 - since / 3.2), 0.0);
 }
 
 // Neon trail: quad k joins point k and k + 1 of the ring buffer, widened towards the camera.
@@ -1725,7 +2001,7 @@ void Pipeline::runtimeShaders(std::vector<gfx::ShaderSource>& out) {
     out.push_back({trailSource(), "trailVS", "vs_3_0", "TrailVS"});
     out.push_back({kSolidPS, "main", "ps_3_0", "Solid"});
     out.push_back({kPalettePS, "main", "ps_3_0", "MaterialPalette"});
-    for (const char* entry : {"dropVS", "splashVS", "sprayVS", "snowVS"}) out.push_back({kRainVS, entry, "vs_3_0", "RainVS"});
+    for (const char* entry : {"dropVS", "splashVS", "sprayVS", "snowVS", "waterVS"}) out.push_back({kRainVS, entry, "vs_3_0", "RainVS"});
 }
 
 bool Pipeline::ensureTrail(IDirect3DDevice9* device) {
@@ -2115,6 +2391,8 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
         m_splashVS = blend ? gfx::compileVertexShader(device, kRainVS, "splashVS", "RainVS") : nullptr;
         m_sprayVS = blend ? gfx::compileVertexShader(device, kRainVS, "sprayVS", "RainVS") : nullptr;
         m_snowVS = blend ? gfx::compileVertexShader(device, kRainVS, "snowVS", "RainVS") : nullptr;
+        // Optional: without it the rain stays and only the water splash is off.
+        m_waterVS = blend ? gfx::compileVertexShader(device, kRainVS, "waterVS", "RainVS") : nullptr;
         const D3DVERTEXELEMENT9 elements[] = {
             {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
             {0, 16, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
@@ -2172,23 +2450,280 @@ bool Pipeline::ensureRain(IDirect3DDevice9* device) {
     return ok;
 }
 
-void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt, bool splashes,
+// --- Water: the pictures, the car against the surface, the splash ----------------------------------
+
+bool Pipeline::ensureWaterAtlas(IDirect3DDevice9* device) {
+    if (m_waterAtlas) return true;
+    static bool s_failed = false; // one try per session: a failure is the device's, not worth a retry every frame
+    if (s_failed) return false;
+    std::string report;
+    const std::vector<uint32_t> texels = waterfx::buildAtlas(log::dataDir() + L"\\textures\\water", &report);
+    const UINT n = waterfx::kAtlasSize;
+    IDirect3DTexture9* staging = nullptr;
+    if (FAILED(device->CreateTexture(n, n, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &staging, nullptr))) {
+        s_failed = true;
+        return false;
+    }
+    D3DLOCKED_RECT rect{};
+    if (SUCCEEDED(staging->LockRect(0, &rect, nullptr, 0))) {
+        for (UINT y = 0; y < n; y++) memcpy(static_cast<BYTE*>(rect.pBits) + static_cast<size_t>(y) * rect.Pitch, &texels[static_cast<size_t>(y) * n], n * 4);
+        staging->UnlockRect(0);
+    }
+    const bool ok = SUCCEEDED(device->CreateTexture(n, n, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_waterAtlas, nullptr)) &&
+                    SUCCEEDED(device->UpdateTexture(staging, m_waterAtlas));
+    staging->Release();
+    if (!ok) {
+        gfx::release(m_waterAtlas);
+        s_failed = true;
+        return false;
+    }
+    TMVS_LOG("water: pictures: %s", report.c_str());
+    return true;
+}
+
+// The height of the water surface nearest `y`: the Stadium water blocks' (one height), the sea the
+// engine reports or the measured one. False: none is known.
+bool Pipeline::waterLevelOf(const Inputs& in, float y, float& level) const {
+    const bool measured = in.water[2] >= 0.0f && in.water[2] < 0.5f && m_seaKnown;
+    float levels[2];
+    int n = 0;
+    if (measured) {
+        levels[n++] = m_seaLevel;
+    } else if (in.water[2] > 0.5f) {
+        if (in.water[0] > -1e29f) levels[n++] = in.water[0];
+        if (in.water[1] > -1e29f && in.water[1] != in.water[0]) levels[n++] = in.water[1];
+    }
+    if (n == 0) return false;
+    level = levels[0];
+    for (int i = 1; i < n; i++) {
+        if (fabsf(levels[i] - y) < fabsf(level - y)) level = levels[i];
+    }
+    return true;
+}
+
+namespace {
+// How big the splash is for a car this fast, coming in this steeply: a car that skims in flat
+// throws up less than one that drops in.
+float entryStrength(float speed, float sinAngle) {
+    const float fast = fminf(fmaxf((speed - 2.0f) / 30.0f, 0.0f), 1.0f);
+    return powf(fast, 0.8f) * (0.45f + 0.55f * fminf(sinAngle * 2.2f, 1.0f));
+}
+} // namespace
+
+// The car's tyres against the surface, once per frame on the effects' clock: going under starts a
+// splash (where, how fast, how steeply), staying under keeps the wake, coming out starts the drips.
+// A jump of the car (respawn, replay cut) is none of these.
+void Pipeline::updateWater(const Inputs& in, const Settings& s, float dt) {
+    if (dt <= 1e-4f) return;
+    const float* w = in.carWheels;
+    const float bottom = in.carPosePosition[1] + in.carPoseUp[1] * w[3]; // where the tyres touch
+    float level = 0.0f;
+    m_waterLevelKnown = s.waterSplash > 0.0f && in.carPoseKnown && waterLevelOf(in, bottom, level);
+    if (!m_waterLevelKnown) {
+        m_waterValid = m_waterIn = false;
+        m_waterWake = m_waterInFor = 0.0f;
+        return;
+    }
+    m_waterLevelY = level;
+    const float depth = level - bottom;
+    const float* p = in.carPosePosition;
+    const float moved = sqrtf((p[0] - m_waterPrev[0]) * (p[0] - m_waterPrev[0]) + (p[1] - m_waterPrev[1]) * (p[1] - m_waterPrev[1]) +
+                              (p[2] - m_waterPrev[2]) * (p[2] - m_waterPrev[2]));
+    if (!m_waterValid || moved > 150.0f * dt + 1.0f) {
+        m_waterIn = depth > 0.05f;
+        m_waterInFor = 0.0f;
+        if (!m_waterIn) m_waterWake = 0.0f;
+    } else if (!m_waterIn && depth > 0.05f) {
+        // Where it crossed the surface, between the last frame and this one.
+        const float before = level - m_waterPrevBottom;
+        const float f = fminf(fmaxf((0.0f - before) / (depth - before), 0.0f), 1.0f);
+        float v[3];
+        for (int j = 0; j < 3; j++) v[j] = (p[j] - m_waterPrev[j]) / dt;
+        const float speed = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        const float horizontal = sqrtf(v[0] * v[0] + v[2] * v[2]);
+        if (speed > 2.0f) {
+            WaterEntry& e = m_waterEntries[m_waterNext++ & 3];
+            for (int j = 0; j < 3; j++) {
+                e.position[j] = m_waterPrev[j] + (p[j] - m_waterPrev[j]) * f;
+                e.velocity[j] = v[j];
+            }
+            e.position[1] = level;
+            const float sinAngle = fmaxf(-v[1], 0.0f) / speed;
+            e.strength = entryStrength(speed, sinAngle);
+            e.time = in.time;
+            if (in.time - m_waterLogTime >= 1.0f || in.time < m_waterLogTime) {
+                m_waterLogTime = in.time;
+                TMVS_LOG("water: splash at %.0f m/s, %.0f deg entry (strength %.2f)", speed, atan2f(fmaxf(-v[1], 0.0f), horizontal) * 57.29578f, e.strength);
+            }
+        }
+        m_waterIn = true;
+        m_waterInFor = 0.0f;
+    } else if (m_waterIn && depth < -0.05f) {
+        m_waterIn = false;
+        m_waterExitTime = in.time;
+        m_waterDrip = fminf(m_waterInFor / 0.5f, 1.0f);
+    }
+    if (m_waterIn) m_waterInFor += dt;
+    const float target = m_waterIn ? fminf(depth / 0.35f, 1.0f) : 0.0f;
+    m_waterWake += (target - m_waterWake) * fminf(dt * 6.0f, 1.0f);
+    memcpy(m_waterPrev, p, sizeof(m_waterPrev));
+    m_waterPrevBottom = bottom;
+    m_waterValid = true;
+}
+
+// What the car throws up in the water, over the finished image (inside drawRain: its camera and
+// car constants are set, its quads and textures bound). Costs nothing while no entry is young
+// and the car is not in the water.
+void Pipeline::drawWater(IDirect3DDevice9* device, const Inputs& in, const Settings& s) {
+    float entries[4][2][4];
+    for (auto& e : entries) for (auto& r : e) r[0] = r[1] = r[2] = r[3] = 0.0f;
+    float level = m_waterLevelY;
+    float wake = m_waterWake, drip = m_waterDrip;
+    float dripSince = in.time - m_waterExitTime;
+    bool any = false;
+    for (int i = 0; i < 4; i++) {
+        const WaterEntry& e = m_waterEntries[i];
+        const float age = in.time - e.time;
+        const bool young = age >= 0.0f && age < 6.0f && e.strength > 0.0f;
+        any = any || young;
+        for (int j = 0; j < 3; j++) {
+            entries[i][0][j] = e.position[j];
+            entries[i][1][j] = e.velocity[j];
+        }
+        entries[i][0][3] = young ? age : -1.0f;
+        entries[i][1][3] = e.strength;
+    }
+    bool car = in.carPoseKnown && m_waterLevelKnown;
+    if (in.splashTest[0] >= 0.0f && in.splashTest[3] > 0.5f) {
+        // A car that isn't there, on the water below the middle of the screen (see Inputs::splashTest).
+        const float* V = in.view;
+        float camera[3];
+        for (int j = 0; j < 3; j++) camera[j] = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
+        float fx = V[2], fz = V[10];
+        const float fl = sqrtf(fx * fx + fz * fz);
+        fx = fl > 1e-4f ? fx / fl : 0.0f;
+        fz = fl > 1e-4f ? fz / fl : 1.0f;
+        level = 0.0f;
+        waterLevelOf(in, in.water[0], level);
+        const int mode = static_cast<int>(in.splashTest[3] + 0.5f);
+        const float t = in.splashTest[0], speed = in.splashTest[1];
+        const float angle = in.splashTest[2] * 0.0174533f;
+        // Where the ray through the lower middle of the screen (0.8 of the way down) meets the water (else 12 m ahead).
+        const float* P = in.projection;
+        const float rx = (0.0f - P[8]) / P[0], ry = (-0.62f - P[9]) / P[5];
+        float ray[3];
+        for (int j = 0; j < 3; j++) ray[j] = rx * V[j * 4 + 0] + ry * V[j * 4 + 1] + V[j * 4 + 2];
+        const float reach = ray[1] < -0.02f ? (level - camera[1]) / ray[1] : 12.0f;
+        const float along = fminf(fmaxf(reach, 4.0f), 40.0f);
+        const float spot[3] = {camera[0] + ray[0] * along, level, camera[2] + ray[2] * along};
+        const float run = mode == 2 ? speed * t : 0.0f; // the car has driven on since it came in
+        WaterEntry e;
+        e.position[0] = spot[0] - fx * run;
+        e.position[1] = level;
+        e.position[2] = spot[2] - fz * run;
+        e.velocity[0] = fx * speed * cosf(angle);
+        e.velocity[1] = -speed * sinf(angle);
+        e.velocity[2] = fz * speed * cosf(angle);
+        e.strength = mode <= 2 ? entryStrength(speed, sinf(angle)) : 0.0f;
+        for (int j = 0; j < 3; j++) {
+            entries[0][0][j] = e.position[j];
+            entries[0][1][j] = e.velocity[j];
+        }
+        entries[0][0][3] = mode <= 2 ? t : -1.0f;
+        entries[0][1][3] = e.strength;
+        for (int i = 1; i < 4; i++) entries[i][0][3] = -1.0f;
+        any = mode <= 2;
+        wake = mode == 2 ? 1.0f : 0.0f;
+        drip = mode == 3 ? 1.0f : 0.0f;
+        dripSince = mode == 3 ? t : -1.0f;
+        car = true;
+        const float* w = in.carWheels;
+        const float height = mode == 3 ? 0.9f : -0.25f; // out of the water, up on the shore, or in it
+        const float pose[5][4] = {
+            {spot[0], level + height - w[3], spot[2], 1.0f},
+            {fx, 0.0f, fz, w[0]},
+            {fz, 0.0f, -fx, w[1]},
+            {0.0f, 1.0f, 0.0f, w[2]},
+            {fx * speed, 0.0f, fz * speed, w[3]},
+        };
+        device->SetVertexShaderConstantF(22, &pose[0][0], 5);
+    }
+    if (dripSince < 0.0f || dripSince > 3.2f) {
+        dripSince = -1.0f;
+        drip = 0.0f;
+    }
+    const bool driving = car && (wake > 0.01f || dripSince >= 0.0f);
+    if (!any && !driving) return;
+
+    const float constants[4] = {level, s.waterSplash, wake, drip};
+    device->SetVertexShaderConstantF(27, constants, 1);
+    device->SetVertexShaderConstantF(28, &entries[0][0][0], 8);
+    device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+    device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    device->SetVertexShader(m_waterVS);
+    device->SetPixelShader(m_shaders[kWaterSplash]);
+    passConstants(device, 0.4f + 0.6f * s.waterSplash, 0.0f);
+    bind(device, 5, m_waterAtlas, true);
+    device->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+    device->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+    auto draw = [&](float kind, float entry, float ring, UINT quads) {
+        const float k[4] = {kind, entry, dripSince, ring};
+        device->SetVertexShaderConstantF(36, k, 1);
+        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, quads * 4, 0, quads * 2);
+    };
+    for (int i = 0; i < 4; i++) {
+        if (entries[i][0][3] < 0.0f) continue;
+        draw(0.0f, static_cast<float>(i), 0.0f, 420); // the fountain
+        draw(1.0f, static_cast<float>(i), 0.0f, 90);  // its mist
+        for (int ring = 0; ring < 3; ring++) draw(2.0f, static_cast<float>(i), static_cast<float>(ring), 1);
+        draw(3.0f, static_cast<float>(i), 0.0f, 14);  // its foam
+    }
+    if (wake > 0.01f && car) {
+        draw(4.0f, 0.0f, 0.0f, 160); // the wake
+        draw(5.0f, 0.0f, 0.0f, 120); // the bow wave
+    }
+    if (dripSince >= 0.0f && car) draw(6.0f, 0.0f, 0.0f, 120);
+    device->SetTexture(5, nullptr);
+    profileMark(kWaterSplash);
+}
+
+void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settings& s, float dt, bool advance, bool splashes,
                         IDirect3DSurface9* target) {
     const float* V = in.view;
     const float* P = in.projection;
     float camera[3];
     for (int j = 0; j < 3; j++) camera[j] = -(V[12] * V[j * 4 + 0] + V[13] * V[j * 4 + 1] + V[14] * V[j * 4 + 2]);
-    // Camera velocity (smoothed): drops streak along their motion relative to the camera.
-    if (in.temporal) {
+    // Camera velocity (smoothed): drops streak along their motion relative to the camera, the
+    // spray takes it as the car's speed. Measured from frame to frame where the rain is drawn: in
+    // the export's own frames only the finished frame gets here (its samples end before), and it
+    // is a repeat, not temporal; measured on temporal frames only, the spray stayed off there.
+    if (advance) {
         float velocity[3] = {};
-        if (m_temporalValid && dt > 1e-4f) {
-            const float* W = m_prevView;
-            for (int j = 0; j < 3; j++) {
-                const float before = -(W[12] * W[j * 4 + 0] + W[13] * W[j * 4 + 1] + W[14] * W[j * 4 + 2]);
-                velocity[j] = (camera[j] - before) / dt;
-            }
+        if (m_temporalValid && m_rainCameraValid && dt > 1e-4f) {
+            for (int j = 0; j < 3; j++) velocity[j] = (camera[j] - m_rainCamera[j]) / dt;
         }
         for (int j = 0; j < 3; j++) m_cameraVelocity[j] += (velocity[j] - m_cameraVelocity[j]) * 0.3f;
+        memcpy(m_rainCamera, camera, sizeof(m_rainCamera));
+        m_rainCameraValid = true;
+        // The spray's car from the engine: its own velocity, from its position on the same clock
+        // (the camera's lags behind in curves and is nothing like it in replays' camera moves).
+        // More than 150 m/s: a respawn or a cut, no speed.
+        float car[3] = {};
+        bool moved = false;
+        if (in.carPoseKnown && m_carPrevValid && dt > 1e-4f) {
+            for (int j = 0; j < 3; j++) car[j] = (in.carPosePosition[j] - m_carPrev[j]) / dt;
+            moved = car[0] * car[0] + car[1] * car[1] + car[2] * car[2] < 150.0f * 150.0f;
+        }
+        if (moved) {
+            for (int j = 0; j < 3; j++) m_carVelocity[j] += (car[j] - m_carVelocity[j]) * 0.5f;
+        } else if (!in.carPoseKnown || m_carPrevValid) {
+            memset(m_carVelocity, 0, sizeof(m_carVelocity));
+        }
+        memcpy(m_carPrev, in.carPosePosition, sizeof(m_carPrev));
+        m_carPrevValid = in.carPoseKnown;
+        updateWater(in, s, dt);
     }
     const float wind[2] = {2.5f + s.wind * 5.0f, 1.0f + s.wind * 2.0f};
     const float fall = 9.0f;
@@ -2253,11 +2788,43 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     pc[4][3] = 0.25f; // longest streak: 1/8 of the screen
     device->SetVertexShaderConstantF(0, &vc[0][0], 10);
     device->SetVertexShaderConstantF(10, &pc[0][0], 5);
-    const float speed = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
+    // The spray: from the engine's car when its pose is known (its own speed along the road), else
+    // the camera's speed (the chase camera keeps up with the car).
+    const bool pose = in.carPoseKnown;
+    float speed = sqrtf(m_cameraVelocity[0] * m_cameraVelocity[0] + m_cameraVelocity[2] * m_cameraVelocity[2]);
+    if (pose) {
+        const float* u = in.carPoseUp;
+        const float* v = m_carVelocity;
+        const float up = v[0] * u[0] + v[1] * u[1] + v[2] * u[2];
+        const float along[3] = {v[0] - u[0] * up, v[1] - u[1] * up, v[2] - u[2] * up};
+        speed = sqrtf(along[0] * along[0] + along[1] * along[1] + along[2] * along[2]);
+    }
     // Whether the tyres touch the road is checked per particle in the depth buffer.
     const float thrown = s.spray * fmaxf(s.wetness, s.snowCover * 2.0f); // water, or powder snow (a lot of it)
     const float spray[4] = {speed, thrown * fminf(fmaxf((speed - 4.0f) / 25.0f, 0.0f), 1.0f), 0.0f, 0.0f};
     device->SetVertexShaderConstantF(15, spray, 1);
+    if (advance && thrown > 0.0f) {
+        m_sprayStats.frames++;
+        if (spray[1] > 0.0f) m_sprayStats.throwing++;
+        m_sprayStats.topSpeed = fmaxf(m_sprayStats.topSpeed, speed);
+        m_sprayStats.speedSum += speed;
+        m_sprayStats.topAmount = fmaxf(m_sprayStats.topAmount, spray[1]);
+    }
+    const float* w = in.carWheels;
+    const float car[5][4] = {
+        {in.carPosePosition[0], in.carPosePosition[1], in.carPosePosition[2], pose ? 1.0f : 0.0f},
+        {in.carForward[0], in.carForward[1], in.carForward[2], w[0]},
+        {in.carRight[0], in.carRight[1], in.carRight[2], w[1]},
+        {in.carPoseUp[0], in.carPoseUp[1], in.carPoseUp[2], w[2]},
+        {m_carVelocity[0], m_carVelocity[1], m_carVelocity[2], w[3]},
+    };
+    device->SetVertexShaderConstantF(22, &car[0][0], 5);
+    if (spray[1] > 0.0f && advance && (pose ? 1 : 0) != m_sprayFrom && m_sprayLogged < 20) {
+        m_sprayFrom = pose ? 1 : 0;
+        m_sprayLogged++;
+        TMVS_LOG("pipeline: spray %s", pose ? "from the car's four tyres (the engine's car and axes)"
+                                            : "behind the car found in the depth buffer (no car from the engine)");
+    }
 
     device->SetRenderTarget(0, target);
     D3DVIEWPORT9 viewport = {0, 0, in.width, in.height, 0.0f, 1.0f};
@@ -2314,6 +2881,15 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         device->SetVertexShader(m_splashVS);
         device->SetPixelShader(m_shaders[kRainSplash]);
         passConstants(device, 0.8f, 0.0f);
+        const float nearBox = vc[8][3];
+        const float nearLayer[4] = {nearBox, 0.0f, 1.0f, 0.4f};
+        device->SetVertexShaderConstantF(19, nearLayer, 1);
+        device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, kRainDrops * 4, 0, splashCount * 4, 0, splashCount * 2);
+        // The far layer: the same splashes over sixteen times the ground, reaching about 110 m
+        // ahead, 2.5 times as large (far away they are a few pixels; spread out, they read as the
+        // rain hitting the whole road).
+        const float farLayer[4] = {nearBox * 4.0f, nearBox, 2.5f, 0.45f};
+        device->SetVertexShaderConstantF(19, farLayer, 1);
         device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, kRainDrops * 4, 0, splashCount * 4, 0, splashCount * 2);
         profileMark(kRainSplash);
     }
@@ -2335,6 +2911,8 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
         }
         profileMark(kSnowFlake);
     }
+
+    if (s.waterSplash > 0.0f && m_waterVS && ensureWaterAtlas(device)) drawWater(device, in, s);
 
     device->SetStreamSource(0, nullptr, 0, 0);
     device->SetIndices(nullptr);
@@ -2871,6 +3449,23 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         m_spillValid = false;
     }
 
+    // 3d. WaterClarity: the game's image with clear water on the water's pixels (PS_ClearWater), the
+    // lighting starts from it. Only with the game's materials (they tell the water) and its height.
+    IDirect3DTexture9* lightingColour = in.hdr ? in.hdr : in.color;
+    if (materials && s.waterClarity > 0.0f && s.waterSurfaces > 0.0f && waterKnown && ensureWaterAtlas(device) &&
+        (m_clearWater.valid() || m_clearWater.create(device, m_hdr.width, m_hdr.height, D3DFMT_A16B16G16R16F))) {
+        bind(device, 0, lightingColour, false);
+        bind(device, 1, m_nd.texture, false);
+        bind(device, 5, m_waterAtlas, true);
+        device->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+        device->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+        bind(device, 13, m_materialTexture, false);
+        passConstants(device, s.waterClarity, 0.0f);
+        runPass(device, kClearWater, m_clearWater);
+        device->SetTexture(5, nullptr);
+        lightingColour = m_clearWater.texture;
+    }
+
     // 4. Lighting composite.
     bind(device, 0, in.color, false);
     bind(device, 1, m_nd.texture, false);
@@ -2885,6 +3480,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     bind(device, 11, m_giHistory[m_giIndex].texture, false);
     bind(device, 13, materials ? m_materialTexture : nullptr, false);
     if (in.hdr) bind(device, 0, in.hdr, false); // GameHdr: light above 1.0 (the guesses in there clamp it)
+    if (lightingColour != (in.hdr ? in.hdr : in.color)) bind(device, 0, lightingColour, false); // WaterClarity
     // EngineLights: light sources from the game, not guessed (s14 = what its additive draws added).
     if (engineLights && in.added) bind(device, 14, in.added, false);
     // GameLight: the light the game's shaders lit each surface with (s15): the night sky spares
@@ -2910,33 +3506,138 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     }
 
+    // 4a. CarHeadlights: two spotlights on the car (PS_Headlights), added to the lit image. Without the
+    // engine's car there is no lamp to put them on.
+    if (s.carHeadlights > 0.0f && in.carPoseKnown) {
+        const float* p = in.carPosePosition;
+        const float* f = in.carForward;
+        const float* r = in.carRight;
+        const float* u = in.carPoseUp;
+        // The Stadium car's lamps: 1.9 m ahead of the drawn position, 0.62 m to each side, a little
+        // above the wheel centres; aimed 4 degrees down at the road (my estimate of the car's model).
+        const float pitch = 0.07f;
+        float aim[3], left[3], right[3];
+        for (int j = 0; j < 3; j++) {
+            aim[j] = f[j] * cosf(pitch) - u[j] * sinf(pitch);
+            const float base = p[j] + f[j] * 1.9f + u[j] * 0.15f;
+            left[j] = base - r[j] * 0.62f;
+            right[j] = base + r[j] * 0.62f;
+        }
+        const float h[4][4] = {
+            {1.0f, 0.89f, 0.985f, 90.0f}, // the cone: 27 degrees to its edge (54 across), 10 to its bright core; the range
+            {left[0], left[1], left[2], 1.0f},
+            {right[0], right[1], right[2], 2.0f * fminf(fmaxf(s.carHeadlightBeam, 0.0f), 1.0f)}, // w: the beam in the air
+            {aim[0], aim[1], aim[2], 0.0f},
+        };
+        float constants[4][4];
+        memcpy(constants, h, sizeof(constants));
+        constants[0][0] = fminf(s.carHeadlights, 1.0f);
+        constants[0][3] = fminf(fmaxf(s.carHeadlightRange, 20.0f), 200.0f);
+        device->SetPixelShaderConstantF(64, &constants[0][0], 4);
+        bind(device, 0, in.hdr ? in.hdr : in.color, false);
+        bind(device, 1, m_nd.texture, false);
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+        device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+        device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+        runPass(device, kHeadlights, m_hdr);
+        device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+    }
+
     // 4b. Neon trail behind the car, into the HDR image so it blooms.
     if (s.neonTrail > 0.0f && ensureTrail(device)) drawTrail(device, in, s, temporal ? dt : 0.0f);
     else m_trailReset = true;
+
+    // 4c. The video export's own frames: this sample's lit scene goes into the frame's float sum.
+    // Every sample but the frame's last ends here; the last grades the average from here on, as
+    // one frame.
+    const bool finishing = in.accumulate == 2;
+    if (in.accumulate != 0) {
+        const bool first = in.accumulateFirst || m_accumWeight <= 0.0f;
+        // fp32 for the sum; fp16 only if that can't be made (fine for the few samples of a plain
+        // supersampled frame, its last bits go with a hundred).
+        D3DFORMAT sumFormat = D3DFMT_A32B32G32R32F;
+        bool sum = m_accum[0].create(device, in.width, in.height, sumFormat) && m_accum[1].create(device, in.width, in.height, sumFormat);
+        if (!sum) {
+            sumFormat = D3DFMT_A16B16G16R16F;
+            sum = m_accum[0].create(device, in.width, in.height, sumFormat) && m_accum[1].create(device, in.width, in.height, sumFormat);
+            static bool s_logged = false;
+            if (!s_logged) {
+                s_logged = true;
+                TMVS_LOG("pipeline: video frames summed in fp16 (no fp32 target%s)", sum ? "" : ", nor fp16: each sample alone");
+            }
+        }
+        if (sum) {
+            const int next = m_accumIndex ^ 1;
+            bind(device, 0, first ? nullptr : m_accum[m_accumIndex].texture, false);
+            bind(device, 1, m_hdr.texture, false);
+            passConstants(device, 1.0f, first ? 1.0f : 0.0f);
+            runPass(device, kAccumulate, m_accum[next]);
+            device->SetTexture(1, nullptr);
+            m_accumIndex = next;
+            m_accumWeight = (first ? 0.0f : m_accumWeight) + 1.0f;
+        } else {
+            m_accumWeight = 0.0f;
+        }
+        if (!finishing) {
+            profileEnd();
+            finishRender(device, in, softwareVP);
+            return true;
+        }
+        if (m_accumWeight > 0.0f) {
+            bind(device, 0, m_accum[m_accumIndex].texture, false);
+            passConstants(device, 1.0f / m_accumWeight, 0.0f);
+            runPass(device, kAccumResolve, m_hdr);
+            m_accumWeight = 0.0f;
+        }
+    }
+    // The grade's clock: in the export from one finished frame to the next (the time of one sample
+    // would slow the exposure and the focus down by the number of samples). The last sample of a
+    // supersampled frame is a repeat, yet its frame is new.
+    const bool postTemporal = finishing || temporal;
+    float postDt = dt;
+    if (finishing) {
+        postDt = m_postTimeValid ? fmaxf(in.time - m_postLastTime, 0.0f) : 0.0f;
+        m_postLastTime = in.time;
+        m_postTimeValid = true;
+    }
 
     // 5. Depth of field and motion blur (cinematic, HDR).
     gfx::Target* hdr = &m_hdr;
     IDirect3DTexture9* dofFocus = nullptr; // the focus distance the blur used (final pass)
     const bool motionBlur = s.motionBlur > 0.0f && m_temporalValid;
     const bool dof = s.depthOfField > 0.0f;
-    if ((motionBlur || dof) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
+    // Accumulation depth of field: the samples are the blur; only the focus is measured.
+    if (dof && in.lensDof && !motionBlur && (postTemporal && !in.freeze)) {
+        const int focus = m_focusIndex ^ 1;
+        bind(device, 0, m_nd.texture, false);
+        bind(device, 1, m_focus[m_focusIndex].texture, false);
+        passConstants(device, 1.0f - expf(-postDt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+        focusOnCarConstants(device, in, s);
+        runPass(device, kFocus, m_focus[focus]);
+        m_focusIndex = focus;
+    }
+    if ((motionBlur || (dof && !in.lensDof)) && m_hdr2.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
         // Photo mode: the blur at full resolution (half resolution showed as coarse, blocky
         // edges once the image stands still and gets looked at). The video export too: it has
         // the time, and its frames get looked at one by one.
         const bool best = in.photo || in.video;
         gfx::Target* dofTarget = &m_dof;
-        if (dof && best && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
+        if (dof && best && !in.lensDof && m_dofFull.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) dofTarget = &m_dofFull;
         if (dof) {
             int focus = m_focusIndex;
-            if (temporal && !in.freeze) {
+            if (postTemporal && !in.freeze) {
                 focus ^= 1;
                 bind(device, 0, m_nd.texture, false);
                 bind(device, 1, m_focus[m_focusIndex].texture, false);
-                passConstants(device, 1.0f - expf(-dt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
+                passConstants(device, 1.0f - expf(-postDt * 4.0f), m_temporalValid ? 0.0f : 1.0f, in.focusPoint[0], in.focusPoint[1]);
                 focusOnCarConstants(device, in, s);
                 runPass(device, kFocus, m_focus[focus]);
                 m_focusIndex = focus;
             }
+        }
+        if (dof && !in.lensDof) {
+            const int focus = m_focusIndex;
             bind(device, 0, m_hdr.texture, true);
             bind(device, 1, dofTarget == &m_dofFull ? m_nd.texture : m_ndHalf.texture, false);
             bind(device, 2, m_focus[focus].texture, false);
@@ -2955,6 +3656,9 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
                 dofTarget = &second;
             }
         }
+        // Accumulation depth of field with motion blur: the composite takes no blur (u_Cine.y 0).
+        const float cine[4] = {s.motionBlur, in.lensDof ? 0.0f : s.depthOfField, s.focusDistance, s.bokehSize};
+        device->SetPixelShaderConstantF(24, cine, 1);
         bind(device, 0, m_hdr.texture, true);
         bind(device, 1, dofTarget->texture, true);
         bind(device, 2, m_nd.texture, false);
@@ -3071,14 +3775,14 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
 
     // 8. Exposure (extra cameras reuse the adapted value).
-    if (temporal && !in.freeze) {
+    if (postTemporal && !in.freeze) {
         bind(device, 0, m_bloomDown[3].texture, true);
         runPass(device, kLuminance, m_luminance);
         const int previous = m_adaptIndex;
         m_adaptIndex ^= 1;
         bind(device, 0, m_luminance.texture, false);
         bind(device, 1, m_adapted[previous].texture, false);
-        passConstants(device, 1.0f - expf(-dt * 1.6f), m_historyValid ? 0.0f : 1.0f);
+        passConstants(device, 1.0f - expf(-postDt * 1.6f), m_historyValid ? 0.0f : 1.0f);
         runPass(device, kAdapt, m_adapted[m_adaptIndex]);
         m_historyValid = true;
     }
@@ -3089,7 +3793,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool drops = (lensDrops > 0.0f || lensSnow > 0.0f) && post;
     // Roof over the camera, eased like the sky average: the lens dries off under a bridge.
     const bool shelter = drops && heightMap && m_heightValid && s.weatherShelter;
-    if (shelter && (temporal || !m_shelterValid)) {
+    if (shelter && (postTemporal || !m_shelterValid)) {
         const int previous = m_shelterIndex;
         m_shelterIndex ^= 1;
         bind(device, 0, m_heightMap[m_heightIndex].texture, false);
@@ -3099,7 +3803,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         const float rainVelocity[4] = {2.5f + s.wind * 5.0f, -9.0f, 1.0f + s.wind * 2.0f, 0.0f};
         const float snowVelocity[4] = {(1.0f + s.wind * 7.0f) * fminf(s.snow, 1.5f), -1.1f, (0.5f + s.wind * 3.0f) * fminf(s.snow, 1.5f), 0.0f};
         device->SetPixelShaderConstantF(33, s.rain > 0.0f ? rainVelocity : snowVelocity, 1);
-        passConstants(device, 1.0f - expf(-dt / 0.8f), (m_shelterValid && m_temporalValid) ? 0.0f : 1.0f);
+        passConstants(device, 1.0f - expf(-postDt / 0.8f), (m_shelterValid && m_temporalValid) ? 0.0f : 1.0f);
         runPass(device, kShelter, m_shelter[m_shelterIndex]);
         m_shelterValid = true;
     } else if (!shelter) {
@@ -3139,24 +3843,34 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     device->SetPixelShaderConstantF(44, finalMaterials, 1);
     const float lutConstants[4] = {lut ? (in.lut > 1.0f ? 1.0f : in.lut) : 0.0f, (n - 1.0f) / n, 0.5f / n, mapNight ? 1.0f : 0.0f};
     device->SetPixelShaderConstantF(42, lutConstants, 1);
-    passConstants(device, 1.0f / norm, 0.0f, s.nightSurfaces);
+    // c32.w (final pass): HDR10, the tone curve's top in the game's whites (0 = SDR).
+    passConstants(device, 1.0f / norm, in.floatOutput ? 1.0f : 0.0f, s.nightSurfaces, in.floatOutput ? in.hdrPeak : 0.0f);
     // c33 (final pass): the lamp glare's and the lamp haze's strength (0: off, s10 not read).
     device->SetPixelShaderConstantF(33, lampScale, 1);
     if (lampReady) bind(device, 10, m_lampUp[0].texture, true);
     // Disabled post passes are skipped entirely, not just passed through. SMAA takes FXAA's
     // place (FXAA if its textures can't be made).
-    const bool smaa = s.fxaa && s.smaa && post && ensureSmaa(device, in.width, in.height);
+    const bool smaa = s.fxaa && s.smaa && post && !in.floatOutput && ensureSmaa(device, in.width, in.height);
     const bool fxaa = s.fxaa && post && !smaa;
     const bool taa = s.taa && post && temporal && m_taa[0].create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
                      m_taa[1].create(device, in.width, in.height, D3DFMT_A16B16G16R16F);
-    const bool sharpen = s.sharpen > 0.001f && post && !upscale;
+    // Not on the HDR10 frame: the sharpen pass works on 0..1 and cuts at white.
+    const bool sharpen = s.sharpen > 0.001f && post && !upscale && !(in.floatOutput && in.hdrPeak > 0.0f);
     // Chain: Final -> [FXAA | SMAA] -> [TAA] -> [Sharpen | Copy] -> output (RenderScale: -> EASU -> RCAS).
+    // The export's frame stays float all the way (its 10 bits, its own dither at the end).
+    gfx::Target* ldr = &m_ldr;
+    gfx::Target* ldr2 = &m_ldr2;
+    if (in.floatOutput && m_ldrFloat.create(device, in.width, in.height, D3DFMT_A16B16G16R16F) &&
+        m_ldr2Float.create(device, in.width, in.height, D3DFMT_A16B16G16R16F)) {
+        ldr = &m_ldrFloat;
+        ldr2 = &m_ldr2Float;
+    }
     IDirect3DTexture9* current = nullptr;
     if (!fxaa && !smaa && !taa && !sharpen && !drops) {
         runPass(device, kFinal, output, in.width, in.height);
     } else {
-        runPass(device, kFinal, m_ldr);
-        current = m_ldr.texture;
+        runPass(device, kFinal, *ldr);
+        current = ldr->texture;
     }
     if (lampReady) device->SetTexture(10, nullptr); // the next frame draws into it
     if (fxaa) {
@@ -3166,8 +3880,8 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
             runPass(device, kFXAA, output, in.width, in.height);
             current = nullptr;
         } else {
-            runPass(device, kFXAA, m_ldr2);
-            current = m_ldr2.texture;
+            runPass(device, kFXAA, *ldr2);
+            current = ldr2->texture;
         }
     }
     if (smaa) {
@@ -3225,13 +3939,20 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     // Rain particles go on top of the finished image: TAA would erase thin, fast drops as
     // flicker, and keeping them out of its history avoids trails.
-    if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && post && ensureRain(device))
-        drawRain(device, in, s, dt, heightMap && m_heightValid, output);
+    // The water splash needs the water's height (Stadium, TMUF sea) and the engine's car (or the test's).
+    const bool splashing = s.waterSplash > 0.0f && (in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown)) &&
+                           (in.carPoseKnown || in.splashTest[0] >= 0.0f);
+    if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f || splashing) && post && ensureRain(device))
+        drawRain(device, in, s, postDt, postTemporal, heightMap && m_heightValid, output);
     if (upscale) upscaleOutput(device, in, s, screen);
     profileEnd();
+    finishRender(device, in, softwareVP);
+    return true;
+}
 
+void Pipeline::finishRender(IDirect3DDevice9* device, const Inputs& in, BOOL softwareVP) {
     if (in.repeat) swapRepeatCamera();
-    if (temporal) {
+    if (in.temporal) {
         keepRepeatCamera();
         memcpy(m_prevView, in.view, sizeof(m_prevView));
         memcpy(m_prevProjection, in.projection, sizeof(m_prevProjection));
@@ -3240,7 +3961,6 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
     for (int i = 12; i < 16; i++) device->SetTexture(i, nullptr); // the LUT, the materials: nothing of ours stays bound (Reset)
     if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
-    return true;
 }
 
 // Every 15 frames the water material on screen is summed up (PS_WaterLevel) and read back once
@@ -3250,8 +3970,9 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
 // to the 3 frames the game lets the GPU fall behind in game, 4 times a second).
 void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
     // Not there after 6 frames (the previewer, which queues frames without presenting them): read
-    // anyway, as before.
-    const bool done = m_waterPending < 0 || !m_waterDone || m_waterDone->GetData(nullptr, 0, D3DGETDATA_FLUSH) == S_OK ||
+    // anyway, as before. Asked without D3DGETDATA_FLUSH: with it the call itself waited for the
+    // GPU (23 ms on my card, the export's plane copies showed it); the game's Present flushes.
+    const bool done = m_waterPending < 0 || !m_waterDone || m_waterDone->GetData(nullptr, 0, 0) == S_OK ||
                       m_frame - m_waterDrawn >= 6;
     if (m_waterPending >= 0 && m_frame - m_waterDrawn >= 2 && done) {
         const gfx::Target& t = m_waterLevel[m_waterPending];
@@ -3288,6 +4009,37 @@ void Pipeline::measureSeaLevel(IDirect3DDevice9* device) {
             m_waterDrawn = m_frame;
         }
     }
+}
+
+bool Pipeline::tenBitPlanesSupported(IDirect3DDevice9* device) {
+    IDirect3D9* d3d = nullptr;
+    D3DDEVICE_CREATION_PARAMETERS params{};
+    D3DDISPLAYMODE mode{};
+    if (FAILED(device->GetDirect3D(&d3d)) || !d3d) return false;
+    const bool ok = SUCCEEDED(device->GetCreationParameters(&params)) && SUCCEEDED(device->GetDisplayMode(0, &mode)) &&
+                    SUCCEEDED(d3d->CheckDeviceFormat(params.AdapterOrdinal, params.DeviceType, mode.Format, D3DUSAGE_RENDERTARGET, D3DRTYPE_TEXTURE,
+                                                     D3DFMT_A16B16G16R16));
+    d3d->Release();
+    return ok;
+}
+
+bool Pipeline::exportPlanes(IDirect3DDevice9* device, IDirect3DTexture9* frame, UINT videoW, UINT videoH, const float crop[4], bool tenBit, float dither,
+                            float hdrWhite, gfx::Target& luma, gfx::Target& chroma) {
+    if (!m_ready || !frame || videoW < 8 || videoH < 2 || (videoW & 3) || (videoH & 1)) return false;
+    const D3DFORMAT format = tenBit ? D3DFMT_A16B16G16R16 : D3DFMT_A8R8G8B8;
+    if (!luma.create(device, videoW / 4, videoH, format) || !chroma.create(device, videoW / 4, videoH / 2, format)) return false;
+    const BOOL softwareVP = setPassStates(device);
+    bind(device, 0, frame, true);
+    const float sizes[4] = {1.0f / videoW, 1.0f / videoH, crop[0], crop[1]};
+    // c33.z: 0 NV12, 1 P010, above 1 P010 in HDR10 with the frame's 1.0 at that many nits.
+    const float modes[4] = {crop[2], crop[3], tenBit ? (hdrWhite > 1.0f ? hdrWhite : 1.0f) : 0.0f, dither};
+    device->SetPixelShaderConstantF(32, sizes, 1);
+    device->SetPixelShaderConstantF(33, modes, 1);
+    runPass(device, kExportLuma, luma);
+    runPass(device, kExportChroma, chroma);
+    device->SetTexture(0, nullptr);
+    if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+    return true;
 }
 
 bool Pipeline::readColor(IDirect3DDevice9* device, IDirect3DSurface9* surface, std::vector<uint32_t>& out) {
@@ -3350,6 +4102,10 @@ bool Pipeline::copyColorArea(IDirect3DDevice9* device, IDirect3DTexture9* source
 
 bool Pipeline::resolveScene(IDirect3DDevice9* device, IDirect3DTexture9* scene, IDirect3DSurface9* target, const RECT& area) {
     return copyScene(device, scene, target, area, false);
+}
+
+bool Pipeline::showLinear(IDirect3DDevice9* device, IDirect3DTexture9* frame, IDirect3DSurface9* target, const RECT& area) {
+    return copyScene(device, frame, target, area, false, true);
 }
 
 // RenderScale: m_scaled (the finished image at the scene's size) up to `output` with FSR 1. RCAS
@@ -3491,7 +4247,7 @@ bool Pipeline::fillBars(IDirect3DDevice9* device, IDirect3DTexture9* band, IDire
     return drew;
 }
 
-bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add) {
+bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, IDirect3DSurface9* target, const RECT& area, bool add, bool srgbWrite) {
     if (!m_ready) return false;
     D3DSURFACE_DESC desc{};
     target->GetDesc(&desc);
@@ -3510,7 +4266,9 @@ bool Pipeline::copyScene(IDirect3DDevice9* device, IDirect3DTexture9* source, ID
     passConstants(device, 0.0f, 0.0f, 1.0f, 1.0f);
     const float mode[4] = {add ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f}; // c33.x: 1 = as it is (added), 0 = cut to 0..1
     device->SetPixelShaderConstantF(33, mode, 1);
+    if (srgbWrite) device->SetRenderState(D3DRS_SRGBWRITEENABLE, TRUE);
     runPass(device, kResolve, target, desc.Width, desc.Height);
+    if (srgbWrite) device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
     if (add) device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
     device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
     device->SetTexture(0, nullptr);

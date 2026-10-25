@@ -9,6 +9,7 @@
 namespace tmshaders {
 struct Field;
 struct Settings;
+class Config;
 
 // The F8 menu, shared by the TMNF and the ManiaPlanet builds. The game side fills a Host.
 namespace menu {
@@ -22,7 +23,40 @@ struct PassTimings {
     virtual float total() const = 0;        // ms
 };
 
+// The Resource packs page's packs (TrackMania Nations/United: the environment mods in
+// Skins\<Environment>\Mod). The choices themselves are in Config (packChoices).
+struct ResourcePacks {
+    struct Pack {
+        std::string environment; // "Stadium"
+        std::string name;        // shown
+        std::string file;        // the choice saved for it (UTF-8)
+        std::string detail;      // a line about it ("4.0 MB")
+        bool usable = true;      // false: the game doesn't know it yet (added after it started)
+    };
+    virtual ~ResourcePacks() = default;
+    virtual const std::vector<Pack>& packs() = 0;
+    virtual std::vector<std::string> environments() = 0; // Stadium first
+    virtual void refresh() = 0;                           // the folders read again
+    // The pack's picture (0: none, or not loaded yet) and its size in pixels.
+    virtual ImTextureID preview(size_t index, int& width, int& height) = 0;
+    virtual void openFolder(const std::string& environment) = 0;
+    virtual std::string status() = 0; // what the last map loaded with ("" before the first)
+    virtual bool hooked() = 0;        // false: this game build can't
+    // The loaded map: whether its pack can be switched now, and whether the choice differs.
+    struct Live {
+        bool possible = false, differs = false;
+        std::string environment, shown, wanted;
+    };
+    virtual Live live() = 0;
+    virtual std::string applyNow() = 0; // switches the loaded map's textures; a line saying how it went
+};
+
 struct Host {
+    // The Resource packs page (null: no such page, TrackMania 2).
+    ResourcePacks* resourcePacks = nullptr;
+    // The Misc page: minimap, split times, finish effects (null: no such page, TrackMania 2 or a build
+    // without TMVS_MISC_TOOLS). Draws the page's content.
+    std::function<void()> miscPage;
     bool depthAvailable = true;
     bool engineHooks = true;
     bool sunKnown = false;
@@ -50,6 +84,10 @@ struct Host {
     // The compare split switch's second line: what photos and the game's side get (null: TMNF's).
     const char* splitNote = nullptr;
     std::function<void()> photoOn;
+    // TrackMania Nations/United: photo mode can leave the cars out (the *Hide car* switch).
+    bool photoHideCar = false;
+    // A photo, a capture or the video export is running: no detached windows this frame.
+    bool hideDetached = false;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
     // Whether shaders can be reloaded (TMNF only). The hotkeys themselves are in keys.h.
@@ -70,7 +108,18 @@ struct Host {
 // Colours, sizes and fonts (after ImGui::CreateContext, before the renderer backend).
 void setupStyle(HWND window);
 float scale();
+ImFont* titleFont(); // headings (null before setupStyle)
+// A look setting was changed outside the menu's pages (the photo panel's sliders): the preset becomes Custom
+// (or the base preset again when everything is back), as for the menu's own sliders; without it a
+// map-type preset or a mood change puts the preset's values back over the change.
+void lookEdited(Config& config, Settings& s);
+// The menu's windows: the menu itself when it is open, and the pages the player pulled out of it
+// into windows of their own (those with "Keep open when the menu closes" also while it is closed).
+// Host::hideDetached: a photo or a capture is being taken, no detached windows.
 void draw(const Host& host);
+// A detached window wants to stay on screen with the menu closed: the host must keep calling draw
+// and let the mouse reach it the way it does for the compare split's bar.
+bool pinnedWindows();
 // A setting's explanation for its tooltip (null: none), for the host's own panel too.
 const char* tooltip(const char* key);
 // Set when the user asks for a shader reload from the menu; cleared by the call.

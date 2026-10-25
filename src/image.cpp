@@ -191,6 +191,14 @@ bool decodeJpeg(const void* data, size_t size, std::vector<uint32_t>& pixels, in
     return true;
 }
 
+bool inflateRaw(const void* data, size_t size, size_t expected, std::vector<unsigned char>& out) {
+    if (size > 0x7fffffff || expected > 0x7fffffff) return false;
+    out.resize(expected);
+    const int n = stbi_zlib_decode_noheader_buffer(reinterpret_cast<char*>(out.data()), static_cast<int>(expected),
+                                                   static_cast<const char*>(data), static_cast<int>(size));
+    return n == static_cast<int>(expected);
+}
+
 bool readJpeg(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height) {
     FILE* f = _wfopen(path.c_str(), L"rb");
     if (!f) return false;
@@ -200,6 +208,26 @@ bool readJpeg(const std::wstring& path, std::vector<uint32_t>& pixels, int& widt
     while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0) data.insert(data.end(), buffer, buffer + n);
     fclose(f);
     return !data.empty() && decodeJpeg(data.data(), data.size(), pixels, width, height);
+}
+
+bool readRgba(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height) {
+    FILE* f = _wfopen(path.c_str(), L"rb");
+    if (!f) return false;
+    std::vector<unsigned char> data;
+    unsigned char buffer[16384];
+    size_t n;
+    while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0 && data.size() < (64u << 20)) data.insert(data.end(), buffer, buffer + n);
+    fclose(f);
+    int channels = 0;
+    unsigned char* rgba = data.empty() ? nullptr : stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &width, &height, &channels, 4);
+    if (!rgba) return false;
+    pixels.resize(static_cast<size_t>(width) * height);
+    for (size_t i = 0; i < pixels.size(); i++) {
+        const unsigned char* p = rgba + i * 4;
+        pixels[i] = (static_cast<uint32_t>(p[3]) << 24) | (static_cast<uint32_t>(p[0]) << 16) | (static_cast<uint32_t>(p[1]) << 8) | p[2];
+    }
+    stbi_image_free(rgba);
+    return true;
 }
 
 bool menuIcon(int size, std::vector<uint32_t>& pixels) {

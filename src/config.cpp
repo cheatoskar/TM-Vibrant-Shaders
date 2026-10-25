@@ -24,6 +24,9 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("LongShadows", "Long shadows", "Lighting", Float, longShadows, 0.0f, 1.0f),
         TMVS_FIELD("AOStrength", "Ambient occlusion", "Lighting", Float, aoStrength, 0.0f, 2.0f),
         TMVS_FIELD("NeonLight", "Neon light spill", "Lighting", Float, neonLight, 0.0f, 2.0f),
+        TMVS_FIELD("CarHeadlights", "Car headlights", "Lighting", Float, carHeadlights, 0.0f, 1.0f),
+        TMVS_FIELD("CarHeadlightRange", "Headlight range (m)", "Lighting", Float, carHeadlightRange, 20.0f, 200.0f),
+        TMVS_FIELD("CarHeadlightBeam", "Headlight beam", "Lighting", Float, carHeadlightBeam, 0.0f, 1.0f),
         TMVS_FIELD("GlobalIllumination", "Bounce light", "Lighting", Float, globalIllumination, 0.0f, 2.0f),
         TMVS_FIELD("SunLight", "Sun tint", "Lighting", Float, sunLight, 0.0f, 1.5f),
         TMVS_FIELD("AmbientTint", "Ambient tint", "Lighting", Float, ambientTint, 0.0f, 1.5f),
@@ -108,6 +111,8 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("Reflections", "Track reflections", "Weather and surfaces", Float, reflections, 0.0f, 2.0f),
         TMVS_FIELD("ReflectionBlur", "Reflection blur", "Weather and surfaces", Float, reflectionBlur, 0.0f, 1.0f),
         TMVS_FIELD("WaterSurfaces", "Water", "Weather and surfaces", Float, waterSurfaces, 0.0f, 1.0f),
+        TMVS_FIELD("WaterClarity", "Water clarity", "Weather and surfaces", Float, waterClarity, 0.0f, 1.0f),
+        TMVS_FIELD("WaterSplash", "Water splash", "Weather and surfaces", Float, waterSplash, 0.0f, 1.0f),
         TMVS_FIELD("GrassDetail", "Grass detail", "Weather and surfaces", Float, grassDetail, 0.0f, 1.0f),
         TMVS_FIELD("MowingStripes", "Mowing stripes", "Weather and surfaces", Float, mowingStripes, 0.0f, 1.0f),
 
@@ -124,9 +129,21 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("DofAutofocus", "Focus on", "Cinematic", Int, dofAutofocus, 0.0f, 1.0f),
         TMVS_FIELD("BokehSize", "Max blur (px)", "Cinematic", Float, bokehSize, 2.0f, 24.0f),
         TMVS_FIELD("CinematicOnlyInReplays", "Cinematic in replays only", "Cinematic", Bool, cinematicOnlyInReplays, 0.0f, 1.0f),
-        TMVS_FIELD("VideoCodec", "Video format", "Cinematic", Int, videoCodec, 0.0f, 2.0f),
+        TMVS_FIELD("VideoCodec", "Video format", "Cinematic", Int, videoCodec, 0.0f, 3.0f),
+        TMVS_FIELD("VideoQuality", "Video quality", "Cinematic", Int, videoQuality, 0.0f, 100.0f),
+        TMVS_FIELD("Video10Bit", "10-bit video", "Cinematic", Bool, video10Bit, 0.0f, 1.0f),
         TMVS_FIELD("VideoBitrate", "Video bitrate (Mbit/s)", "Cinematic", Float, videoBitrate, 0.0f, 200.0f),
+        TMVS_FIELD("VideoEncoder", "Video encoder", "Cinematic", Int, videoEncoder, 0.0f, 1.0f),
+        TMVS_FIELD("VideoFfmpegPreset", "ffmpeg preset", "Cinematic", Int, videoFfmpegPreset, 0.0f, 2.0f),
         TMVS_FIELD("VideoExportBest", "Best export quality", "Cinematic", Bool, videoExportBest, 0.0f, 1.0f),
+        TMVS_FIELD("VideoOwnFrames", "Blend samples in HDR", "Cinematic", Bool, videoOwnFrames, 0.0f, 1.0f),
+        TMVS_FIELD("VideoShutter", "Shutter angle", "Cinematic", Float, videoShutter, 45.0f, 360.0f),
+        TMVS_FIELD("VideoLensDof", "Lens depth of field", "Cinematic", Bool, videoLensDof, 0.0f, 1.0f),
+        TMVS_FIELD("VideoGrain", "Video grain", "Cinematic", Float, videoGrain, 0.0f, 1.0f),
+        TMVS_FIELD("VideoAspect", "Video crop", "Cinematic", Int, videoAspect, 0.0f, 2.0f),
+        TMVS_FIELD("VideoHdr", "HDR10 video", "Cinematic", Bool, videoHdr, 0.0f, 1.0f),
+        TMVS_FIELD("VideoHdrPeak", "HDR peak (nits)", "Cinematic", Float, videoHdrPeak, 400.0f, 4000.0f),
+        TMVS_FIELD("VideoHdrWhite", "HDR paper white (nits)", "Cinematic", Float, videoHdrWhite, 100.0f, 400.0f),
 
         TMVS_FIELD("TAA", "Temporal AA", "Image quality", Bool, taa, 0.0f, 1.0f),
         TMVS_FIELD("TAAJitter", "TAA jitter", "Image quality", Bool, taaJitter, 0.0f, 1.0f),
@@ -149,6 +166,7 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("CasterAlphaTest", "Fence shadows", "Game integration", Bool, casterAlphaTest, 0.0f, 1.0f),
         TMVS_FIELD("CleanWater", "Clean water", "Game integration", Bool, cleanWater, 0.0f, 1.0f),
         TMVS_FIELD("WaterFarReflections", "Far water reflections", "Game integration", Bool, waterFarReflections, 0.0f, 1.0f),
+        TMVS_FIELD("OverlapFix", "Overlapping blocks: last placed on top", "Game integration", Bool, overlapFix, 0.0f, 1.0f),
         TMVS_FIELD("ReadableGameDepth", "Effects in replays", "Game integration", Bool, readableGameDepth, 0.0f, 1.0f),
         TMVS_FIELD("ShadeMenuBars", "Replay menu shading", "Game integration", Bool, shadeMenuBars, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameFX", "Turn off game FX", "Game integration", Bool, disableGameFx, 0.0f, 1.0f),
@@ -177,6 +195,7 @@ const char* presetName(Preset preset) {
         case Preset::ReplayCinema: return "Replay Cinema";
         case Preset::Storm: return "Storm";
         case Preset::Snowstorm: return "Snowstorm";
+        case Preset::Horror: return "Horror";
         case Preset::Custom: return "Custom";
         default: return "?";
     }
@@ -221,6 +240,8 @@ Settings Config::lookForMood(Mood m) const {
 namespace {
 
 const wchar_t* const kMoodKeys[] = {L"PresetDay", L"PresetDusk", L"PresetNight"};
+// [ResourcePacks]: "<Environment>.Day" ... (the menu says sunset for Dusk).
+const wchar_t* const kPackMoodKeys[] = {L"Day", L"Sunset", L"Night"};
 
 std::wstring widen(const std::string& text) {
     if (text.empty()) return {};
@@ -262,9 +283,9 @@ std::string presetFromText(const std::wstring& text, const std::string& fallback
 bool isSystemField(const Field& f) {
     return !strcmp(f.key, "NeonTrail") || !strncmp(f.key, "Trail", 5) || !strcmp(f.key, "DisableGameMSAA") || !strcmp(f.key, "ReadableGameDepth") || !strcmp(f.key, "AutoQuality") ||
            !strcmp(f.key, "DisableGameFX") || !strcmp(f.key, "GameMaterials") || !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "WeatherSound") || !strcmp(f.key, "CinematicOnlyInReplays") ||
-           !strcmp(f.key, "VideoExportBest") || !strcmp(f.key, "VideoCodec") || !strcmp(f.key, "VideoBitrate") || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
+           !strncmp(f.key, "Video", 5) || !strcmp(f.key, "TAAJitter") || !strcmp(f.key, "GameNight") || !strcmp(f.key, "EngineMoon") || !strcmp(f.key, "GameSkyClouds") ||
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
-           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "GameGBuffer") ||
+           !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "OverlapFix") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
            !strcmp(f.key, "FsrSharpness");
 }
@@ -409,11 +430,12 @@ const char* const kTagKeys[] = {
     "GrassDetail", "MowingStripes", "Wind", "Spray", "MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "FXAA",
     "TAA", "Sharpen", "Quality", "BlackHoleAzimuth", "BlackHoleElevation", "AuroraSpeed", "ReflectionBlur",
     "WeatherShelter", "HazeDistance", "BorderGlow", "DofAutofocus", "LampGlare", "LampHaze", "LampSkyHalos", "Floodlights",
-    "SMAA",
+    "SMAA", "WaterSplash", "WaterClarity", "CarHeadlights",
+    "CarHeadlightRange", "CarHeadlightBeam",
 };
 const char* const kTagPresets[] = {
     "Vibrant", "Realistic", "Golden Hour", "Dreamy", "Neon", "Horizon", "Aurora", "Competition", "Performance",
-    "Rainy", "Replay Cinema", "Storm", "Snowstorm",
+    "Rainy", "Replay Cinema", "Storm", "Snowstorm", "Horror",
 };
 constexpr unsigned char kTagVersion = 1;
 const char kBase64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -930,7 +952,9 @@ bool Config::applyShareCode(const std::string& text, std::string& message) {
 
 std::vector<std::string> Config::presetNames() const {
     std::vector<std::string> names;
-    for (int i = 0; i < static_cast<int>(Preset::Custom); i++) names.push_back(presetName(static_cast<Preset>(i)));
+    for (int i = 0; i < static_cast<int>(Preset::Custom); i++) {
+        names.push_back(presetName(static_cast<Preset>(i)));
+    }
     names.insert(names.end(), m_userPresets.begin(), m_userPresets.end());
     return names;
 }
@@ -996,6 +1020,21 @@ bool Config::selectPreset(const std::string& name) {
     else if (autoMood) manualPick = true;
     markDirty();
     return true;
+}
+
+Config::PackChoice& Config::packChoice(const std::string& environment) {
+    for (auto& entry : packChoices) {
+        if (!_stricmp(entry.first.c_str(), environment.c_str())) return entry.second;
+    }
+    packChoices.emplace_back(environment, PackChoice());
+    return packChoices.back().second;
+}
+
+const Config::PackChoice* Config::findPackChoice(const std::string& environment) const {
+    for (const auto& entry : packChoices) {
+        if (!_stricmp(entry.first.c_str(), environment.c_str())) return &entry.second;
+    }
+    return nullptr;
 }
 
 void Config::resumeMoodPresets() {
@@ -1243,6 +1282,7 @@ void applyPreset(Settings& s, Preset preset) {
     const bool keepClean = s.cleanHighlights;
     const bool keepCleanWater = s.cleanWater;
     const bool keepWaterFar = s.waterFarReflections;
+    const bool keepOverlapFix = s.overlapFix;
     const bool keepGBuffer = s.gameGBuffer;
     const bool keepGameLight = s.gameLight;
     const bool keepMenuBars = s.shadeMenuBars;
@@ -1255,9 +1295,7 @@ void applyPreset(Settings& s, Preset preset) {
     const float keepTarget = s.targetFps;
     const float keepSound = s.weatherSound;
     const bool keepReplayOnly = s.cinematicOnlyInReplays;
-    const bool keepVideoBest = s.videoExportBest;
-    const int keepVideoCodec = s.videoCodec;
-    const float keepVideoBitrate = s.videoBitrate;
+    const Settings keepVideo = s; // the video export's settings (Video*): all of them belong to the installation
     const bool keepJitter = s.taaJitter;
     const float keepScale = s.renderScale, keepFsrSharpness = s.fsrSharpness;
     const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
@@ -1283,6 +1321,7 @@ void applyPreset(Settings& s, Preset preset) {
     s.cleanHighlights = keepClean;
     s.cleanWater = keepCleanWater;
     s.waterFarReflections = keepWaterFar;
+    s.overlapFix = keepOverlapFix;
     s.gameGBuffer = keepGBuffer;
     s.gameLight = keepGameLight;
     s.shadeMenuBars = keepMenuBars;
@@ -1295,12 +1334,29 @@ void applyPreset(Settings& s, Preset preset) {
     s.targetFps = keepTarget;
     s.weatherSound = keepSound;
     s.cinematicOnlyInReplays = keepReplayOnly;
-    s.videoExportBest = keepVideoBest;
-    s.videoCodec = keepVideoCodec;
-    s.videoBitrate = keepVideoBitrate;
+    s.videoExportBest = keepVideo.videoExportBest;
+    s.videoCodec = keepVideo.videoCodec;
+    s.videoBitrate = keepVideo.videoBitrate;
+    s.videoQuality = keepVideo.videoQuality;
+    s.video10Bit = keepVideo.video10Bit;
+    s.videoEncoder = keepVideo.videoEncoder;
+    s.videoFfmpegPreset = keepVideo.videoFfmpegPreset;
+    s.videoOwnFrames = keepVideo.videoOwnFrames;
+    s.videoShutter = keepVideo.videoShutter;
+    s.videoLensDof = keepVideo.videoLensDof;
+    s.videoGrain = keepVideo.videoGrain;
+    s.videoAspect = keepVideo.videoAspect;
+    s.videoHdr = keepVideo.videoHdr;
+    s.videoHdrPeak = keepVideo.videoHdrPeak;
+    s.videoHdrWhite = keepVideo.videoHdrWhite;
     s.taaJitter = keepJitter;
     s.renderScale = keepScale;
     s.fsrSharpness = keepFsrSharpness;
+#ifdef TMVS_MANIAPLANET
+    // ManiaPlanet: clear water at 0.6 (my game test); the splash stays off by default.
+    s.waterClarity = 0.6f;
+    s.waterSplash = 0.0f;
+#endif
     switch (preset) {
         case Preset::Vibrant:
             // The Settings defaults are the base of every preset; Vibrant's own tuning on top.
@@ -1586,7 +1642,7 @@ void applyPreset(Settings& s, Preset preset) {
             s.puddles = 0.55f;
             s.reflections = 1.5f;
             s.lightning = 1.0f;
-            s.spray = 0.25f;
+            s.spray = 0.45f; // from the tyres it reads as spray at 0.45 in my export
             s.wind = 0.9f;
             s.sunLight = 0.0f;
             s.shadowStrength = 0.1f;
@@ -1654,6 +1710,51 @@ void applyPreset(Settings& s, Preset preset) {
             s.filmGrain = 0.015f;
             s.autoExposure = 0.2f;  // a white world must not be pulled down to grey
             break;
+        case Preset::Horror:
+            // Black night: the game's lamps are taken out (Floodlights 0 removes the light its additive
+            // draws add, the lamps' glow and their spill; the neon strips and every glow with them) and
+            // what the game baked into the night is darkened by the night itself (Night darkening 1,
+            // GameLight stays off). Only the car's headlights light the road, in thick fog.
+            s.skyMode = 2;
+            s.starAmount = 0.5f;
+            s.skyBrightness = 0.25f;
+            s.skyNight = 1.0f;
+            s.skyColor[0] = 0.12f; s.skyColor[1] = 0.17f; s.skyColor[2] = 0.3f;
+            s.carHeadlights = 1.0f;
+            s.carHeadlightRange = 90.0f;
+            s.carHeadlightBeam = 0.5f;
+            s.floodlights = 0.0f;
+            s.borderGlow = 0.0f;
+            s.lampGlare = 0.0f;
+            s.lampHaze = 0.0f;
+            s.neonLight = 0.0f;
+            s.highlightBoost = 0.0f;
+            s.volumetricLight = 0.0f;
+            s.godRays = 0.0f;
+            s.sunGlow = 0.0f;
+            s.lensFlare = 0.0f;
+            s.globalIllumination = 0.0f;
+            s.shadowStrength = 0.0f;
+            s.longShadows = 0.0f;
+            s.aoStrength = 1.4f;
+            s.ambientTint = 0.9f;
+            s.fogDensity = 5.0f;
+            s.fogHeightFalloff = 0.4f;
+            s.hazeDistance = 0.6f;
+            s.bloom = 0.1f;
+            s.bloomRadius = 0.8f;
+            s.exposure = -0.4f;
+            s.autoExposure = 0.0f;  // the dark stays dark
+            s.contrast = 1.12f;
+            s.saturation = 0.6f;
+            s.vibrance = 0.0f;
+            s.temperature = -0.1f;
+            s.shadowTint = 0.5f;
+            s.vignette = 0.55f;
+            s.chromaticAberration = 0.0f;
+            s.filmGrain = 0.03f;
+            s.reflections = 0.4f;
+            break;
         default:
             break;
     }
@@ -1677,11 +1778,35 @@ void Config::load() {
     // Until 1.3 the menu had a simple and an advanced view: advanced opens the studio.
     const int advanced = GetPrivateProfileIntW(L"General", L"AdvancedMenu", 0, ini) != 0 ? 2 : 0;
     menuPage = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuPage", advanced, ini));
+    // [Windows]: Page=detached,minimized,keepOpen,x,y,w,h,opacity
+    menuWindows.clear();
+    {
+        std::vector<wchar_t> section(32768);
+        GetPrivateProfileSectionW(L"Windows", section.data(), static_cast<DWORD>(section.size()), ini);
+        for (const wchar_t* line = section.data(); *line; line += wcslen(line) + 1) {
+            const wchar_t* eq = wcschr(line, L'=');
+            if (!eq || eq == line) continue;
+            MenuWindow w;
+            int det = 0, min = 0, keep = 0, opacity = 100;
+            float x = 0, y = 0, width = 0, height = 0;
+            if (swscanf(eq + 1, L"%d,%d,%d,%f,%f,%f,%f,%d", &det, &min, &keep, &x, &y, &width, &height, &opacity) != 8) continue;
+            w.detached = det != 0;
+            w.minimized = min != 0;
+            w.keepOpen = keep != 0;
+            w.x = x, w.y = y, w.w = width, w.h = height;
+            w.opacity = opacity < 30 ? 30 : (opacity > 100 ? 100 : opacity);
+            std::string key;
+            for (const wchar_t* c = line; c < eq; c++) key += static_cast<char>(towlower(*c) & 0x7f);
+            menuWindows[key] = w;
+        }
+    }
     hoverPreview = GetPrivateProfileIntW(L"General", L"HoverPreview", 1, ini) != 0;
     menuFull = GetPrivateProfileIntW(L"General", L"MenuFull", 0, ini) != 0;
     checkUpdates = GetPrivateProfileIntW(L"General", L"CheckForUpdates", 1, ini) != 0;
     photoAuto = GetPrivateProfileIntW(L"General", L"PhotoAuto", 1, ini) != 0;
     photoHideHud = GetPrivateProfileIntW(L"General", L"PhotoHideHud", 1, ini) != 0;
+    photoHideEditor = GetPrivateProfileIntW(L"General", L"PhotoHideEditor", 0, ini) != 0;
+    photoHideCar = GetPrivateProfileIntW(L"General", L"PhotoHideCar", 0, ini) != 0;
     photoTiles = static_cast<int>(GetPrivateProfileIntW(L"General", L"PhotoTiles", 2, ini));
     photoTiles = photoTiles < 2 ? 2 : (photoTiles > 4 ? 4 : photoTiles);
     photoDof = 0.5f;
@@ -1692,6 +1817,31 @@ void Config::load() {
     lutAmount = 1.0f;
     if (GetPrivateProfileStringW(L"General", L"LutAmount", L"", text, 128, ini)) lutAmount = static_cast<float>(_wtof(text));
     lutAmount = lutAmount < 0.0f ? 0.0f : (lutAmount > 1.0f ? 1.0f : lutAmount);
+    // Resource packs: the keys are the environments found when they were chosen.
+    packReplaceMapMod = GetPrivateProfileIntW(L"ResourcePacks", L"ReplaceMapMod", 1, ini) != 0;
+    packChoices.clear();
+    {
+        std::vector<wchar_t> section(32768);
+        const DWORD n = GetPrivateProfileSectionW(L"ResourcePacks", section.data(), static_cast<DWORD>(section.size()), ini);
+        for (const wchar_t* line = section.data(); n && *line; line += wcslen(line) + 1) {
+            const wchar_t* eq = wcschr(line, L'=');
+            if (!eq) continue;
+            std::wstring key(line, eq), value(eq + 1);
+            if (key == L"ReplaceMapMod") continue;
+            const size_t dot = key.find(L'.');
+            PackChoice& choice = packChoice(narrow(key.substr(0, dot)));
+            const std::string chosen = narrow(value);
+            if (dot == std::wstring::npos) {
+                choice.all = chosen;
+            } else if (key.compare(dot + 1, std::wstring::npos, L"PerMood") == 0) {
+                choice.perMood = _wtoi(value.c_str()) != 0;
+            } else {
+                for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
+                    if (key.compare(dot + 1, std::wstring::npos, kPackMoodKeys[i]) == 0) choice.mood[i] = chosen;
+                }
+            }
+        }
+    }
     rememberMoodPick = GetPrivateProfileIntW(L"General", L"RememberMoodPick", 0, ini) != 0;
     manualPick = GetPrivateProfileIntW(L"General", L"ManualPick", 0, ini) != 0;
     menuSections = static_cast<int>(GetPrivateProfileIntW(L"General", L"MenuSections", 0, ini));
@@ -1714,6 +1864,7 @@ void Config::load() {
     settings.cleanHighlights = GetPrivateProfileIntW(L"Settings", L"CleanHighlights", 1, ini) != 0;
     settings.cleanWater = GetPrivateProfileIntW(L"Settings", L"CleanWater", 1, ini) != 0;
     settings.waterFarReflections = GetPrivateProfileIntW(L"Settings", L"WaterFarReflections", 1, ini) != 0;
+    settings.overlapFix = GetPrivateProfileIntW(L"Settings", L"OverlapFix", 1, ini) != 0;
     settings.gameGBuffer = GetPrivateProfileIntW(L"Settings", L"GameGBuffer", 0, ini) != 0;
     settings.gameLight = GetPrivateProfileIntW(L"Settings", L"GameLight", 0, ini) != 0;
     settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;
@@ -1728,8 +1879,28 @@ void Config::load() {
     settings.cinematicOnlyInReplays = GetPrivateProfileIntW(L"Settings", L"CinematicOnlyInReplays", 1, ini) != 0;
     settings.videoExportBest = GetPrivateProfileIntW(L"Settings", L"VideoExportBest", 1, ini) != 0;
     settings.videoCodec = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoCodec", 1, ini));
-    if (settings.videoCodec < 0 || settings.videoCodec > 2) settings.videoCodec = 1;
+    if (settings.videoCodec < 0 || settings.videoCodec > 3) settings.videoCodec = 1;
     if (GetPrivateProfileStringW(L"Settings", L"VideoBitrate", L"", target, 32, ini)) settings.videoBitrate = static_cast<float>(_wtof(target));
+    settings.videoQuality = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoQuality", 80, ini)), 0, 100);
+    settings.video10Bit = GetPrivateProfileIntW(L"Settings", L"Video10Bit", 0, ini) != 0;
+    settings.videoEncoder = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoEncoder", 0, ini)), 0, 1);
+    settings.videoFfmpegPreset = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoFfmpegPreset", 1, ini)), 0, 2);
+    settings.videoOwnFrames = GetPrivateProfileIntW(L"Settings", L"VideoOwnFrames", 1, ini) != 0;
+    if (GetPrivateProfileStringW(L"Settings", L"VideoShutter", L"", target, 32, ini)) {
+        settings.videoShutter = std::clamp(static_cast<float>(_wtof(target)), 45.0f, 360.0f);
+    }
+    settings.videoLensDof = GetPrivateProfileIntW(L"Settings", L"VideoLensDof", 1, ini) != 0;
+    if (GetPrivateProfileStringW(L"Settings", L"VideoGrain", L"", target, 32, ini)) {
+        settings.videoGrain = std::clamp(static_cast<float>(_wtof(target)), 0.0f, 1.0f);
+    }
+    settings.videoAspect = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VideoAspect", 0, ini)), 0, 2);
+    settings.videoHdr = GetPrivateProfileIntW(L"Settings", L"VideoHdr", 0, ini) != 0;
+    if (GetPrivateProfileStringW(L"Settings", L"VideoHdrPeak", L"", target, 32, ini)) {
+        settings.videoHdrPeak = std::clamp(static_cast<float>(_wtof(target)), 400.0f, 4000.0f);
+    }
+    if (GetPrivateProfileStringW(L"Settings", L"VideoHdrWhite", L"", target, 32, ini)) {
+        settings.videoHdrWhite = std::clamp(static_cast<float>(_wtof(target)), 100.0f, 400.0f);
+    }
     settings.taaJitter = GetPrivateProfileIntW(L"Settings", L"TAAJitter", 1, ini) != 0;
     if (GetPrivateProfileStringW(L"Settings", L"RenderScale", L"", target, 32, ini)) {
         settings.renderScale = std::clamp(static_cast<float>(_wtof(target)), 0.5f, 1.0f);
@@ -1772,11 +1943,20 @@ void Config::save() {
     wchar_t page[16];
     swprintf(page, 16, L"%d", menuPage);
     ini.set(L"General", L"MenuPage", page);
+    for (const auto& entry : menuWindows) {
+        const MenuWindow& w = entry.second;
+        wchar_t value[160];
+        swprintf(value, 160, L"%d,%d,%d,%.0f,%.0f,%.0f,%.0f,%d", w.detached ? 1 : 0, w.minimized ? 1 : 0, w.keepOpen ? 1 : 0, w.x, w.y, w.w, w.h,
+                 w.opacity);
+        ini.set(L"Windows", widen(entry.first).c_str(), value);
+    }
     ini.set(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0");
     ini.set(L"General", L"MenuFull", menuFull ? L"1" : L"0");
     ini.set(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0");
     ini.set(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0");
     ini.set(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0");
+    ini.set(L"General", L"PhotoHideEditor", photoHideEditor ? L"1" : L"0");
+    ini.set(L"General", L"PhotoHideCar", photoHideCar ? L"1" : L"0");
     wchar_t photo[32];
     swprintf(photo, 32, L"%d", photoTiles);
     ini.set(L"General", L"PhotoTiles", photo);
@@ -1788,6 +1968,15 @@ void Config::save() {
     ini.set(L"General", L"LutAmount", photo);
     ini.set(L"General", L"RememberMoodPick", rememberMoodPick ? L"1" : L"0");
     ini.set(L"General", L"ManualPick", manualPick ? L"1" : L"0");
+    if (!packChoices.empty() || !packReplaceMapMod) ini.set(L"ResourcePacks", L"ReplaceMapMod", packReplaceMapMod ? L"1" : L"0");
+    for (const auto& entry : packChoices) {
+        const std::wstring env = widen(entry.first);
+        ini.set(L"ResourcePacks", env.c_str(), widen(entry.second.all).c_str());
+        ini.set(L"ResourcePacks", (env + L".PerMood").c_str(), entry.second.perMood ? L"1" : L"0");
+        for (int i = 0; i < static_cast<int>(Mood::Count); i++) {
+            ini.set(L"ResourcePacks", (env + L"." + kPackMoodKeys[i]).c_str(), widen(entry.second.mood[i]).c_str());
+        }
+    }
     wchar_t sections[16];
     swprintf(sections, 16, L"%d", menuSections);
     ini.set(L"General", L"MenuSections", sections);
@@ -1799,6 +1988,7 @@ void Config::save() {
     ini.set(L"General", L"LastMood", value);
     writeFields(own, ini, L"Settings", true);
     keys::save(ini);
+    if (saveExtra) saveExtra(ini);
     if (ini.save(m_path)) {
         m_dirty = false;
         return;

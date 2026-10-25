@@ -26,9 +26,15 @@ bool writePng(const std::wstring& path, const unsigned char* rgb, int width, int
 void drawSplitLabels(unsigned char* pixels, int width, int height, int bytesPerPixel, size_t pitch, float at, const std::string& left,
                      const std::string& right);
 
-// JPEG -> 0xFFRRGGBB pixels, rows top-down.
+// A zip entry's deflate stream (no zlib header) into exactly `expected` bytes. False when it
+// doesn't decode to that size.
+bool inflateRaw(const void* data, size_t size, size_t expected, std::vector<unsigned char>& out);
+
+// JPEG (or PNG) -> 0xFFRRGGBB pixels, rows top-down.
 bool decodeJpeg(const void* data, size_t size, std::vector<uint32_t>& pixels, int& width, int& height);
 bool readJpeg(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height);
+// Any picture stb reads (PNG, JPEG, TGA, BMP) -> 0xAARRGGBB pixels, rows top-down. False: no such file or unreadable.
+bool readRgba(const std::wstring& path, std::vector<uint32_t>& pixels, int& width, int& height);
 
 // The mod's icon (packaging/icons/icon_a_64.png, embedded by thumbnails/thumbnails.rc) for the
 // menu's header: size x size 0xAARRGGBB pixels, area-averaged from the embedded PNG, rows

@@ -648,6 +648,7 @@ HRESULT APIENTRY drawPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE 
 
 HRESULT APIENTRY drawIndexedPrimitiveDetour(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT minIndex, UINT vertices,
                                             UINT start, UINT count) {
+    if (g_callbacks.skipDraw && gameCall(device) && g_callbacks.skipDraw(device, base, start, count)) return D3D_OK;
     if (tracingGame(device)) traceDrawState(device, "DIP", count);
     countDraw(device, count);
     if (gameCall(device) && g_callbacks.draw) g_callbacks.draw(device);
