@@ -1,6 +1,6 @@
 ## TM Vibrant Shaders 1.4.2
 
-A release candidate for **TrackMania Nations & United Forever**: a new video export, resource packs on every map, a Horror look with car headlights, clear water and splashes, a fix for flickering overlapped blocks, photo mode in the MediaTracker, and a Misc page with a minimap and split times. TrackMania 2 gets car spray from the real tyres and menu pages in their own windows.
+A release candidate for **TrackMania Nations & United Forever**: a new video export, resource packs on every map, a Horror look with car headlights, clear water and splashes, a fix for flickering overlapped blocks, photo mode in the MediaTracker, and a Misc page with a minimap and split times. TrackMania 2 gets car spray from the real tyres, menu pages in their own windows, and the Horror look with car headlights.
 
 **This is a pre-release.** It is what I test with right now; things may still change before 1.4.2. Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
 
@@ -36,7 +36,7 @@ A new **Resource packs** page: your environment mods from `Skins\<Environment>\M
 
 ### Horror look and car headlights
 
-The **Horror** preset is a black night with every lamp off, thick fog, and your car's headlights as the only light: they light the road and walls ahead and show as beams in the fog. *Car headlights* works with any preset, with *Headlight range* (how far they reach) and *Headlight beam* (how strongly the cone shows in the air).
+The **Horror** preset is a black night with every lamp off, thick fog, and your car's headlights as the only light: they light the road and walls ahead and show as beams in the fog. *Car headlights* works with any preset, with *Headlight range* (how far they reach) and *Headlight beam* (how strongly the cone shows in the air). In TrackMania 2 too.
 
 ### Water
 
