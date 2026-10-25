@@ -26,6 +26,8 @@ struct ShaderInfo {
     // The texture slot of the material's own light (TMapSelfIllum, TMapAdvert: the screens,
     // TMapIllum), kNoSlot if it has none (EngineLightDraws, engine_lights.cpp).
     uint8_t lightSlot = kNoSlot;
+    // The water fog's linear depth (TMapDepth, Tech3/DeferredWaterFog_p: water11.cpp), kNoSlot if none.
+    uint8_t depthSlot = kNoSlot;
     bool reads(Slot s) const { return slots[s] != kNoSlot; }
 };
 
@@ -36,6 +38,8 @@ ShaderInfo identify(const void* bytecode, size_t size);
 // The slot the bytecode binds a texture of the self-illumination's names at (its RDEF chunk), or
 // kNoSlot.
 uint8_t lightTextureSlot(const void* bytecode, size_t size);
+// The slot the bytecode binds the texture `name` at, or kNoSlot.
+uint8_t textureSlot(const void* bytecode, size_t size, const char* name);
 const char* roleName(Role role);
 size_t count();
 

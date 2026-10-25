@@ -41,7 +41,7 @@ const char* const kPassNames[kPassCount] = {
     "SkyAurora",    "SkyRing",         "AuroraHalf",    "SkyAverage", "Clouds",   "Reflect",    "SpillDown", "SpillBlur",
     "SpillTemporal", "Lighting",     "RainDrop",        "RainSplash",    "Spray",    "SnowFlake",  "Trail",      "Focus",    "DofBlur",
     "Cinematic",    "RayMask",         "RayBlur",       "BloomDown", "BloomUp",   "Final",      "TAA",      "Sharpen",
-    "Volumetric",   "Headlights"};
+    "Volumetric",   "Headlights", "WaterSplash"};
 
 // The settings ManiaPlanet can do so far (the menu shows only these). The look (hdr.hlsl), then
 // the scene effects (scene.hlsl), then the stages as they come. Not DisableGameFX: the engine's
@@ -232,6 +232,7 @@ bool Effects::init(ID3D11Device* device) {
     if (!m_cinema.init(device)) TMVS_LOG("effects: the cinema stage failed to start");
     if (!m_trail.init(device)) TMVS_LOG("effects: the neon trail failed to start");
     if (!m_headlights.init(device)) TMVS_LOG("effects: the headlights failed to start");
+    if (!m_water.init(device)) TMVS_LOG("effects: the water stage failed to start");
     if (!ok) TMVS_LOG("effects: creating shaders or states failed (feature level 0x%x)", device->GetFeatureLevel());
     return ok;
 }
@@ -262,6 +263,7 @@ void Effects::release() {
     m_cinema.release();
     m_trail.release();
     m_headlights.release();
+    m_water.release();
     m_profiler.release();
     safeRelease(m_vs);
     safeRelease(m_ndHalf);
@@ -291,7 +293,7 @@ bool Effects::wanted(const tmshaders::Settings& s) {
            s.ambientTint > 0.0f || s.fogDensity > 0.0f || s.skyMode > 0 || s.skyEnhance > 0.0f || s.debugView != 0 ||
            s.volumetricClouds > 0.0f || s.godRays > 0.0f || s.lensFlare > 0.0f || s.wetness > 0.0f || s.rain > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f ||
            s.puddles > 0.0f || s.reflections > 0.0f || s.lightning > 0.0f || s.depthOfField > 0.0f || s.motionBlur > 0.0f || s.taa ||
-           s.volumetricLight > 0.0f || s.neonTrail > 0.0f || s.carHeadlights > 0.0f;
+           s.volumetricLight > 0.0f || s.neonTrail > 0.0f || s.carHeadlights > 0.0f || WaterStage::wanted(s);
 }
 
 bool Effects::supports(const char* key) {
@@ -299,7 +301,7 @@ bool Effects::supports(const char* key) {
     for (const char* k : kSupported)
         if (!strcmp(k, key)) return true;
     return SkyStage::supports(key) || WeatherStage::supports(key) || CinemaStage::supports(key) || TrailStage::supports(key) ||
-           HeadlightStage::supports(key);
+           HeadlightStage::supports(key) || WaterStage::supports(key);
 }
 
 bool Effects::ensureTargets(UINT w, UINT h) {
@@ -891,6 +893,9 @@ bool Effects::scene(ID3D11DeviceContext* ctx, const SceneFrame& frame, const tms
     ctx->PSSetShaderResources(8, 8, engine);
     if (m_sound) m_weather.tick(s, frame.time);
     m_weather.draw(ctx, *this, frame, s);
+    bindFrame(ctx);
+    // What the car throws up in the game's water (WaterSplash).
+    m_water.draw(ctx, *this, frame, s);
     bindFrame(ctx);
     m_trail.draw(ctx, *this, frame, s);
     bindFrame(ctx);

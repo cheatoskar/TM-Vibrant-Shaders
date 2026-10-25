@@ -252,7 +252,11 @@ bool isRelevant(const Field& f, const Settings& s) {
     if (is("LensDrops")) return s.rain > 0.0f || s.snow > 0.0f;
     if (is("ReflectionBlur")) return s.reflections > 0.0f;
     if (is("WaterFarReflections")) return s.cleanWater && s.waterSurfaces > 0.0f;
-    if (is("WaterClarity")) return s.waterSurfaces > 0.0f;
+    if (is("WaterClarity")) {
+        // TrackMania 2 has no Water setting (the game's own surface stays): clarity stands alone.
+        const Field* surfaces = findField("WaterSurfaces");
+        return s.waterSurfaces > 0.0f || !surfaces || !supported(*surfaces);
+    }
     if (is("CarHeadlightRange") || is("CarHeadlightBeam")) return s.carHeadlights > 0.0f;
     if (is("FocusDistance") || is("BokehSize")) return s.depthOfField > 0.0f;
     if (is("DofAutofocus")) return s.depthOfField > 0.0f && s.focusDistance <= 0.0f; // a set distance overrides it

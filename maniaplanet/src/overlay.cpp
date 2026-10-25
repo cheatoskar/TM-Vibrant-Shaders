@@ -13,6 +13,7 @@
 #include "renderer.h"
 #include "shaderdb.h"
 #include "softshadow.h"
+#include "water11.h"
 #include "thumbnails11.h"
 #include "photo11.h"
 #include "maplook.h"
@@ -359,6 +360,7 @@ void gamePanel() {
     }
     ImGui::TextDisabled("Engine textures: %s", found.empty() ? "none" : found.c_str());
     ImGui::TextDisabled("Soft shadows: %s", softshadow::status());
+    ImGui::TextDisabled("Water: %s", water::status());
     ImGui::TextDisabled("Shaders recognised: %u of %u, %u draws, %ux%u", st.shadersKnown, st.shadersCreated, st.drawsLastFrame,
                         st.width, st.height);
 }

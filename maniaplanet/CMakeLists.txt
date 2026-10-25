@@ -112,6 +112,8 @@ add_library(tmvs_mp_core STATIC
   src/effects_cinema.cpp
   src/effects_trail.cpp
   src/effects_headlights.cpp
+  src/effects_water.cpp
+  src/water11.cpp
   src/maplook.cpp
   src/autoquality11.cpp
   src/photo11.cpp
@@ -132,6 +134,8 @@ add_library(tmvs_mp_core STATIC
   # The TMNF mod's weather sound (rain, thunder, the snow storm's wind), shared.
   ${TMVS_ROOT}/src/audio.cpp
   ${TMVS_ROOT}/src/noise.cpp
+  # The TMNF mod's water pictures (droplet, foam, ripple), shared.
+  ${TMVS_ROOT}/src/waterfx.cpp
   ${MP_SHADER_HEADERS}
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
