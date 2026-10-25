@@ -2744,6 +2744,30 @@ const CameraInfo& currentCamera() {
     return g_camera;
 }
 
+// The minimap's block reading (misc/blockmesh.cpp). TMNF from its map file's symbols (Ghidra);
+// TMUF ported with tools/port_address.py (each function confirmed over 256 bytes; the two tree
+// vtables ported by their GetChild slot, slot 31 read from the TMUF vtable; s_Declarations from
+// StaticSetStream01Decl's mov ecx, imm32 at the same place in the ported function).
+constexpr MeshReadAddresses kMeshReadAddresses[] = {
+    {0x0075d060, 0x00848790, 0x0086aac0, 0x0086aea0, 0x0097c0d0, 0x0097c190, 0x0097be50, 0x00d75ae4}, // Nations Forever
+    {0x00849580, 0x008488e0, 0x0086b260, 0x0086b5e0, 0x0097bdc0, 0x0097be80, 0x0097bb40, 0x00d77144}, // United Forever
+};
+static_assert(sizeof(kMeshReadAddresses) / sizeof(kMeshReadAddresses[0]) == sizeof(kBuilds) / sizeof(kBuilds[0]), "one entry per build");
+
+bool meshReadAddresses(MeshReadAddresses& out) {
+    if (!g_build) return false;
+    const MeshReadAddresses& a = kMeshReadAddresses[g_build - kBuilds];
+    out.treeChildCount = rebase(a.treeChildCount);
+    out.treeGetChild = rebase(a.treeGetChild);
+    out.mipChildCount = rebase(a.mipChildCount);
+    out.mipGetChild = rebase(a.mipGetChild);
+    out.geometryStatic = rebase(a.geometryStatic);
+    out.geometrySplits = rebase(a.geometrySplits);
+    out.geometrySubVisuals = rebase(a.geometrySubVisuals);
+    out.declarations = rebase(a.declarations);
+    return true;
+}
+
 bool stadium() {
     if (g_environment[0]) return strcmp(g_environment, "Stadium") == 0;
     return g_build == &kBuilds[0]; // Nations Forever has nothing else

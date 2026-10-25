@@ -33,6 +33,7 @@ IDirect3DBaseTexture9* g_testDiffuse = nullptr;
 namespace tmshaders {
 namespace engine {
 Material currentMaterial() { return Material::Other; }
+Material materialClass(const void*) { return Material::Other; }
 const void* currentShader() { static int s_shader; return &s_shader; } // inside a game shader call
 bool materialFile(const void*, wchar_t* out, size_t size) {
     wcsncpy_s(out, size, L"TestMaterial.Shader.Gbx", _TRUNCATE);
@@ -443,6 +444,67 @@ int main(int argc, char** argv) {
         copy->UnlockRect();
         gfx::release(copy);
         gfx::release(level);
+    }
+    // Meshes read from the blocks (blockmesh.cpp -> addBlockMesh) on another map: queued with the
+    // material's colour map, at their place; the camera's draw of the same placement later (moved by
+    // the jitter, with another texture bound) is known and not taken again, nor the same mesh read
+    // again; one outside the area is left out.
+    {
+        topview::setRegion(0x7777, 0.0f, 0.0f, 64.0f, 64.0f, 100.0f, 2, 2);
+        const int before = topview::meshes();
+        const auto blockMesh = [&](float x, float y, float z) {
+            topview::BlockMesh m;
+            m.decl = decl;
+            m.vb = vb;
+            m.stride = sizeof(Vertex);
+            m.ib = ib;
+            m.vertices = 4;
+            m.count = 2;
+            m.world[0][0] = m.world[1][1] = m.world[2][2] = 1.0f;
+            m.world[3][0] = x;
+            m.world[3][1] = y;
+            m.world[3][2] = z;
+            static int s_material;
+            m.shader = &s_material;
+            return m;
+        };
+        g_testDiffuse = red;
+        check(topview::addBlockMesh(device, blockMesh(0.0f, 10.0f, 0.0f)) == topview::BlockMeshResult::Queued, "a mesh read from a block is queued");
+        check(topview::addBlockMesh(device, blockMesh(0.3f, 10.2f, 0.4f)) == topview::BlockMeshResult::Known, "the same mesh read again is known");
+        check(topview::addBlockMesh(device, blockMesh(300.0f, 10.0f, 0.0f)) == topview::BlockMeshResult::Outside, "a mesh outside the area is left out");
+        topview::render(device);
+        check(topview::meshes() == before + 1, "one mesh from the blocks in the picture");
+        device->BeginScene();
+        device->SetVertexDeclaration(decl);
+        device->SetStreamSource(0, vb, 0, sizeof(Vertex));
+        device->SetIndices(ib);
+        device->SetVertexShader(vs);
+        device->SetPixelShader(ps);
+        device->SetTexture(0, lightmap);
+        drawQuad(0.6f, 10.4f, -0.7f, green); // the camera's draw of it, its colour map now green
+        device->EndScene();
+        topview::render(device);
+        check(topview::meshes() == before + 1, "the camera's draw of a placement read from the blocks isn't taken again");
+        check(topview::takeBlockHits() == 1, "and it is counted as found");
+        picture = topview::picture();
+        if (picture) {
+            IDirect3DSurface9* level = nullptr;
+            IDirect3DSurface9* copy = nullptr;
+            picture->GetSurfaceLevel(0, &level);
+            device->CreateOffscreenPlainSurface(64, 64, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &copy, nullptr);
+            device->GetRenderTargetData(level, copy);
+            D3DLOCKED_RECT r{};
+            copy->LockRect(&r, nullptr, D3DLOCK_READONLY);
+            const D3DCOLOR a = reinterpret_cast<const D3DCOLOR*>(static_cast<const BYTE*>(r.pBits) + 8 * r.Pitch)[8];
+            const D3DCOLOR none = reinterpret_cast<const D3DCOLOR*>(static_cast<const BYTE*>(r.pBits) + 40 * r.Pitch)[40];
+            check(((a >> 16) & 255) > 150 && ((a >> 8) & 255) < 40, "the block's mesh: red (its colour map), at its place");
+            check((none >> 24) == 0, "nothing elsewhere");
+            copy->UnlockRect();
+            gfx::release(copy);
+            gfx::release(level);
+        } else {
+            check(false, "the picture exists for the blocks' map");
+        }
     }
     if (benchmark) bench(device, vs, ps, decl, green, view, projection);
     topview::releaseDevice();

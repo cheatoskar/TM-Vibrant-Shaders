@@ -195,7 +195,8 @@ if(TMVS_MISC_TOOLS)
     src/misc/replay.cpp
     src/misc/tmx.cpp
     src/misc/confetti.cpp
-    src/misc/topview.cpp)
+    src/misc/topview.cpp
+    src/misc/blockmesh.cpp)
   target_compile_definitions(tm_vibrant_shaders PRIVATE TMVS_MISC_TOOLS=1)
 endif()
 target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR})
