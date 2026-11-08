@@ -2305,7 +2305,7 @@ void processSceneOne(IDirect3DDevice9* device);
 struct VrStats {
     DWORD lastEyes = 0;       // GetTickCount of the last frame with eyes
     DWORD windowStart = 0;
-    int eyeFrames = 0, shaded[2] = {}, monoSkipped = 0, monoShaded = 0;
+    int eyeFrames = 0, shaded[2] = {}, monoSkipped = 0, monoShaded = 0, outsideTarget = 0;
     bool loggedProjection = false;
 } g_vr;
 
@@ -2321,12 +2321,17 @@ void logVrStats(const float* left, const float* right, const float* leftView, co
     }
     if (now - g_vr.windowStart < 10000) return;
     const Settings& s = Config::get().settings;
-    TMVS_LOG("vr: last %.0f s: %d frames with eyes (left %d, right %d shaded), frames without eyes: %d left alone, %d shaded; "
+    TMVS_LOG("vr: last %.0f s: %d frames with eyes (left %d, right %d shaded), frames without eyes: %d left alone, %d shaded; eyes bigger than the target: %d; "
              "history per eye %s, Comfort %d, Quality in VR %d, TAA in VR %d, drops %d at %.2f m; auto quality: %s",
-             (now - g_vr.windowStart) / 1000.0f, g_vr.eyeFrames, g_vr.shaded[0], g_vr.shaded[1], g_vr.monoSkipped, g_vr.monoShaded,
+             (now - g_vr.windowStart) / 1000.0f, g_vr.eyeFrames, g_vr.shaded[0], g_vr.shaded[1], g_vr.monoSkipped, g_vr.monoShaded, g_vr.outsideTarget,
              s.vrTaa ? "on" : "off", s.vrComfort ? 1 : 0, s.vrQuality, s.vrTaa ? 1 : 0, s.vrLensDrops ? 1 : 0, s.vrLensDistance,
              g_autoQuality.summary());
-    g_vr = VrStats{g_vr.lastEyes, now, 0, {0, 0}, 0, 0, g_vr.loggedProjection};
+    const bool loggedProjection = g_vr.loggedProjection;
+    const DWORD lastEyes = g_vr.lastEyes;
+    g_vr = VrStats{};
+    g_vr.lastEyes = lastEyes;
+    g_vr.windowStart = now;
+    g_vr.loggedProjection = loggedProjection;
 }
 
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
@@ -2548,6 +2553,21 @@ void processSceneOne(IDirect3DDevice9* device) {
     D3DVIEWPORT9 viewport{};
     if (g_eye.active) viewport = g_eye.viewport; // the VR mod's eye
     else device->GetViewport(&viewport);
+    // An eye that doesn't fit the target: the VR mod gave eyes, but this camera draws into the
+    // 1280x960 window (wial663's log, the race's start: every other frame, all effects made again at
+    // each switch between the sizes). Left as the game drew it.
+    if (g_eye.active && (viewport.X + viewport.Width > desc.Width || viewport.Y + viewport.Height > desc.Height)) {
+        g_vr.outsideTarget++;
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            TMVS_LOG("vr: an eye (%lux%lu) bigger than the camera's target (%ux%u): that camera is left as the game drew it",
+                     viewport.Width, viewport.Height, desc.Width, desc.Height);
+        }
+        target->Release();
+        if (savedDepth) savedDepth->Release();
+        return;
+    }
     // Real panels only: replay cameras sometimes leave a few rows out (2560x1433 at 0,3).
     const bool part = viewport.Width >= 320 && viewport.Height >= 200 && viewport.X + viewport.Width <= desc.Width &&
                       viewport.Y + viewport.Height <= desc.Height &&
