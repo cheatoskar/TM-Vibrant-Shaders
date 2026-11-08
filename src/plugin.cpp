@@ -31,6 +31,7 @@
 #include <set>
 #include <tuple>
 #include <d3d9.h>
+#include <psapi.h> // K32EnumProcessModules (the log when no game device turns up)
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -3988,6 +3989,40 @@ DWORD WINAPI retryHooks(LPVOID) {
     return 0;
 }
 
+// 30 s after the start without the game's device: the menu and the effects can't start, and the log
+// said nothing (jiink's report, issue #14: Competition Patch from the mod loader, no menu, no effects,
+// no error). Names the other mods loaded in the game, the likely cause.
+DWORD WINAPI watchForDevice(LPVOID) {
+    Sleep(30000);
+    if (g_device) return 0;
+    wchar_t windows[MAX_PATH] = {};
+    const UINT windowsLength = GetWindowsDirectoryW(windows, MAX_PATH);
+    HMODULE self = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&watchForDevice), &self);
+    HMODULE modules[512];
+    DWORD bytes = 0;
+    std::string others;
+    if (K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytes)) {
+        const DWORD count = (std::min)(bytes / static_cast<DWORD>(sizeof(HMODULE)), static_cast<DWORD>(512));
+        for (DWORD i = 1; i < count; i++) { // 0 is the game's exe
+            if (modules[i] == self) continue;
+            wchar_t path[MAX_PATH] = {};
+            if (!GetModuleFileNameW(modules[i], path, MAX_PATH)) continue;
+            if (windowsLength && _wcsnicmp(path, windows, windowsLength) == 0) continue; // Windows' own
+            const wchar_t* name = wcsrchr(path, L'\\');
+            char narrow[MAX_PATH] = {};
+            WideCharToMultiByte(CP_UTF8, 0, name ? name + 1 : path, -1, narrow, MAX_PATH, nullptr, nullptr);
+            if (!others.empty()) others += ", ";
+            others += narrow;
+        }
+    }
+    TMVS_LOG("hook: no game device 30 s after the start: the menu and the effects can't start. Another mod probably creates or "
+             "wraps the game's Direct3D device before this one sees it; other DLLs in the game: %s. Try turning the other mods "
+             "off one by one in the mod loader.", others.empty() ? "none found" : others.c_str());
+    return 0;
+}
+
 // Map load: light a day or sunset map at midnight when its look will have a night sky (the
 // sky replaces the sun anyway; the game's own night has no baked sun to take out).
 // The map's mood comes from the same time of day (see processScene), so the look decided here
@@ -4156,6 +4191,7 @@ void bootOnce() {
         HANDLE thread = CreateThread(nullptr, 0, retryHooks, nullptr, 0, nullptr);
         if (thread) CloseHandle(thread);
     }
+    if (HANDLE watch = CreateThread(nullptr, 0, watchForDevice, nullptr, 0, nullptr)) CloseHandle(watch);
 }
 
 } // namespace
