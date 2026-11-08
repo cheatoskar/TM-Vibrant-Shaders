@@ -2308,6 +2308,19 @@ void processScene(IDirect3DDevice9* device) {
         bool valid;
     } eyes[2] = {};
     for (int eye = 0; eye < 2 && provider; eye++) eyes[eye].valid = provider(eye, eyes[eye].view, eyes[eye].projection, eyes[eye].rect) != 0;
+    // The log: what the VR mod gave, once each way (eyes, or a frame without them).
+    if (provider) {
+        static bool s_loggedEyes = false, s_loggedNone = false;
+        if ((eyes[0].valid || eyes[1].valid) && !s_loggedEyes) {
+            s_loggedEyes = true;
+            const int* r = eyes[0].valid ? eyes[0].rect : eyes[1].rect;
+            TMVS_LOG("scene: VR eyes shaded: %s%s, %dx%d each at %d,%d (%s)", eyes[0].valid ? "left" : "", eyes[1].valid ? " right" : "", r[2], r[3], r[0],
+                     r[1], hook::observeOnly() ? "watch only" : "effects");
+        } else if (!eyes[0].valid && !eyes[1].valid && !s_loggedNone) {
+            s_loggedNone = true;
+            TMVS_LOG("scene: the VR mod gave no eyes this frame: shaded as one camera");
+        }
+    }
     // No VR mod, or no stereo frame this time (its menus, the headset not ready): the one camera as always.
     if (!eyes[0].valid && !eyes[1].valid) {
         processSceneOne(device);

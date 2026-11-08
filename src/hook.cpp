@@ -5,6 +5,7 @@
 #include "tracer.h"
 #include "overlay.h"
 #include "config.h"
+#include "depth.h"
 #include "log.h"
 #include <windows.h>
 #include <d3d9.h>
@@ -980,9 +981,49 @@ bool observeOnly() { return g_observeOnly; }
 static bool g_handedOver = false;
 bool handedOver() { return g_handedOver; }
 
+// Watch only: everything that substitutes the game's targets, depth, viewports or draws goes.
+static void dropSubstitutions() {
+    g_callbacks.adjustPresentParams = nullptr;
+    g_callbacks.createDepthStencil = nullptr;
+    g_callbacks.setDepthStencil = nullptr;
+    g_callbacks.setRenderTarget = nullptr;
+    g_callbacks.draw = nullptr;
+    g_callbacks.drawDone = nullptr;
+    g_callbacks.drawIndexed = nullptr;
+    g_callbacks.skipDraw = nullptr;
+    g_callbacks.setTransform = nullptr;
+    g_callbacks.setLight = nullptr;
+    g_callbacks.clear = nullptr;
+    g_callbacks.createPixelShader = nullptr;
+    g_callbacks.setViewport = nullptr;
+    g_callbacks.getViewport = nullptr;
+    g_callbacks.setScissorRect = nullptr;
+    g_callbacks.getScissorRect = nullptr;
+    g_callbacks.clearRects = nullptr;
+    g_callbacks.stretchRects = nullptr;
+    g_callbacks.otherModRenderTarget = nullptr;
+}
+
 bool attachDevice(IDirect3DDevice9* device, bool observeOnly) {
     if (!device) return false;
-    if (g_gameDevice == device) return true;
+    if (g_gameDevice == device) {
+        // We saw it created ourselves (the VR mod from the mod loader leaves our Direct3DCreate9 in
+        // place): hooked fully already, its depth buffer swapped for our readable one. The VR mod's
+        // call still says it runs, and watch only must hold here too: the depth goes back to the
+        // game's own before the VR mod sets up its eye targets from it (it made them INTZ, and the
+        // effects ran in the eyes with Effects in VR off; my SteamVR test).
+        TMVS_LOG("attach: device %p handed over by another mod, already hooked by us (%s)", static_cast<void*>(device),
+                 observeOnly ? "observe only from now on: the game's depth buffer back, no render target, depth or draw changes" : "full");
+        g_handedOver = true;
+        if (observeOnly && !g_observeOnly) {
+            g_observeOnly = true;
+            dropSubstitutions();
+            g_internal++;
+            depth::restoreGameDepth(device);
+            g_internal--;
+        }
+        return true;
+    }
     if (g_gameDevice) {
         TMVS_LOG("attach: already hooked to device %p, not attaching %p", static_cast<void*>(g_gameDevice), static_cast<void*>(device));
         return false;
@@ -991,27 +1032,7 @@ bool attachDevice(IDirect3DDevice9* device, bool observeOnly) {
              observeOnly ? "observe only: no render target, depth or draw changes" : "full");
     g_observeOnly = observeOnly;
     g_handedOver = true;
-    if (observeOnly) {
-        g_callbacks.adjustPresentParams = nullptr;
-        g_callbacks.createDepthStencil = nullptr;
-        g_callbacks.setDepthStencil = nullptr;
-        g_callbacks.setRenderTarget = nullptr;
-        g_callbacks.draw = nullptr;
-        g_callbacks.drawDone = nullptr;
-        g_callbacks.drawIndexed = nullptr;
-        g_callbacks.skipDraw = nullptr;
-        g_callbacks.setTransform = nullptr;
-        g_callbacks.setLight = nullptr;
-        g_callbacks.clear = nullptr;
-        g_callbacks.createPixelShader = nullptr;
-        g_callbacks.setViewport = nullptr;
-        g_callbacks.getViewport = nullptr;
-        g_callbacks.setScissorRect = nullptr;
-        g_callbacks.getScissorRect = nullptr;
-        g_callbacks.clearRects = nullptr;
-        g_callbacks.stretchRects = nullptr;
-        g_callbacks.otherModRenderTarget = nullptr;
-    }
+    if (observeOnly) dropSubstitutions();
     g_gameDevice = device;
     hookDevice(device);
     if (g_callbacks.deviceCreated) {
