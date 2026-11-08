@@ -57,6 +57,9 @@ struct Host {
     // The Misc page: minimap, split times, finish effects (null: no such page, TrackMania 2 or a build
     // without TMVS_MISC_TOOLS). Draws the page's content.
     std::function<void()> miscPage;
+    // The VR mod (TrackMania Forever OpenXR): 0 not running, 1 running with only the menu in the
+    // headset, 2 with the effects in both eyes. Null: this game has none.
+    std::function<int()> vrState;
     bool depthAvailable = true;
     bool engineHooks = true;
     bool sunKnown = false;

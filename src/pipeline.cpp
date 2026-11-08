@@ -298,6 +298,13 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_dof.create(device, hw, hh, D3DFMT_A16B16G16R16F);
     if (!ok) {
         destroyTargets();
+        // Once per size: it is tried again every frame.
+        static UINT s_failedW = 0, s_failedH = 0;
+        if (s_failedW != width || s_failedH != height) {
+            s_failedW = width;
+            s_failedH = height;
+            TMVS_LOG("pipeline: render targets for %ux%u could not be created (video memory?)", width, height);
+        }
         return false;
     }
     m_width = width;
@@ -309,7 +316,62 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     return true;
 }
 
+void Pipeline::EyeHistory::destroy() {
+    for (auto& t : giHistory) t.destroy();
+    for (auto& t : spillHistory) t.destroy();
+    for (auto& t : neonHistory) t.destroy();
+    for (auto& t : taa) t.destroy();
+    giValid = spillValid = neonValid = taaValid = temporalValid = havePrevious = historyValid = false;
+}
+
+void Pipeline::selectEye(IDirect3DDevice9* device, int eye) {
+    if (eye == m_eye) return;
+    if (eye < 0 || m_eye < 0) {
+        // Into or out of the eyes: the set the pipeline has goes on as this view's (its camera
+        // jumps, the history's own checks catch that); the other one starts empty.
+        m_otherEye.destroy();
+        m_eye = eye;
+        return;
+    }
+    EyeHistory& o = m_otherEye;
+    for (int i = 0; i < 2; i++) {
+        std::swap(m_giHistory[i], o.giHistory[i]);
+        std::swap(m_spillHistory[i], o.spillHistory[i]);
+        std::swap(m_neonHistory[i], o.neonHistory[i]);
+        std::swap(m_taa[i], o.taa[i]);
+    }
+    std::swap(m_giIndex, o.giIndex);
+    std::swap(m_giValid, o.giValid);
+    std::swap(m_spillIndex, o.spillIndex);
+    std::swap(m_spillValid, o.spillValid);
+    std::swap(m_neonIndex, o.neonIndex);
+    std::swap(m_neonValid, o.neonValid);
+    std::swap(m_taaIndex, o.taaIndex);
+    std::swap(m_taaValid, o.taaValid);
+    std::swap(m_temporalValid, o.temporalValid);
+    std::swap(m_prevView, o.prevView);
+    std::swap(m_prevProjection, o.prevProjection);
+    std::swap(m_havePrevious, o.havePrevious);
+    std::swap(m_prevJitter, o.prevJitter);
+    std::swap(m_historyValid, o.historyValid);
+    m_eye = eye;
+    // The set swapped in may have no targets yet (its first frame) or another size: bounce light and
+    // spill are made with the other targets (ensureTargets), so make them here; the neon glow and
+    // TAA make theirs when used.
+    if (!m_width || !device) return;
+    const UINT qw = (m_width + 3) / 4, qh = (m_height + 3) / 4;
+    if (!m_giHistory[0].valid() || m_giHistory[0].width != qw || m_giHistory[0].height != qh) {
+        for (auto& t : m_giHistory) t.create(device, qw, qh, D3DFMT_A16B16G16R16F);
+        m_giValid = false;
+    }
+    if (!m_spillHistory[0].valid() || m_spillHistory[0].width != qw || m_spillHistory[0].height != qh) {
+        for (auto& t : m_spillHistory) t.create(device, qw, qh, D3DFMT_A16B16G16R16F);
+        m_spillValid = false;
+    }
+}
+
 void Pipeline::destroyTargets(bool keepWorld) {
+    m_otherEye.destroy(); // a VR eye's history has this size too
     // The screen's size: these follow the image.
     m_linearDepth.destroy();
     m_nd.destroy();
@@ -695,6 +757,8 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(39, snow, 1);
     const float sky3[4] = {s.auroraSpeed, s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f, s.reflectionBlur, 1.0f / fmaxf(s.hazeDistance, 0.1f)};
     device->SetPixelShaderConstantF(41, sky3, 1);
+    const float lensEye[4] = {in.lensEyeShift, 0.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(43, lensEye, 1);
     // Day-for-night: how much of the game's baked sun comes out, and where that sun is (the
     // game's own, also under a black hole sky, whose light is the hole). Every night sky over a
     // day map takes it out fully; the scene's darkness (u_Sky.y) is a separate thing (a black
@@ -2564,7 +2628,12 @@ void Pipeline::updateWater(const Inputs& in, const Settings& s, float dt) {
         m_waterDrip = fminf(m_waterInFor / 0.5f, 1.0f);
     }
     if (m_waterIn) m_waterInFor += dt;
-    const float target = m_waterIn ? fminf(depth / 0.35f, 1.0f) : 0.0f;
+    // The wake and the bow wave are the car cutting through the surface: once its roof (about a
+    // metre above the tyres) is under too, they fade out. A car that sank kept drawing foam on
+    // the surface above it as it drifted on along the bottom (my test, 2026-11-08).
+    const float roofUnder = depth - 1.0f;
+    const float surfaced = fminf(fmaxf(1.0f - roofUnder / 0.3f, 0.0f), 1.0f);
+    const float target = m_waterIn ? fminf(depth / 0.35f, 1.0f) * surfaced : 0.0f;
     m_waterWake += (target - m_waterWake) * fminf(dt * 6.0f, 1.0f);
     memcpy(m_waterPrev, p, sizeof(m_waterPrev));
     m_waterPrevBottom = bottom;
@@ -3919,6 +3988,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 1, m_taa[previous].texture, true);
         bind(device, 2, m_nd.texture, false);
         bind(device, 3, m_hdr.texture, false); // alpha: where the neon trail lies
+        bind(device, 13, m_materialsOn ? m_materialTexture : nullptr, false); // the cars (u_Mat.x from the final pass)
         const float taaValid[4] = {1.0f, (m_taaValid && m_temporalValid) ? 1.0f : 0.0f, static_cast<float>(m_frame % 64),
                                    longConstants[3]};
         device->SetPixelShaderConstantF(34, taaValid, 1);
@@ -3943,7 +4013,10 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool splashing = s.waterSplash > 0.0f && (in.water[2] > 0.5f || (in.water[2] >= 0.0f && m_seaKnown)) &&
                            (in.carPoseKnown || in.splashTest[0] >= 0.0f);
     if ((s.rain > 0.0f || s.wetness > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f || splashing) && post && ensureRain(device))
-        drawRain(device, in, s, postDt, postTemporal, heightMap && m_heightValid, output);
+        // VR eyes (TAA in VR): the drops, the spray and the splash move once a frame, with the left
+        // eye; the right one draws them as they are (its camera is 64 mm away: as a camera move the
+        // streaks and the spray's speed jumped by it every frame).
+        drawRain(device, in, s, postDt, postTemporal && m_eye != 1, heightMap && m_heightValid, output);
     if (upscale) upscaleOutput(device, in, s, screen);
     profileEnd();
     finishRender(device, in, softwareVP);

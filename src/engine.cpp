@@ -1172,6 +1172,66 @@ bool neonMaterial(const void* shader) {
     return neon;
 }
 
+// The caches below keep one answer per material address and map. The engine reuses the memory
+// of freed materials, and not every reload is a map load the mod sees: back from the replay
+// editor on an online map, the dirt's Soil copies sat where Grass and block copies had been
+// and kept their classes (capture_147: half the dirt "other", a dirt road "grass", so the
+// dry track's reflection mirrored the barriers in it). So every answer keeps the material's
+// stamp, its file node (CMwNod +8, what CSystemEngine::GetFidFile reads) and its first texture,
+// and is looked up again when that changed. Plain reads, cheap enough for every draw. A
+// material whose stamp keeps changing (a texture swapped while it draws) keeps its answer
+// after a few looks: each look leaves a path string with the game's allocator.
+struct MaterialStamp {
+    const void* fid = nullptr;
+    const void* bitmap = nullptr;
+    bool operator==(const MaterialStamp& o) const { return fid == o.fid && bitmap == o.bitmap; }
+};
+constexpr int kMaxRelooks = 4;
+const void* nodFidField(const void* nod) {
+    __try {
+        return *reinterpret_cast<const void* const*>(static_cast<const BYTE*>(nod) + 8);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+MaterialStamp materialStamp(const void* shader) {
+    MaterialStamp stamp;
+    stamp.fid = nodFidField(shader);
+    const void* bitmaps[1] = {};
+    if (shaderBitmaps(shader, bitmaps, 1) > 0) stamp.bitmap = bitmaps[0];
+    return stamp;
+}
+template <typename T>
+struct StampedCache {
+    struct Entry {
+        MaterialStamp stamp;
+        T value;
+        int looks;
+    };
+    std::unordered_map<const void*, Entry> known;
+    LONG loads = -1;
+    // The answer still valid for this material, or null (then look it up and put() it).
+    const T* find(const void* shader, const MaterialStamp& stamp) {
+        if (loads != g_mapLoads) {
+            known.clear();
+            loads = g_mapLoads;
+        }
+        const auto it = known.find(shader);
+        if (it == known.end()) return nullptr;
+        if (!(it->second.stamp == stamp) && it->second.looks < kMaxRelooks) return nullptr;
+        return &it->second.value;
+    }
+    const T& put(const void* shader, const MaterialStamp& stamp, const T& value) {
+        const auto it = known.find(shader);
+        if (it != known.end()) {
+            it->second = Entry{stamp, value, it->second.looks + 1};
+            return it->second.value;
+        }
+        if (known.size() >= 8192) known.clear();
+        return known.emplace(shader, Entry{stamp, value, 1}).first->second.value;
+    }
+};
+
 // The file names of a material's textures, "; " between them (F12's capture_NNN.mat).
 bool textureFiles(const void* shader, wchar_t* out, size_t size) {
     const void* bitmaps[16] = {};
@@ -1208,21 +1268,16 @@ struct DiffuseOf {
 };
 const void* findDiffuse(const void* shader, wchar_t* file, size_t size);
 const void* diffuseBitmap(const void* shader, wchar_t* file, size_t size) {
-    static std::unordered_map<const void*, DiffuseOf> known;
-    static LONG knownLoads = -1;
-    if (knownLoads != g_mapLoads) {
-        known.clear();
-        knownLoads = g_mapLoads;
-    }
-    auto it = known.find(shader);
-    if (it == known.end()) {
+    static StampedCache<DiffuseOf> cache;
+    const MaterialStamp stamp = materialStamp(shader);
+    const DiffuseOf* known = cache.find(shader, stamp);
+    if (!known) {
         wchar_t name[96] = {};
         const void* bitmap = findDiffuse(shader, name, 96);
-        if (known.size() >= 8192) known.clear();
-        it = known.emplace(shader, DiffuseOf{bitmap, name}).first;
+        known = &cache.put(shader, stamp, DiffuseOf{bitmap, name});
     }
-    if (file && size) wcsncpy_s(file, size, it->second.file.c_str(), _TRUNCATE);
-    return it->second.bitmap;
+    if (file && size) wcsncpy_s(file, size, known->file.c_str(), _TRUNCATE);
+    return known->bitmap;
 }
 const void* findDiffuse(const void* shader, wchar_t* file, size_t size) {
     const void* bitmaps[16] = {};
@@ -1253,36 +1308,25 @@ const void* findDiffuse(const void* shader, wchar_t* file, size_t size) {
 }
 
 Material materialOf(const void* shader) {
-    static std::unordered_map<const void*, Material> known;
-    static LONG knownLoads = -1;
+    static StampedCache<Material> cache;
     if (!shader) return Material::Other;
-    if (knownLoads != g_mapLoads) {
-        known.clear();
-        knownLoads = g_mapLoads;
-    }
-    const auto it = known.find(shader);
-    if (it != known.end()) return it->second;
+    const MaterialStamp stamp = materialStamp(shader);
+    if (const Material* known = cache.find(shader, stamp)) return *known;
     wchar_t path[512] = {};
     const bool named = nodFilePath(shader, path, 512);
     Material m = named ? classify(path) : Material::Other;
     if (m == Material::Other && neonMaterial(shader)) m = Material::Neon;
-    if (known.size() < 8192) known.emplace(shader, m);
-    return m;
+    return cache.put(shader, stamp, m);
 }
 
 // The environment's painted horizon: TMUF Island's IslandSkyPC1 is a ring around the map with
 // the sunset painted on (it writes depth, so the mod's sky can't replace it; the sea mirrors
 // it). Not Sky\SkyDay (the generic dome, at the sky's depth anyway).
 bool isPaintedHorizon(const void* shader) {
-    static std::unordered_map<const void*, bool> known;
-    static LONG knownLoads = -1;
+    static StampedCache<bool> cache;
     if (!shader) return false;
-    if (knownLoads != g_mapLoads) {
-        known.clear();
-        knownLoads = g_mapLoads;
-    }
-    const auto it = known.find(shader);
-    if (it != known.end()) return it->second;
+    const MaterialStamp stamp = materialStamp(shader);
+    if (const bool* known = cache.find(shader, stamp)) return *known;
     wchar_t path[512] = {};
     bool horizon = false;
     if (nodFilePath(shader, path, 512)) {
@@ -1291,8 +1335,7 @@ bool isPaintedHorizon(const void* shader) {
         horizon = wcsstr(file, L"SkyPC") && !wcsstr(path, L"\\Sky\\") && !wcsstr(path, L"\\Menu");
         if (horizon) TMVS_LOG("engine: %ls is the painted horizon (left out under night skies)", path);
     }
-    if (known.size() < 8192) known.emplace(shader, horizon);
-    return horizon;
+    return cache.put(shader, stamp, horizon);
 }
 
 void censusShader(const void* shader) {
@@ -1306,15 +1349,10 @@ void censusShader(const void* shader) {
 // The cars' own materials (Vehicles\..., the glass and rear lights included; not their smoke, chunks and
 // wheel marks): what photo mode's Hide car leaves out, from the shader file like classify().
 bool isVehicle(const void* shader) {
-    static std::unordered_map<const void*, bool> known;
-    static LONG knownLoads = -1;
+    static StampedCache<bool> cache;
     if (!shader) return false;
-    if (knownLoads != g_mapLoads) {
-        known.clear();
-        knownLoads = g_mapLoads;
-    }
-    const auto it = known.find(shader);
-    if (it != known.end()) return it->second;
+    const MaterialStamp stamp = materialStamp(shader);
+    if (const bool* known = cache.find(shader, stamp)) return *known;
     wchar_t path[512] = {};
     bool vehicle = false;
     if (nodFilePath(shader, path, 512) && !wcsstr(path, L"\\Menu")) {
@@ -1322,8 +1360,7 @@ bool isVehicle(const void* shader) {
         file = file ? file + 1 : path;
         vehicle = (wcsstr(path, L"Vehicles\\") || wcsstr(path, L"Vehicles/")) && _wcsnicmp(file, L"Particle", 8) && _wcsnicmp(file, L"WheelMarks", 10);
     }
-    if (known.size() < 8192) known.emplace(shader, vehicle);
-    return vehicle;
+    return cache.put(shader, stamp, vehicle);
 }
 
 // Hide car, every pass: the cars' colour draws use Vehicles shaders, but the same visuals are drawn again

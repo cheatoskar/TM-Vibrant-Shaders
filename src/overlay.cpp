@@ -3,6 +3,7 @@
 #include "autoquality.h"
 #include "config.h"
 #include "engine.h"
+#include "hook.h"
 #include "keys.h"
 #include "pipeline.h"
 #include "log.h"
@@ -603,6 +604,21 @@ void drawStatusLine(IDirect3DDevice9* device) {
     ImGui::PopStyleVar(4);
 }
 
+static ExternalTarget* g_ext = nullptr;
+static bool g_extSeen = false;
+static bool g_extThisFrame = false;
+void setExternal(ExternalTarget* target) {
+    g_ext = target;
+    if (target) g_extSeen = g_extThisFrame = true;
+}
+bool externalActive() { return g_extSeen; }
+bool takeExternalFrame() {
+    const bool drawn = g_extThisFrame;
+    g_extThisFrame = false;
+    return drawn;
+}
+void pollHotkeys() { handleHotkeys(); }
+
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
     if (!g_initialized) init(device);
@@ -688,10 +704,14 @@ void draw(IDirect3DDevice9* device) {
         host.photoOn = [] {
             if (!photo::active()) photo::toggle();
         };
-        host.supports = [](const Field& f) { return strcmp(f.key, "ToneCurve") != 0; }; // ManiaPlanet only
+        host.supports = [](const Field& f) {
+            if (!strncmp(f.key, "Vr", 2)) return hook::handedOver(); // only with the VR mod
+            return strcmp(f.key, "ToneCurve") != 0;                    // ManiaPlanet only
+        };
         g_packs.device = device;
         host.resourcePacks = &g_packs;
         if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
+        host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
         host.hideDetached = capturing;
         menu::draw(host);
     }
@@ -715,7 +735,21 @@ void draw(IDirect3DDevice9* device) {
     ImGui::EndFrame();
     // Does one of our windows want the mouse (hovered or held)? Then the other mod stays out of it.
     publishMouseOwner((menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse);
-    if (SUCCEEDED(device->BeginScene())) {
+    if (g_ext && g_ext->prepare) {
+        // The VR mod owns the target: the same draw data to its headset layer and its desktop mirror.
+        ImGui::Render();
+        for (int pass = 0; pass < 2; pass++) {
+            if (!g_ext->prepare(g_ext->user, pass)) continue;
+            {
+                CleanFixedFunction clean(device);
+                ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+            }
+            if (pass == 0) g_ext->drew = true;
+            if (g_ext->finish) g_ext->finish(g_ext->user, pass);
+        }
+        if (ImGui::GetDrawData()->TotalVtxCount > 0 && (menu || pinned || g_splitBar)) SetPropW(g_hwnd, kTopOverlay, selfHandle());
+        else if (!menu && !pinned && !g_splitBar) removeTop();
+    } else if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
         {
             CleanFixedFunction clean(device); // given back to the game at the end of this block

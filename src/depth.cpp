@@ -70,6 +70,16 @@ void onPreReset() {
     g_auto = nullptr;
 }
 
+void restoreGameDepth(IDirect3DDevice9* device) {
+    if (!device) return;
+    IDirect3DSurface9* current = nullptr;
+    device->GetDepthStencilSurface(&current);
+    if (current && current == g_surface && g_auto) device->SetDepthStencilSurface(g_auto);
+    if (current) current->Release();
+    if (g_surface) TMVS_LOG("depth: the game's own depth buffer is back (watch only)");
+    onPreReset();
+}
+
 IDirect3DSurface9* substitute(IDirect3DSurface9* surface) {
     if (surface && surface == g_auto && g_surface) return g_surface;
     return surface;

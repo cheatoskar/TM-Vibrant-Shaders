@@ -365,6 +365,15 @@ void AutoQuality::apply(Settings& s) const {
     if (m_reduced[9] && s.bokehSize > 8.0f) s.bokehSize = 8.0f;
 }
 
+void AutoQuality::applyVrQuality(Settings& s, int level) {
+    if (level >= 1) {
+        for (int k : {0, 1, 2}) applyKnob(k, s);
+    }
+    if (level >= 2) {
+        for (int k : {3, 5, 8, 10}) applyKnob(k, s);
+    }
+}
+
 const char* AutoQuality::summary() const {
     if (m_reducedCount == 0) return "your settings";
     m_summary[0] = 0;

@@ -14,6 +14,9 @@ constexpr D3DFORMAT kINTZ = static_cast<D3DFORMAT>(MAKEFOURCC('I', 'N', 'T', 'Z'
 
 void onDeviceReady(IDirect3DDevice9* device);  // after CreateDevice / Reset
 void onPreReset();
+// Watch only after all (another mod handed over a device we hooked ourselves): the game's own
+// automatic depth buffer is bound again and our readable copy goes.
+void restoreGameDepth(IDirect3DDevice9* device);
 
 // Substitution hook for SetDepthStencilSurface.
 IDirect3DSurface9* substitute(IDirect3DSurface9* surface);

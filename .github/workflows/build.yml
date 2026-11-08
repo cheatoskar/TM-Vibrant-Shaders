@@ -97,6 +97,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # A personal token (secret RELEASE_TOKEN, contents: write on this repo) makes me the
+          # release's author; without it the release shows "github-actions released this".
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
           name: TM Vibrant Shaders ${{ steps.v.outputs.version }}
           prerelease: ${{ steps.v.outputs.prerelease }}
           files: |

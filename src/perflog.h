@@ -33,6 +33,8 @@ void renderScaled(float scale);
 // Once a frame, at Present. `pipeline`: its smoothed per-pass GPU times. `castersCpuMs`: the
 // recording's cumulative CPU time (casters::cpuMs).
 void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, double castersCpuMs);
+// false: no GPU timestamp queries at all (the log keeps the frame rate and the CPU times).
+void setGpuTimestamps(bool on);
 // Before a device reset: the queries go (default pool).
 void release();
 // Whether this frame's disjoint bracket is open (from frame() to the next Present): the

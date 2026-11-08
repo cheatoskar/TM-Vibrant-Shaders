@@ -31,6 +31,7 @@
 #include <set>
 #include <tuple>
 #include <d3d9.h>
+#include <psapi.h> // K32EnumProcessModules (the log when no game device turns up)
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -65,6 +66,8 @@ struct DevOptions {
     bool fakeBlockRank = false;  // "FakeBlockRank=1": OverlapFix takes a rank from the vertex buffer's address (0..7) instead of blockorder, to test the bias without the engine side
     float exitAt = 0.0f;         // terminate the game (0 = off)
     float hardExitAt = 0.0f;     // terminate even if no gameplay camera appeared (absolute time)
+    float vrLensSign = 1.0f;       // "VrLensSign=-1" flips the side the drops shift if they look farther than the car
+    int vrProfiling = 0;         // "VrProfiling=1": keep the GPU timestamp queries on while a VR mod draws the eyes (they cost frame time there)
     int waterSplashTest = 0;     // "WaterSplashTest=1": every 8 s a car that isn't there enters the water 12 m ahead of the camera (24 m/s, 40 degrees); 2: it drives through, 3: it drips after coming out (WaterSplash on, a map with water)
     // "Keys=4:13,7:a13,9:min,12:restore": post VK 13 at 4 s, Alt+Enter at 7 s, minimize / restore.
     // Photo mode: "photomode" (like F6), "photo" / "photohires" (like F12 / Shift+F12 in it).
@@ -124,6 +127,9 @@ bool g_shadedThisFrame = false;
 bool g_gameplayThisFrame = false; // a gameplay camera (not a menu background) was shaded
 bool g_gameplayLastFrame = false; // and in the frame before (at the next frame's start)
 float g_jitterUV[2] = {};         // TAA jitter of this frame (uv shift of the image)
+bool g_lastFrameShaded = false;   // the frame before was shaded (TAA ran): only then the next one is jittered
+bool g_cameraThisFrame = false;   // a game camera began this frame
+char g_unshadedWhy[192] = "";     // why this frame's main camera wasn't shaded (empty: none drew into the screen)
 UINT g_frameWidth = 0, g_frameHeight = 0;
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
 gfx::Target g_sceneCopy;
@@ -553,6 +559,39 @@ void logHangs(double ms, double captureMs, bool racing) {
     s_last = racing ? now : -1.0f;
 }
 
+void setUnshadedWhy(const char* why) {
+    strncpy_s(g_unshadedWhy, why, _TRUNCATE);
+}
+
+// The effects on, game cameras drawing, but no frame shaded for 2 s: logged once per stretch
+// with the reason, and when shading starts again. After an alt-tab during a replay the effects
+// stayed off whatever F7 did and the log showed nothing (my test, 2026-11-08). Frames without
+// any camera (loading screens) don't count.
+void trackUnshaded(const Settings& s) {
+    static DWORD s_since = 0;
+    static int s_frames = 0;
+    static bool s_logged = false;
+    static int s_lines = 0;
+    // Watch-only (the VR mod's default hand-over): no frame is shaded on purpose.
+    if (g_shadedThisFrame || !s.enabled || hook::observeOnly()) {
+        if (s_logged && g_shadedThisFrame)
+            TMVS_LOG("scene: shading again after %.1f s", static_cast<float>(GetTickCount() - s_since) / 1000.0f);
+        s_frames = 0;
+        s_logged = false;
+    } else if (g_cameraThisFrame) {
+        if (s_frames++ == 0) s_since = GetTickCount();
+        if (!s_logged && GetTickCount() - s_since > 2000 && s_lines < 20) {
+            s_logged = true;
+            s_lines++;
+            TMVS_LOG("scene: effects on, but no frame shaded for %.1f s (%d frames): %s", static_cast<float>(GetTickCount() - s_since) / 1000.0f,
+                     s_frames, g_unshadedWhy[0] ? g_unshadedWhy : "no camera drew into the screen (only smaller targets)");
+        }
+    }
+    g_lastFrameShaded = g_shadedThisFrame;
+    g_cameraThisFrame = false;
+    g_unshadedWhy[0] = '\0';
+}
+
 void countPipelineCpu(double ms) {
     perflog::addCpu(ms);
     if (g_cpuStats.frames >= 20000) return;
@@ -583,6 +622,8 @@ void loadDevOptions() {
     g_dev.fakeBlockRank = GetPrivateProfileIntW(L"dev", L"FakeBlockRank", 0, ini) != 0;
     g_dev.hardExitAt = iniFloat(ini, L"HardExitAt", 0.0f);
     g_dev.waterSplashTest = GetPrivateProfileIntW(L"dev", L"WaterSplashTest", 0, ini);
+    g_dev.vrProfiling = GetPrivateProfileIntW(L"dev", L"VrProfiling", 0, ini);
+    g_dev.vrLensSign = iniFloat(ini, L"VrLensSign", 1.0f);
     wchar_t buffer[MAX_PATH] = {};
     GetPrivateProfileStringW(L"dev", L"ShaderDir", L"", buffer, MAX_PATH, ini);
     g_dev.shaderDir = buffer;
@@ -2246,8 +2287,81 @@ void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3D
     }
 }
 
+// One eye of the VR mod's stereo frame, shaded as its own camera (processScene runs it twice).
+struct ForcedEye {
+    bool active = false;
+    D3DVIEWPORT9 viewport{};
+    float view[16] = {};
+    float projection[16] = {};
+    float lensShift = 0.0f; // uv.x shift for the lens drops (see processScene)
+    int index = -1;         // 0 left, 1 right
+} g_eye;
+
+void processSceneOne(IDirect3DDevice9* device);
+
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
 void processScene(IDirect3DDevice9* device) {
+    const hook::EyeProviderFn provider = hook::eyeProvider();
+    struct Eye {
+        float view[16];
+        float projection[16];
+        int rect[4];
+        bool valid;
+    } eyes[2] = {};
+    for (int eye = 0; eye < 2 && provider; eye++) eyes[eye].valid = provider(eye, eyes[eye].view, eyes[eye].projection, eyes[eye].rect) != 0;
+    // The log: what the VR mod gave, once each way (eyes, or a frame without them).
+    if (provider) {
+        static bool s_loggedEyes = false, s_loggedNone = false;
+        if ((eyes[0].valid || eyes[1].valid) && !s_loggedEyes) {
+            s_loggedEyes = true;
+            const int* r = eyes[0].valid ? eyes[0].rect : eyes[1].rect;
+            TMVS_LOG("scene: VR eyes shaded: %s%s, %dx%d each at %d,%d (%s)", eyes[0].valid ? "left" : "", eyes[1].valid ? " right" : "", r[2], r[3], r[0],
+                     r[1], hook::observeOnly() ? "watch only" : "effects");
+        } else if (!eyes[0].valid && !eyes[1].valid && !s_loggedNone) {
+            s_loggedNone = true;
+            TMVS_LOG("scene: the VR mod gave no eyes this frame: shaded as one camera");
+        }
+    }
+    // No VR mod, or no stereo frame this time (its menus, the headset not ready): the one camera as always.
+    if (!eyes[0].valid && !eyes[1].valid) {
+        processSceneOne(device);
+        return;
+    }
+    // The VR mod draws both eyes side by side into one target: each eye is its own camera, with its
+    // own part of the target and matrices, and its own history (Pipeline::selectEye).
+    // Rain drops and flakes belong on a windshield or visor, a little way in front of the eyes,
+    // not on each eye's lens. The drops are drawn on a plane at Drop distance (VrLensDistance) in front of both eyes: each eye sees them
+    // shifted by its share of the eye separation, so they sit at that depth.
+    const bool haveSeparation = eyes[0].valid && eyes[1].valid;
+    const float mid = haveSeparation ? 0.5f * (eyes[0].view[12] + eyes[1].view[12]) : 0.0f;
+    const float lensDistance = Config::get().settings.vrLensDistance;
+    // Also in Stadium (all of TMNF): on each eye's lens the drops sat at the same place in both
+    // eyes, which reads as infinitely far away, and Drop distance did nothing there (wial663's test).
+    const bool plane = haveSeparation && lensDistance > 0.01f;
+    const hook::ScenePhaseFn begin = hook::sceneBegin();
+    const hook::ScenePhaseFn end = hook::sceneEnd();
+    if (begin) begin(device);
+    const int before = g_scene.processedCount;
+    for (int eye = 0; eye < 2; eye++) {
+        if (!eyes[eye].valid) continue;
+        const int* rect = eyes[eye].rect;
+        memcpy(g_eye.view, eyes[eye].view, sizeof(g_eye.view));
+        memcpy(g_eye.projection, eyes[eye].projection, sizeof(g_eye.projection));
+        g_eye.viewport = D3DVIEWPORT9{static_cast<DWORD>(rect[0]), static_cast<DWORD>(rect[1]), static_cast<DWORD>(rect[2]),
+                                      static_cast<DWORD>(rect[3]), 0.0f, 1.0f};
+        g_eye.active = true;
+        g_eye.lensShift = plane ? -0.5f * g_eye.projection[0] * (eyes[eye].view[12] - mid) / lensDistance * g_dev.vrLensSign : 0.0f;
+        g_eye.index = eye;
+        // The first eye wasn't shaded (this target already was in this frame, or no readable depth):
+        // the second one isn't either, or it would be shaded twice.
+        if (eye == 1 && eyes[0].valid && g_scene.processedCount == before) break;
+        processSceneOne(device);
+    }
+    g_eye.active = false;
+    if (end) end(device);
+}
+
+void processSceneOne(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
     // The video export's supersampling (its dialog's "high quality" without the sub-frames of
     // its motion blur): CSceneFxSuperSample::FxRender renders the camera n x n times a frame,
@@ -2261,6 +2375,20 @@ void processScene(IDirect3DDevice9* device) {
     // engine::cameraMatrices): within it the SetTransform hook sees none, or a shadow's or a
     // projector's. During the export the samples take the engine's (all alike), and so does any
     // main camera without them.
+    // Outside the export too: on a map of mine (TMUnlimiter, 6095 blocks, night) the main camera
+    // set no view of its own all race long, and F7 changed nothing (the log said "the main camera
+    // set no view"). Its own matrices from the engine stand in then.
+    if (!g_exporting && g_scene.haveEngine && (!g_scene.haveView || !g_scene.haveProjection)) {
+        static int s_loggedMap = -1;
+        if (s_loggedMap != engine::mapLoads()) {
+            s_loggedMap = engine::mapLoads();
+            TMVS_LOG("scene: the main camera set no %s of its own: the engine's camera matrices stand in (this map)",
+                     !g_scene.haveView && !g_scene.haveProjection ? "view and projection" : (!g_scene.haveView ? "view" : "projection"));
+        }
+        if (!g_scene.haveView) memcpy(g_scene.view, g_scene.engineView, sizeof(g_scene.view));
+        if (!g_scene.haveProjection) memcpy(g_scene.projection, g_scene.engineProjection, sizeof(g_scene.projection));
+        g_scene.haveView = g_scene.haveProjection = true;
+    }
     if (g_exporting && g_scene.haveEngine && (samples || !g_scene.haveView || !g_scene.haveProjection)) {
         if (g_frameStepped) {
             g_exportStats.engineMatrices++;
@@ -2270,7 +2398,13 @@ void processScene(IDirect3DDevice9* device) {
         memcpy(g_scene.projection, g_scene.engineProjection, sizeof(g_scene.projection));
         g_scene.haveView = g_scene.haveProjection = true;
     }
-    if (!g_scene.haveView || !g_scene.haveProjection) return;
+    if (!g_scene.haveView || !g_scene.haveProjection) {
+        char why[192];
+        sprintf_s(why, "the main camera set no %s (and the engine's camera matrices were not readable)",
+                  !g_scene.haveView && !g_scene.haveProjection ? "view and no projection" : (!g_scene.haveView ? "view" : "projection"));
+        setUnshadedWhy(why);
+        return;
+    }
     if (!settings.enabled && !photo::active() && !g_captureRequested) {
         if (g_pipelineB.ready()) releaseSideB(); // photo mode ended with the shaders off
         return;
@@ -2314,15 +2448,23 @@ void processScene(IDirect3DDevice9* device) {
     IDirect3DSurface9* savedDepth = nullptr;
     if (FAILED(device->GetRenderTarget(0, &target)) || !target) return;
     const bool repeat = samples && g_scene.processedCount > 0;
+    // The VR mod's second eye: the same target as the first, another part of it.
+    const bool secondEye = g_eye.active && g_eye.viewport.X > 0 && g_scene.processedCount > 0;
     // The same target twice in a frame would be shaded twice.
-    if (g_scene.processedCount > 0 && target == g_scene.processedTarget && !repeat) {
+    if (g_scene.processedCount > 0 && target == g_scene.processedTarget && !repeat && !secondEye) {
         target->Release();
         return;
     }
     // Only the first camera of a single-camera frame continues the temporal history (and the
     // first of the export's samples: every frame has them).
-    const bool temporal = g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples);
-    if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera && !repeat) {
+    // VR eyes: each continues its own history (Pipeline::selectEye: TAA, bounce light, neon, the
+    // previous camera); the world (height map, rain, splash) moves on with the left eye. Shaded
+    // without history (as two cameras of one frame) the long shadows and the rain's shelter never
+    // got their height map and the drops stood still.
+    const bool temporal = g_eye.active || (g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples));
+    // Photo mode, pictures and captures: the one camera of a plain frame, never a VR eye.
+    const bool firstCamera = temporal && !g_eye.active;
+    if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera && !repeat && !g_eye.active) {
         g_scene.loggedMultiCamera = true;
         TMVS_LOG("scene: several main cameras in one frame (camera blend) - shading each, temporal effects paused");
     }
@@ -2331,6 +2473,12 @@ void processScene(IDirect3DDevice9* device) {
     device->GetDepthStencilSurface(&savedDepth);
     IDirect3DTexture9* sceneDepth = depth::textureFor(savedDepth);
     if (!sceneDepth) {
+        D3DSURFACE_DESC dsDesc{};
+        if (savedDepth) savedDepth->GetDesc(&dsDesc);
+        char why[192];
+        sprintf_s(why, "the main camera's depth buffer is not readable (%ux%u format %u%s)", dsDesc.Width, dsDesc.Height,
+                  static_cast<unsigned>(dsDesc.Format), savedDepth ? "" : ", none bound");
+        setUnshadedWhy(why);
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
@@ -2343,7 +2491,8 @@ void processScene(IDirect3DDevice9* device) {
     // turned the panels' background into sky, and the effects missed the view (the camera's
     // projection belongs to its part of the screen).
     D3DVIEWPORT9 viewport{};
-    device->GetViewport(&viewport);
+    if (g_eye.active) viewport = g_eye.viewport; // the VR mod's eye
+    else device->GetViewport(&viewport);
     // Real panels only: replay cameras sometimes leave a few rows out (2560x1433 at 0,3).
     const bool part = viewport.Width >= 320 && viewport.Height >= 200 && viewport.X + viewport.Width <= desc.Width &&
                       viewport.Y + viewport.Height <= desc.Height &&
@@ -2368,9 +2517,10 @@ void processScene(IDirect3DDevice9* device) {
         }
         s_wasPart = part;
     }
-    if (temporal) photo::setView(part, area, desc.Width, desc.Height);
+    if (firstCamera) photo::setView(part, area, desc.Width, desc.Height);
     if (!g_pipeline.ready() && (g_pipelineFailed || !g_pipeline.init(device, g_dev.shaderDir))) {
         g_pipelineFailed = true;
+        setUnshadedWhy("the shaders failed to start (F9 retries)");
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
@@ -2386,6 +2536,7 @@ void processScene(IDirect3DDevice9* device) {
         g_exportStats.targetHeight = desc.Height;
     }
     if (!g_sceneCopy.create(device, width, height, copyFormat) || (part && !g_partOut.create(device, width, height, D3DFMT_A8R8G8B8))) {
+        setUnshadedWhy("the copy of the image could not be created (video memory?)");
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
@@ -2403,6 +2554,7 @@ void processScene(IDirect3DDevice9* device) {
     IDirect3DTexture9* const stencil = sceneDepth;
     if (part || scaledPath) {
         if (!g_pipeline.copyDepthArea(device, sceneDepth, part ? area : scaledArea, g_partDepth)) {
+            setUnshadedWhy("the depth of the camera's part of the screen could not be copied");
             device->SetRenderTarget(0, target);
             device->SetDepthStencilSurface(savedDepth);
             g_pipeline.endStateSave(device);
@@ -2456,8 +2608,9 @@ void processScene(IDirect3DDevice9* device) {
         inputs.outputWidth = desc.Width;
         inputs.outputHeight = desc.Height;
     }
-    memcpy(inputs.view, g_scene.view, sizeof(inputs.view));
-    memcpy(inputs.projection, g_scene.projection, sizeof(inputs.projection));
+    inputs.lensEyeShift = g_eye.active ? g_eye.lensShift : 0.0f;
+    memcpy(inputs.view, g_eye.active ? g_eye.view : g_scene.view, sizeof(inputs.view));
+    memcpy(inputs.projection, g_eye.active ? g_eye.projection : g_scene.projection, sizeof(inputs.projection));
     inputs.sunKnown = sunDirection(settings, inputs.sunDirection);
     inputs.sunColorKnown = g_scene.haveLight;
     inputs.moonReplaced = engine::moonReplaced();
@@ -2632,8 +2785,9 @@ void processScene(IDirect3DDevice9* device) {
             g_pipelineB.resetHeights();
         }
     }
-    inputs.jitter[0] = g_jitterUV[0];
-    inputs.jitter[1] = g_jitterUV[1];
+    // VR eyes: the VR mod's projections carry no jitter (updateJitter is off with it).
+    inputs.jitter[0] = g_eye.active ? 0.0f : g_jitterUV[0];
+    inputs.jitter[1] = g_eye.active ? 0.0f : g_jitterUV[1];
     inputs.photo = photo::active();
     photo::focusPoint(inputs.focusPoint);
     inputs.freeze = photo::tiling();
@@ -2681,6 +2835,21 @@ void processScene(IDirect3DDevice9* device) {
             effective.depthOfField = 0.0f;
         }
         photo::adjust(effective);
+        // VR eyes: what is uncomfortable in a headset goes (Comfort), each eye costs a frame of
+        // effects (Quality in VR), the drops follow their own switch, TAA its own.
+        if (g_eye.active) {
+            if (effective.vrComfort) {
+                effective.motionBlur = 0.0f;
+                effective.depthOfField = 0.0f;
+                effective.vignette = 0.0f;
+                effective.filmGrain = 0.0f;
+                effective.lensFlare = 0.0f;
+                effective.chromaticAberration = 0.0f;
+            }
+            AutoQuality::applyVrQuality(effective, effective.vrQuality);
+            if (!effective.vrLensDrops) effective.lensDrops = false;
+            if (!effective.vrTaa) effective.taa = false;
+        }
         // The video export's own frames: this sample into the float sum, the last one finishes the
         // frame into g_own.frame (see OwnExport).
         OwnSample own = ownSample(g_scene.processedCount - 1, part || scaledPath);
@@ -2712,14 +2881,19 @@ void processScene(IDirect3DDevice9* device) {
         // RenderScale: switching between the scaled and the full size (photo mode, captures) keeps
         // the height map, the neon trail and the exposure.
         g_pipeline.keepWorldOnResize(settings.renderScale < 0.99f);
+        g_pipeline.selectEye(device, g_eye.active ? g_eye.index : -1);
+        bool rendered = true;
         if (own.skip) {
             g_own.skipped++;
             showOwnFrame(device, shaded, width, height);
         } else if (own.accumulate == 2) {
-            if (g_pipeline.render(device, inputs, effective, g_own.frame.surface)) finishOwnFrame(device, shaded, width, height);
-        } else if (g_pipeline.render(device, inputs, effective, shaded) && scaledPath) {
-            g_rs.pending = false;
+            rendered = g_pipeline.render(device, inputs, effective, g_own.frame.surface);
+            if (rendered) finishOwnFrame(device, shaded, width, height);
+        } else {
+            rendered = g_pipeline.render(device, inputs, effective, shaded);
+            if (rendered && scaledPath) g_rs.pending = false;
         }
+        if (!rendered) setUnshadedWhy("the effects' render targets could not be created (video memory?)");
         // A sample only summed wrote nothing: the screen keeps showing the last finished frame.
         if (own.accumulate == 1) showOwnFrame(device, shaded, width, height);
         LARGE_INTEGER captureStart, captureEnd;
@@ -2729,7 +2903,7 @@ void processScene(IDirect3DDevice9* device) {
         // A preset was just saved: this frame (without HUD and menu) becomes its picture, never
         // with the compare split.
         std::string picture;
-        if (temporal && Config::get().takePictureRequest(picture)) {
+        if (firstCamera && Config::get().takePictureRequest(picture)) {
             thumbnails::savePicture(device, shaded, Config::get().presetPicture(picture));
             Config::get().pictureTaken();
         }
@@ -2747,9 +2921,9 @@ void processScene(IDirect3DDevice9* device) {
         logHangs(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * toMs,
                  static_cast<double>(captureEnd.QuadPart - captureStart.QuadPart) * toMs,
                  inputs.driving && !inputs.photo && g_scene.projection[14] > -1.0f); // not a menu background
-        g_shadedThisFrame = true;
+        g_shadedThisFrame = g_shadedThisFrame || rendered;
         // The shaded frame before the HUD: a photo or a hi-res tile.
-        if (temporal) photo::afterRender(device, shaded);
+        if (firstCamera) photo::afterRender(device, shaded);
         g_gameplayThisFrame = g_gameplayThisFrame || g_scene.projection[14] > -1.0f; // not a menu background
     }
 
@@ -2876,7 +3050,9 @@ void updateVideoExport() {
 // --- Engine callbacks -------------------------------------------------------
 
 // TAA jitter: a Halton (2, 3) sequence of 8 sub-pixel offsets, one per frame. Only while
-// TAA runs: without it the image would visibly shake.
+// TAA runs: without it the image would visibly shake. Runs means the frame before was shaded:
+// with the effects on in the settings but the pipeline not running (after an alt-tab during a
+// replay, my test 2026-11-08) the game's own image shook.
 
 float halton(int index, int base) {
     float f = 1.0f, r = 0.0f;
@@ -2896,7 +3072,8 @@ void updateJitter() {
     // The compare split: its other side (the game's image, or a preset shaded a second time) has
     // no TAA of this frame to take the jitter out again and trembled (my test, 2026-10-17).
     const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0 &&
-                    !photo::tiling() && !supersampled && !photo::splitShown();
+                    !photo::tiling() && !supersampled && !photo::splitShown() && g_lastFrameShaded &&
+                    !hook::eyeProvider(); // VR: the VR mod sets its own projections
     if (!on) {
         engine::setProjectionJitter(0.0f, 0.0f);
         g_jitterUV[0] = g_jitterUV[1] = 0.0f;
@@ -2941,6 +3118,7 @@ void onCameraBegin(void* camera) {
     IDirect3DSurface9* rt = nullptr;
     g_device->GetRenderTarget(0, &rt);
     g_scene.inMainCamera = isMainTarget(g_device, rt);
+    g_cameraThisFrame = true;
     if (g_scene.inMainCamera) {
         perflog::mark(g_device, perflog::Mark::GameBegin);
         g_scene.haveView = false;
@@ -2980,6 +3158,13 @@ void onCameraBegin(void* camera) {
         const bool readable = depth::textureFor(ds) != nullptr;
         if (ds) ds->Release();
         const std::array<UINT, 5> kind = {rtDesc.Width, rtDesc.Height, dsDesc.Width, dsDesc.Height, static_cast<UINT>(dsDesc.Format)};
+        if (rtDesc.Width >= 640 && rtDesc.Height >= 400 && !g_unshadedWhy[0]) {
+            char why[192];
+            sprintf_s(why, "a camera into %ux%u is not the screen (depth %ux%u format %u, %s)", rtDesc.Width, rtDesc.Height, dsDesc.Width,
+                      dsDesc.Height, static_cast<unsigned>(dsDesc.Format),
+                      !ds ? "no depth buffer" : (readable ? "size differs from the depth" : "depth not readable"));
+            setUnshadedWhy(why);
+        }
         if (rtDesc.Width >= 640 && rtDesc.Height >= 400 && s_logged.size() < 8 &&
             std::find(s_logged.begin(), s_logged.end(), kind) == s_logged.end()) {
             s_logged.push_back(kind);
@@ -3388,7 +3573,7 @@ void onAdjustPresentParams(D3DPRESENT_PARAMETERS* params) {
 
 void onDeviceCreated(IDirect3DDevice9* device) {
     g_device = device;
-    depth::onDeviceReady(device);
+    if (!hook::observeOnly()) depth::onDeviceReady(device); // watch-only: the VR mod's depth buffer stays as it is
 }
 
 void onPreReset() {
@@ -3441,7 +3626,7 @@ DWORD g_resetAt = 0; // a device reset, until the first shaded frame after it (t
 
 void onPostReset(IDirect3DDevice9* device) {
     g_resetAt = GetTickCount();
-    depth::onDeviceReady(device);
+    if (!hook::observeOnly()) depth::onDeviceReady(device); // watch-only: the VR mod's depth buffer stays as it is
     overlay::postReset();
 }
 
@@ -3584,10 +3769,19 @@ void onPresent(IDirect3DDevice9* device) {
     // GPU timing per pass: auto quality, the overlay and the perf log line use it (a few
     // timestamp queries a frame, never waited for).
     const Settings& settings = Config::get().settings;
+    // A VR mod draws the eyes: every pass of both eyes would carry two timestamp queries, which cost
+    // frame time there (the layer under the game's D3D9 turns each into GPU work). Off unless asked.
+    const bool vrNoStamps = hook::eyeProvider() && !g_dev.vrProfiling;
+    static bool s_vrStampsLogged = false;
+    if (vrNoStamps && !s_vrStampsLogged) {
+        s_vrStampsLogged = true;
+        TMVS_LOG("perf: GPU timestamp queries off with a VR mod (dev VrProfiling=1 turns them on); the log keeps the frame rate");
+    }
+    perflog::setGpuTimestamps(!vrNoStamps);
     perflog::frame(device, g_pipeline, g_shadedThisFrame, casters::cpuMs());
     // Inside perflog's frame-wide disjoint query (open from here to the next Present) the
     // pipeline opens none of its own: only one at a time.
-    g_pipeline.setProfiling(true, perflog::bracketOpen());
+    g_pipeline.setProfiling(!vrNoStamps, perflog::bracketOpen());
     // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
     // frame times when it ends starts a quiet period).
     // The video export likewise: its frames are slow on purpose.
@@ -3638,6 +3832,7 @@ void onPresent(IDirect3DDevice9* device) {
     castersTick();
     unbindGBuffer(device);
     gameshaders::tick();
+    trackUnshaded(settings);
     g_shadedThisFrame = false;
     g_gameplayLastFrame = g_gameplayThisFrame;
     g_gameplayThisFrame = false;
@@ -3652,7 +3847,14 @@ void onPresent(IDirect3DDevice9* device) {
     // The F12 screenshot reads the back buffer after the overlay: the Misc page's windows stay out of it.
     status.hideTools = g_exporting || g_captureRequested || g_screenshotNumber >= 0;
     overlay::setStatus(status);
-    overlay::draw(device);
+    // The VR mod draws the menu into its own targets (TMVS_DrawOverlay, before this Present). A frame
+    // it leaves out (its own menu open, the headset not ready): no menu, but the hotkeys still work.
+    if (overlay::takeExternalFrame()) {
+    } else if (overlay::externalActive()) {
+        overlay::pollHotkeys();
+    } else {
+        overlay::draw(device);
+    }
     // overlay::draw polled the hotkeys (keys::poll, once a frame).
     const bool reload = overlay::consumeReloadRequest() | keys::take(keys::Action::Reload);
     if (reload) {
@@ -3784,6 +3986,40 @@ DWORD WINAPI retryHooks(LPVOID) {
         if (hook::install(g_deviceCallbacks)) return 0;
     }
     TMVS_LOG("hook: failed to hook Direct3D 9");
+    return 0;
+}
+
+// 30 s after the start without the game's device: the menu and the effects can't start, and the log
+// said nothing (jiink's report, issue #14: Competition Patch from the mod loader, no menu, no effects,
+// no error). Names the other mods loaded in the game, the likely cause.
+DWORD WINAPI watchForDevice(LPVOID) {
+    Sleep(30000);
+    if (g_device) return 0;
+    wchar_t windows[MAX_PATH] = {};
+    const UINT windowsLength = GetWindowsDirectoryW(windows, MAX_PATH);
+    HMODULE self = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&watchForDevice), &self);
+    HMODULE modules[512];
+    DWORD bytes = 0;
+    std::string others;
+    if (K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytes)) {
+        const DWORD count = (std::min)(bytes / static_cast<DWORD>(sizeof(HMODULE)), static_cast<DWORD>(512));
+        for (DWORD i = 1; i < count; i++) { // 0 is the game's exe
+            if (modules[i] == self) continue;
+            wchar_t path[MAX_PATH] = {};
+            if (!GetModuleFileNameW(modules[i], path, MAX_PATH)) continue;
+            if (windowsLength && _wcsnicmp(path, windows, windowsLength) == 0) continue; // Windows' own
+            const wchar_t* name = wcsrchr(path, L'\\');
+            char narrow[MAX_PATH] = {};
+            WideCharToMultiByte(CP_UTF8, 0, name ? name + 1 : path, -1, narrow, MAX_PATH, nullptr, nullptr);
+            if (!others.empty()) others += ", ";
+            others += narrow;
+        }
+    }
+    TMVS_LOG("hook: no game device 30 s after the start: the menu and the effects can't start. Another mod probably creates or "
+             "wraps the game's Direct3D device before this one sees it; other DLLs in the game: %s. Try turning the other mods "
+             "off one by one in the mod loader.", others.empty() ? "none found" : others.c_str());
     return 0;
 }
 
@@ -3955,6 +4191,7 @@ void bootOnce() {
         HANDLE thread = CreateThread(nullptr, 0, retryHooks, nullptr, 0, nullptr);
         if (thread) CloseHandle(thread);
     }
+    if (HANDLE watch = CreateThread(nullptr, 0, watchForDevice, nullptr, 0, nullptr)) CloseHandle(watch);
 }
 
 } // namespace

@@ -3,6 +3,9 @@
 #include "gameshaders.h"
 #include "proxy.h"
 #include "tracer.h"
+#include "overlay.h"
+#include "config.h"
+#include "depth.h"
 #include "log.h"
 #include <windows.h>
 #include <d3d9.h>
@@ -956,6 +959,90 @@ bool patchGameImport(const char* dll, const char* function, void* replacement, v
     return patchImport(dll, function, replacement, originalOut);
 }
 
+// Another mod that creates the game's device itself (the VR mod, TMFOXR, hands the game a wrapper
+// factory over a D3D9On12 factory) can pass that device here, so it is hooked although our
+// Direct3DCreate9 / CreateDevice detours never saw it. Call it right after the device was created
+// and before the other mod writes its own hooks into the device's method table.
+// observeOnly: only the callbacks that watch (Present, Reset, device created) stay; everything that
+// substitutes the game's render targets, depth buffers, viewports or draws is switched off.
+static EyeProviderFn g_eyeProvider = nullptr;
+EyeProviderFn eyeProvider() { return g_eyeProvider; }
+void setEyeProvider(EyeProviderFn fn) { g_eyeProvider = fn; }
+static ScenePhaseFn g_sceneBegin = nullptr;
+static ScenePhaseFn g_sceneEnd = nullptr;
+ScenePhaseFn sceneBegin() { return g_sceneBegin; }
+ScenePhaseFn sceneEnd() { return g_sceneEnd; }
+void setSceneCallbacks(ScenePhaseFn begin, ScenePhaseFn end) {
+    g_sceneBegin = begin;
+    g_sceneEnd = end;
+}
+static bool g_observeOnly = false;
+bool observeOnly() { return g_observeOnly; }
+static bool g_handedOver = false;
+bool handedOver() { return g_handedOver; }
+
+// Watch only: everything that substitutes the game's targets, depth, viewports or draws goes.
+static void dropSubstitutions() {
+    g_callbacks.adjustPresentParams = nullptr;
+    g_callbacks.createDepthStencil = nullptr;
+    g_callbacks.setDepthStencil = nullptr;
+    g_callbacks.setRenderTarget = nullptr;
+    g_callbacks.draw = nullptr;
+    g_callbacks.drawDone = nullptr;
+    g_callbacks.drawIndexed = nullptr;
+    g_callbacks.skipDraw = nullptr;
+    g_callbacks.setTransform = nullptr;
+    g_callbacks.setLight = nullptr;
+    g_callbacks.clear = nullptr;
+    g_callbacks.createPixelShader = nullptr;
+    g_callbacks.setViewport = nullptr;
+    g_callbacks.getViewport = nullptr;
+    g_callbacks.setScissorRect = nullptr;
+    g_callbacks.getScissorRect = nullptr;
+    g_callbacks.clearRects = nullptr;
+    g_callbacks.stretchRects = nullptr;
+    g_callbacks.otherModRenderTarget = nullptr;
+}
+
+bool attachDevice(IDirect3DDevice9* device, bool observeOnly) {
+    if (!device) return false;
+    if (g_gameDevice == device) {
+        // We saw it created ourselves (the VR mod from the mod loader leaves our Direct3DCreate9 in
+        // place): hooked fully already, its depth buffer swapped for our readable one. The VR mod's
+        // call still says it runs, and watch only must hold here too: the depth goes back to the
+        // game's own before the VR mod sets up its eye targets from it (it made them INTZ, and the
+        // effects ran in the eyes with Effects in VR off; my SteamVR test).
+        TMVS_LOG("attach: device %p handed over by another mod, already hooked by us (%s)", static_cast<void*>(device),
+                 observeOnly ? "observe only from now on: the game's depth buffer back, no render target, depth or draw changes" : "full");
+        g_handedOver = true;
+        if (observeOnly && !g_observeOnly) {
+            g_observeOnly = true;
+            dropSubstitutions();
+            g_internal++;
+            depth::restoreGameDepth(device);
+            g_internal--;
+        }
+        return true;
+    }
+    if (g_gameDevice) {
+        TMVS_LOG("attach: already hooked to device %p, not attaching %p", static_cast<void*>(g_gameDevice), static_cast<void*>(device));
+        return false;
+    }
+    TMVS_LOG("attach: device %p handed over by another mod (%s)", static_cast<void*>(device),
+             observeOnly ? "observe only: no render target, depth or draw changes" : "full");
+    g_observeOnly = observeOnly;
+    g_handedOver = true;
+    if (observeOnly) dropSubstitutions();
+    g_gameDevice = device;
+    hookDevice(device);
+    if (g_callbacks.deviceCreated) {
+        g_internal++;
+        g_callbacks.deviceCreated(device);
+        g_internal--;
+    }
+    return true;
+}
+
 bool install(const DeviceCallbacks& callbacks) {
     g_callbacks = callbacks;
     if (g_realCreateDevice) return true;
@@ -1095,3 +1182,39 @@ void endInternal() {
 
 } // namespace hook
 } // namespace tmshaders
+
+// For another mod: GetProcAddress(TMVibrantShaders.dll, "TMVS_AttachDevice"). mode 1 = our setting
+// decides (Effects in VR, settings.ini VrEffects: off = observe only, the menu alone), 2 = full
+// whatever it says. Returns 1 when the device is hooked. (__declspec(dllexport) on these __cdecl
+// functions already exports the plain names GetProcAddress asks for.)
+extern "C" __declspec(dllexport) int TMVS_AttachDevice(IDirect3DDevice9* device, int mode) {
+    const bool full = mode == 2 || tmshaders::Config::get().settings.vrEffects;
+    return tmshaders::hook::attachDevice(device, !full) ? 1 : 0;
+}
+
+// For the VR mod: draws the F8 menu once, into targets it sets up through prepare/finish (pass 0 the
+// headset layer, 1 the desktop mirror). Returns 1 when something was drawn into the headset layer.
+extern "C" __declspec(dllexport) int TMVS_DrawOverlay(IDirect3DDevice9* device, int (*prepare)(void*, int),
+                                                      void (*finish)(void*, int), void* user) {
+    if (!device || !prepare) return 0;
+    tmshaders::overlay::ExternalTarget ext;
+    ext.prepare = prepare;
+    ext.finish = finish;
+    ext.user = user;
+    tmshaders::overlay::setExternal(&ext);
+    tmshaders::hook::beginInternal();
+    tmshaders::overlay::draw(device);
+    tmshaders::hook::endInternal();
+    tmshaders::overlay::setExternal(nullptr);
+    return ext.drew ? 1 : 0;
+}
+
+// For the VR mod: how to get each eye's camera (see hook.h). Without it TMVS shades the one camera it sees.
+extern "C" __declspec(dllexport) void TMVS_SetEyeProvider(tmshaders::hook::EyeProviderFn fn) {
+    tmshaders::hook::setEyeProvider(fn);
+}
+
+// For the VR mod: before and after TMVS shades a stereo frame (see hook.h).
+extern "C" __declspec(dllexport) void TMVS_SetSceneCallbacks(tmshaders::hook::ScenePhaseFn begin, tmshaders::hook::ScenePhaseFn end) {
+    tmshaders::hook::setSceneCallbacks(begin, end);
+}

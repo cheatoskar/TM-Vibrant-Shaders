@@ -1,6 +1,21 @@
 # Changelog
 
-## 1.4.2 (in testing)
+## 1.4.3 (in testing)
+
+Fixes for dirt, the car with TAA, water and maps where the effects stayed off, and the mod works next to the VR mod TrackMania Forever OpenXR (TrackMania Nations/United).
+
+**New**
+- **Works next to the VR mod** ([TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR), with the ModLoader install; experimental): a VR build that hands its Direct3D device to this mod (offered to the VR mod in [a pull request](https://github.com/jiink/TrackManiaForeverOpenXR/pull/27); until it is merged, the build from [my fork](https://github.com/cheatoskar/TrackManiaForeverOpenXR-TMVS)) gets the menu (`F8`) in the headset and the hotkeys; before, the mod never saw the game's device under VR and stayed dead. The effects stay off by default, the VR image is left as it is. *Effects in VR* (in the VR section of the *Misc* page, which is called *Misc & VR* while the VR mod runs; off; takes effect after a restart) shades each eye as its own camera with its own history (experimental), with *Comfort* (no motion blur, depth of field, vignette, grain, flares or fringes in the headset), *Quality in VR* (Balanced by default: the effects run once per eye), *TAA in VR* and *Rain on the windshield* with its *Drop distance*. The hand-over is by [wial663](https://github.com/wial663).
+
+**Fixed**
+- Dirt no longer mirrors walls and barriers after the replay editor. Back on the map (online too), the mod kept the old materials' classes for the new ones the game put at the same place in memory: half the dirt counted as "other", a dirt road as grass, and the dry track's reflection showed up on dirt in shadow. Each remembered material now carries its file and first texture and is looked at again when they change; lamps, neon, the minimap's colours and *Hide car* use the same check.
+- Your car stays smooth while driving with TAA. TAA looked for the car's last frames where the road had been (the car moves with the camera), threw them away and showed the raw frame on the car: grainy, more so with *Sharpen*. It now takes them from the same place on screen. Standing still the car no longer trembles with TAA on.
+- The image no longer shakes when the effects don't run. TAA moves each frame by a fraction of a pixel and takes it out again; when the effects stayed off (after an alt-tab during a replay) the game's own image kept being moved and shook. The move now waits for a shaded frame. When the effects are on but no frame is shaded for 2 seconds, `tmvs.log` says why (`scene: effects on, but no frame shaded ...`).
+- The effects run on maps where `F7` changed nothing: the game's camera set no view of its own there (a TMUnlimiter map of mine), and the mod waited for one. The camera's matrices now come from the engine then (`scene: the main camera set no view of its own` in `tmvs.log`).
+- Water splash: a car that sank no longer leaves foam and spray on the surface above it. The wake fades once the roof is under water.
+- When no game device turns up (another mod creates or wraps it), `tmvs.log` now says so after 30 s and names the other mods in the game; before, the menu and the effects just didn't start, without a word.
+
+## 1.4.2 (2026-10-25)
 
 A new video export, resource packs, the Horror look with car headlights, clear water and splashes, a fix for overlapped blocks, photo mode in the MediaTracker, and the Misc page (TrackMania Nations/United); car spray, menu windows, the Horror look and car headlights also in TrackMania 2.
 

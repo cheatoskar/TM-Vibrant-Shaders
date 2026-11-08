@@ -42,6 +42,7 @@ public:
         // skipped then). 0 = output is width x height.
         UINT outputWidth = 0;
         UINT outputHeight = 0;
+        float lensEyeShift = 0.0f; // VR: uv.x shift putting the lens drops on a plane in front of both eyes (0 = on the lens)
         float view[16] = {};
         float projection[16] = {};
         float sunDirection[3] = {0.0f, 1.0f, 0.0f}; // world space, towards the sun
@@ -320,6 +321,11 @@ public:
     // The material id of every pixel (one byte, rows top-down), after a frame rendered with
     // Inputs::materialClasses.
     bool readMaterialIds(IDirect3DDevice9* device, std::vector<uint8_t>& out);
+
+    // VR (TAA in VR): each eye keeps its own history over frames (TAA, bounce light, neon spill
+    // and glow, the previous camera). Before rendering an eye, select it: the other eye's set is
+    // swapped in. -1: no eyes (a mono frame); entering or leaving the eyes drops the other set.
+    void selectEye(IDirect3DDevice9* device, int eye);
 
     // Resets temporal state (exposure, TAA, motion blur, long-shadow height map).
     void resetHistory() {
@@ -751,6 +757,30 @@ private:
     int m_sprayFrom = -1;                       // the log's last spray source (1 the engine's car)
     int m_sprayLogged = 0;
     float m_prevJitter[2] = {};                 // jitter of the TAA history's frame
+    // The other VR eye's history (selectEye): swapped with the members of the same names.
+    struct EyeHistory {
+        gfx::Target giHistory[2];
+        int giIndex = 0;
+        bool giValid = false;
+        gfx::Target spillHistory[2];
+        int spillIndex = 0;
+        bool spillValid = false;
+        gfx::Target neonHistory[2];
+        int neonIndex = 0;
+        bool neonValid = false;
+        gfx::Target taa[2];
+        int taaIndex = 0;
+        bool taaValid = false;
+        bool temporalValid = false;
+        float prevView[16] = {};
+        float prevProjection[16] = {};
+        bool havePrevious = false;
+        float prevJitter[2] = {};
+        bool historyValid = false;
+        void destroy();
+    };
+    EyeHistory m_otherEye;
+    int m_eye = -1;
     int m_boltSlot = -1000000;                  // lightning strike the bolt direction belongs to
     float m_boltAzimuth = 0.0f;
     bool m_historyValid = false;
