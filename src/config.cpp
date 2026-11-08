@@ -170,6 +170,11 @@ const std::vector<Field>& fields() {
         TMVS_FIELD("ReadableGameDepth", "Effects in replays", "Game integration", Bool, readableGameDepth, 0.0f, 1.0f),
         TMVS_FIELD("ShadeMenuBars", "Replay menu shading", "Game integration", Bool, shadeMenuBars, 0.0f, 1.0f),
         TMVS_FIELD("VrEffects", "Effects in VR", "Game integration", Bool, vrEffects, 0.0f, 1.0f),
+        TMVS_FIELD("VrComfort", "Comfort", "Game integration", Bool, vrComfort, 0.0f, 1.0f),
+        TMVS_FIELD("VrQuality", "Quality in VR", "Game integration", Int, vrQuality, 0.0f, 2.0f),
+        TMVS_FIELD("VrTaa", "TAA in VR", "Game integration", Bool, vrTaa, 0.0f, 1.0f),
+        TMVS_FIELD("VrLensDrops", "Rain on the windshield", "Game integration", Bool, vrLensDrops, 0.0f, 1.0f),
+        TMVS_FIELD("VrLensDistance", "Drop distance", "Game integration", Float, vrLensDistance, 0.0f, 3.0f),
         TMVS_FIELD("DisableGameFX", "Turn off game FX", "Game integration", Bool, disableGameFx, 0.0f, 1.0f),
         TMVS_FIELD("DisableGameMSAA", "Turn off game MSAA", "Game integration", Bool, disableGameMSAA, 0.0f, 1.0f),
         TMVS_FIELD("GameMaterials", "Game materials", "Game integration", Bool, gameMaterials, 0.0f, 1.0f),
@@ -288,7 +293,7 @@ bool isSystemField(const Field& f) {
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "OverlapFix") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
-           !strcmp(f.key, "FsrSharpness") || !strcmp(f.key, "VrEffects");
+           !strcmp(f.key, "FsrSharpness") || !strncmp(f.key, "Vr", 2);
 }
 
 void readFields(Settings& settings, const wchar_t* ini, const wchar_t* section, bool includeSystem, bool onlyTrail = false) {
@@ -1870,6 +1875,16 @@ void Config::load() {
     settings.gameLight = GetPrivateProfileIntW(L"Settings", L"GameLight", 0, ini) != 0;
     settings.shadeMenuBars = GetPrivateProfileIntW(L"Settings", L"ShadeMenuBars", 1, ini) != 0;
     settings.vrEffects = GetPrivateProfileIntW(L"Settings", L"VrEffects", 0, ini) != 0;
+    settings.vrComfort = GetPrivateProfileIntW(L"Settings", L"VrComfort", 1, ini) != 0;
+    settings.vrQuality = static_cast<int>(GetPrivateProfileIntW(L"Settings", L"VrQuality", 1, ini));
+    if (settings.vrQuality < 0 || settings.vrQuality > 2) settings.vrQuality = 1;
+    settings.vrTaa = GetPrivateProfileIntW(L"Settings", L"VrTaa", 0, ini) != 0;
+    settings.vrLensDrops = GetPrivateProfileIntW(L"Settings", L"VrLensDrops", 1, ini) != 0;
+    {
+        wchar_t value[32];
+        if (GetPrivateProfileStringW(L"Settings", L"VrLensDistance", L"", value, 32, ini))
+            settings.vrLensDistance = std::clamp(static_cast<float>(_wtof(value)), 0.0f, 3.0f);
+    }
     settings.gameHdr = GetPrivateProfileIntW(L"Settings", L"GameHdr", 1, ini) != 0;
     settings.engineLights = GetPrivateProfileIntW(L"Settings", L"EngineLights", 1, ini) != 0;
     settings.casterShadows = GetPrivateProfileIntW(L"Settings", L"CasterShadows", 1, ini) != 0;

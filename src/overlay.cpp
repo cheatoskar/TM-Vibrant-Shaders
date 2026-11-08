@@ -705,7 +705,7 @@ void draw(IDirect3DDevice9* device) {
             if (!photo::active()) photo::toggle();
         };
         host.supports = [](const Field& f) {
-            if (!strcmp(f.key, "VrEffects")) return hook::handedOver(); // only with the VR mod
+            if (!strncmp(f.key, "Vr", 2)) return hook::handedOver(); // only with the VR mod
             return strcmp(f.key, "ToneCurve") != 0;                    // ManiaPlanet only
         };
         g_packs.device = device;

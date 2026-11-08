@@ -65,7 +65,6 @@ struct DevOptions {
     bool fakeBlockRank = false;  // "FakeBlockRank=1": OverlapFix takes a rank from the vertex buffer's address (0..7) instead of blockorder, to test the bias without the engine side
     float exitAt = 0.0f;         // terminate the game (0 = off)
     float hardExitAt = 0.0f;     // terminate even if no gameplay camera appeared (absolute time)
-    float vrLensDistance = 0.75f; // "VrLensDistance": how far in front of the eyes the rain drops and flakes sit in VR (game units, about metres); 0 = on the lens as on a screen
     float vrLensSign = 1.0f;       // "VrLensSign=-1" flips the side the drops shift if they look farther than the car
     int vrProfiling = 0;         // "VrProfiling=1": keep the GPU timestamp queries on while a VR mod draws the eyes (they cost frame time there)
     int waterSplashTest = 0;     // "WaterSplashTest=1": every 8 s a car that isn't there enters the water 12 m ahead of the camera (24 m/s, 40 degrees); 2: it drives through, 3: it drips after coming out (WaterSplash on, a map with water)
@@ -623,7 +622,6 @@ void loadDevOptions() {
     g_dev.hardExitAt = iniFloat(ini, L"HardExitAt", 0.0f);
     g_dev.waterSplashTest = GetPrivateProfileIntW(L"dev", L"WaterSplashTest", 0, ini);
     g_dev.vrProfiling = GetPrivateProfileIntW(L"dev", L"VrProfiling", 0, ini);
-    g_dev.vrLensDistance = iniFloat(ini, L"VrLensDistance", 0.75f);
     g_dev.vrLensSign = iniFloat(ini, L"VrLensSign", 1.0f);
     wchar_t buffer[MAX_PATH] = {};
     GetPrivateProfileStringW(L"dev", L"ShaderDir", L"", buffer, MAX_PATH, ini);
@@ -2295,6 +2293,7 @@ struct ForcedEye {
     float view[16] = {};
     float projection[16] = {};
     float lensShift = 0.0f; // uv.x shift for the lens drops (see processScene)
+    int index = -1;         // 0 left, 1 right
 } g_eye;
 
 void processSceneOne(IDirect3DDevice9* device);
@@ -2318,11 +2317,12 @@ void processScene(IDirect3DDevice9* device) {
     // own part of the target and matrices (temporal effects pause, as with several main cameras).
     // Rain drops and flakes in a closed car belong on the windshield, a little way in front of the
     // eyes, not on each eye's lens (Stadium keeps them on the lens: the driver wears a helmet). The
-    // drops are drawn on a plane at g_dev.vrLensDistance in front of both eyes: each eye sees them
+    // drops are drawn on a plane at Drop distance (VrLensDistance) in front of both eyes: each eye sees them
     // shifted by its share of the eye separation, so they sit at that depth.
     const bool haveSeparation = eyes[0].valid && eyes[1].valid;
     const float mid = haveSeparation ? 0.5f * (eyes[0].view[12] + eyes[1].view[12]) : 0.0f;
-    const bool plane = haveSeparation && g_dev.vrLensDistance > 0.01f && !engine::stadium();
+    const float lensDistance = Config::get().settings.vrLensDistance;
+    const bool plane = haveSeparation && lensDistance > 0.01f && !engine::stadium();
     const hook::ScenePhaseFn begin = hook::sceneBegin();
     const hook::ScenePhaseFn end = hook::sceneEnd();
     if (begin) begin(device);
@@ -2335,7 +2335,8 @@ void processScene(IDirect3DDevice9* device) {
         g_eye.viewport = D3DVIEWPORT9{static_cast<DWORD>(rect[0]), static_cast<DWORD>(rect[1]), static_cast<DWORD>(rect[2]),
                                       static_cast<DWORD>(rect[3]), 0.0f, 1.0f};
         g_eye.active = true;
-        g_eye.lensShift = plane ? -0.5f * g_eye.projection[0] * (eyes[eye].view[12] - mid) / g_dev.vrLensDistance * g_dev.vrLensSign : 0.0f;
+        g_eye.lensShift = plane ? -0.5f * g_eye.projection[0] * (eyes[eye].view[12] - mid) / lensDistance * g_dev.vrLensSign : 0.0f;
+        g_eye.index = eye;
         // The first eye wasn't shaded (this target already was in this frame, or no readable depth):
         // the second one isn't either, or it would be shaded twice.
         if (eye == 1 && eyes[0].valid && g_scene.processedCount == before) break;
@@ -2441,8 +2442,14 @@ void processSceneOne(IDirect3DDevice9* device) {
     }
     // Only the first camera of a single-camera frame continues the temporal history (and the
     // first of the export's samples: every frame has them).
-    const bool temporal = !g_eye.active && g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples);
-    if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera && !repeat) {
+    // VR eyes: each continues its own history (Pipeline::selectEye: TAA, bounce light, neon, the
+    // previous camera); the world (height map, rain, splash) moves on with the left eye. Shaded
+    // without history (as two cameras of one frame) the long shadows and the rain's shelter never
+    // got their height map and the drops stood still.
+    const bool temporal = g_eye.active || (g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples));
+    // Photo mode, pictures and captures: the one camera of a plain frame, never a VR eye.
+    const bool firstCamera = temporal && !g_eye.active;
+    if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera && !repeat && !g_eye.active) {
         g_scene.loggedMultiCamera = true;
         TMVS_LOG("scene: several main cameras in one frame (camera blend) - shading each, temporal effects paused");
     }
@@ -2495,7 +2502,7 @@ void processSceneOne(IDirect3DDevice9* device) {
         }
         s_wasPart = part;
     }
-    if (temporal) photo::setView(part, area, desc.Width, desc.Height);
+    if (firstCamera) photo::setView(part, area, desc.Width, desc.Height);
     if (!g_pipeline.ready() && (g_pipelineFailed || !g_pipeline.init(device, g_dev.shaderDir))) {
         g_pipelineFailed = true;
         setUnshadedWhy("the shaders failed to start (F9 retries)");
@@ -2763,8 +2770,9 @@ void processSceneOne(IDirect3DDevice9* device) {
             g_pipelineB.resetHeights();
         }
     }
-    inputs.jitter[0] = g_jitterUV[0];
-    inputs.jitter[1] = g_jitterUV[1];
+    // VR eyes: the VR mod's projections carry no jitter (updateJitter is off with it).
+    inputs.jitter[0] = g_eye.active ? 0.0f : g_jitterUV[0];
+    inputs.jitter[1] = g_eye.active ? 0.0f : g_jitterUV[1];
     inputs.photo = photo::active();
     photo::focusPoint(inputs.focusPoint);
     inputs.freeze = photo::tiling();
@@ -2812,6 +2820,21 @@ void processSceneOne(IDirect3DDevice9* device) {
             effective.depthOfField = 0.0f;
         }
         photo::adjust(effective);
+        // VR eyes: what is uncomfortable in a headset goes (Comfort), each eye costs a frame of
+        // effects (Quality in VR), the drops follow their own switch, TAA its own.
+        if (g_eye.active) {
+            if (effective.vrComfort) {
+                effective.motionBlur = 0.0f;
+                effective.depthOfField = 0.0f;
+                effective.vignette = 0.0f;
+                effective.filmGrain = 0.0f;
+                effective.lensFlare = 0.0f;
+                effective.chromaticAberration = 0.0f;
+            }
+            AutoQuality::applyVrQuality(effective, effective.vrQuality);
+            if (!effective.vrLensDrops) effective.lensDrops = false;
+            if (!effective.vrTaa) effective.taa = false;
+        }
         // The video export's own frames: this sample into the float sum, the last one finishes the
         // frame into g_own.frame (see OwnExport).
         OwnSample own = ownSample(g_scene.processedCount - 1, part || scaledPath);
@@ -2843,6 +2866,7 @@ void processSceneOne(IDirect3DDevice9* device) {
         // RenderScale: switching between the scaled and the full size (photo mode, captures) keeps
         // the height map, the neon trail and the exposure.
         g_pipeline.keepWorldOnResize(settings.renderScale < 0.99f);
+        g_pipeline.selectEye(device, g_eye.active ? g_eye.index : -1);
         bool rendered = true;
         if (own.skip) {
             g_own.skipped++;
@@ -2864,7 +2888,7 @@ void processSceneOne(IDirect3DDevice9* device) {
         // A preset was just saved: this frame (without HUD and menu) becomes its picture, never
         // with the compare split.
         std::string picture;
-        if (temporal && Config::get().takePictureRequest(picture)) {
+        if (firstCamera && Config::get().takePictureRequest(picture)) {
             thumbnails::savePicture(device, shaded, Config::get().presetPicture(picture));
             Config::get().pictureTaken();
         }
@@ -2884,7 +2908,7 @@ void processSceneOne(IDirect3DDevice9* device) {
                  inputs.driving && !inputs.photo && g_scene.projection[14] > -1.0f); // not a menu background
         g_shadedThisFrame = g_shadedThisFrame || rendered;
         // The shaded frame before the HUD: a photo or a hi-res tile.
-        if (temporal) photo::afterRender(device, shaded);
+        if (firstCamera) photo::afterRender(device, shaded);
         g_gameplayThisFrame = g_gameplayThisFrame || g_scene.projection[14] > -1.0f; // not a menu background
     }
 
@@ -3033,7 +3057,8 @@ void updateJitter() {
     // The compare split: its other side (the game's image, or a preset shaded a second time) has
     // no TAA of this frame to take the jitter out again and trembled (my test, 2026-10-17).
     const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0 &&
-                    !photo::tiling() && !supersampled && !photo::splitShown() && g_lastFrameShaded;
+                    !photo::tiling() && !supersampled && !photo::splitShown() && g_lastFrameShaded &&
+                    !hook::eyeProvider(); // VR: the VR mod sets its own projections
     if (!on) {
         engine::setProjectionJitter(0.0f, 0.0f);
         g_jitterUV[0] = g_jitterUV[1] = 0.0f;

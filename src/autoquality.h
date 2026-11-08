@@ -20,6 +20,9 @@ public:
     void onFrame(double now, bool gameplay, const Pipeline& pipeline, const Settings& settings);
     // Writes the current reductions into a copy of the settings.
     void apply(Settings& s) const;
+    // VR eyes (Quality in VR): 1 balanced cuts volumetric light, bounce light and High quality,
+    // 2 fast also long shadows, volumetric clouds, light shafts and quality Low.
+    static void applyVrQuality(Settings& s, int level);
 
     float fps() const { return m_fps; }
     float pipelineMs() const { return m_pipelineMs; }

@@ -223,7 +223,7 @@ bool isMachineSetting(const Field& f) {
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "OverlapFix") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
-           !strcmp(f.key, "FsrSharpness") || !strcmp(f.key, "VrEffects");
+           !strcmp(f.key, "FsrSharpness") || !strncmp(f.key, "Vr", 2);
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -456,6 +456,11 @@ const char* tooltipFor(const char* key) {
         {"GameLight", "Darkens night by dimming the game's own lighting, not the whole image: paint keeps its colour and lamp-lit areas stay bright. Needs Game HDR and Game light sources. (restart the first time)"},
         {"ShadeMenuBars", "Shows the mirrored replay under the replay menu bars. Off: black bars."},
         {"VrEffects", "Shows the effects in the VR headset. Off: only this menu. Experimental. (restart)"},
+        {"VrComfort", "In the headset: no motion blur, depth of field, vignette, film grain, lens flares or colour fringes."},
+        {"VrQuality", "The effects run once per eye. Balanced leaves out volumetric light and bounce light, Fast also long shadows, clouds and light shafts."},
+        {"VrTaa", "Smooths edges and noise over frames, each eye on its own. Experimental."},
+        {"VrLensDrops", "Rain drops and snow flakes in front of your eyes, like on a windshield. Stadium: on the helmet's visor."},
+        {"VrLensDistance", "How far in front of your eyes the drops sit, in metres. 0: on each eye's lens."},
         {"NeonTrail", "A glowing trail behind the car. 0 is off."},
         {"TrailTyres", "Two lines from the rear tyres instead of one."},
         {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},
@@ -559,6 +564,9 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
                     }
                     changed = true;
                 }
+            } else if (!strcmp(f.key, "VrQuality")) {
+                static const char* kVrQualities[] = {"Full", "Balanced", "Fast"};
+                changed |= ImGui::Combo(label, value, kVrQualities, IM_ARRAYSIZE(kVrQualities));
             } else if (!strcmp(f.key, "Quality")) {
                 static const char* kQualities[] = {"Low (fast)", "Medium", "High"};
                 changed |= ImGui::Combo(label, value, kQualities, IM_ARRAYSIZE(kQualities));
@@ -2084,7 +2092,7 @@ bool drawSettings(Config& config, Settings& s) {
     // How the mod works with the game itself, as in Studio's group of the same name (same order).
     Entries game;
     for (const Field& f : fields()) {
-        if (!strcmp(f.category, "Game integration") && strcmp(f.key, "VrEffects") != 0) game.push_back({f.key, nullptr}); // VR: on Misc & VR
+        if (!strcmp(f.category, "Game integration") && strncmp(f.key, "Vr", 2) != 0) game.push_back({f.key, nullptr}); // VR: on Misc & VR
     }
     panels.push_back(settingsPanel("Game integration", s, game));
     panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) + (g_host->photoHideCar ? 2.0f : 0.0f), [&config] {
@@ -2421,6 +2429,13 @@ void drawVrSection(Settings& s) {
     if (const Field* f = findField("VrEffects")) drawField(*f, s);
     if (s.vrEffects != (state == 2)) ImGui::TextDisabled("Restart the game to apply.");
     else ImGui::TextDisabled(state == 2 ? "Effects in the headset." : "Only this menu in the headset.");
+    if (!s.vrEffects && state != 2) return;
+    for (const char* key : {"VrComfort", "VrQuality", "VrTaa", "VrLensDrops"}) {
+        if (const Field* f = findField(key)) drawField(*f, s);
+    }
+    if (s.vrLensDrops) {
+        if (const Field* f = findField("VrLensDistance")) drawField(*f, s);
+    }
 }
 
 const PageDef kPageTable[] = {
