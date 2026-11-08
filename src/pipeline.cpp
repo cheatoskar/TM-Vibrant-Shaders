@@ -2571,7 +2571,12 @@ void Pipeline::updateWater(const Inputs& in, const Settings& s, float dt) {
         m_waterDrip = fminf(m_waterInFor / 0.5f, 1.0f);
     }
     if (m_waterIn) m_waterInFor += dt;
-    const float target = m_waterIn ? fminf(depth / 0.35f, 1.0f) : 0.0f;
+    // The wake and the bow wave are the car cutting through the surface: once its roof (about a
+    // metre above the tyres) is under too, they fade out. A car that sank kept drawing foam on
+    // the surface above it as it drifted on along the bottom (my test, 2026-11-08).
+    const float roofUnder = depth - 1.0f;
+    const float surfaced = fminf(fmaxf(1.0f - roofUnder / 0.3f, 0.0f), 1.0f);
+    const float target = m_waterIn ? fminf(depth / 0.35f, 1.0f) * surfaced : 0.0f;
     m_waterWake += (target - m_waterWake) * fminf(dt * 6.0f, 1.0f);
     memcpy(m_waterPrev, p, sizeof(m_waterPrev));
     m_waterPrevBottom = bottom;
