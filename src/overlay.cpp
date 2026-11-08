@@ -603,6 +603,14 @@ void drawStatusLine(IDirect3DDevice9* device) {
     ImGui::PopStyleVar(4);
 }
 
+static ExternalTarget* g_ext = nullptr;
+static bool g_extSeen = false;
+void setExternal(ExternalTarget* target) {
+    g_ext = target;
+    if (target) g_extSeen = true;
+}
+bool externalActive() { return g_extSeen; }
+
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
     if (!g_initialized) init(device);
@@ -715,7 +723,21 @@ void draw(IDirect3DDevice9* device) {
     ImGui::EndFrame();
     // Does one of our windows want the mouse (hovered or held)? Then the other mod stays out of it.
     publishMouseOwner((menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse);
-    if (SUCCEEDED(device->BeginScene())) {
+    if (g_ext && g_ext->prepare) {
+        // The VR mod owns the target: the same draw data to its headset layer and its desktop mirror.
+        ImGui::Render();
+        for (int pass = 0; pass < 2; pass++) {
+            if (!g_ext->prepare(g_ext->user, pass)) continue;
+            {
+                CleanFixedFunction clean(device);
+                ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+            }
+            if (pass == 0) g_ext->drew = true;
+            if (g_ext->finish) g_ext->finish(g_ext->user, pass);
+        }
+        if (ImGui::GetDrawData()->TotalVtxCount > 0 && (menu || pinned || g_splitBar)) SetPropW(g_hwnd, kTopOverlay, selfHandle());
+        else if (!menu && !pinned && !g_splitBar) removeTop();
+    } else if (SUCCEEDED(device->BeginScene())) {
         ImGui::Render();
         {
             CleanFixedFunction clean(device); // given back to the game at the end of this block

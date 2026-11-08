@@ -702,6 +702,8 @@ void Pipeline::setFrameConstants(IDirect3DDevice9* device, const Inputs& in, con
     device->SetPixelShaderConstantF(39, snow, 1);
     const float sky3[4] = {s.auroraSpeed, s.lensDrops ? fminf(s.snow, 1.5f) : 0.0f, s.reflectionBlur, 1.0f / fmaxf(s.hazeDistance, 0.1f)};
     device->SetPixelShaderConstantF(41, sky3, 1);
+    const float lensEye[4] = {in.lensEyeShift, 0.0f, 0.0f, 0.0f};
+    device->SetPixelShaderConstantF(43, lensEye, 1);
     // Day-for-night: how much of the game's baked sun comes out, and where that sun is (the
     // game's own, also under a black hole sky, whose light is the hole). Every night sky over a
     // day map takes it out fully; the scene's darkness (u_Sky.y) is a separate thing (a black

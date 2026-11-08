@@ -56,6 +56,7 @@ float4 u_BlackHole : register(c40); // black hole direction (world, turns with t
 float4 u_Sky3      : register(c41); // aurora speed, snow flakes on the lens, reflection blur, 1 / haze distance
 float4 u_Mat       : register(c44); // x: s13 holds the game's materials (debug view "Materials"); y: s9 holds the focus distance (final pass); z: a night sky replaces the game's (its clouds and their mirror image go); w: tone curve knee
 float4 u_Lut       : register(c42); // LUT mix (0 = off), texel scale (N-1)/N, offset 0.5/N; w: lamps keep the game's brightness (night maps, s8 = game image) (final pass)
+float4 u_LensEye   : register(c43); // VR: x = uv shift of the lens drops and flakes for this eye (they sit on a plane in front of both eyes, not on each eye's lens); 0 = on the lens
 float4 u_Volume    : register(c37); // volumetric light strength, march range (m), global illumination, lens drops
 float4 u_Head0     : register(c64); // CarHeadlights (PS_Headlights): strength, cos of the cone's edge, cos of its bright core, range (m)
 float4 u_Head1     : register(c65); // the left lamp (world), glare strength
@@ -3924,6 +3925,7 @@ float sheltered() { return tex2Dlod(s1, float4(0.5, 0.5, 0, 0)).r; }
 // Water on a lens is clear: it only bends the image behind it (no dark rim, no "bubble").
 //   returns uv offset (xy) and a brightness factor (z, ~1)
 float3 lensDrops(float2 uv) {
+    uv.x += u_LensEye.x;
     float3 r = float3(0, 0, 1);
     float amount = u_Volume.w;
     if (amount <= 0.0) return r;
@@ -3989,6 +3991,7 @@ float3 lensDrops(float2 uv) {
 // Snow flakes on the lens: they land, sit out of focus (soft six-armed blurs) and melt away.
 // Returns the flake's colour (rgb) and coverage (a).
 float4 lensSnow(float2 uv) {
+    uv.x += u_LensEye.x;
     float amount = u_Sky3.y;
     if (amount <= 0.0) return 0;
     amount *= 1.0 - sheltered();

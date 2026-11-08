@@ -51,6 +51,23 @@ struct DeviceCallbacks {
 
 bool install(const DeviceCallbacks& callbacks);
 
+// Hooks a device that another mod created (see hook.cpp). observeOnly: watch Present / Reset only.
+bool attachDevice(IDirect3DDevice9* device, bool observeOnly);
+// True when another mod handed over the device and TMVS only watches (no depth or target changes).
+bool observeOnly();
+// The VR mod's per-eye camera data (TMVS_SetEyeProvider): for eye 0/1 the view and projection (16 floats
+// each, D3D row-major, as SetTransform takes them) and the eye's rectangle {x, y, width, height} in the
+// scene target. Returns 0 when there is no stereo frame. nullptr: no VR mod.
+typedef int(__cdecl* EyeProviderFn)(int eye, float* view, float* projection, int* rect);
+EyeProviderFn eyeProvider();
+void setEyeProvider(EyeProviderFn fn);
+// Called by the shading of a VR frame: before (the VR mod puts the game's shader state back) and after
+// (it puts the game's render target back and mirrors the shaded eye to the desktop).
+typedef void(__cdecl* ScenePhaseFn)(IDirect3DDevice9* device);
+ScenePhaseFn sceneBegin();
+ScenePhaseFn sceneEnd();
+void setSceneCallbacks(ScenePhaseFn begin, ScenePhaseFn end);
+
 // Replaces an import of the game's exe (by DLL and function name). Returns false if the exe
 // doesn't import it.
 bool patchGameImport(const char* dll, const char* function, void* replacement, void** originalOut);

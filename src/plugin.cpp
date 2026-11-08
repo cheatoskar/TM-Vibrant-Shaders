@@ -65,6 +65,9 @@ struct DevOptions {
     bool fakeBlockRank = false;  // "FakeBlockRank=1": OverlapFix takes a rank from the vertex buffer's address (0..7) instead of blockorder, to test the bias without the engine side
     float exitAt = 0.0f;         // terminate the game (0 = off)
     float hardExitAt = 0.0f;     // terminate even if no gameplay camera appeared (absolute time)
+    float vrLensDistance = 0.75f; // "VrLensDistance": how far in front of the eyes the rain drops and flakes sit in VR (game units, about metres); 0 = on the lens as on a screen
+    float vrLensSign = 1.0f;       // "VrLensSign=-1" flips the side the drops shift if they look farther than the car
+    int vrProfiling = 0;         // "VrProfiling=1": keep the GPU timestamp queries on while a VR mod draws the eyes (they cost frame time there)
     int waterSplashTest = 0;     // "WaterSplashTest=1": every 8 s a car that isn't there enters the water 12 m ahead of the camera (24 m/s, 40 degrees); 2: it drives through, 3: it drips after coming out (WaterSplash on, a map with water)
     // "Keys=4:13,7:a13,9:min,12:restore": post VK 13 at 4 s, Alt+Enter at 7 s, minimize / restore.
     // Photo mode: "photomode" (like F6), "photo" / "photohires" (like F12 / Shift+F12 in it).
@@ -618,6 +621,9 @@ void loadDevOptions() {
     g_dev.fakeBlockRank = GetPrivateProfileIntW(L"dev", L"FakeBlockRank", 0, ini) != 0;
     g_dev.hardExitAt = iniFloat(ini, L"HardExitAt", 0.0f);
     g_dev.waterSplashTest = GetPrivateProfileIntW(L"dev", L"WaterSplashTest", 0, ini);
+    g_dev.vrProfiling = GetPrivateProfileIntW(L"dev", L"VrProfiling", 0, ini);
+    g_dev.vrLensDistance = iniFloat(ini, L"VrLensDistance", 0.75f);
+    g_dev.vrLensSign = iniFloat(ini, L"VrLensSign", 1.0f);
     wchar_t buffer[MAX_PATH] = {};
     GetPrivateProfileStringW(L"dev", L"ShaderDir", L"", buffer, MAX_PATH, ini);
     g_dev.shaderDir = buffer;
@@ -2282,7 +2288,62 @@ void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3D
 }
 
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
+// One eye of the VR mod's stereo frame, shaded as its own camera (processScene runs it twice).
+struct ForcedEye {
+    bool active = false;
+    D3DVIEWPORT9 viewport{};
+    float view[16] = {};
+    float projection[16] = {};
+    float lensShift = 0.0f; // uv.x shift for the lens drops (see processScene)
+} g_eye;
+
+void processSceneOne(IDirect3DDevice9* device);
+
 void processScene(IDirect3DDevice9* device) {
+    const hook::EyeProviderFn provider = hook::eyeProvider();
+    if (!provider) {
+        processSceneOne(device);
+        return;
+    }
+    // The VR mod draws both eyes side by side into one target: each eye is its own camera, with its
+    // own part of the target and matrices (temporal effects pause, as with several main cameras).
+    bool any = false;
+    // Rain drops and flakes in a closed car belong on the windshield, a little way in front of the
+    // eyes, not on each eye's lens (Stadium keeps them on the lens: the driver wears a helmet). The
+    // drops are drawn on a plane at g_dev.vrLensDistance in front of both eyes: each eye sees them
+    // shifted by its share of the eye separation, so they sit at that depth.
+    float eyeSeparationView[2] = {0.0f, 0.0f};
+    bool haveSeparation = false;
+    {
+        float vl[16], pl[16], vr[16], pr[16];
+        int rl[4], rr[4];
+        if (provider(0, vl, pl, rl) && provider(1, vr, pr, rr)) {
+            const float mid = 0.5f * (vl[12] + vr[12]);
+            eyeSeparationView[0] = vl[12] - mid;
+            eyeSeparationView[1] = vr[12] - mid;
+            haveSeparation = true;
+        }
+    }
+    const bool plane = haveSeparation && g_dev.vrLensDistance > 0.01f && !engine::stadium();
+    const hook::ScenePhaseFn begin = hook::sceneBegin();
+    const hook::ScenePhaseFn end = hook::sceneEnd();
+    if (begin) begin(device);
+    for (int eye = 0; eye < 2; eye++) {
+        int rect[4] = {};
+        if (!provider(eye, g_eye.view, g_eye.projection, rect)) continue;
+        g_eye.viewport = D3DVIEWPORT9{static_cast<DWORD>(rect[0]), static_cast<DWORD>(rect[1]), static_cast<DWORD>(rect[2]),
+                                      static_cast<DWORD>(rect[3]), 0.0f, 1.0f};
+        g_eye.active = true;
+        g_eye.lensShift = plane ? -0.5f * g_eye.projection[0] * eyeSeparationView[eye] / g_dev.vrLensDistance * g_dev.vrLensSign : 0.0f;
+        any = true;
+        processSceneOne(device);
+    }
+    g_eye.active = false;
+    if (!any) processSceneOne(device);
+    if (end) end(device);
+}
+
+void processSceneOne(IDirect3DDevice9* device) {
     Settings& settings = Config::get().settings;
     // The video export's supersampling (its dialog's "high quality" without the sub-frames of
     // its motion blur): CSceneFxSuperSample::FxRender renders the camera n x n times a frame,
@@ -2354,7 +2415,7 @@ void processScene(IDirect3DDevice9* device) {
     if (FAILED(device->GetRenderTarget(0, &target)) || !target) return;
     const bool repeat = samples && g_scene.processedCount > 0;
     // The same target twice in a frame would be shaded twice.
-    if (g_scene.processedCount > 0 && target == g_scene.processedTarget && !repeat) {
+    if (g_scene.processedCount > 0 && target == g_scene.processedTarget && !repeat && !g_eye.active) {
         target->Release();
         return;
     }
@@ -2388,7 +2449,8 @@ void processScene(IDirect3DDevice9* device) {
     // turned the panels' background into sky, and the effects missed the view (the camera's
     // projection belongs to its part of the screen).
     D3DVIEWPORT9 viewport{};
-    device->GetViewport(&viewport);
+    if (g_eye.active) viewport = g_eye.viewport; // the VR mod's eye
+    else device->GetViewport(&viewport);
     // Real panels only: replay cameras sometimes leave a few rows out (2560x1433 at 0,3).
     const bool part = viewport.Width >= 320 && viewport.Height >= 200 && viewport.X + viewport.Width <= desc.Width &&
                       viewport.Y + viewport.Height <= desc.Height &&
@@ -2504,8 +2566,9 @@ void processScene(IDirect3DDevice9* device) {
         inputs.outputWidth = desc.Width;
         inputs.outputHeight = desc.Height;
     }
-    memcpy(inputs.view, g_scene.view, sizeof(inputs.view));
-    memcpy(inputs.projection, g_scene.projection, sizeof(inputs.projection));
+    inputs.lensEyeShift = g_eye.active ? g_eye.lensShift : 0.0f;
+    memcpy(inputs.view, g_eye.active ? g_eye.view : g_scene.view, sizeof(inputs.view));
+    memcpy(inputs.projection, g_eye.active ? g_eye.projection : g_scene.projection, sizeof(inputs.projection));
     inputs.sunKnown = sunDirection(settings, inputs.sunDirection);
     inputs.sunColorKnown = g_scene.haveLight;
     inputs.moonReplaced = engine::moonReplaced();
@@ -3450,7 +3513,7 @@ void onAdjustPresentParams(D3DPRESENT_PARAMETERS* params) {
 
 void onDeviceCreated(IDirect3DDevice9* device) {
     g_device = device;
-    depth::onDeviceReady(device);
+    if (!hook::observeOnly()) depth::onDeviceReady(device); // watch-only: the VR mod's depth buffer stays as it is
 }
 
 void onPreReset() {
@@ -3503,7 +3566,7 @@ DWORD g_resetAt = 0; // a device reset, until the first shaded frame after it (t
 
 void onPostReset(IDirect3DDevice9* device) {
     g_resetAt = GetTickCount();
-    depth::onDeviceReady(device);
+    if (!hook::observeOnly()) depth::onDeviceReady(device); // watch-only: the VR mod's depth buffer stays as it is
     overlay::postReset();
 }
 
@@ -3646,10 +3709,19 @@ void onPresent(IDirect3DDevice9* device) {
     // GPU timing per pass: auto quality, the overlay and the perf log line use it (a few
     // timestamp queries a frame, never waited for).
     const Settings& settings = Config::get().settings;
+    // A VR mod draws the eyes: every pass of both eyes would carry two timestamp queries, which cost
+    // frame time there (the layer under the game's D3D9 turns each into GPU work). Off unless asked.
+    const bool vrNoStamps = hook::eyeProvider() && !g_dev.vrProfiling;
+    static bool s_vrStampsLogged = false;
+    if (vrNoStamps && !s_vrStampsLogged) {
+        s_vrStampsLogged = true;
+        TMVS_LOG("perf: GPU timestamp queries off with a VR mod (dev VrProfiling=1 turns them on); the log keeps the frame rate");
+    }
+    perflog::setGpuTimestamps(!vrNoStamps);
     perflog::frame(device, g_pipeline, g_shadedThisFrame, casters::cpuMs());
     // Inside perflog's frame-wide disjoint query (open from here to the next Present) the
     // pipeline opens none of its own: only one at a time.
-    g_pipeline.setProfiling(true, perflog::bracketOpen());
+    g_pipeline.setProfiling(!vrNoStamps, perflog::bracketOpen());
     // Paused in photo mode: full quality there must not count as slow gameplay (the gap in
     // frame times when it ends starts a quiet period).
     // The video export likewise: its frames are slow on purpose.
@@ -3715,7 +3787,7 @@ void onPresent(IDirect3DDevice9* device) {
     // The F12 screenshot reads the back buffer after the overlay: the Misc page's windows stay out of it.
     status.hideTools = g_exporting || g_captureRequested || g_screenshotNumber >= 0;
     overlay::setStatus(status);
-    overlay::draw(device);
+    if (!overlay::externalActive()) overlay::draw(device); // else the VR mod draws it, into its own targets
     // overlay::draw polled the hotkeys (keys::poll, once a frame).
     const bool reload = overlay::consumeReloadRequest() | keys::take(keys::Action::Reload);
     if (reload) {

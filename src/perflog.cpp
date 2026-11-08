@@ -33,6 +33,7 @@ int g_current = -1;       // the set this frame's marks go to, -1 none
 int g_next = 0;
 unsigned g_frame = 0;
 bool g_failed = false;     // no timestamp queries on this device
+bool g_gpuStamps = true;   // setGpuTimestamps
 UINT64 g_lastPresent = 0;  // the last resolved frame's Present stamp
 unsigned g_lastPresentFrame = 0;
 bool g_havePresent = false;
@@ -242,7 +243,7 @@ void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, doub
     g_frameScale = 0.0f;
 
     // The next frame's set, unless the GPU is that far behind (then this frame isn't measured).
-    if (g_failed) return;
+    if (g_failed || !g_gpuStamps) return;
     QuerySet& next = g_sets[g_next];
     if (next.pending) return;
     if (!ensureSet(device, next)) {
@@ -255,6 +256,10 @@ void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, doub
     next.disjoint->Issue(D3DISSUE_BEGIN);
     g_current = g_next;
     g_next = (g_next + 1) % kSets;
+}
+
+void setGpuTimestamps(bool on) {
+    g_gpuStamps = on;
 }
 
 void release() {

@@ -42,6 +42,7 @@ public:
         // skipped then). 0 = output is width x height.
         UINT outputWidth = 0;
         UINT outputHeight = 0;
+        float lensEyeShift = 0.0f; // VR: uv.x shift putting the lens drops on a plane in front of both eyes (0 = on the lens)
         float view[16] = {};
         float projection[16] = {};
         float sunDirection[3] = {0.0f, 1.0f, 0.0f}; // world space, towards the sun
