@@ -3,6 +3,7 @@
 #include "autoquality.h"
 #include "config.h"
 #include "engine.h"
+#include "hook.h"
 #include "keys.h"
 #include "pipeline.h"
 #include "log.h"
@@ -703,7 +704,10 @@ void draw(IDirect3DDevice9* device) {
         host.photoOn = [] {
             if (!photo::active()) photo::toggle();
         };
-        host.supports = [](const Field& f) { return strcmp(f.key, "ToneCurve") != 0; }; // ManiaPlanet only
+        host.supports = [](const Field& f) {
+            if (!strcmp(f.key, "VrEffects")) return hook::handedOver(); // only with the VR mod
+            return strcmp(f.key, "ToneCurve") != 0;                    // ManiaPlanet only
+        };
         g_packs.device = device;
         host.resourcePacks = &g_packs;
         if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };

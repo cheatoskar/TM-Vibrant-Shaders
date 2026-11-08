@@ -34,6 +34,7 @@ struct Settings {
     bool cleanHighlights = true;   // the game's clipped white maps to one smooth result (no frost on floodlit surfaces); off = as up to 1.4.0-preview
     bool casterShadows = true;     // long shadows from a light-space map of the game's own static meshes (casters.cpp)
     bool casterAlphaTest = true;   // CasterShadows also keeps alpha-tested meshes (fences, grids) and draws them with the game's alpha test: lattice shadows; off = they cast none
+    bool vrEffects = false;        // the VR mod (TrackMania Forever OpenXR) handed over its device: shade each eye (else only the menu); read at the game's start
     bool shadeMenuBars = true;     // replay menu: the rows under its bars show the shaded image (mirrored); off = black (never leftovers of earlier frames)
     bool cleanWater = true;        // the game's water mirrors only what it can see, unblurred (no blotches of the ramps over it); off = as before
     bool overlapFix = true;        // TMUnlimiter maps: of blocks overlapping at the same height the one placed last wins (a depth bias in plugin.cpp), no flickering stripes

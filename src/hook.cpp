@@ -4,6 +4,7 @@
 #include "proxy.h"
 #include "tracer.h"
 #include "overlay.h"
+#include "config.h"
 #include "log.h"
 #include <windows.h>
 #include <d3d9.h>
@@ -976,6 +977,8 @@ void setSceneCallbacks(ScenePhaseFn begin, ScenePhaseFn end) {
 }
 static bool g_observeOnly = false;
 bool observeOnly() { return g_observeOnly; }
+static bool g_handedOver = false;
+bool handedOver() { return g_handedOver; }
 
 bool attachDevice(IDirect3DDevice9* device, bool observeOnly) {
     if (!device) return false;
@@ -987,6 +990,7 @@ bool attachDevice(IDirect3DDevice9* device, bool observeOnly) {
     TMVS_LOG("attach: device %p handed over by another mod (%s)", static_cast<void*>(device),
              observeOnly ? "observe only: no render target, depth or draw changes" : "full");
     g_observeOnly = observeOnly;
+    g_handedOver = true;
     if (observeOnly) {
         g_callbacks.adjustPresentParams = nullptr;
         g_callbacks.createDepthStencil = nullptr;
@@ -1158,11 +1162,13 @@ void endInternal() {
 } // namespace hook
 } // namespace tmshaders
 
-// For another mod: GetProcAddress(TMVibrantShaders.dll, "TMVS_AttachDevice"). mode 1 = observe only,
-// 2 = full. Returns 1 when the device is hooked. (__declspec(dllexport) on these __cdecl functions
-// already exports the plain names GetProcAddress asks for.)
+// For another mod: GetProcAddress(TMVibrantShaders.dll, "TMVS_AttachDevice"). mode 1 = our setting
+// decides (Effects in VR, settings.ini VrEffects: off = observe only, the menu alone), 2 = full
+// whatever it says. Returns 1 when the device is hooked. (__declspec(dllexport) on these __cdecl
+// functions already exports the plain names GetProcAddress asks for.)
 extern "C" __declspec(dllexport) int TMVS_AttachDevice(IDirect3DDevice9* device, int mode) {
-    return tmshaders::hook::attachDevice(device, mode != 2) ? 1 : 0;
+    const bool full = mode == 2 || tmshaders::Config::get().settings.vrEffects;
+    return tmshaders::hook::attachDevice(device, !full) ? 1 : 0;
 }
 
 // For the VR mod: draws the F8 menu once, into targets it sets up through prepare/finish (pass 0 the

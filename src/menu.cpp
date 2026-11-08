@@ -223,7 +223,7 @@ bool isMachineSetting(const Field& f) {
            !strcmp(f.key, "CleanHighlights") || !strcmp(f.key, "GameHdr") || !strcmp(f.key, "EngineLights") ||
            !strcmp(f.key, "CasterShadows") || !strcmp(f.key, "CasterAlphaTest") || !strcmp(f.key, "CleanWater") || !strcmp(f.key, "WaterFarReflections") || !strcmp(f.key, "OverlapFix") || !strcmp(f.key, "GameGBuffer") ||
            !strcmp(f.key, "GameLight") || !strcmp(f.key, "ShadeMenuBars") || !strcmp(f.key, "RenderScale") ||
-           !strcmp(f.key, "FsrSharpness");
+           !strcmp(f.key, "FsrSharpness") || !strcmp(f.key, "VrEffects");
 }
 
 // Only show what does something with the current choices (planet settings only for the
@@ -455,6 +455,7 @@ const char* tooltipFor(const char* key) {
         {"GameGBuffer", "Real surface normals, so AO, shadows and reflections follow bump maps and the car's shape. Needs Game HDR. (restart the first time)"},
         {"GameLight", "Darkens night by dimming the game's own lighting, not the whole image: paint keeps its colour and lamp-lit areas stay bright. Needs Game HDR and Game light sources. (restart the first time)"},
         {"ShadeMenuBars", "Shows the mirrored replay under the replay menu bars. Off: black bars."},
+        {"VrEffects", "Shows the effects in the VR headset. Off: only this menu. Experimental. (restart)"},
         {"NeonTrail", "A glowing trail behind the car. 0 is off."},
         {"TrailTyres", "Two lines from the rear tyres instead of one."},
         {"TrailDuration", "Seconds until the trail fades. 0 keeps the whole run."},

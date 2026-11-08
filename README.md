@@ -184,7 +184,7 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 | TrackMania Nations ESWC, Trackmania (2020) | No |
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
 | CenterSpeed (speedometer) | Yes. With both loaded, this mod's menu opens with `F5` (CenterSpeed uses `F8`) |
-| TrackMania Forever OpenXR (VR) | With the ModLoader install and a VR build that hands over its device: the menu in the headset, effects off (per eye: experimental) |
+| TrackMania Forever OpenXR (VR) | With the ModLoader install and a VR build that hands over its device: the menu in the headset; the effects with *Effects in VR* (experimental) |
 | Other `d3d9.dll` mods (ReShade and similar) | Not as `d3d9.dll` in the same game folder. Together with the ModLoader install: untested |
 | Windows | 10 and 11 |
 

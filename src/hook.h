@@ -55,6 +55,8 @@ bool install(const DeviceCallbacks& callbacks);
 bool attachDevice(IDirect3DDevice9* device, bool observeOnly);
 // True when another mod handed over the device and TMVS only watches (no depth or target changes).
 bool observeOnly();
+// True when another mod (the VR mod) handed over the device.
+bool handedOver();
 // The VR mod's per-eye camera data (TMVS_SetEyeProvider): for eye 0/1 the view and projection (16 floats
 // each, D3D row-major, as SetTransform takes them) and the eye's rectangle {x, y, width, height} in the
 // scene target. Returns 0 when there is no stereo frame. nullptr: no VR mod.
