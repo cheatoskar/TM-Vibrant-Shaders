@@ -13,11 +13,11 @@ Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
 - **No foam on the water above a sunken car.**
 - **The effects run on maps where `F7` changed nothing** (a TMUnlimiter map of mine set no camera view of its own). On such maps the image also shook; it doesn't any more.
 - When the effects are on but nothing is shaded for 2 seconds, `tmvs.log` now says why.
+- When another mod keeps this one from starting (no menu, no effects, as with an older Competition Patch), `tmvs.log` now says so after 30 seconds and lists the other mods in the game. Competition Patch 2.0 works.
 
 ### VR (experimental)
 
 ![In the headset: the TM Vibrant Shaders menu next to the cockpit, Golden Hour on the start of A06 (wial663's test)](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/{{TAG}}/docs/images/vr-golden-hour.jpg)
-
 
 With the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR) both mods now run together (both from the ModLoader). The mod's menu (`F8`) shows in the headset. *Effects in VR* (page *Misc & VR*, off; restart the game after switching it) shades both eyes, with *Comfort*, *Quality in VR*, *TAA in VR* and *Rain on the windshield*.
 
