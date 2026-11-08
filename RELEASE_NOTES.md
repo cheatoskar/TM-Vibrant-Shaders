@@ -16,6 +16,9 @@ Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
 
 ### VR (experimental)
 
+![In the headset: the TM Vibrant Shaders menu next to the cockpit, Golden Hour on the start of A06 (wial663's test)](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/{{TAG}}/docs/images/vr-golden-hour.jpg)
+
+
 With the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR) both mods now run together (both from the ModLoader). The mod's menu (`F8`) shows in the headset. *Effects in VR* (page *Misc & VR*, off; restart the game after switching it) shades both eyes, with *Comfort*, *Quality in VR*, *TAA in VR* and *Rain on the windshield*.
 
 This needs a VR mod build that hands its device to this mod. That change is a [pull request to the VR mod](https://github.com/jiink/TrackManiaForeverOpenXR/pull/27); until it is merged, use the build from [my fork](https://github.com/cheatoskar/TrackManiaForeverOpenXR-TMVS). The hand-over is by @wial663, who also tested it in the headset. Thanks!
