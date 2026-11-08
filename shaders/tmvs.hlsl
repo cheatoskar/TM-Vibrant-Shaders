@@ -4129,9 +4129,12 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
     // the raw jittered frame while driving (grainy, its half-res reflections in steps; sharp
     // standing still, my test 2026-11-08). A car pixel (the game's car and glass materials, g
     // .5 and 1) takes its history from the same place on screen when the depth there still
-    // matches: another car that moves on screen fails that and resets as before.
+    // matches: another car that moves on screen fails that and resets as before. The history
+    // holds the image without jitter, so "the same place" is uv (cuv minus this frame's
+    // jitter); cuv minus the last frame's jitter moved it by the difference of the two and the
+    // car trembled standing still with TAA on (my test).
     if (u_Mat.x > 0.5 && z < 40.0 && tex2Dlod(s13, float4(cuv, 0, 0)).g > 0.45) {
-        float2 screenUV = cuv - u_Pass0.zw;
+        float2 screenUV = uv;
         float screenZ = tex2Dlod(s1, float4(screenUV, 0, 0)).a;
         if (abs(screenZ - z) < 0.03 * z + 0.05) {
             prevUV = screenUV;

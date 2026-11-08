@@ -2359,6 +2359,20 @@ void processSceneOne(IDirect3DDevice9* device) {
     // engine::cameraMatrices): within it the SetTransform hook sees none, or a shadow's or a
     // projector's. During the export the samples take the engine's (all alike), and so does any
     // main camera without them.
+    // Outside the export too: on a map of mine (TMUnlimiter, 6095 blocks, night) the main camera
+    // set no view of its own all race long, and F7 changed nothing (the log said "the main camera
+    // set no view"). Its own matrices from the engine stand in then.
+    if (!g_exporting && g_scene.haveEngine && (!g_scene.haveView || !g_scene.haveProjection)) {
+        static int s_loggedMap = -1;
+        if (s_loggedMap != engine::mapLoads()) {
+            s_loggedMap = engine::mapLoads();
+            TMVS_LOG("scene: the main camera set no %s of its own: the engine's camera matrices stand in (this map)",
+                     !g_scene.haveView && !g_scene.haveProjection ? "view and projection" : (!g_scene.haveView ? "view" : "projection"));
+        }
+        if (!g_scene.haveView) memcpy(g_scene.view, g_scene.engineView, sizeof(g_scene.view));
+        if (!g_scene.haveProjection) memcpy(g_scene.projection, g_scene.engineProjection, sizeof(g_scene.projection));
+        g_scene.haveView = g_scene.haveProjection = true;
+    }
     if (g_exporting && g_scene.haveEngine && (samples || !g_scene.haveView || !g_scene.haveProjection)) {
         if (g_frameStepped) {
             g_exportStats.engineMatrices++;
@@ -2369,8 +2383,10 @@ void processSceneOne(IDirect3DDevice9* device) {
         g_scene.haveView = g_scene.haveProjection = true;
     }
     if (!g_scene.haveView || !g_scene.haveProjection) {
-        setUnshadedWhy(!g_scene.haveView && !g_scene.haveProjection ? "the main camera set no view and no projection"
-                                                                     : (!g_scene.haveView ? "the main camera set no view" : "the main camera set no projection"));
+        char why[192];
+        sprintf_s(why, "the main camera set no %s (and the engine's camera matrices were not readable)",
+                  !g_scene.haveView && !g_scene.haveProjection ? "view and no projection" : (!g_scene.haveView ? "view" : "projection"));
+        setUnshadedWhy(why);
         return;
     }
     if (!settings.enabled && !photo::active() && !g_captureRequested) {
