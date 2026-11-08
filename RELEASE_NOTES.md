@@ -13,7 +13,9 @@ Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
 - **No foam on the water above a sunken car.**
 - **The effects run on maps where `F7` changed nothing** (a TMUnlimiter map of mine set no camera view of its own). On such maps the image also shook; it doesn't any more.
 - When the effects are on but nothing is shaded for 2 seconds, `tmvs.log` now says why.
-- When another mod keeps this one from starting (no menu, no effects, as with an older Competition Patch), `tmvs.log` now says so after 30 seconds and lists the other mods in the game. Competition Patch 2.0 works.
+- When another mod keeps this one from starting (no menu, no effects), `tmvs.log` now says so after 30 seconds and lists the other mods in the game.
+
+**Known issue:** with Competition Patch 1.5.3 the game closes when you open the menu (`F8`). Update Competition Patch to 2.0, which works.
 
 ### VR (experimental)
 

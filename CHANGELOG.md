@@ -13,7 +13,7 @@ Fixes for dirt, the car with TAA, water and maps where the effects stayed off, a
 - The image no longer shakes when the effects don't run. TAA moves each frame by a fraction of a pixel and takes it out again; when the effects stayed off (after an alt-tab during a replay) the game's own image kept being moved and shook. The move now waits for a shaded frame. When the effects are on but no frame is shaded for 2 seconds, `tmvs.log` says why (`scene: effects on, but no frame shaded ...`).
 - The effects run on maps where `F7` changed nothing: the game's camera set no view of its own there (a TMUnlimiter map of mine), and the mod waited for one. The camera's matrices now come from the engine then (`scene: the main camera set no view of its own` in `tmvs.log`).
 - Water splash: a car that sank no longer leaves foam and spray on the surface above it. The wake fades once the roof is under water.
-- When no game device turns up (another mod creates or wraps it, e.g. an older Competition Patch from the mod loader), `tmvs.log` now says so after 30 s and names the other mods in the game; before, the menu and the effects just didn't start, without a word.
+- When no game device turns up (another mod creates or wraps it), `tmvs.log` now says so after 30 s and names the other mods in the game; before, the menu and the effects just didn't start, without a word.
 
 ## 1.4.2 (2026-10-25)
 
