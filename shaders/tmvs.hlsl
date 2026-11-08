@@ -112,7 +112,10 @@ float luma(float3 c) { return dot(c, LUMA); }
 
 float linearDepth(float d) {
     // Hardware depth -> view z. TrackMania uses an infinite far plane (P22 = 1).
-    return (d >= 0.999999) ? SKY_Z : u_Proj2.y / (d - u_Proj2.x);
+    // Sky: the depth of a point a million near distances away. Relative to P22 (the depth of
+    // infinity): the VR mod's cockpit projection scales its depth row a little below 1 so far
+    // meshes aren't clipped by rounding, and a fixed 0.999999 lost the sky there.
+    return (d >= 0.999999 * min(u_Proj2.x, 1.0)) ? SKY_Z : u_Proj2.y / (d - u_Proj2.x);
 }
 
 // Screen uv <-> the game's ndc. D3D9 rasterizes pixel i at ndc 2i/W - 1 (pixel centres on
