@@ -4121,6 +4121,20 @@ float4 PS_TAA(float2 uv : TEXCOORD0) : COLOR0 {
 
     float prevZ;
     float2 prevUV = reproject(worldPosition(viewPosition(cuv, min(z, 20000.0))), prevZ) - u_Pass0.zw;
+    // The player's car moves with the chase camera: reprojected by the camera's motion its
+    // history was looked for where the road had been, failed the depth test and the car showed
+    // the raw jittered frame while driving (grainy, its half-res reflections in steps; sharp
+    // standing still, my test 2026-11-08). A car pixel (the game's car and glass materials, g
+    // .5 and 1) takes its history from the same place on screen when the depth there still
+    // matches: another car that moves on screen fails that and resets as before.
+    if (u_Mat.x > 0.5 && z < 40.0 && tex2Dlod(s13, float4(cuv, 0, 0)).g > 0.45) {
+        float2 screenUV = cuv - u_Pass0.zw;
+        float screenZ = tex2Dlod(s1, float4(screenUV, 0, 0)).a;
+        if (abs(screenZ - z) < 0.03 * z + 0.05) {
+            prevUV = screenUV;
+            prevZ = z;
+        }
+    }
     if (any(prevUV < 0.0) || any(prevUV > 1.0)) return float4(current, z);
 
     // Neighbourhood statistics of the current frame (variance clipping in YCoCg), 3x3.

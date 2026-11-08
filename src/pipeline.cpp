@@ -3926,6 +3926,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         bind(device, 1, m_taa[previous].texture, true);
         bind(device, 2, m_nd.texture, false);
         bind(device, 3, m_hdr.texture, false); // alpha: where the neon trail lies
+        bind(device, 13, m_materialsOn ? m_materialTexture : nullptr, false); // the cars (u_Mat.x from the final pass)
         const float taaValid[4] = {1.0f, (m_taaValid && m_temporalValid) ? 1.0f : 0.0f, static_cast<float>(m_frame % 64),
                                    longConstants[3]};
         device->SetPixelShaderConstantF(34, taaValid, 1);
