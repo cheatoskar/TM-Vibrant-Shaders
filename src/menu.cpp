@@ -2411,16 +2411,13 @@ struct PageDef {
     bool (*draw)(Config&, Settings&, const Names&);
 };
 
-// The VR section of Misc & VR: the VR mod hands over its device at the game's start, and the
+// The VR section of Misc (then "Misc & VR"), only while the VR mod runs: it hands over its device at the game's start, and the
 // effects in the eyes are decided then (Effects in VR).
 void drawVrSection(Settings& s) {
+    const int state = g_host->vrState ? g_host->vrState() : 0;
+    if (state == 0) return; // no VR mod: the page is plain Misc
     ImGui::Spacing();
     ImGui::SeparatorText("VR");
-    const int state = g_host->vrState ? g_host->vrState() : 0;
-    if (state == 0) {
-        ImGui::TextDisabled("For the VR mod TrackMania Forever OpenXR. Not running.");
-        return;
-    }
     if (const Field* f = findField("VrEffects")) drawField(*f, s);
     if (s.vrEffects != (state == 2)) ImGui::TextDisabled("Restart the game to apply.");
     else ImGui::TextDisabled(state == 2 ? "Effects in the headset." : "Only this menu in the headset.");
@@ -2434,7 +2431,7 @@ const PageDef kPageTable[] = {
     {kPerformance, "performance", "Performance", "Frame rate and effect costs", nullptr, [](Config&, Settings& s, const Names&) { return drawPerformancePage(s); }},
     {kVideo, "video", "Video", "Shoot video: presets, quality, the camera's look", videoPageShown, [](Config& c, Settings& s, const Names&) { return drawVideoPage(c, s); }},
     {kPacks, "packs", "Resource packs", "Texture mods on every map", [] { return g_host->resourcePacks != nullptr; }, [](Config& c, Settings&, const Names&) { drawPacks(c); return false; }},
-    {kMisc, "misc", "Misc & VR", "Minimap, split times, finish effects, VR", [] { return static_cast<bool>(g_host->miscPage); }, [](Config&, Settings& s, const Names&) {
+    {kMisc, "misc", "Misc", "Minimap, split times, finish effects", [] { return static_cast<bool>(g_host->miscPage); }, [](Config&, Settings& s, const Names&) {
          g_host->miscPage();
          drawVrSection(s);
          return false;
@@ -2445,6 +2442,12 @@ const PageDef kPageTable[] = {
 
 bool pageShown(const PageDef& page) {
     return !page.available || page.available();
+}
+
+// Misc is "Misc & VR" while the VR mod runs (it has a VR section then).
+const char* pageTitle(const PageDef& page) {
+    if (page.id == kMisc && g_host->vrState && g_host->vrState() != 0) return "Misc & VR";
+    return page.title;
 }
 
 const PageDef* findPage(int id) {
@@ -2471,7 +2474,7 @@ bool isDetached(Config& config, const PageDef& page) {
 }
 
 std::string windowName(const PageDef& page) {
-    return std::string(page.title) + "##tmvsWindow_" + page.key;
+    return std::string(pageTitle(page)) + "##tmvsWindow_" + page.key;
 }
 
 // The first page in the bar that is shown and still in the menu (the Settings page if none).
@@ -2515,7 +2518,7 @@ void drawNavigation(Config& config) {
         const bool active = config.menuPage == page.id && !detached;
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float w = ImGui::GetContentRegionAvail().x;
-        const bool clicked = ImGui::InvisibleButton(page.title, ImVec2(w, h));
+        const bool clicked = ImGui::InvisibleButton(pageTitle(page), ImVec2(w, h));
         const bool hovered = ImGui::IsItemHovered();
         // The pop-out symbol at the right end of the tab: a click on it makes the page a window.
         const float iconSize = 18.0f * g_scale;
@@ -2534,22 +2537,22 @@ void drawNavigation(Config& config) {
             }
         }
         if (hovered) {
-            if (detached) ImGui::SetTooltip("%s is in its own window. Click to bring the window to the front.", page.title);
-            else if (onIcon) ImGui::SetTooltip("Open %s in its own window", page.title);
+            if (detached) ImGui::SetTooltip("%s is in its own window. Click to bring the window to the front.", pageTitle(page));
+            else if (onIcon) ImGui::SetTooltip("Open %s in its own window", pageTitle(page));
             else ImGui::SetTooltip("%s", page.hint);
         }
         if (active || hovered) draw->AddRectFilled(p, ImVec2(p.x + w, p.y + h), active ? colour(kAccent, 0.16f) : IM_COL32(255, 255, 255, 14), 6.0f * g_scale);
         if (active) draw->AddRectFilled(ImVec2(p.x, p.y + h * 0.22f), ImVec2(p.x + 3.0f * g_scale, p.y + h * 0.78f), colour(kAccent, 1.0f), 2.0f);
         const float size = g_fontTitle->FontSize * 0.82f;
         draw->AddText(g_fontTitle, size, ImVec2(p.x + 14.0f * g_scale, p.y + (h - size) * 0.5f),
-                      active ? IM_COL32_WHITE : ImGui::GetColorU32(ImGuiCol_Text, detached ? 0.4f : 0.7f), page.title);
+                      active ? IM_COL32_WHITE : ImGui::GetColorU32(ImGuiCol_Text, detached ? 0.4f : 0.7f), pageTitle(page));
         if (detached) {
             // Right-aligned, measured in its own size; left out where the title would run into it (the
             // dimmed title and the tooltip say it then).
             const char* mark = "(detached)";
             const float ms = g_fontTitle->FontSize * 0.6f;
             const float markX = p.x + w - g_fontTitle->CalcTextSizeA(ms, FLT_MAX, 0.0f, mark).x - 10.0f * g_scale;
-            const float titleEnd = p.x + 14.0f * g_scale + g_fontTitle->CalcTextSizeA(size, FLT_MAX, 0.0f, page.title).x;
+            const float titleEnd = p.x + 14.0f * g_scale + g_fontTitle->CalcTextSizeA(size, FLT_MAX, 0.0f, pageTitle(page)).x;
             if (markX > titleEnd + 8.0f * g_scale)
                 draw->AddText(g_fontTitle, ms, ImVec2(markX, p.y + (h - ms) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text, 0.4f), mark);
         } else if (hovered || active) {
@@ -2607,7 +2610,7 @@ void drawMenu() {
     const PageDef& page = pageFor(config.menuPage);
     if (isDetached(config, page)) {
         // The page is in a window (it was the open one when saved, or About from the update note).
-        ImGui::TextDisabled("%s is in its own window.", page.title);
+        ImGui::TextDisabled("%s is in its own window.", pageTitle(page));
         if (ImGui::Button("Show window")) {
             windowOf(config, page).minimized = false;
             ImGui::SetWindowFocus(windowName(page).c_str());
