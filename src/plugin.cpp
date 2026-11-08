@@ -572,7 +572,8 @@ void trackUnshaded(const Settings& s) {
     static int s_frames = 0;
     static bool s_logged = false;
     static int s_lines = 0;
-    if (g_shadedThisFrame || !s.enabled) {
+    // Watch-only (the VR mod's default hand-over): no frame is shaded on purpose.
+    if (g_shadedThisFrame || !s.enabled || hook::observeOnly()) {
         if (s_logged && g_shadedThisFrame)
             TMVS_LOG("scene: shading again after %.1f s", static_cast<float>(GetTickCount() - s_since) / 1000.0f);
         s_frames = 0;
@@ -2287,7 +2288,6 @@ void fillMenuBars(IDirect3DDevice9* device, IDirect3DSurface9* target, const D3D
     }
 }
 
-// Runs the post pipeline over the main camera's image, before the HUD is drawn.
 // One eye of the VR mod's stereo frame, shaded as its own camera (processScene runs it twice).
 struct ForcedEye {
     bool active = false;
@@ -2299,47 +2299,49 @@ struct ForcedEye {
 
 void processSceneOne(IDirect3DDevice9* device);
 
+// Runs the post pipeline over the main camera's image, before the HUD is drawn.
 void processScene(IDirect3DDevice9* device) {
     const hook::EyeProviderFn provider = hook::eyeProvider();
-    if (!provider) {
+    struct Eye {
+        float view[16];
+        float projection[16];
+        int rect[4];
+        bool valid;
+    } eyes[2] = {};
+    for (int eye = 0; eye < 2 && provider; eye++) eyes[eye].valid = provider(eye, eyes[eye].view, eyes[eye].projection, eyes[eye].rect) != 0;
+    // No VR mod, or no stereo frame this time (its menus, the headset not ready): the one camera as always.
+    if (!eyes[0].valid && !eyes[1].valid) {
         processSceneOne(device);
         return;
     }
     // The VR mod draws both eyes side by side into one target: each eye is its own camera, with its
     // own part of the target and matrices (temporal effects pause, as with several main cameras).
-    bool any = false;
     // Rain drops and flakes in a closed car belong on the windshield, a little way in front of the
     // eyes, not on each eye's lens (Stadium keeps them on the lens: the driver wears a helmet). The
     // drops are drawn on a plane at g_dev.vrLensDistance in front of both eyes: each eye sees them
     // shifted by its share of the eye separation, so they sit at that depth.
-    float eyeSeparationView[2] = {0.0f, 0.0f};
-    bool haveSeparation = false;
-    {
-        float vl[16], pl[16], vr[16], pr[16];
-        int rl[4], rr[4];
-        if (provider(0, vl, pl, rl) && provider(1, vr, pr, rr)) {
-            const float mid = 0.5f * (vl[12] + vr[12]);
-            eyeSeparationView[0] = vl[12] - mid;
-            eyeSeparationView[1] = vr[12] - mid;
-            haveSeparation = true;
-        }
-    }
+    const bool haveSeparation = eyes[0].valid && eyes[1].valid;
+    const float mid = haveSeparation ? 0.5f * (eyes[0].view[12] + eyes[1].view[12]) : 0.0f;
     const bool plane = haveSeparation && g_dev.vrLensDistance > 0.01f && !engine::stadium();
     const hook::ScenePhaseFn begin = hook::sceneBegin();
     const hook::ScenePhaseFn end = hook::sceneEnd();
     if (begin) begin(device);
+    const int before = g_scene.processedCount;
     for (int eye = 0; eye < 2; eye++) {
-        int rect[4] = {};
-        if (!provider(eye, g_eye.view, g_eye.projection, rect)) continue;
+        if (!eyes[eye].valid) continue;
+        const int* rect = eyes[eye].rect;
+        memcpy(g_eye.view, eyes[eye].view, sizeof(g_eye.view));
+        memcpy(g_eye.projection, eyes[eye].projection, sizeof(g_eye.projection));
         g_eye.viewport = D3DVIEWPORT9{static_cast<DWORD>(rect[0]), static_cast<DWORD>(rect[1]), static_cast<DWORD>(rect[2]),
                                       static_cast<DWORD>(rect[3]), 0.0f, 1.0f};
         g_eye.active = true;
-        g_eye.lensShift = plane ? -0.5f * g_eye.projection[0] * eyeSeparationView[eye] / g_dev.vrLensDistance * g_dev.vrLensSign : 0.0f;
-        any = true;
+        g_eye.lensShift = plane ? -0.5f * g_eye.projection[0] * (eyes[eye].view[12] - mid) / g_dev.vrLensDistance * g_dev.vrLensSign : 0.0f;
+        // The first eye wasn't shaded (this target already was in this frame, or no readable depth):
+        // the second one isn't either, or it would be shaded twice.
+        if (eye == 1 && eyes[0].valid && g_scene.processedCount == before) break;
         processSceneOne(device);
     }
     g_eye.active = false;
-    if (!any) processSceneOne(device);
     if (end) end(device);
 }
 
@@ -2414,14 +2416,16 @@ void processSceneOne(IDirect3DDevice9* device) {
     IDirect3DSurface9* savedDepth = nullptr;
     if (FAILED(device->GetRenderTarget(0, &target)) || !target) return;
     const bool repeat = samples && g_scene.processedCount > 0;
+    // The VR mod's second eye: the same target as the first, another part of it.
+    const bool secondEye = g_eye.active && g_eye.viewport.X > 0 && g_scene.processedCount > 0;
     // The same target twice in a frame would be shaded twice.
-    if (g_scene.processedCount > 0 && target == g_scene.processedTarget && !repeat && !g_eye.active) {
+    if (g_scene.processedCount > 0 && target == g_scene.processedTarget && !repeat && !secondEye) {
         target->Release();
         return;
     }
     // Only the first camera of a single-camera frame continues the temporal history (and the
     // first of the export's samples: every frame has them).
-    const bool temporal = g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples);
+    const bool temporal = !g_eye.active && g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples);
     if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera && !repeat) {
         g_scene.loggedMultiCamera = true;
         TMVS_LOG("scene: several main cameras in one frame (camera blend) - shading each, temporal effects paused");
@@ -3787,7 +3791,14 @@ void onPresent(IDirect3DDevice9* device) {
     // The F12 screenshot reads the back buffer after the overlay: the Misc page's windows stay out of it.
     status.hideTools = g_exporting || g_captureRequested || g_screenshotNumber >= 0;
     overlay::setStatus(status);
-    if (!overlay::externalActive()) overlay::draw(device); // else the VR mod draws it, into its own targets
+    // The VR mod draws the menu into its own targets (TMVS_DrawOverlay, before this Present). A frame
+    // it leaves out (its own menu open, the headset not ready): no menu, but the hotkeys still work.
+    if (overlay::takeExternalFrame()) {
+    } else if (overlay::externalActive()) {
+        overlay::pollHotkeys();
+    } else {
+        overlay::draw(device);
+    }
     // overlay::draw polled the hotkeys (keys::poll, once a frame).
     const bool reload = overlay::consumeReloadRequest() | keys::take(keys::Action::Reload);
     if (reload) {

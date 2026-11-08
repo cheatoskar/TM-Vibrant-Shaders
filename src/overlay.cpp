@@ -605,11 +605,18 @@ void drawStatusLine(IDirect3DDevice9* device) {
 
 static ExternalTarget* g_ext = nullptr;
 static bool g_extSeen = false;
+static bool g_extThisFrame = false;
 void setExternal(ExternalTarget* target) {
     g_ext = target;
-    if (target) g_extSeen = true;
+    if (target) g_extSeen = g_extThisFrame = true;
 }
 bool externalActive() { return g_extSeen; }
+bool takeExternalFrame() {
+    const bool drawn = g_extThisFrame;
+    g_extThisFrame = false;
+    return drawn;
+}
+void pollHotkeys() { handleHotkeys(); }
 
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;

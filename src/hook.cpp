@@ -1159,13 +1159,8 @@ void endInternal() {
 } // namespace tmshaders
 
 // For another mod: GetProcAddress(TMVibrantShaders.dll, "TMVS_AttachDevice"). mode 1 = observe only,
-// 2 = full. Returns 1 when the device is hooked.
-#if defined(_MSC_VER) && defined(_M_IX86)
-#pragma comment(linker, "/EXPORT:TMVS_AttachDevice=_TMVS_AttachDevice") // the plain name for GetProcAddress
-#pragma comment(linker, "/EXPORT:TMVS_DrawOverlay=_TMVS_DrawOverlay")
-#pragma comment(linker, "/EXPORT:TMVS_SetEyeProvider=_TMVS_SetEyeProvider")
-#pragma comment(linker, "/EXPORT:TMVS_SetSceneCallbacks=_TMVS_SetSceneCallbacks")
-#endif
+// 2 = full. Returns 1 when the device is hooked. (__declspec(dllexport) on these __cdecl functions
+// already exports the plain names GetProcAddress asks for.)
 extern "C" __declspec(dllexport) int TMVS_AttachDevice(IDirect3DDevice9* device, int mode) {
     return tmshaders::hook::attachDevice(device, mode != 2) ? 1 : 0;
 }

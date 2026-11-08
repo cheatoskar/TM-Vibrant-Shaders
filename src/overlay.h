@@ -37,6 +37,8 @@ struct ExternalTarget {
 };
 void setExternal(ExternalTarget* target); // nullptr: the menu draws itself into the current target
 bool externalActive();                    // an outside caller has been drawing the menu
+bool takeExternalFrame();                 // it drew the menu since the last call (once a frame, at Present)
+void pollHotkeys();                       // the hotkeys alone, for a frame the outside caller left out
 // Set when the user asks for a shader reload from the menu; cleared by the caller.
 bool consumeReloadRequest();
 
