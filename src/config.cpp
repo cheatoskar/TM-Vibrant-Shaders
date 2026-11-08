@@ -1301,7 +1301,7 @@ void applyPreset(Settings& s, Preset preset) {
     const float keepTarget = s.targetFps;
     const float keepSound = s.weatherSound;
     const bool keepReplayOnly = s.cinematicOnlyInReplays;
-    const Settings keepVideo = s; // the video export's settings (Video*): all of them belong to the installation
+    const Settings keepVideo = s; // the video export's settings (Video*) and VR's (Vr*): all of them belong to the installation
     const bool keepJitter = s.taaJitter;
     const float keepScale = s.renderScale, keepFsrSharpness = s.fsrSharpness;
     const float keepTrail = s.neonTrail, keepTrailWidth = s.trailWidth, keepTrailDuration = s.trailDuration;
@@ -1358,6 +1358,14 @@ void applyPreset(Settings& s, Preset preset) {
     s.taaJitter = keepJitter;
     s.renderScale = keepScale;
     s.fsrSharpness = keepFsrSharpness;
+    // VR (Misc & VR) belongs to the installation too: a preset, and the load of settings.ini that
+    // applies one, put them back to their defaults after every restart (wial663's test).
+    s.vrEffects = keepVideo.vrEffects;
+    s.vrComfort = keepVideo.vrComfort;
+    s.vrQuality = keepVideo.vrQuality;
+    s.vrTaa = keepVideo.vrTaa;
+    s.vrLensDrops = keepVideo.vrLensDrops;
+    s.vrLensDistance = keepVideo.vrLensDistance;
 #ifdef TMVS_MANIAPLANET
     // ManiaPlanet: clear water at 0.6 (my game test); the splash stays off by default.
     s.waterClarity = 0.6f;
