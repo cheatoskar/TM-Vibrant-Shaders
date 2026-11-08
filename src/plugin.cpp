@@ -2327,15 +2327,16 @@ void processScene(IDirect3DDevice9* device) {
         return;
     }
     // The VR mod draws both eyes side by side into one target: each eye is its own camera, with its
-    // own part of the target and matrices (temporal effects pause, as with several main cameras).
-    // Rain drops and flakes in a closed car belong on the windshield, a little way in front of the
-    // eyes, not on each eye's lens (Stadium keeps them on the lens: the driver wears a helmet). The
-    // drops are drawn on a plane at Drop distance (VrLensDistance) in front of both eyes: each eye sees them
+    // own part of the target and matrices, and its own history (Pipeline::selectEye).
+    // Rain drops and flakes belong on a windshield or visor, a little way in front of the eyes,
+    // not on each eye's lens. The drops are drawn on a plane at Drop distance (VrLensDistance) in front of both eyes: each eye sees them
     // shifted by its share of the eye separation, so they sit at that depth.
     const bool haveSeparation = eyes[0].valid && eyes[1].valid;
     const float mid = haveSeparation ? 0.5f * (eyes[0].view[12] + eyes[1].view[12]) : 0.0f;
     const float lensDistance = Config::get().settings.vrLensDistance;
-    const bool plane = haveSeparation && lensDistance > 0.01f && !engine::stadium();
+    // Also in Stadium (all of TMNF): on each eye's lens the drops sat at the same place in both
+    // eyes, which reads as infinitely far away, and Drop distance did nothing there (wial663's test).
+    const bool plane = haveSeparation && lensDistance > 0.01f;
     const hook::ScenePhaseFn begin = hook::sceneBegin();
     const hook::ScenePhaseFn end = hook::sceneEnd();
     if (begin) begin(device);
