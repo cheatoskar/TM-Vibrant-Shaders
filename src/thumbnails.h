@@ -10,6 +10,9 @@ namespace thumbnails {
 // Managed textures: they survive a device reset.
 IDirect3DTexture9* get(IDirect3DDevice9* device, const std::string& preset);
 
+// Before the device is reset: the pictures live in video memory and are made again when asked for.
+void preReset();
+
 // The mod's icon for the menu's header, size x size pixels (drawn texel for pixel). Managed, kept
 // until the size or the device changes. nullptr = none.
 IDirect3DTexture9* icon(IDirect3DDevice9* device, int size);

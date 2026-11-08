@@ -522,6 +522,7 @@ void shutdown() {
 
 void preReset() {
     if (g_initialized) ImGui_ImplDX9_InvalidateDeviceObjects();
+    thumbnails::preReset();
 }
 
 void postReset() {

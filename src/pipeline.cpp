@@ -2770,7 +2770,7 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     // is a repeat, not temporal; measured on temporal frames only, the spray stayed off there.
     if (advance) {
         float velocity[3] = {};
-        if (m_temporalValid && m_rainCameraValid && dt > 1e-4f) {
+        if (m_stepContinued && m_rainCameraValid && dt > 1e-4f) {
             for (int j = 0; j < 3; j++) velocity[j] = (camera[j] - m_rainCamera[j]) / dt;
         }
         for (int j = 0; j < 3; j++) m_cameraVelocity[j] += (velocity[j] - m_cameraVelocity[j]) * 0.3f;
@@ -2839,7 +2839,9 @@ void Pipeline::drawRain(IDirect3DDevice9* device, const Inputs& in, const Settin
     vc[9][2] = 1.0f / m_heightWorld;
     vc[9][3] = splashes && s.weatherShelter ? 1.0f : 0.0f; // shelter (the height map is valid)
     // Previous camera for the streaks (camera turns smear the rain like a real shutter).
-    const bool previous = in.temporal && m_temporalValid && m_havePrevious && dt > 1e-4f;
+    // Not in VR: a head turn smeared every streak over the sky and the lamps, each frame anew
+    // (wial663's test: the sky flickered with Rain, not with Aurora).
+    const bool previous = in.temporal && !in.vrEye && m_temporalValid && m_havePrevious && dt > 1e-4f;
     float pc[5][4] = {};
     for (int j = 0; j < 3; j++) {
         pc[j][0] = m_prevView[0 * 4 + j];
@@ -3065,7 +3067,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         if (!m_scaled.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
         output = m_scaled.surface;
     }
-    m_frame++;
+    if (in.stepWorld != 0) m_frame++;
 
     const BOOL softwareVP = setPassStates(device);
 
@@ -3142,6 +3144,11 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
     const bool cut = temporal && detectCameraCut(in);
     m_temporalValid = temporal && !cut;
+    // Over-time state steps on this call; it continues the last step (VR eyes without a history:
+    // the head moves on smoothly, the easing goes on; a jump is taken in like a camera cut there).
+    const bool step = in.stepWorld < 0 ? temporal : in.stepWorld > 0;
+    m_stepContinued = in.stepWorld < 0 ? m_temporalValid : (step && m_stepValid);
+    if (step) m_stepValid = true;
     if (cut) m_taaValid = false;
     // A repeat of the last frame: its motion (the camera before it), swapped back at the end.
     if (in.repeat) {
@@ -3225,7 +3232,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         return true;
     }
     // 1a. The sea the game reports no height for (TMUF Island), from its water material.
-    if (materials && s.waterSurfaces > 0.0f && ((in.water[2] >= 0.0f && in.water[2] < 0.5f) || in.water[2] > 1.5f)) measureSeaLevel(device);
+    if (step && materials && s.waterSurfaces > 0.0f && ((in.water[2] >= 0.0f && in.water[2] < 0.5f) || in.water[2] > 1.5f)) measureSeaLevel(device);
 
     // 1b. Long-range shadows: update the world-space height map.
     // Extra cameras (replay blends) use the map as it is: it follows the main camera.
@@ -3239,7 +3246,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         m_heightHoldUntil = in.time + 4.0f; // the respawn camera lasts ~1.5 s
     }
     if (in.driving || in.time > m_heightHoldUntil) m_heightHoldUntil = -1.0f;
-    const bool splat = temporal && m_heightHoldUntil < 0.0f;
+    const bool splat = step && m_heightHoldUntil < 0.0f;
     const bool heightMap = (wantLong || wantVolume || s.rain > 0.0f || s.snow > 0.0f || s.snowCover > 0.0f) && ensureHeightMap(device) && (splat || m_heightValid);
     // Every other frame is enough for a map of the static world (saves ~0.15 ms).
     // Roofs and bridges for the rain and snow, only while it falls.
@@ -3395,19 +3402,19 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         runPass(device, static_cast<Pass>(kSkyClear + mode - 1), m_sky);
     }
     const float dt = m_historyValid ? fmaxf(in.time - m_lastTime, 0.0f) : 0.0f;
-    if (temporal) m_lastTime = in.time;
+    if (step) m_lastTime = in.time;
 
     // The fog and haze colour, eased over time: with a few sky pixels flickering through a
     // gap (between walls, in a building) it jumped every frame and the fog came and went.
     // Extra cameras reuse it, like the exposure.
-    if ((temporal && !in.freeze) || !m_skyValid) {
+    if ((step && !in.freeze) || !m_skyValid) {
         const int previous = m_skyIndex;
         m_skyIndex ^= 1;
         bind(device, 0, in.color, false);
         bind(device, 1, m_nd.texture, false);
         bind(device, 2, m_sky.texture, false);
         bind(device, 3, m_skyAverage[previous].texture, false);
-        passConstants(device, 1.0f - expf(-dt / 0.4f), (m_skyValid && m_temporalValid) ? 0.0f : 1.0f);
+        passConstants(device, 1.0f - expf(-dt / 0.4f), (m_skyValid && m_stepContinued) ? 0.0f : 1.0f);
         runPass(device, kSkyAverage, m_skyAverage[m_skyIndex]);
         m_skyValid = true;
     }
@@ -3614,7 +3621,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     }
 
     // 4b. Neon trail behind the car, into the HDR image so it blooms.
-    if (s.neonTrail > 0.0f && ensureTrail(device)) drawTrail(device, in, s, temporal ? dt : 0.0f);
+    if (s.neonTrail > 0.0f && ensureTrail(device)) drawTrail(device, in, s, step ? dt : 0.0f);
     else m_trailReset = true;
 
     // 4c. The video export's own frames: this sample's lit scene goes into the frame's float sum.
@@ -3664,6 +3671,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     // would slow the exposure and the focus down by the number of samples). The last sample of a
     // supersampled frame is a repeat, yet its frame is new.
     const bool postTemporal = finishing || temporal;
+    const bool postStep = finishing || step;
     float postDt = dt;
     if (finishing) {
         postDt = m_postTimeValid ? fmaxf(in.time - m_postLastTime, 0.0f) : 0.0f;
@@ -3843,8 +3851,8 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         lampScale[1] = floodlights * fmaxf(s.lampHaze, 0.0f) / hazeNorm;
     }
 
-    // 8. Exposure (extra cameras reuse the adapted value).
-    if (postTemporal && !in.freeze) {
+    // 8. Exposure (extra cameras and the right VR eye reuse the adapted value).
+    if (postStep && !in.freeze) {
         bind(device, 0, m_bloomDown[3].texture, true);
         runPass(device, kLuminance, m_luminance);
         const int previous = m_adaptIndex;
@@ -3862,7 +3870,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
     const bool drops = (lensDrops > 0.0f || lensSnow > 0.0f) && post;
     // Roof over the camera, eased like the sky average: the lens dries off under a bridge.
     const bool shelter = drops && heightMap && m_heightValid && s.weatherShelter;
-    if (shelter && (postTemporal || !m_shelterValid)) {
+    if (shelter && (postStep || !m_shelterValid)) {
         const int previous = m_shelterIndex;
         m_shelterIndex ^= 1;
         bind(device, 0, m_heightMap[m_heightIndex].texture, false);
@@ -3872,7 +3880,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         const float rainVelocity[4] = {2.5f + s.wind * 5.0f, -9.0f, 1.0f + s.wind * 2.0f, 0.0f};
         const float snowVelocity[4] = {(1.0f + s.wind * 7.0f) * fminf(s.snow, 1.5f), -1.1f, (0.5f + s.wind * 3.0f) * fminf(s.snow, 1.5f), 0.0f};
         device->SetPixelShaderConstantF(33, s.rain > 0.0f ? rainVelocity : snowVelocity, 1);
-        passConstants(device, 1.0f - expf(-postDt / 0.8f), (m_shelterValid && m_temporalValid) ? 0.0f : 1.0f);
+        passConstants(device, 1.0f - expf(-postDt / 0.8f), (m_shelterValid && m_stepContinued) ? 0.0f : 1.0f);
         runPass(device, kShelter, m_shelter[m_shelterIndex]);
         m_shelterValid = true;
     } else if (!shelter) {
@@ -4016,7 +4024,7 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         // VR eyes (TAA in VR): the drops, the spray and the splash move once a frame, with the left
         // eye; the right one draws them as they are (its camera is 64 mm away: as a camera move the
         // streaks and the spray's speed jumped by it every frame).
-        drawRain(device, in, s, postDt, postTemporal && m_eye != 1, heightMap && m_heightValid, output);
+        drawRain(device, in, s, postDt, postStep, heightMap && m_heightValid, output);
     if (upscale) upscaleOutput(device, in, s, screen);
     profileEnd();
     finishRender(device, in, softwareVP);

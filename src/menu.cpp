@@ -458,7 +458,7 @@ const char* tooltipFor(const char* key) {
         {"VrEffects", "Shows the effects in the VR headset. Off: only this menu. Experimental. (restart)"},
         {"VrComfort", "In the headset: no motion blur, depth of field, vignette, film grain, lens flares or colour fringes."},
         {"VrQuality", "The effects run once per eye. Balanced leaves out volumetric light and bounce light, Fast also long shadows, clouds and light shafts."},
-        {"VrTaa", "Smooths edges and noise over frames, each eye on its own. Experimental."},
+        {"VrTaa", "Smooths edges and noise over frames, each eye on its own. Experimental: may flicker."},
         {"VrLensDrops", "Rain drops and snow flakes in front of your eyes, like on a windshield or a visor."},
         {"VrLensDistance", "How far in front of your eyes the drops sit, in metres. 0: on each eye's lens."},
         {"NeonTrail", "A glowing trail behind the car. 0 is off."},
