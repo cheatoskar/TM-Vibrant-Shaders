@@ -2299,6 +2299,36 @@ struct ForcedEye {
 
 void processSceneOne(IDirect3DDevice9* device);
 
+// VR in tmvs.log: every 10 s while the VR mod gives eyes, what was shaded and with what, so a
+// flicker report comes with what the mod did (frames with eyes, frames left out, the settings in
+// the eyes, the eyes' projections).
+struct VrStats {
+    DWORD lastEyes = 0;       // GetTickCount of the last frame with eyes
+    DWORD windowStart = 0;
+    int eyeFrames = 0, shaded[2] = {}, monoSkipped = 0, monoShaded = 0;
+    bool loggedProjection = false;
+} g_vr;
+
+void logVrStats(const float* left, const float* right, const float* leftView, const float* rightView) {
+    const DWORD now = GetTickCount();
+    if (!g_vr.windowStart) g_vr.windowStart = now;
+    if (!g_vr.loggedProjection && left && right) {
+        g_vr.loggedProjection = true;
+        // Off-centre terms (P20, P21) and the eyes' distance: an asymmetric frustum per eye is normal.
+        const float dx = leftView[12] - rightView[12], dy = leftView[13] - rightView[13], dz = leftView[14] - rightView[14];
+        TMVS_LOG("vr: eye projections: left P00 %.3f P11 %.3f P20 %.3f P21 %.3f, right P00 %.3f P11 %.3f P20 %.3f P21 %.3f; eyes %.1f cm apart",
+                 left[0], left[5], left[8], left[9], right[0], right[5], right[8], right[9], 100.0f * sqrtf(dx * dx + dy * dy + dz * dz));
+    }
+    if (now - g_vr.windowStart < 10000) return;
+    const Settings& s = Config::get().settings;
+    TMVS_LOG("vr: last %.0f s: %d frames with eyes (left %d, right %d shaded), frames without eyes: %d left alone, %d shaded; "
+             "history per eye %s, Comfort %d, Quality in VR %d, TAA in VR %d, drops %d at %.2f m; auto quality: %s",
+             (now - g_vr.windowStart) / 1000.0f, g_vr.eyeFrames, g_vr.shaded[0], g_vr.shaded[1], g_vr.monoSkipped, g_vr.monoShaded,
+             s.vrTaa ? "on" : "off", s.vrComfort ? 1 : 0, s.vrQuality, s.vrTaa ? 1 : 0, s.vrLensDrops ? 1 : 0, s.vrLensDistance,
+             g_autoQuality.summary());
+    g_vr = VrStats{g_vr.lastEyes, now, 0, {0, 0}, 0, 0, g_vr.loggedProjection};
+}
+
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
 void processScene(IDirect3DDevice9* device) {
     const hook::EyeProviderFn provider = hook::eyeProvider();
@@ -2324,9 +2354,24 @@ void processScene(IDirect3DDevice9* device) {
     }
     // No VR mod, or no stereo frame this time (its menus, the headset not ready): the one camera as always.
     if (!eyes[0].valid && !eyes[1].valid) {
+        // Between frames with eyes (the race's start in wial663's log: eyes and the 1280x960 window in
+        // turn for 2 s) the targets were made again at each switch, every effect's history with them.
+        // Within 3 s of the last eyes the frame without them is left as the game drew it.
+        if (provider && g_vr.lastEyes && GetTickCount() - g_vr.lastEyes < 3000) {
+            g_vr.monoSkipped++;
+            static bool s_loggedSkip = false;
+            if (!s_loggedSkip) {
+                s_loggedSkip = true;
+                TMVS_LOG("vr: a frame without eyes between frames with eyes: left as the game drew it (no target switch)");
+            }
+            return;
+        }
+        if (provider && g_vr.lastEyes) g_vr.monoShaded++;
         processSceneOne(device);
         return;
     }
+    g_vr.lastEyes = GetTickCount();
+    g_vr.eyeFrames++;
     // The VR mod draws both eyes side by side into one target: each eye is its own camera, with its
     // own part of the target and matrices, and its own history (Pipeline::selectEye).
     // Rain drops and flakes belong on a windshield or visor, a little way in front of the eyes,
@@ -2355,10 +2400,17 @@ void processScene(IDirect3DDevice9* device) {
         // The first eye wasn't shaded (this target already was in this frame, or no readable depth):
         // the second one isn't either, or it would be shaded twice.
         if (eye == 1 && eyes[0].valid && g_scene.processedCount == before) break;
+        const int was = g_scene.processedCount;
         processSceneOne(device);
+        if (g_scene.processedCount > was) g_vr.shaded[eye]++;
     }
     g_eye.active = false;
     if (end) end(device);
+    if (haveSeparation) {
+        logVrStats(eyes[0].projection, eyes[1].projection, eyes[0].view, eyes[1].view);
+    } else {
+        logVrStats(nullptr, nullptr, nullptr, nullptr);
+    }
 }
 
 void processSceneOne(IDirect3DDevice9* device) {
@@ -2457,11 +2509,14 @@ void processSceneOne(IDirect3DDevice9* device) {
     }
     // Only the first camera of a single-camera frame continues the temporal history (and the
     // first of the export's samples: every frame has them).
-    // VR eyes: each continues its own history (Pipeline::selectEye: TAA, bounce light, neon, the
-    // previous camera); the world (height map, rain, splash) moves on with the left eye. Shaded
-    // without history (as two cameras of one frame) the long shadows and the rain's shelter never
-    // got their height map and the drops stood still.
-    const bool temporal = g_eye.active || (g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples));
+    // VR eyes: with TAA in VR each continues its own history (Pipeline::selectEye: TAA, bounce
+    // light, neon, the previous camera). Without it the eyes are shaded without history, as in
+    // wial663's first hand-over, which didn't flicker: with a history per eye lamps and the Rain
+    // sky flickered in the headset (his test of my builds). Either way the over-time state (clock,
+    // exposure, fog colour, height map, rain, splash) steps with the left eye only and the right
+    // eye shows the same values (Inputs::stepWorld), so both eyes see one picture.
+    const bool eyesWithHistory = g_eye.active && Config::get().settings.vrTaa;
+    const bool temporal = g_eye.active ? eyesWithHistory : (g_scene.processedCount == 0 && (g_scene.lastFrameCount <= 1 || samples));
     // Photo mode, pictures and captures: the one camera of a plain frame, never a VR eye.
     const bool firstCamera = temporal && !g_eye.active;
     if (g_scene.processedCount == 1 && !g_scene.loggedMultiCamera && !repeat && !g_eye.active) {
@@ -2616,7 +2671,15 @@ void processSceneOne(IDirect3DDevice9* device) {
     inputs.moonReplaced = engine::moonReplaced();
     memcpy(inputs.sunColor, g_scene.lightColor, sizeof(inputs.sunColor));
     inputs.time = effectTime();
+    // Both eyes of a frame at the left eye's time (rain, lightning, clouds in step).
+    static float s_eyeTime = 0.0f;
+    if (g_eye.active) {
+        if (g_eye.index == 0) s_eyeTime = inputs.time;
+        else inputs.time = s_eyeTime;
+    }
     inputs.temporal = temporal;
+    inputs.stepWorld = g_eye.active ? (g_eye.index == 0 ? 1 : 0) : -1;
+    inputs.vrEye = g_eye.active;
     inputs.video = g_exporting;
     if (g_dev.waterSplashTest > 0) {
         const float cycle = fmodf(inputs.time, 8.0f);
@@ -2881,7 +2944,7 @@ void processSceneOne(IDirect3DDevice9* device) {
         // RenderScale: switching between the scaled and the full size (photo mode, captures) keeps
         // the height map, the neon trail and the exposure.
         g_pipeline.keepWorldOnResize(settings.renderScale < 0.99f);
-        g_pipeline.selectEye(device, g_eye.active ? g_eye.index : -1);
+        g_pipeline.selectEye(device, g_eye.active && Config::get().settings.vrTaa ? g_eye.index : -1);
         bool rendered = true;
         if (own.skip) {
             g_own.skipped++;

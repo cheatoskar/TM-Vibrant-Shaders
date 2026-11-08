@@ -56,6 +56,12 @@ public:
         // false for extra cameras in the same frame (replay camera blends): they must not
         // touch temporal history (TAA, motion blur, exposure, focus).
         bool temporal = true;
+        // What moves on over time with the clock (dt, exposure, fog colour, the lens' shelter, rain
+        // camera, spray, water, trail, height map): -1 = the temporal frames (as before), 1 = this
+        // call, 0 = not this call. VR: the left eye steps, the right one shows the same values
+        // (with a history per eye they were stepped by both eyes in turn).
+        int stepWorld = -1;
+        bool vrEye = false; // a VR eye: no shutter smear of the rain from head turns
         // TAA jitter of this frame's projection, as the uv shift of the image content.
         float jitter[2] = {};
         // Water surfaces from the game: block water height, sea level, state 1 = known,
@@ -337,6 +343,7 @@ public:
         m_skyValid = false;
         m_shelterValid = false;
         m_postTimeValid = false;
+        m_stepValid = false;
         m_accumWeight = 0.0f;
     }
 
@@ -613,6 +620,8 @@ private:
     int m_taaIndex = 0;
     bool m_taaValid = false;
     bool m_temporalValid = false; // this frame continues the previous one (no camera cut)
+    bool m_stepContinued = false; // the over-time state continues its last step (Inputs::stepWorld)
+    bool m_stepValid = false;
     bool m_sunKnown = false;
     bool m_castersWanted = false; // see consumeCastersWanted
 

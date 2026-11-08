@@ -30,7 +30,11 @@ ULONGLONG writeTime(const std::wstring& path) {
 }
 std::map<std::string, Entry> g_cache;
 IDirect3DDevice9* g_device = nullptr;
-IDirect3DTexture9* g_icon = nullptr;
+// The logo by its size in pixels. The badge after the start and the menu's title draw it at two
+// sizes in the same frame: with one texture the second call released the first while the frame's
+// draw list still had it, and opening the menu within the badge's 10 s closed the game (an access
+// violation in d3d9 under DrawIndexedPrimitive: CResourceManager, or SetTexture).
+std::map<int, IDirect3DTexture9*> g_icons;
 // Resource pack pictures, by the zip's path: the texture (null: none) and the file's write time
 // it was made from (a replaced zip gets a new one).
 struct PackEntry {
@@ -52,7 +56,6 @@ struct PackJob {
     std::atomic<bool> done{false};
 };
 std::shared_ptr<PackJob> g_packJob;
-int g_iconSize = 0; // the size g_icon was made for (also when that failed: tried once per size)
 
 IDirect3DTexture9* upload(IDirect3DDevice9* device, const std::vector<uint32_t>& pixels, int width, int height) {
     IDirect3DTexture9* texture = nullptr;
@@ -92,9 +95,10 @@ void useDevice(IDirect3DDevice9* device) {
         if (entry.second.texture) entry.second.texture->Release();
     }
     g_packs.clear();
-    if (g_icon) g_icon->Release();
-    g_icon = nullptr;
-    g_iconSize = 0;
+    for (auto& icon : g_icons) {
+        if (icon.second) icon.second->Release();
+    }
+    g_icons.clear();
     g_device = device;
 }
 } // namespace
@@ -135,13 +139,14 @@ IDirect3DTexture9* get(IDirect3DDevice9* device, const std::string& preset) {
 
 IDirect3DTexture9* icon(IDirect3DDevice9* device, int size) {
     useDevice(device);
-    if (size == g_iconSize) return g_icon;
-    if (g_icon) g_icon->Release();
-    g_icon = nullptr;
-    g_iconSize = size;
+    auto found = g_icons.find(size);
+    if (found != g_icons.end()) return found->second; // also a failed one: tried once per size
+    // Kept until the device goes: a few KB each, and releasing one could hit a frame still drawing it.
+    IDirect3DTexture9* texture = nullptr;
     std::vector<uint32_t> pixels;
-    if (image::menuIcon(size, pixels)) g_icon = upload(device, pixels, size, size);
-    return g_icon;
+    if (image::menuIcon(size, pixels)) texture = upload(device, pixels, size, size);
+    g_icons[size] = texture;
+    return texture;
 }
 
 IDirect3DTexture9* packPreview(IDirect3DDevice9* device, const std::wstring& zip, unsigned long long written, int& width, int& height) {
