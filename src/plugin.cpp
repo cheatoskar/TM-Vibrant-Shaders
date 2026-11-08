@@ -124,6 +124,9 @@ bool g_shadedThisFrame = false;
 bool g_gameplayThisFrame = false; // a gameplay camera (not a menu background) was shaded
 bool g_gameplayLastFrame = false; // and in the frame before (at the next frame's start)
 float g_jitterUV[2] = {};         // TAA jitter of this frame (uv shift of the image)
+bool g_lastFrameShaded = false;   // the frame before was shaded (TAA ran): only then the next one is jittered
+bool g_cameraThisFrame = false;   // a game camera began this frame
+char g_unshadedWhy[192] = "";     // why this frame's main camera wasn't shaded (empty: none drew into the screen)
 UINT g_frameWidth = 0, g_frameHeight = 0;
 bool g_pipelineFailed = false; // don't retry a failed compile every frame; F9 retries
 gfx::Target g_sceneCopy;
@@ -551,6 +554,38 @@ void logHangs(double ms, double captureMs, bool racing) {
         }
     }
     s_last = racing ? now : -1.0f;
+}
+
+void setUnshadedWhy(const char* why) {
+    strncpy_s(g_unshadedWhy, why, _TRUNCATE);
+}
+
+// The effects on, game cameras drawing, but no frame shaded for 2 s: logged once per stretch
+// with the reason, and when shading starts again. After an alt-tab during a replay the effects
+// stayed off whatever F7 did and the log showed nothing (my test, 2026-11-08). Frames without
+// any camera (loading screens) don't count.
+void trackUnshaded(const Settings& s) {
+    static DWORD s_since = 0;
+    static int s_frames = 0;
+    static bool s_logged = false;
+    static int s_lines = 0;
+    if (g_shadedThisFrame || !s.enabled) {
+        if (s_logged && g_shadedThisFrame)
+            TMVS_LOG("scene: shading again after %.1f s", static_cast<float>(GetTickCount() - s_since) / 1000.0f);
+        s_frames = 0;
+        s_logged = false;
+    } else if (g_cameraThisFrame) {
+        if (s_frames++ == 0) s_since = GetTickCount();
+        if (!s_logged && GetTickCount() - s_since > 2000 && s_lines < 20) {
+            s_logged = true;
+            s_lines++;
+            TMVS_LOG("scene: effects on, but no frame shaded for %.1f s (%d frames): %s", static_cast<float>(GetTickCount() - s_since) / 1000.0f,
+                     s_frames, g_unshadedWhy[0] ? g_unshadedWhy : "no camera drew into the screen (only smaller targets)");
+        }
+    }
+    g_lastFrameShaded = g_shadedThisFrame;
+    g_cameraThisFrame = false;
+    g_unshadedWhy[0] = '\0';
 }
 
 void countPipelineCpu(double ms) {
@@ -2270,7 +2305,11 @@ void processScene(IDirect3DDevice9* device) {
         memcpy(g_scene.projection, g_scene.engineProjection, sizeof(g_scene.projection));
         g_scene.haveView = g_scene.haveProjection = true;
     }
-    if (!g_scene.haveView || !g_scene.haveProjection) return;
+    if (!g_scene.haveView || !g_scene.haveProjection) {
+        setUnshadedWhy(!g_scene.haveView && !g_scene.haveProjection ? "the main camera set no view and no projection"
+                                                                     : (!g_scene.haveView ? "the main camera set no view" : "the main camera set no projection"));
+        return;
+    }
     if (!settings.enabled && !photo::active() && !g_captureRequested) {
         if (g_pipelineB.ready()) releaseSideB(); // photo mode ended with the shaders off
         return;
@@ -2331,6 +2370,12 @@ void processScene(IDirect3DDevice9* device) {
     device->GetDepthStencilSurface(&savedDepth);
     IDirect3DTexture9* sceneDepth = depth::textureFor(savedDepth);
     if (!sceneDepth) {
+        D3DSURFACE_DESC dsDesc{};
+        if (savedDepth) savedDepth->GetDesc(&dsDesc);
+        char why[192];
+        sprintf_s(why, "the main camera's depth buffer is not readable (%ux%u format %u%s)", dsDesc.Width, dsDesc.Height,
+                  static_cast<unsigned>(dsDesc.Format), savedDepth ? "" : ", none bound");
+        setUnshadedWhy(why);
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
@@ -2371,6 +2416,7 @@ void processScene(IDirect3DDevice9* device) {
     if (temporal) photo::setView(part, area, desc.Width, desc.Height);
     if (!g_pipeline.ready() && (g_pipelineFailed || !g_pipeline.init(device, g_dev.shaderDir))) {
         g_pipelineFailed = true;
+        setUnshadedWhy("the shaders failed to start (F9 retries)");
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
@@ -2386,6 +2432,7 @@ void processScene(IDirect3DDevice9* device) {
         g_exportStats.targetHeight = desc.Height;
     }
     if (!g_sceneCopy.create(device, width, height, copyFormat) || (part && !g_partOut.create(device, width, height, D3DFMT_A8R8G8B8))) {
+        setUnshadedWhy("the copy of the image could not be created (video memory?)");
         target->Release();
         if (savedDepth) savedDepth->Release();
         return;
@@ -2403,6 +2450,7 @@ void processScene(IDirect3DDevice9* device) {
     IDirect3DTexture9* const stencil = sceneDepth;
     if (part || scaledPath) {
         if (!g_pipeline.copyDepthArea(device, sceneDepth, part ? area : scaledArea, g_partDepth)) {
+            setUnshadedWhy("the depth of the camera's part of the screen could not be copied");
             device->SetRenderTarget(0, target);
             device->SetDepthStencilSurface(savedDepth);
             g_pipeline.endStateSave(device);
@@ -2712,14 +2760,18 @@ void processScene(IDirect3DDevice9* device) {
         // RenderScale: switching between the scaled and the full size (photo mode, captures) keeps
         // the height map, the neon trail and the exposure.
         g_pipeline.keepWorldOnResize(settings.renderScale < 0.99f);
+        bool rendered = true;
         if (own.skip) {
             g_own.skipped++;
             showOwnFrame(device, shaded, width, height);
         } else if (own.accumulate == 2) {
-            if (g_pipeline.render(device, inputs, effective, g_own.frame.surface)) finishOwnFrame(device, shaded, width, height);
-        } else if (g_pipeline.render(device, inputs, effective, shaded) && scaledPath) {
-            g_rs.pending = false;
+            rendered = g_pipeline.render(device, inputs, effective, g_own.frame.surface);
+            if (rendered) finishOwnFrame(device, shaded, width, height);
+        } else {
+            rendered = g_pipeline.render(device, inputs, effective, shaded);
+            if (rendered && scaledPath) g_rs.pending = false;
         }
+        if (!rendered) setUnshadedWhy("the effects' render targets could not be created (video memory?)");
         // A sample only summed wrote nothing: the screen keeps showing the last finished frame.
         if (own.accumulate == 1) showOwnFrame(device, shaded, width, height);
         LARGE_INTEGER captureStart, captureEnd;
@@ -2747,7 +2799,7 @@ void processScene(IDirect3DDevice9* device) {
         logHangs(static_cast<double>(renderEnd.QuadPart - renderStart.QuadPart) * toMs,
                  static_cast<double>(captureEnd.QuadPart - captureStart.QuadPart) * toMs,
                  inputs.driving && !inputs.photo && g_scene.projection[14] > -1.0f); // not a menu background
-        g_shadedThisFrame = true;
+        g_shadedThisFrame = g_shadedThisFrame || rendered;
         // The shaded frame before the HUD: a photo or a hi-res tile.
         if (temporal) photo::afterRender(device, shaded);
         g_gameplayThisFrame = g_gameplayThisFrame || g_scene.projection[14] > -1.0f; // not a menu background
@@ -2876,7 +2928,9 @@ void updateVideoExport() {
 // --- Engine callbacks -------------------------------------------------------
 
 // TAA jitter: a Halton (2, 3) sequence of 8 sub-pixel offsets, one per frame. Only while
-// TAA runs: without it the image would visibly shake.
+// TAA runs: without it the image would visibly shake. Runs means the frame before was shaded:
+// with the effects on in the settings but the pipeline not running (after an alt-tab during a
+// replay, my test 2026-11-08) the game's own image shook.
 
 float halton(int index, int base) {
     float f = 1.0f, r = 0.0f;
@@ -2896,7 +2950,7 @@ void updateJitter() {
     // The compare split: its other side (the game's image, or a preset shaded a second time) has
     // no TAA of this frame to take the jitter out again and trembled (my test, 2026-10-17).
     const bool on = effective.enabled && effective.taa && effective.taaJitter && effective.debugView == 0 && g_frameWidth > 0 &&
-                    !photo::tiling() && !supersampled && !photo::splitShown();
+                    !photo::tiling() && !supersampled && !photo::splitShown() && g_lastFrameShaded;
     if (!on) {
         engine::setProjectionJitter(0.0f, 0.0f);
         g_jitterUV[0] = g_jitterUV[1] = 0.0f;
@@ -2941,6 +2995,7 @@ void onCameraBegin(void* camera) {
     IDirect3DSurface9* rt = nullptr;
     g_device->GetRenderTarget(0, &rt);
     g_scene.inMainCamera = isMainTarget(g_device, rt);
+    g_cameraThisFrame = true;
     if (g_scene.inMainCamera) {
         perflog::mark(g_device, perflog::Mark::GameBegin);
         g_scene.haveView = false;
@@ -2980,6 +3035,13 @@ void onCameraBegin(void* camera) {
         const bool readable = depth::textureFor(ds) != nullptr;
         if (ds) ds->Release();
         const std::array<UINT, 5> kind = {rtDesc.Width, rtDesc.Height, dsDesc.Width, dsDesc.Height, static_cast<UINT>(dsDesc.Format)};
+        if (rtDesc.Width >= 640 && rtDesc.Height >= 400 && !g_unshadedWhy[0]) {
+            char why[192];
+            sprintf_s(why, "a camera into %ux%u is not the screen (depth %ux%u format %u, %s)", rtDesc.Width, rtDesc.Height, dsDesc.Width,
+                      dsDesc.Height, static_cast<unsigned>(dsDesc.Format),
+                      !ds ? "no depth buffer" : (readable ? "size differs from the depth" : "depth not readable"));
+            setUnshadedWhy(why);
+        }
         if (rtDesc.Width >= 640 && rtDesc.Height >= 400 && s_logged.size() < 8 &&
             std::find(s_logged.begin(), s_logged.end(), kind) == s_logged.end()) {
             s_logged.push_back(kind);
@@ -3638,6 +3700,7 @@ void onPresent(IDirect3DDevice9* device) {
     castersTick();
     unbindGBuffer(device);
     gameshaders::tick();
+    trackUnshaded(settings);
     g_shadedThisFrame = false;
     g_gameplayLastFrame = g_gameplayThisFrame;
     g_gameplayThisFrame = false;

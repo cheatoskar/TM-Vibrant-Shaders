@@ -298,6 +298,13 @@ bool Pipeline::ensureTargets(IDirect3DDevice9* device, UINT width, UINT height) 
     ok &= m_dof.create(device, hw, hh, D3DFMT_A16B16G16R16F);
     if (!ok) {
         destroyTargets();
+        // Once per size: it is tried again every frame.
+        static UINT s_failedW = 0, s_failedH = 0;
+        if (s_failedW != width || s_failedH != height) {
+            s_failedW = width;
+            s_failedH = height;
+            TMVS_LOG("pipeline: render targets for %ux%u could not be created (video memory?)", width, height);
+        }
         return false;
     }
     m_width = width;
