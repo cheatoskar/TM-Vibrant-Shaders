@@ -18,7 +18,7 @@ The menu opens over most of the screen's height and the left part of its width: 
 - **Maps:** the preset per map mood (day, sunset, night) and the [Author's Shader](#authors-shader).
 - **Performance:** auto quality, target FPS, effect quality, and what each effect costs on your GPU.
 - **Resource packs** (TrackMania Nations/United): the game's environment mods on every map, [below](#resource-packs).
-- **Misc** (TrackMania Nations/United): a minimap, split times and finish effects, [below](#misc).
+- **Misc & VR** (TrackMania Nations/United): a minimap, split times and finish effects, and the switch for the VR mod, [below](#misc--vr).
 - **Video** (TrackMania Nations/United): the replay editor's *Shoot video*. Presets for what the file is for (*YouTube*: H.264 quality 80, grain halved; *Best*: H.264 quality 92, grain halved; *Editing*: H.264 quality 92, full grain; *Small*: HEVC 10-bit quality 70; *Discord*: H.264 at a fixed 8 Mbit/s; *HDR10*: HEVC 10-bit HDR10 quality 85; each of them picks the graphics card's encoder) and for the look (*Replay*: shutter 360, no crop; *Cinema*: shutter 180, lens depth of field, 2.39:1), the recommended settings for the game's own dialog (size and frame rate, *High quality* with 4 samples or 9 with motion blur: that is where the supersampling and the motion blur are switched on), and every *Video* setting below.
 - **Settings:** options that are not part of a preset: the *Hotkeys* ([below](#hotkeys)), *Preset per map type*, *Picked preset applies to all maps of this type* (off by default; on: picking a preset on a night map makes it the preset for all night maps, the same for day and sunset; off: only the Maps page sets them), *Author's Shaders*, live preview, full-screen menu, update check, the video export, *Effects* (motion blur only in replays, weather volume, TAA), *Game integration* (the same switches as in Studio: the game's MSAA, effects in replays, real night, game light sources, ...), and the folders.
 - **About:** the version, updates (with the new version's notes and a link to its release page), links to the project page and the issue tracker, the folder with your settings and `tmvs.log`, and the credits.
@@ -138,7 +138,7 @@ TrackMania Nations/United (not TrackMania 2). The game's own environment mods, z
 
 The pack is only in your game: the map, its saved file, replays and ghosts keep the map's own mod, and nothing is sent to the server (also with *Apply now*, which only changes the images of the game's textures). `tmvs.log` says at every map load what was used, for example `modpack: Stadium: DarkBlue.zip (instead of the map's Portal.zip)`, `modpack: Stadium: map's own: none` or `modpack: Stadium: none`. Not part of presets: `settings.ini` keeps it in `[ResourcePacks]` (`ReplaceMapMod`, default 1; per environment `Stadium` for all moods, `Stadium.PerMood`, `Stadium.Day`, `Stadium.Sunset`, `Stadium.Night`; empty = the map's own, `None`, or the zip's file name).
 
-## Misc
+## Misc & VR
 
 TrackMania Nations/United (not TrackMania 2). Three small tools, each off until you switch it on: split times and finish effects while you drive, a minimap in the replay editor and exported videos. They show the track's shape and your times only: no checkpoint or trigger positions, no ghost's path, and nothing turns off a map's cameras or MediaTracker clips. While the menu is open their windows show a strip with a move symbol at the top and a grip in the lower right corner: drag the window to move it, the corner to resize it. With the menu closed they ignore the mouse. The split times, the Session panel and the finish effects are never in photos, the video export, F12 captures or screenshots. Sizes are pixels on a 2560 x 1440 screen and scale with the game window (by its height, or by its width when it is narrower than 16:9), text and spacing included, so a smaller window shows the same layout smaller.
 
@@ -154,6 +154,8 @@ By default the split times sit at the right, below the game's map name (where th
 - **Finish effects** (`FinishEffect`, Off, Subtle, Big (Off); `0 – 2`): confetti when you cross the finish; *Big* throws it up from both lower corners, with fireworks for a new best run. *Test* shows it on the spot.
 
 `settings.ini` keeps these in `[Misc]`, with the panels' places (`SplitTimesX`, `SplitTimesY`, `SessionX`, `SessionY`, used while the panel is not attached). Not part of presets or share codes.
+
+**VR**: with the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR) (a version that hands over its device; both installed with the mod loader) this menu shows in the headset. *Effects in VR* (`VrEffects` in `[Settings]`, on / off (off)) also shades both eyes, each as its own camera; temporal effects such as TAA pause. Experimental. Takes effect after a restart: the section says whether the running game has the effects or only the menu. Without the VR mod the section says it is not running. `AttachVibrantShaders` in the VR mod's `TMFOXR.ini`: `0` turns the hand-over off, `2` the effects on whatever this setting says.
 
 After the game starts, its menus or login screen show a badge at the top centre for 10 seconds: the logo, `TM Vibrant Shaders 1.4.2` and the keys for the menu and the effects (the menu is on F5 when CenterSpeed has F8). Never in a race, a replay, the editor, photos or the video export.
 

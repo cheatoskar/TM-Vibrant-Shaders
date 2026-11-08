@@ -711,6 +711,7 @@ void draw(IDirect3DDevice9* device) {
         g_packs.device = device;
         host.resourcePacks = &g_packs;
         if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
+        host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
         host.hideDetached = capturing;
         menu::draw(host);
     }

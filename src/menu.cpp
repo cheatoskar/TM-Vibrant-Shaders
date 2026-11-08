@@ -2084,7 +2084,7 @@ bool drawSettings(Config& config, Settings& s) {
     // How the mod works with the game itself, as in Studio's group of the same name (same order).
     Entries game;
     for (const Field& f : fields()) {
-        if (!strcmp(f.category, "Game integration")) game.push_back({f.key, nullptr});
+        if (!strcmp(f.category, "Game integration") && strcmp(f.key, "VrEffects") != 0) game.push_back({f.key, nullptr}); // VR: on Misc & VR
     }
     panels.push_back(settingsPanel("Game integration", s, game));
     panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) + (g_host->photoHideCar ? 2.0f : 0.0f), [&config] {
@@ -2411,6 +2411,21 @@ struct PageDef {
     bool (*draw)(Config&, Settings&, const Names&);
 };
 
+// The VR section of Misc & VR: the VR mod hands over its device at the game's start, and the
+// effects in the eyes are decided then (Effects in VR).
+void drawVrSection(Settings& s) {
+    ImGui::Spacing();
+    ImGui::SeparatorText("VR");
+    const int state = g_host->vrState ? g_host->vrState() : 0;
+    if (state == 0) {
+        ImGui::TextDisabled("For the VR mod TrackMania Forever OpenXR. Not running.");
+        return;
+    }
+    if (const Field* f = findField("VrEffects")) drawField(*f, s);
+    if (s.vrEffects != (state == 2)) ImGui::TextDisabled("Restart the game to apply.");
+    else ImGui::TextDisabled(state == 2 ? "Effects in the headset." : "Only this menu in the headset.");
+}
+
 const PageDef kPageTable[] = {
     {kShaders, "shaders", "Shaders", "Browse and apply presets", nullptr, [](Config& c, Settings&, const Names&) { drawShaders(c); return false; }},
     {kCustomize, "customize", "Customize", "Main settings", nullptr, [](Config& c, Settings& s, const Names&) { return drawCustomize(c, s); }},
@@ -2419,7 +2434,11 @@ const PageDef kPageTable[] = {
     {kPerformance, "performance", "Performance", "Frame rate and effect costs", nullptr, [](Config&, Settings& s, const Names&) { return drawPerformancePage(s); }},
     {kVideo, "video", "Video", "Shoot video: presets, quality, the camera's look", videoPageShown, [](Config& c, Settings& s, const Names&) { return drawVideoPage(c, s); }},
     {kPacks, "packs", "Resource packs", "Texture mods on every map", [] { return g_host->resourcePacks != nullptr; }, [](Config& c, Settings&, const Names&) { drawPacks(c); return false; }},
-    {kMisc, "misc", "Misc", "Minimap, split times, finish effects", [] { return static_cast<bool>(g_host->miscPage); }, [](Config&, Settings&, const Names&) { g_host->miscPage(); return false; }},
+    {kMisc, "misc", "Misc & VR", "Minimap, split times, finish effects, VR", [] { return static_cast<bool>(g_host->miscPage); }, [](Config&, Settings& s, const Names&) {
+         g_host->miscPage();
+         drawVrSection(s);
+         return false;
+     }},
     {kSettings, "settings", "Settings", "General options", nullptr, [](Config& c, Settings& s, const Names&) { return drawSettings(c, s); }},
     {kAbout, "about", "About", "Version, updates, help", nullptr, [](Config& c, Settings&, const Names&) { drawAbout(c); return false; }},
 };
