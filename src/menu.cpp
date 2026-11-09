@@ -2428,7 +2428,7 @@ void drawVrSection(Settings& s) {
     ImGui::SeparatorText("VR");
     if (const Field* f = findField("VrEffects")) drawField(*f, s);
     if (s.vrEffects != (state == 2)) ImGui::TextDisabled("Restart the game to apply.");
-    else ImGui::TextDisabled(state == 2 ? "Effects in the headset." : "Only this menu in the headset.");
+    else ImGui::TextDisabled(state == 2 ? "Effects in the headset. Game HDR and Render scale stay off there." : "Only this menu in the headset.");
     if (!s.vrEffects && state != 2) return;
     for (const char* key : {"VrComfort", "VrQuality", "VrTaa", "VrLensDrops"}) {
         if (const Field* f = findField(key)) drawField(*f, s);

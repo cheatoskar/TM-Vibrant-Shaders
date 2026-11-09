@@ -1605,6 +1605,17 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_rs.active = false;
     const Settings& s = Config::get().settings;
     if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
+    // VR: the VR mod draws the eyes into its own targets. The float target took the camera's image
+    // away from them and the headset showed black (jiink's test with Game HDR on); Render scale goes
+    // the same way. Both stay off while the VR mod gives eyes.
+    if (hook::eyeProvider()) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            TMVS_LOG("hdr: Game HDR and Render scale are off while the VR mod draws the eyes (the headset would get no image)");
+        }
+        return;
+    }
     // RenderScale: a second camera into the same target in this frame (at a map's start a small 3D
     // view in the corner, 480x272 at 2039,1138 on a 1440p screen) draws straight into the game's
     // target at full size: the first camera's image is already shaded there (the effects don't run
@@ -3923,7 +3934,9 @@ void onPresent(IDirect3DDevice9* device) {
     overlay::Status status;
     status.pipeline = &g_pipeline;
     status.autoQuality = &g_autoQuality;
-    status.depthAvailable = depth::texture() != nullptr;
+    // Watch only under a VR mod hands the game its depth buffer back on purpose (depth::restoreGameDepth):
+    // that isn't the missing depth of an MSAA game (jiink's first start showed "restart with MSAA disabled").
+    status.depthAvailable = depth::texture() != nullptr || hook::observeOnly();
     status.engineHooks = engine::active();
     status.sunKnown = sunDirection(Config::get().settings, status.sunDirection);
     status.shaderError = g_pipeline.lastError().empty() ? nullptr : g_pipeline.lastError().c_str();
