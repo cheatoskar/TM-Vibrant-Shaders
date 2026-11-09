@@ -149,6 +149,12 @@ void apply(const Want& want, bool allowed) {
     }
     float d[4] = {}, d1[4] = {};
     if (!game::readBytes(camera + kDrawRect, d, sizeof(d)) || !sane(d)) {
+        static int logged = 0;
+        if (logged++ < 3) {
+            game::readBytes(camera + kDrawRect + kDrawRectSlot, d1, sizeof(d1));
+            TMVS_LOG("gamecamera: the main camera's DrawRect makes no sense (%g,%g - %g,%g; second slot %g,%g - %g,%g): left alone", d[0], d[1],
+                     d[2], d[3], d1[0], d1[1], d1[2], d1[3]);
+        }
         snprintf(g_status, sizeof(g_status), "No draw rectangle");
         return;
     }

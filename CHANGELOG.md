@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.0 (in testing)
+
+TrackMania 2 catches up with TrackMania Nations/United: photo zoom, hi-res photos, TAA jitter, "only in replays", Hide car and the Misc page.
+
+**New (TrackMania 2)**
+- **Game camera** (Settings page, panel *ManiaPlanet*, off by default): photo zoom (`Shift`+wheel), hi-res photos (`Shift+F12`, tiles put together) and *TAA jitter*. I change the FovRect of the game's main camera, the engine's own way of zooming into a part of the view, so its projection, culling and shadows follow by themselves. This writes into the game's memory: not tested against ManiaPlanet's anti-cheat, so it stays off unless you switch it on. What the engine did is measured from its constants every frame (`gamecamera:` in `tmvs-mp.log`).
+- **Only in replays** now knows replays: depth of field and motion blur run in the replay editor (watching, editing, *Shoot video*) and in photo mode, not while driving.
+- **Hide car** in photo mode: the cars' draws are skipped, also their shadow-map draws.
+- **Misc page**: split times at each checkpoint against your best run on the map, the Session panel and finish effects (confetti, fireworks for a new best). Read from the game only, so fine online. Your best runs are kept in `Documents\ManiaPlanet\TMVS\splits.ini`. No minimap in TrackMania 2.
+
 ## 1.4.3 (in testing)
 
 Fixes for dirt, the car with TAA, water and maps where the effects stayed off, the mod works next to the VR mod TrackMania Forever OpenXR (TrackMania Nations/United), and it runs in TrackMania Nations ESWC.
