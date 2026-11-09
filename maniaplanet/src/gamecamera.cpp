@@ -82,13 +82,15 @@ void restore() {
     g_active = false;
     const uintptr_t camera = mainCamera();
     if (camera && camera == g_saved.camera) {
-        // Only when the mod's values are still there (the game may have set its own meanwhile).
+        // Always, even when the values there aren't the ones written last (a render between the
+        // engine's begin and end moves them by the viewport; it puts back what it found): a
+        // camera left zoomed would be worse than a FovRect of the game's own overwritten (the
+        // game sets one only around a tiled render of its own, which saves and restores it).
         float now[4] = {};
-        if (game::readBytes(camera + kFovRect, now, sizeof(now)) && !memcmp(now, g_written, sizeof(now))) {
-            game::writeBytes(camera + kFovRectEnable, &g_saved.enable, sizeof(g_saved.enable));
-            game::writeBytes(camera + kFovRect, g_saved.rect, sizeof(g_saved.rect));
-        }
-        TMVS_LOG("gamecamera: the game's own FovRect back (enable %u)", g_saved.enable);
+        const bool ours = game::readBytes(camera + kFovRect, now, sizeof(now)) && !memcmp(now, g_written, sizeof(now));
+        game::writeBytes(camera + kFovRectEnable, &g_saved.enable, sizeof(g_saved.enable));
+        game::writeBytes(camera + kFovRect, g_saved.rect, sizeof(g_saved.rect));
+        TMVS_LOG("gamecamera: the game's own FovRect back (enable %u%s)", g_saved.enable, ours ? "" : "; the camera held other values");
     } else {
         TMVS_LOG("gamecamera: the camera changed meanwhile, nothing to put back");
     }
