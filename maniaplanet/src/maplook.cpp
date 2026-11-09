@@ -1,5 +1,6 @@
 #include "maplook.h"
 #include "config.h"
+#include "game.h"
 #include "log.h"
 #include <windows.h>
 #include <cstdint>
@@ -24,80 +25,32 @@ namespace {
 //     length}, set through the engine's own assign (kWStringAssign: copies into its own buffer).
 // Every object's class is checked through its vtable's GetMwClassId (slot 3:
 // `mov dword [rdx], id; mov rax, rdx; ret`) before anything is read.
-constexpr uintptr_t kAppGlobal = 0x1C8B410;
+// The app global and the class checks: game.cpp.
 constexpr uintptr_t kWStringAssign = 0x142E50;
-constexpr size_t kRootMap = 0x378, kEditor = 0x7C8, kEditorMap = 0x410, kComments = 0xE0;
+constexpr size_t kRootMap = game::kAppRootMap, kEditor = game::kAppEditor, kEditorMap = 0x410, kComments = 0xE0;
 constexpr uint32_t kChallengeId = 0x03043000;
 // The map editor: CGameCtnEditorFree, ::Puzzle, ::Simple and their base CGameCtnEditorCommon.
 constexpr uint32_t kMapEditorIds[] = {0x0310F000, 0x03110000, 0x03115000, 0x0310E000};
-constexpr uint32_t kAppIds[] = {0x24001000, 0x03013000, 0x030D3000}; // CTrackMania, CGameManiaPlanet, CGameCtnApp
 // The assign's first bytes (mov [rsp+10h], rbx; mov [rsp+18h], rbp; push rdi; sub rsp, 30h;
 // movaps xmm0, [rdx]): another build has something else there and nothing is written.
 constexpr unsigned char kAssignStart[] = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18,
                                           0x57, 0x48, 0x83, 0xEC, 0x30, 0x0F, 0x28, 0x02};
 
-uintptr_t g_base = 0;
-uintptr_t g_textStart = 0, g_textEnd = 0;
 bool g_ready = false;
 bool g_checked = false;
+
+using game::app;
+using game::classOf;
+using game::readPointer;
 
 bool setUp() {
     if (g_checked) return g_ready;
     g_checked = true;
-    HMODULE exe = GetModuleHandleW(nullptr);
-    wchar_t path[MAX_PATH] = {};
-    GetModuleFileNameW(exe, path, MAX_PATH);
-    const wchar_t* name = wcsrchr(path, L'\\');
-    if (!name || _wcsicmp(name + 1, L"ManiaPlanet.exe") != 0) return false;
-    g_base = reinterpret_cast<uintptr_t>(exe);
-    auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(g_base);
-    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(g_base + dos->e_lfanew);
-    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
-    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
-        if (!memcmp(sec->Name, ".text", 6)) {
-            g_textStart = g_base + sec->VirtualAddress;
-            g_textEnd = g_textStart + sec->Misc.VirtualSize;
-        }
-    }
-    g_ready = g_textEnd > g_textStart && kWStringAssign + sizeof(kAssignStart) < g_textEnd - g_base &&
-              !memcmp(reinterpret_cast<const void*>(g_base + kWStringAssign), kAssignStart, sizeof(kAssignStart));
+    if (!game::attached()) return false;
+    g_ready = game::codeIs(kWStringAssign, kAssignStart, sizeof(kAssignStart));
     TMVS_LOG("maplook: %s", g_ready ? "ManiaPlanet's map comments found (Author's Shaders)"
                                     : "not the ManiaPlanet build this was made for: no Author's Shaders");
     return g_ready;
-}
-
-// The class id an engine object reports, 0 when it isn't one (or can't be read).
-uint32_t classOf(uintptr_t object) {
-    __try {
-        if (!object) return 0;
-        const uintptr_t vtable = *reinterpret_cast<const uintptr_t*>(object);
-        if (vtable < g_base || vtable >= g_base + 0x4000000) return 0;
-        const uintptr_t fn = reinterpret_cast<const uintptr_t*>(vtable)[3];
-        if (fn < g_textStart || fn + 9 > g_textEnd) return 0;
-        const auto* code = reinterpret_cast<const unsigned char*>(fn);
-        if (code[0] != 0xC7 || code[1] != 0x02 || code[6] != 0x48 || code[7] != 0x8B || code[8] != 0xC2) return 0;
-        uint32_t id;
-        memcpy(&id, code + 2, 4);
-        return id;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-uintptr_t readPointer(uintptr_t at) {
-    __try {
-        return *reinterpret_cast<const uintptr_t*>(at);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
-}
-
-uintptr_t app() {
-    const uintptr_t a = readPointer(g_base + kAppGlobal);
-    const uint32_t id = classOf(a);
-    for (uint32_t ok : kAppIds)
-        if (id == ok) return a;
-    return 0;
 }
 
 // The map in the editor, else the one being played (0: none).
@@ -153,7 +106,7 @@ using AssignFn = void*(__fastcall*)(void* target, const WideRef* source);
 bool writeComments(uintptr_t map, const wchar_t* text, uint32_t length) {
     __try {
         WideRef source{text, length, 0};
-        reinterpret_cast<AssignFn>(g_base + kWStringAssign)(reinterpret_cast<void*>(map + kComments), &source);
+        reinterpret_cast<AssignFn>(game::base() + kWStringAssign)(reinterpret_cast<void*>(map + kComments), &source);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

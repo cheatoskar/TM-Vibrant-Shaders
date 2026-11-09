@@ -17,6 +17,8 @@
 #include "thumbnails11.h"
 #include "photo11.h"
 #include "maplook.h"
+#include "game.h"
+#include "gamecamera.h"
 #include "shaders/PS_UiComposite.h"
 #include "shaders/VS_Full.h"
 #include "imgui.h"
@@ -261,7 +263,7 @@ void hotkeys() {
     if (photoKey && allowed(keys::Action::Photo)) photo::toggle();
     if (captureKey && allowed(keys::Action::Capture)) {
         if (photo::active()) {
-            photo::request();
+            photo::request(keys::shiftHeld()); // Shift: a hi-res photo (tiles, the Game camera option)
         } else {
             capture::request();
             toast("Frame captured (Documents\\ManiaPlanet\\TMVS\\captures)");
@@ -315,6 +317,10 @@ void gamePanel() {
                           "The value is the sun's size in the sky (real sun: 0.5 degrees; more is softer).\n"
                           "Off: the game's own shadows.\n"
                           "Not tested against ManiaPlanet's anti-cheat.");
+    changed |= ImGui::Checkbox("Game camera", &o.gameCamera);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Photo zoom, hi-res photos and TAA jitter.\n"
+                          "Writes into the game's camera. Not tested against ManiaPlanet's anti-cheat.");
     // Only while Game moonlight is Black hole (engineMoonChoice): its brightness. Off is that choice's job.
     if (o.blackHoleMoon > 0.0f) {
         ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
@@ -361,6 +367,8 @@ void gamePanel() {
     ImGui::TextDisabled("Engine textures: %s", found.empty() ? "none" : found.c_str());
     ImGui::TextDisabled("Soft shadows: %s", softshadow::status());
     ImGui::TextDisabled("Water: %s", water::status());
+    ImGui::TextDisabled("Game camera: %s", gamecamera::status());
+    ImGui::TextDisabled("Replay editor: %s", game::replayEditor() ? "open (counts as a replay)" : "closed");
     ImGui::TextDisabled("Shaders recognised: %u of %u, %u draws, %ux%u", st.shadersKnown, st.shadersCreated, st.drawsLastFrame,
                         st.width, st.height);
 }
@@ -484,7 +492,8 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             h.tips = {{"GameNight", "Day and sunset maps under a night sky (Starry night, Black hole, Aurora): darkens sky light, light maps and reflections to moonlight, since TrackMania 2 can't change the time of day. Lamps and neon stay. Night maps are unchanged (with Game moonlight Off their sky light is darkened too)."},
                       {"EngineMoon", "Night maps under a night sky (Starry night, Black hole, Aurora). Game's: the moon stays as it is. Black hole: the moon's light and blue glint are replaced by the black hole's warm light (brightness: Black hole light, ManiaPlanet panel); under other skies the moon stays. Off: the moon's light and glint go (with Real night on, the sky light dims too). Lamps and neon stay. Applies at once."},
                       {"Floodlights", "Brightness of the game's lamps, neon and screens. 0 turns them off."},
-                      {"CinematicOnlyInReplays", "Motion blur and depth of field only in photo mode (TrackMania 2 can't tell replays from driving yet). Off: always."},
+                      {"CinematicOnlyInReplays", "Motion blur and depth of field only in the replay editor, the video export and photo mode. Off: always."},
+                      {"TAAJitter", "Sharper, calmer edges: the game's camera moves by a fraction of a pixel every frame. Needs Game camera (ManiaPlanet panel)."},
                       {"DofAutofocus", "Where automatic focus sits. Middle: the screen centre. Car: your car, or the centre while it is off screen. A click in photo mode still wins."}};
             h.engineMoon = engineMoonChoice;
             h.fNumber = photo::fNumber;
@@ -497,6 +506,10 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             h.photoOn = [] {
                 if (!photo::active()) photo::toggle();
             };
+            // Hide car: the cars' draws skipped (hooks.cpp). No Hide editor: TrackMania 2's replay
+            // editor isn't hidden by the mod.
+            h.photoHideCar = true;
+            h.photoHideEditor = false;
             h.mapComments = [](std::string& comments) { return maplook::editorComments(comments); };
             h.setMapComments = [](const std::string& comments) { return maplook::setEditorComments(comments); };
             h.gamePanelTitle = "ManiaPlanet";

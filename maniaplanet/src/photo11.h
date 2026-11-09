@@ -2,8 +2,9 @@
 // Photo mode for ManiaPlanet, after the TMNF mod's (src/photo.cpp): F6 on/off, the interface
 // hidden, full quality, depth of field on the point clicked (middle click), aperture on
 // Ctrl+wheel, F12 saves photo_NNN.png (the frame without the interface) in Documents\ManiaPlanet\TMVS.
-// Not here: hi-res tiled photos and zoom (they need the engine's projection), and coming on by
-// itself with the free camera (ManiaPlanet's camera isn't known to the mod).
+// Zoom (Shift+wheel) and hi-res photos (Shift+F12, tiles put together) through the game's camera
+// (gamecamera.cpp, the *Game camera* option). Not here: coming on by itself with the free camera.
+#include "gamecamera.h"
 #include <d3d11.h>
 #include <windows.h>
 #include <string>
@@ -19,13 +20,25 @@ bool active();
 void toggle();
 // The interface (HUD, the game's menus) is skipped while photo mode is on (Hide the HUD).
 bool hideInterface();
+// Hide car (photo mode): the cars' draws are skipped (hooks.cpp).
+bool hideCars();
+
+// Once a frame at Present: what photo mode wants from the game's camera this frame (zoom, the
+// hi-res photo's tile). `gameCamera`: the Game camera option is on (else zoom and tiles can't be
+// done: a request says so).
+gamecamera::Want cameraWant(bool gameCamera);
+// A hi-res photo is being taken (no TAA jitter, the exposure frozen, effects of the whole frame off).
+bool tiling();
 
 // From the game window's procedure: middle click = focus there, Ctrl + middle click = no focus,
 // Ctrl + wheel = aperture, Esc = leave photo mode. True = used (the game doesn't get it).
 bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
-// F12 in photo mode: a photo of the next frame, without the interface.
-void request();
+// F12 in photo mode: a photo of the next frame, without the interface. hiRes (Shift+F12): tiles
+// of the view, each rendered by the game's camera zoomed in on it (photoTiles x photoTiles).
+void request(bool hiRes = false);
+// Shift+wheel zoom (1 = none).
+float zoom();
 
 // The look of this frame: full quality, depth of field on the focus point, no motion blur.
 void adjust(tmshaders::Settings& s);

@@ -1283,6 +1283,18 @@ int main(int argc, char** argv) {
                   "with the car and the water the game's constant buffers (b5, b13) are still bound after the tone map");
             for (ID3D11Buffer* b : {ps5, ps13, vs5})
                 if (b) b->Release();
+            // Photo mode's Hide car: the car's draw is skipped (and said so), not outside photo mode.
+            set("PhotoHideCar", "1");
+            for (int i = 0; i < 2; i++) frame(true, centre, hud);
+            const std::vector<char> before = readFile((std::string(data) + "\\tmvs-mp.log").c_str());
+            const bool hiddenBefore = std::string(before.begin(), before.end()).find("Hide car: the cars' draws skipped") != std::string::npos;
+            set("PhotoMode", "1");
+            for (int i = 0; i < 2; i++) frame(true, centre, hud);
+            set("PhotoMode", "0");
+            set("PhotoHideCar", "0");
+            const std::vector<char> after = readFile((std::string(data) + "\\tmvs-mp.log").c_str());
+            check(!hiddenBefore && std::string(after.begin(), after.end()).find("Hide car: the cars' draws skipped") != std::string::npos,
+                  "Hide car skips the car's draw in photo mode only");
         }
         // A capture holds the fog buffer and the water volume's plane.
         requestCapture();

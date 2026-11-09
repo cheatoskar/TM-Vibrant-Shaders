@@ -530,7 +530,9 @@ bool Renderer::toneMap(ID3D11DeviceContext* ctx, ID3D11RenderTargetView* target,
         frame.car = engine.car;
         frame.time = engine.time;
         frame.photo = engine.photo;
-        frame.driving = !engine.video;
+        frame.driving = !engine.video && !engine.replay;
+        frame.jitter[0] = engine.jitter[0];
+        frame.jitter[1] = engine.jitter[1];
         frame.focus[0] = engine.focus[0];
         frame.focus[1] = engine.focus[1];
         if (m_effects.scene(ctx, frame, s)) {

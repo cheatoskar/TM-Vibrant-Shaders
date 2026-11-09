@@ -115,6 +115,8 @@ add_library(tmvs_mp_core STATIC
   src/effects_water.cpp
   src/water11.cpp
   src/maplook.cpp
+  src/game.cpp
+  src/gamecamera.cpp
   src/autoquality11.cpp
   src/photo11.cpp
   src/overlay.cpp
