@@ -248,10 +248,14 @@ void drawPage() {
                        "Drag and resize the windows while this menu is open.");
     ImGui::Spacing();
 
-    ImGui::SeparatorText("Minimap");
-    changed |= ImGui::Checkbox("Minimap", &s.minimap);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("In the replay editor and exported videos, never while you drive.");
-    if (s.minimap) {
+    // TM Nations ESWC: no minimap (TMX allows it only in the replay editor and the video export).
+    const bool minimap = !engine::eswc();
+    if (minimap) {
+        ImGui::SeparatorText("Minimap");
+        changed |= ImGui::Checkbox("Minimap", &s.minimap);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("In the replay editor and exported videos, never while you drive.");
+    }
+    if (minimap && s.minimap) {
         changed |= ImGui::SliderFloat("Size", &s.mapSize, 120.0f, 800.0f, "%.0f px");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("At 1440p; smaller screens scale it down.");
         changed |= ImGui::SliderFloat("Opacity", &s.mapOpacity, 0.2f, 1.0f, "%.2f");
@@ -318,7 +322,7 @@ void releaseDevice() {
 
 bool wantsOverlay(const Frame& frame) {
     // Not tied to an open map: Shoot video closes and loads the map again, the picture stays.
-    topview::setWanted(g_settings.minimap && g_settings.mapTextured);
+    topview::setWanted(g_settings.minimap && g_settings.mapTextured && !engine::eswc());
     g_collect = mapview::wanted();
     if (g_collect) mapview::prepare(frame.device);
     g_mapOnScreen = g_collect && !frame.hide && engine::replayEditorOpen();
