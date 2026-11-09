@@ -19,6 +19,7 @@
 #include "maplook.h"
 #include "game.h"
 #include "gamecamera.h"
+#include "splits11.h"
 #include "shaders/PS_UiComposite.h"
 #include "shaders/VS_Full.h"
 #include "imgui.h"
@@ -429,7 +430,11 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     // With photo mode's line on screen only, as TMNF's (drawn at Present: never in the photos).
     g_splitBar = photo::splitShown() && *photoLine;
     if (!g_splitBar && !pinned && !config.showOverlay) g_wantMouse = false;
-    if (!config.showOverlay && !pinned && !showToast && !*photoLine && !photo::splitShown()) return;
+    // The Misc page's split times and finish effects stay with the menu closed (not in photo mode
+    // or the video export).
+    const bool hideMisc = photo::active() || hooks::videoExport();
+    const bool misc = splits::wantsOverlay() && !hideMisc;
+    if (!config.showOverlay && !pinned && !showToast && !*photoLine && !photo::splitShown() && !misc) return;
 
     std::vector<Message> messages;
     {
@@ -444,6 +449,7 @@ void frame(ID3D11RenderTargetView* backBuffer) {
     // ImGui's pointer over the menu (the game hides the OS cursor), the game's elsewhere.
     io.MouseDrawCursor = (config.showOverlay || pinned || g_splitBar) && io.WantCaptureMouse;
     ImGui::NewFrame();
+    splits::drawOverlay(config.showOverlay, hideMisc);
     if (config.showOverlay || pinned) {
         // The effects' GPU times for the Performance page (as TMNF's pipeline reports them).
         struct Timings : tmshaders::menu::PassTimings {
@@ -510,6 +516,8 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             // editor isn't hidden by the mod.
             h.photoHideCar = true;
             h.photoHideEditor = false;
+            // The Misc page: split times, the Session panel, finish effects (splits11.cpp).
+            h.miscPage = splits::drawPage;
             h.mapComments = [](std::string& comments) { return maplook::editorComments(comments); };
             h.setMapComments = [](const std::string& comments) { return maplook::setEditorComments(comments); };
             h.gamePanelTitle = "ManiaPlanet";

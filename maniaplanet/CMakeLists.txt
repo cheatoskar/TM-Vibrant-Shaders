@@ -117,6 +117,7 @@ add_library(tmvs_mp_core STATIC
   src/maplook.cpp
   src/game.cpp
   src/gamecamera.cpp
+  src/splits11.cpp
   src/autoquality11.cpp
   src/photo11.cpp
   src/overlay.cpp

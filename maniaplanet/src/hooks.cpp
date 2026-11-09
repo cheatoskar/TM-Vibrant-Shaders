@@ -21,6 +21,7 @@
 #include "maplook.h"
 #include "game.h"
 #include "gamecamera.h"
+#include "splits11.h"
 #include "shaderdb.h"
 #include "softshadow.h"
 #include "water11.h"
@@ -1802,6 +1803,7 @@ bool onPresent(IDXGISwapChain* sc) {
     maplook::tick();
     // Replays (the replay editor open) for "only in replays"; the game camera for the next frame.
     game::tick();
+    splits::tick();
     applyGameCamera();
     prepareLook();
 
@@ -1935,6 +1937,10 @@ Effects* effects() {
 
 const char* autoQualityReduced() {
     return g_autoQuality.reducedCount() ? g_autoQuality.summary() : nullptr;
+}
+
+bool videoExport() {
+    return videoExporting();
 }
 
 void onDevice(ID3D11Device* device) {

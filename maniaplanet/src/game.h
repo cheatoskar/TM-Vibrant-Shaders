@@ -5,6 +5,7 @@
 // (Author's Shaders), the replay state and the game camera (gamecamera.cpp).
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace tmvs_mp {
 namespace game {
@@ -39,6 +40,23 @@ constexpr size_t kAppEditor = 0x7C8;
 // The replay editor (CGameCtnMediaTracker) is open: watching or editing a replay, or exporting
 // one as a video. Read once a frame (tick).
 bool replayEditor();
+
+// The local player's run (read only): CGameCtnApp::CurrentPlayground -> CGamePlayground::
+// GameTerminals[0] (CGameTerminal) -> ControlledPlayer (CTrackManiaPlayer 0x24031000).
+struct Race {
+    static constexpr int kMaxCheckpoints = 256;
+    int state = -1;       // RaceState: 0 before the start, 1 running, 2 finished, 3 eliminated
+    int count = 0;        // checkpoints passed this run (the finish is the last one when finished)
+    int times[kMaxCheckpoints] = {}; // race time at each (ms)
+    int respawns = 0;
+    int speed = 0;        // the speed the HUD shows (km/h)
+};
+// False: no player of this kind (menus, replays, the editors, another game mode).
+bool readRace(Race& out);
+// What the last readRace found ("read", or where the chain ended, with the class there).
+const char* raceStatus();
+// The map being played: its name (UTF-8) and a key for it (name and author). False: none.
+bool currentMap(std::string& name, std::string& key);
 // Once a frame on the render thread: the replay state; its changes go to the log with the classes
 // of the app's editor and playground (to learn what the game has open).
 void tick();
