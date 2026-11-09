@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0 (in testing)
+
+More of the mod in TrackMania Nations ESWC.
+
+**New**
+- **TrackMania Nations ESWC: the car and the race.** I read the race, your car and its speed from the game's own objects once a frame (only *Hide car* changes something there) and hook its map loads. That brings the *Neon trail*, *Car headlights* (also *Horror*), *Spray*, *Long mesh shadows*, *Hide car* in photo mode (the game's own visible bit of each car, and its shadow), and on the *Misc* page the split times, the Session panel and the finish effects (compared with your best; ESWC maps aren't on TMX). The trail starts over on a new map, starts a new run at the start line and a new line after a respawn. Motion blur and *Cinematic in replays only* are back: a replay you watch (or shoot as a video) and the replay editor count as watching, driving doesn't. Still not there: the video export (the game has its own, not hooked yet), water (its Stadium has none), the game's materials and light, the minimap. `tmvs-eswc.log` says what was found (`engine (eswc): ...`).
+
 ## 1.4.3 (in testing)
 
 Fixes for dirt, the car with TAA, water and maps where the effects stayed off, the mod works next to the VR mod TrackMania Forever OpenXR (TrackMania Nations/United), and it runs in TrackMania Nations ESWC.
