@@ -618,7 +618,9 @@ static bool eswcSupports(const Field& f) {
         "VideoHdrWhite",
         // the map's light and weather, the game's FX, its materials and shaders, the block order, map loads
         "GameNight", "EngineMoon", "GameSkyClouds", "DisableGameFX", "GameMaterials", "GameGBuffer", "GameLight", "CasterShadows",
-        "CasterAlphaTest", "OverlapFix", "ToneCurve"};
+        "CasterAlphaTest", "OverlapFix", "ToneCurve",
+        // no water in its Stadium; without the game's materials grey road was taken for water
+        "WaterSurfaces", "WaterClarity", "CleanWater", "WaterFarReflections"};
     if (!strncmp(f.key, "Vr", 2)) return false; // the VR mod is TMNF's
     for (const char* key : kHidden) {
         if (!strcmp(f.key, key)) return false;

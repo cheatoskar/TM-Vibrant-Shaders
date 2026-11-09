@@ -2916,6 +2916,12 @@ void processSceneOne(IDirect3DDevice9* device) {
         smoothLook(effective, effectTime());
         // Photo mode and the video export: full quality, whatever the frame rate.
         if (!inputs.photo && !inputs.video) g_autoQuality.apply(effective);
+        // TM Nations ESWC: its Stadium has no water, and with no material known the water was
+        // guessed from the colour: grey road turned into mirroring water (my test, 2026-11-09).
+        if (engine::eswc()) {
+            effective.waterSurfaces = 0.0f;
+            effective.waterClarity = 0.0f;
+        }
         if (inputs.video) {
             effective.quality = 2;
             // The game's supersampling is the anti-aliasing. TAA would run on the first of its
