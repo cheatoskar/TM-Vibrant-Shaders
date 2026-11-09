@@ -3288,7 +3288,8 @@ bool g_gameStencil = false;
 
 bool materialsWanted() {
     const Settings& s = Config::get().settings;
-    return s.enabled && s.gameMaterials && !g_gameStencil;
+    // TM Nations ESWC: no draw hooks, no material is ever known (the pixels are guessed from, as without the setting).
+    return s.enabled && s.gameMaterials && !g_gameStencil && !engine::eswc();
 }
 
 // The stencil states the tagging changes, as the game had them (given back when it stops).
@@ -3579,7 +3580,8 @@ void castersTick() {
     const Settings& s = Config::get().settings;
     // Not with the effects (F7): switched off to compare, the meshes stay (the recording pauses
     // below, nothing uses the maps) and the shadows are back at once, not rebuilt over seconds.
-    const bool on = s.casterShadows && engine::active();
+    // Not in TM Nations ESWC: no map loads seen, the meshes of the last map would keep casting.
+    const bool on = s.casterShadows && engine::active() && !engine::eswc();
     static int s_loads = -1, s_closes = -1, s_removed = -1;
     if (engine::mapLoads() != s_loads || engine::mapCloses() != s_closes) {
         s_loads = engine::mapLoads();
@@ -4231,6 +4233,9 @@ void relightOnSwitch(const Settings& s) {
 void bootOnce() {
     QueryPerformanceFrequency(&g_frequency);
     QueryPerformanceCounter(&g_startTime);
+    // TrackMania Nations ESWC: its own log, so a TMNF start doesn't move it to *.prev.log (the
+    // settings and presets in the same folder are shared).
+    if (engine::eswcExecutable()) log::setFileName(L"tmvs-eswc.log");
     TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
     loadDevOptions();
     Config::get().load();

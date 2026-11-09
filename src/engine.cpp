@@ -101,6 +101,40 @@ constexpr GameBuild kBuilds[] = {
 };
 const GameBuild* g_build = nullptr;
 
+// TrackMania Nations ESWC: only TmNationsESWC.exe of the unofficial 1.80 patch (2021, reports
+// 0.1.7.9; SHA-256 983bd127...2d8068), told by its link timestamp and image size, then by every
+// vtable slot below. Its engine is the 2006 one: no CGameCtn* classes, no MediaTracker, and its
+// CVisionViewportDx9 has fewer virtual functions (no RenderCameraDepTextures; ComputeDriverProjection
+// gets no camera). The vtable: the class's registration (push create, push "CVisionViewportDx9",
+// call CMwClassInfo at 0x007ee4e9), its create function 0x007eef60, the constructor 0x007d2800
+// (mov [ebp], 0x00af5cd8). The slots matched one by one against TmForever.map's names: the same
+// order, the same return sizes (ret 0/8/4/4/4/8/0/4/8), the same log strings (FrameBegin's
+// "[Dx9] Driver is reporting VideoFree=", FrameEnd's "%s\%s%04d.dds" and its EndScene/Present),
+// ComputeDriverViewMatrix byte for byte TMNF's (SHmsCameraLocation: +0x00 GmIso4, +0x60 the matrix,
+// flags +0xa0), ComputeDriverProjection TMNF's without the camera (SHmsCameraProjection: +0x00 the
+// GmMat4, +0x40 its transpose, as TMNF; flags at +0x8c instead of +0xcc).
+constexpr DWORD kEswcTimestamp = 0x5ce7272f;
+constexpr DWORD kEswcImageSize = 0x008e8000;
+constexpr uintptr_t kEswcViewportVTable = 0x00af5cd8;
+struct EswcSlot {
+    int index;
+    uintptr_t function;
+    const char* name;
+};
+constexpr EswcSlot kEswcFrameBegin = {80, 0x007de0f0, "RenderFrameBegin"};
+constexpr EswcSlot kEswcCameraBegin = {81, 0x007de650, "RenderCameraBegin"};
+constexpr EswcSlot kEswcCameraEnd = {86, 0x007e2fc0, "RenderCameraEnd"};
+constexpr EswcSlot kEswcOverlayZones = {87, 0x007e33f0, "RenderOverlayZones"};
+constexpr EswcSlot kEswcFrameEnd = {88, 0x007e3fd0, "RenderFrameEnd"};
+constexpr EswcSlot kEswcViewMatrix = {89, 0x007d77d0, "ComputeDriverViewMatrix"};
+constexpr EswcSlot kEswcProjection = {90, 0x007d7800, "ComputeDriverProjection"};
+// CInputPortDx8's read of one DirectInput device (TMNF's DeviceReadHardwareCurState, the same
+// cdecl (port, buffer, size), the same three callers: keyboard 0x100 bytes, mouse, pad). It answers
+// the HRESULT of GetDeviceState instead of a bool; the buffer is filled or zeroed either way.
+constexpr uintptr_t kEswcReadInput = 0x00465460;
+constexpr unsigned char kEswcReadInputPrologue[] = {0x53, 0x8b, 0x5c, 0x24, 0x08}; // push ebx; mov ebx, [esp+8]
+bool g_eswc = false;
+
 struct Slot {
     int index;
     SlotId id;
@@ -473,6 +507,13 @@ Matrix4 g_lastView{}, g_lastProjection{};
 bool g_lastViewSet = false, g_lastProjectionSet = false;
 Matrix4 g_beginView{}, g_beginProjection{};
 bool g_beginMatrices = false;
+// The cameras between their RenderCameraBegin and RenderCameraEnd, innermost last. ESWC's
+// ComputeDriverProjection gets no camera: the viewport computes a camera's projection inside it
+// (RenderZoneBegin 0x007dede0 -> 0x007deb70 -> 0x007e0ca0, TMNF's UpdateCameraAndRect), so the
+// camera rendering then is the one it belongs to.
+constexpr int kCameraDepth = 8;
+const void* g_cameraStack[kCameraDepth] = {};
+int g_cameraDepth = 0;
 bool g_hideOverlay = false;      // skip the game's HUD and menus (photo mode)
 using FreeCamFn = void(__fastcall*)(void*, void*, int);
 FreeCamFn g_freeCamSet = nullptr;
@@ -607,13 +648,17 @@ bool verify(const GameBuild& build, const Slot& slot) {
 }
 
 template <typename Fn>
-void patch(const Slot& slot, void* detour, Fn& original) {
-    void** entry = &vtable(*g_build)[slot.index];
+void patchEntry(void** entry, void* detour, Fn& original) {
     original = reinterpret_cast<Fn>(*entry);
     DWORD old = 0;
     VirtualProtect(entry, sizeof(void*), PAGE_READWRITE, &old);
     *entry = detour;
     VirtualProtect(entry, sizeof(void*), old, &old);
+}
+
+template <typename Fn>
+void patch(const Slot& slot, void* detour, Fn& original) {
+    patchEntry(&vtable(*g_build)[slot.index], detour, original);
 }
 
 // Jumps from the function's start to the detour; the trampoline runs the copied prologue
@@ -656,6 +701,24 @@ bool chainOntoJump(const InlineSite& site, BYTE* target, void* detour, void** tr
     return true;
 }
 
+// The patch itself: `length` bytes at `target` (whole, position-independent instructions, at least
+// 5) go into the trampoline, the start jumps to the detour.
+void* jumpToDetour(BYTE* target, size_t length, void* detour) {
+    BYTE* trampoline = static_cast<BYTE*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!trampoline) return nullptr;
+    memcpy(trampoline, target, length);
+    trampoline[length] = 0xE9;
+    *reinterpret_cast<int32_t*>(trampoline + length + 1) = static_cast<int32_t>((target + length) - (trampoline + length + 5));
+    DWORD old = 0;
+    VirtualProtect(target, length, PAGE_EXECUTE_READWRITE, &old);
+    target[0] = 0xE9;
+    *reinterpret_cast<int32_t*>(target + 1) = static_cast<int32_t>(static_cast<BYTE*>(detour) - (target + 5));
+    for (size_t i = 5; i < length; i++) target[i] = 0x90; // nop out the rest
+    VirtualProtect(target, length, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), target, length);
+    return trampoline;
+}
+
 void* inlineHook(const InlineSite& site, void* detour) {
     BYTE* target = reinterpret_cast<BYTE*>(rebase(g_build->sites[site.id]));
     if (!prologueMatches(site)) {
@@ -673,20 +736,7 @@ void* inlineHook(const InlineSite& site, void* detour) {
         }
         return nullptr;
     }
-    BYTE* trampoline = static_cast<BYTE*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
-    if (!trampoline) return nullptr;
-    memcpy(trampoline, target, site.length);
-    trampoline[site.length] = 0xE9;
-    *reinterpret_cast<int32_t*>(trampoline + site.length + 1) =
-        static_cast<int32_t>((target + site.length) - (trampoline + site.length + 5));
-    DWORD old = 0;
-    VirtualProtect(target, site.length, PAGE_EXECUTE_READWRITE, &old);
-    target[0] = 0xE9;
-    *reinterpret_cast<int32_t*>(target + 1) = static_cast<int32_t>(static_cast<BYTE*>(detour) - (target + 5));
-    for (size_t i = 5; i < site.length; i++) target[i] = 0x90; // nop out the rest
-    VirtualProtect(target, site.length, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), target, site.length);
-    return trampoline;
+    return jumpToDetour(target, site.length, detour);
 }
 
 // Points one call instruction (E8 rel32) inside a function at the detour, after checking that it
@@ -2293,6 +2343,8 @@ void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* cle
         g_beginView = g_lastView;
         g_beginProjection = g_lastProjection;
     }
+    if (g_cameraDepth < kCameraDepth) g_cameraStack[g_cameraDepth] = camera;
+    g_cameraDepth++;
     g_lastViewSet = g_lastProjectionSet = false;
     if (g_callbacks.cameraBegin) g_callbacks.cameraBegin(camera);
     g_cameraBegin(self, edx, camera, clearDesc);
@@ -2300,7 +2352,13 @@ void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* cle
 
 void __fastcall cameraEndDetour(void* self, void* edx, void* camera) {
     g_cameraEnd(self, edx, camera);
+    if (g_cameraDepth > 0) g_cameraDepth--;
     if (g_callbacks.cameraEnd) g_callbacks.cameraEnd(camera, g_camera);
+}
+
+// The camera rendering now (between its begin and end), null between cameras.
+const void* renderingCamera() {
+    return g_cameraDepth > 0 && g_cameraDepth <= kCameraDepth ? g_cameraStack[g_cameraDepth - 1] : nullptr;
 }
 
 void __fastcall overlayZonesDetour(void* self, void* edx, void* zones, int flags) {
@@ -2417,14 +2475,12 @@ void applyLens(float* m, const void* camera) {
     }
 }
 
-// SHmsCameraProjection: +0x00 GmMat4 projection, +0x40 transposed copy.
-void __fastcall projectionDetour(void* self, void* edx, void* projection, const void* frustum, void* camera) {
-    g_projection(self, edx, projection, frustum, camera);
+// SHmsCameraProjection: +0x00 GmMat4 projection, +0x40 transposed copy. `main`: the projection of
+// the camera the plugin shades (`camera`: that CHmsCamera, null when unknown).
+void adjustProjection(float* m, bool main, const void* camera) {
     // TAA jitter: shift the image by a fraction of a pixel. In D3D's row-vector form P20/P21
     // move x/y in NDC. The struct holds the matrix transposed first (P20 at [0][2]), then
     // in D3D's own layout. Perspective only (shadow maps are orthographic).
-    float* m = static_cast<float*>(projection);
-    const bool main = camera && camera == g_mainCamera;
     if (main && !g_loggedMainProjection && (g_zoom > 1.0f || g_tile[0] != 1.0f)) {
         g_loggedMainProjection = true;
         TMVS_LOG("engine: photo zoom / tiles on the main camera's projection");
@@ -2465,6 +2521,77 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
     g_lastProjectionSet = true;
 }
 
+void __fastcall projectionDetour(void* self, void* edx, void* projection, const void* frustum, void* camera) {
+    g_projection(self, edx, projection, frustum, camera);
+    adjustProjection(static_cast<float*>(projection), camera && camera == g_mainCamera, camera);
+}
+
+// ESWC: (projection, frustum), no camera: the camera rendering now is its camera (g_cameraStack).
+// One computed outside every camera (a texture render's, before its begin) is never the main one.
+using EswcProjectionFn = void(__fastcall*)(void*, void*, void*, const void*);
+EswcProjectionFn g_eswcProjection = nullptr;
+
+void __fastcall eswcProjectionDetour(void* self, void* edx, void* projection, const void* frustum) {
+    g_eswcProjection(self, edx, projection, frustum);
+    const void* camera = renderingCamera();
+    adjustProjection(static_cast<float*>(projection), camera && camera == g_mainCamera, nullptr);
+}
+
+int __fastcall eswcFrameBeginDetour(void* self, void* edx) {
+    g_cameraDepth = 0; // nothing renders between frames
+    g_engineFrames++;
+    if (g_callbacks.frameBegin) g_callbacks.frameBegin();
+    return g_frameBegin(self, edx);
+}
+
+using ReadInputResultFn = int(__cdecl*)(void*, void*, unsigned long);
+ReadInputResultFn g_eswcReadInput = nullptr;
+
+int __cdecl eswcReadInputDetour(void* port, void* state, unsigned long size) {
+    const int result = g_eswcReadInput(port, state, size);
+    if (g_swallowEscape) {
+        if (GetAsyncKeyState(VK_ESCAPE) < 0) {
+            if (state && size == 256) static_cast<BYTE*>(state)[0x01] = 0; // DIK_ESCAPE (filled or zeroed, either way)
+        } else {
+            g_swallowEscape = false;
+        }
+    }
+    return result;
+}
+
+// TrackMania Nations ESWC (see kEswcTimestamp): the viewport's frame and camera hooks, the view and
+// projection, and the keyboard read. False when the executable isn't that one.
+bool installEswc() {
+    HMODULE module = GetModuleHandleW(nullptr);
+    const BYTE* image = reinterpret_cast<const BYTE*>(module);
+    const IMAGE_DOS_HEADER* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+    if (!readable(dos, sizeof(*dos)) || dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+    const IMAGE_NT_HEADERS32* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(image + dos->e_lfanew);
+    if (!readable(nt, sizeof(*nt)) || nt->Signature != IMAGE_NT_SIGNATURE) return false;
+    if (nt->FileHeader.TimeDateStamp != kEswcTimestamp || nt->OptionalHeader.SizeOfImage != kEswcImageSize) return false;
+    void** table = reinterpret_cast<void**>(rebase(kEswcViewportVTable));
+    const EswcSlot slots[] = {kEswcFrameBegin, kEswcCameraBegin, kEswcCameraEnd, kEswcOverlayZones, kEswcFrameEnd, kEswcViewMatrix, kEswcProjection};
+    for (const EswcSlot& slot : slots) {
+        if (!readable(&table[slot.index], sizeof(void*)) || reinterpret_cast<uintptr_t>(table[slot.index]) != rebase(slot.function)) {
+            TMVS_LOG("engine: TmNationsESWC.exe (unofficial 1.80 patch) but CVisionViewportDx9::%s is not where expected: engine hooks disabled", slot.name);
+            return false;
+        }
+    }
+    patchEntry(&table[kEswcFrameBegin.index], reinterpret_cast<void*>(&eswcFrameBeginDetour), g_frameBegin);
+    patchEntry(&table[kEswcCameraBegin.index], reinterpret_cast<void*>(&cameraBeginDetour), g_cameraBegin);
+    patchEntry(&table[kEswcCameraEnd.index], reinterpret_cast<void*>(&cameraEndDetour), g_cameraEnd);
+    patchEntry(&table[kEswcOverlayZones.index], reinterpret_cast<void*>(&overlayZonesDetour), g_overlayZones);
+    patchEntry(&table[kEswcFrameEnd.index], reinterpret_cast<void*>(&frameEndDetour), g_frameEnd);
+    patchEntry(&table[kEswcViewMatrix.index], reinterpret_cast<void*>(&viewMatrixDetour), g_viewMatrix);
+    patchEntry(&table[kEswcProjection.index], reinterpret_cast<void*>(&eswcProjectionDetour), g_eswcProjection);
+    BYTE* read = reinterpret_cast<BYTE*>(rebase(kEswcReadInput));
+    if (readable(read, sizeof(kEswcReadInputPrologue)) && memcmp(read, kEswcReadInputPrologue, sizeof(kEswcReadInputPrologue)) == 0)
+        g_eswcReadInput = reinterpret_cast<ReadInputResultFn>(jumpToDetour(read, sizeof(kEswcReadInputPrologue), reinterpret_cast<void*>(&eswcReadInputDetour)));
+    if (!g_eswcReadInput) TMVS_LOG("engine: ESWC's keyboard read not where expected: Esc in the menu also reaches the game");
+    g_eswc = true;
+    return true;
+}
+
 // EShadow: 0 None, 1 Minimum, 2 Medium, 3 High, 4 VeryHigh, 5 Complex (assumed launcher order).
 void __fastcall shadowsSetDetour(void* self, void* edx, int mode) {
     g_shadowsSet(self, edx, g_forcedShadows >= 0 ? g_forcedShadows : mode);
@@ -2478,6 +2605,14 @@ void forceShadows(int mode) {
 
 bool install(const Callbacks& callbacks) {
     if (g_active) return true;
+
+    g_callbacks = callbacks;
+    if (installEswc()) {
+        g_active = true;
+        TMVS_LOG("engine: TrackMania Nations ESWC (TmNationsESWC.exe 0.1.7.9, unofficial 1.80 patch), CVisionViewportDx9 hooks installed (module base %p)%s",
+                 GetModuleHandleW(nullptr), g_eswcReadInput ? ", keyboard read hooked" : "");
+        return true;
+    }
 
     const Slot slots[] = {kRenderFrameBegin, kRenderCameraBegin, kRenderCameraEnd, kRenderOverlayZones,
                           kRenderFrameEnd, kComputeDriverViewMatrix, kComputeDriverProjection, kRenderShadowsSet};
@@ -2806,6 +2941,7 @@ bool meshReadAddresses(MeshReadAddresses& out) {
 }
 
 bool stadium() {
+    if (g_eswc) return true; // TrackMania Nations ESWC has only Stadium
     if (g_environment[0]) return strcmp(g_environment, "Stadium") == 0;
     return g_build == &kBuilds[0]; // Nations Forever has nothing else
 }
@@ -3366,6 +3502,17 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 
 void setMainCamera(const void* camera) {
     g_mainCamera = camera;
+}
+
+bool eswc() {
+    return g_eswc;
+}
+
+bool eswcExecutable() {
+    wchar_t path[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, path, MAX_PATH)) return false;
+    const wchar_t* name = wcsrchr(path, L'\\');
+    return _wcsicmp(name ? name + 1 : path, L"TmNationsESWC.exe") == 0;
 }
 
 void setLensOffset(float x, float y, float focusDistance) {
