@@ -107,6 +107,7 @@ bool gameRunning() {
     bool found = false;
     for (BOOL ok = Process32FirstW(snapshot, &entry); ok && !found; ok = Process32NextW(snapshot, &entry)) {
         if (_wcsicmp(entry.szExeFile, L"TmForever.exe") == 0 ||
+            _wcsicmp(entry.szExeFile, L"TmNationsESWC.exe") == 0 ||
             _wcsicmp(entry.szExeFile, L"ManiaPlanet.exe") == 0 ||
             _wcsicmp(entry.szExeFile, L"ManiaPlanet32.exe") == 0) {
             found = true;
@@ -175,6 +176,25 @@ bool isMpGame(const std::wstring& dir) {
     return exists(dir + L"\\ManiaPlanet.exe");
 }
 
+// TrackMania Nations ESWC: only the unofficial 1.80 patch's TmNationsESWC.exe (link timestamp
+// 0x5ce7272f, as the mod's engine check). The original 2006 exe is copy-protected: never offered.
+bool isEswcGame(const std::wstring& dir) {
+    HANDLE file = CreateFileW((dir + L"\\TmNationsESWC.exe").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    BYTE header[0x400] = {};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, header, sizeof(header), &read, nullptr);
+    CloseHandle(file);
+    if (!ok || read < 0x40 || header[0] != 'M' || header[1] != 'Z') return false;
+    const DWORD pe = *reinterpret_cast<const DWORD*>(header + 0x3c);
+    if (pe + 12 > read || memcmp(header + pe, "PE\0\0", 4) != 0) return false;
+    return *reinterpret_cast<const DWORD*>(header + pe + 8) == 0x5ce7272f;
+}
+
+bool hasEswcExe(const std::wstring& dir) {
+    return exists(dir + L"\\TmNationsESWC.exe");
+}
+
 // --- Finding games -----------------------------------------------------------
 
 std::wstring regString(HKEY root, const std::wstring& key, const wchar_t* value, REGSAM view = 0) {
@@ -186,6 +206,7 @@ std::wstring regString(HKEY root, const std::wstring& key, const wchar_t* value,
 
 std::wstring gameName(const std::wstring& dir) {
     if (isMpGame(dir)) return L"TrackMania 2 (ManiaPlanet)";
+    if (hasEswcExe(dir) && !exists(dir + L"\\TmForever.exe")) return L"TrackMania Nations ESWC";
     wchar_t title[128] = {};
     GetPrivateProfileStringW(L"TmForever", L"WindowTitle", L"", title, 128, (dir + L"\\Nadeo.ini").c_str());
     if (title[0]) return title;
@@ -201,8 +222,8 @@ void addGameDir(std::vector<FoundGame>& dirs, std::wstring dir) {
     GameKind kind;
     if (exists(dir + L"\\ManiaPlanet.exe")) {
         kind = GameKind::ManiaPlanet;
-    } else if (exists(dir + L"\\TmForever.exe")) {
-        kind = GameKind::Forever;
+    } else if (exists(dir + L"\\TmForever.exe") || isEswcGame(dir)) {
+        kind = GameKind::Forever; // the same d3d9.dll
     } else {
         return;
     }
@@ -218,6 +239,7 @@ std::vector<FoundGame> findGameDirs() {
     // Previous game-folder installs.
     addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder"));
     addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ManiaPlanet"));
+    addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ESWC"));
 
     // Installers register an uninstall entry with the location.
     const HKEY roots[] = {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER};
@@ -357,7 +379,7 @@ int gameInstall(const std::wstring& dir) {
 
     HKEY key = nullptr;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
-        const wchar_t* valName = isMp ? L"GameFolder_ManiaPlanet" : L"GameFolder";
+        const wchar_t* valName = isMp ? L"GameFolder_ManiaPlanet" : (exists(dir + L"\\TmForever.exe") ? L"GameFolder" : L"GameFolder_ESWC");
         RegSetValueExW(key, valName, 0, REG_SZ, reinterpret_cast<const BYTE*>(dir.c_str()),
                        static_cast<DWORD>((dir.size() + 1) * sizeof(wchar_t)));
         RegCloseKey(key);
@@ -431,7 +453,11 @@ void doGameInstall(std::wstring dir) {
     if (dir.empty()) return;
 
     const bool isMp = isMpGame(dir);
-    const bool isForever = exists(dir + L"\\TmForever.exe");
+    const bool isForever = exists(dir + L"\\TmForever.exe") || isEswcGame(dir);
+    if (!isMp && !isForever && hasEswcExe(dir)) {
+        message(L"This TmNationsESWC.exe is not supported.\n\nOnly TrackMania Nations ESWC with the unofficial 1.80 patch works.", MB_OK | MB_ICONWARNING);
+        return;
+    }
     if (!isMp && !isForever) {
         message(L"Neither TmForever.exe nor ManiaPlanet.exe was found in\n" + dir + L"\n\nPlease select the TrackMania or ManiaPlanet folder itself.", MB_OK | MB_ICONWARNING);
         return;
@@ -474,6 +500,7 @@ void doUninstall() {
     if (ok) {
         RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder");
         RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ManiaPlanet");
+        RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ESWC");
         RegDeleteKeyW(HKEY_CURRENT_USER, kRegistryKey);
     }
     message(ok ? L"TM Vibrant Shaders was removed.\n\nYour settings and presets are kept in Documents\\TrackMania\\TMVS and Documents\\ManiaPlanet\\TMVS "
