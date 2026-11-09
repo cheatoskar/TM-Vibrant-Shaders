@@ -39,6 +39,12 @@ bool install(const Callbacks& callbacks);
 // Overrides the game's shadow quality (-1 = keep the game's setting).
 void forceShadows(int mode);
 bool active();
+// The game is TrackMania Nations ESWC (TmNationsESWC.exe of the unofficial 1.80 patch, 2006
+// engine): only the viewport's frame and camera hooks, the view, the projection and the keyboard
+// read; nothing of the map, the race, the cars, replays, the video export or the materials.
+bool eswc();
+// The game's executable is TmNationsESWC.exe (by its file name, before any hook is checked).
+bool eswcExecutable();
 
 // Camera info of the camera currently between RenderCameraBegin/End (or the last one).
 const CameraInfo& currentCamera();

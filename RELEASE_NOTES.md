@@ -1,6 +1,6 @@
 ## TM Vibrant Shaders 1.4.3 (pre-release)
 
-Fixes for **TrackMania Nations & United Forever**, and the mod now works next to the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR). TrackMania 2 is unchanged.
+Fixes for **TrackMania Nations & United Forever**, the mod now works next to the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR), and it runs in **TrackMania Nations ESWC** (experimental). TrackMania 2 is unchanged.
 
 Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
 
@@ -22,7 +22,13 @@ Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
 
 With the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR) both mods now run together (both from the ModLoader). The mod's menu (`F8`) shows in the headset. *Effects in VR* (page *Misc & VR*, off; restart the game after switching it) shades both eyes, with *Comfort*, *Quality in VR*, *TAA in VR* and *Rain on the windshield*. Both eyes get the same exposure, sky and rain; without *TAA in VR* the eyes are shaded without a history over frames, which stopped lamps and the Rain sky from flickering in an earlier test build. Tell me if anything still flickers (with `tmvs.log`: it now says every 10 s what was shaded in the headset).
 
+New in rc.2: with *Game HDR* on the headset no longer goes black (*Game HDR* and *Render scale* stay off while the VR mod draws the eyes), no false "Depth buffer unavailable" message with *Effects in VR* off, and the effects no longer switch size every other frame at a race's start.
+
 This needs a VR mod build that hands its device to this mod. That change is a [pull request to the VR mod](https://github.com/jiink/TrackManiaForeverOpenXR/pull/27); until it is merged, use the build from [my fork](https://github.com/cheatoskar/TrackManiaForeverOpenXR-TMVS). The hand-over is by @wial663, who also tested it in the headset. Thanks!
+
+### TrackMania Nations ESWC (experimental)
+
+The same DLL runs in **TrackMania Nations ESWC**, but only with the unofficial community patch 1.80 (`TmNationsESWC.exe` 0.1.7.9), not the StarForce original. Put `TMVibrantShaders.dll` next to `TmNationsESWC.exe` as `d3d9.dll` (or use the setup's *Install into another game folder*). You get the menu (`F8`), the look, photo mode and captures, with the HUD left out of the effects. The car, map, replay and video features need more of the old game than I found so far: the menu doesn't show them there. The log is `Documents\TrackMania\TMVS\tmvs-eswc.log`.
 
 ---
 

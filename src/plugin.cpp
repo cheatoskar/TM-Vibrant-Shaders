@@ -1605,6 +1605,17 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_rs.active = false;
     const Settings& s = Config::get().settings;
     if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
+    // VR: the VR mod draws the eyes into its own targets. The float target took the camera's image
+    // away from them and the headset showed black (jiink's test with Game HDR on); Render scale goes
+    // the same way. Both stay off while the VR mod gives eyes.
+    if (hook::eyeProvider()) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            TMVS_LOG("hdr: Game HDR and Render scale are off while the VR mod draws the eyes (the headset would get no image)");
+        }
+        return;
+    }
     // RenderScale: a second camera into the same target in this frame (at a map's start a small 3D
     // view in the corner, 480x272 at 2039,1138 on a 1440p screen) draws straight into the game's
     // target at full size: the first camera's image is already shaded there (the effects don't run
@@ -2305,7 +2316,7 @@ void processSceneOne(IDirect3DDevice9* device);
 struct VrStats {
     DWORD lastEyes = 0;       // GetTickCount of the last frame with eyes
     DWORD windowStart = 0;
-    int eyeFrames = 0, shaded[2] = {}, monoSkipped = 0, monoShaded = 0;
+    int eyeFrames = 0, shaded[2] = {}, monoSkipped = 0, monoShaded = 0, outsideTarget = 0;
     bool loggedProjection = false;
 } g_vr;
 
@@ -2321,12 +2332,17 @@ void logVrStats(const float* left, const float* right, const float* leftView, co
     }
     if (now - g_vr.windowStart < 10000) return;
     const Settings& s = Config::get().settings;
-    TMVS_LOG("vr: last %.0f s: %d frames with eyes (left %d, right %d shaded), frames without eyes: %d left alone, %d shaded; "
+    TMVS_LOG("vr: last %.0f s: %d frames with eyes (left %d, right %d shaded), frames without eyes: %d left alone, %d shaded; eyes bigger than the target: %d; "
              "history per eye %s, Comfort %d, Quality in VR %d, TAA in VR %d, drops %d at %.2f m; auto quality: %s",
-             (now - g_vr.windowStart) / 1000.0f, g_vr.eyeFrames, g_vr.shaded[0], g_vr.shaded[1], g_vr.monoSkipped, g_vr.monoShaded,
+             (now - g_vr.windowStart) / 1000.0f, g_vr.eyeFrames, g_vr.shaded[0], g_vr.shaded[1], g_vr.monoSkipped, g_vr.monoShaded, g_vr.outsideTarget,
              s.vrTaa ? "on" : "off", s.vrComfort ? 1 : 0, s.vrQuality, s.vrTaa ? 1 : 0, s.vrLensDrops ? 1 : 0, s.vrLensDistance,
              g_autoQuality.summary());
-    g_vr = VrStats{g_vr.lastEyes, now, 0, {0, 0}, 0, 0, g_vr.loggedProjection};
+    const bool loggedProjection = g_vr.loggedProjection;
+    const DWORD lastEyes = g_vr.lastEyes;
+    g_vr = VrStats{};
+    g_vr.lastEyes = lastEyes;
+    g_vr.windowStart = now;
+    g_vr.loggedProjection = loggedProjection;
 }
 
 // Runs the post pipeline over the main camera's image, before the HUD is drawn.
@@ -2548,6 +2564,21 @@ void processSceneOne(IDirect3DDevice9* device) {
     D3DVIEWPORT9 viewport{};
     if (g_eye.active) viewport = g_eye.viewport; // the VR mod's eye
     else device->GetViewport(&viewport);
+    // An eye that doesn't fit the target: the VR mod gave eyes, but this camera draws into the
+    // 1280x960 window (wial663's log, the race's start: every other frame, all effects made again at
+    // each switch between the sizes). Left as the game drew it.
+    if (g_eye.active && (viewport.X + viewport.Width > desc.Width || viewport.Y + viewport.Height > desc.Height)) {
+        g_vr.outsideTarget++;
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            TMVS_LOG("vr: an eye (%lux%lu) bigger than the camera's target (%ux%u): that camera is left as the game drew it",
+                     viewport.Width, viewport.Height, desc.Width, desc.Height);
+        }
+        target->Release();
+        if (savedDepth) savedDepth->Release();
+        return;
+    }
     // Real panels only: replay cameras sometimes leave a few rows out (2560x1433 at 0,3).
     const bool part = viewport.Width >= 320 && viewport.Height >= 200 && viewport.X + viewport.Width <= desc.Width &&
                       viewport.Y + viewport.Height <= desc.Height &&
@@ -2885,6 +2916,12 @@ void processSceneOne(IDirect3DDevice9* device) {
         smoothLook(effective, effectTime());
         // Photo mode and the video export: full quality, whatever the frame rate.
         if (!inputs.photo && !inputs.video) g_autoQuality.apply(effective);
+        // TM Nations ESWC: its Stadium has no water, and with no material known the water was
+        // guessed from the colour: grey road turned into mirroring water (my test, 2026-11-09).
+        if (engine::eswc()) {
+            effective.waterSurfaces = 0.0f;
+            effective.waterClarity = 0.0f;
+        }
         if (inputs.video) {
             effective.quality = 2;
             // The game's supersampling is the anti-aliasing. TAA would run on the first of its
@@ -3257,7 +3294,8 @@ bool g_gameStencil = false;
 
 bool materialsWanted() {
     const Settings& s = Config::get().settings;
-    return s.enabled && s.gameMaterials && !g_gameStencil;
+    // TM Nations ESWC: no draw hooks, no material is ever known (the pixels are guessed from, as without the setting).
+    return s.enabled && s.gameMaterials && !g_gameStencil && !engine::eswc();
 }
 
 // The stencil states the tagging changes, as the game had them (given back when it stops).
@@ -3548,7 +3586,8 @@ void castersTick() {
     const Settings& s = Config::get().settings;
     // Not with the effects (F7): switched off to compare, the meshes stay (the recording pauses
     // below, nothing uses the maps) and the shadows are back at once, not rebuilt over seconds.
-    const bool on = s.casterShadows && engine::active();
+    // Not in TM Nations ESWC: no map loads seen, the meshes of the last map would keep casting.
+    const bool on = s.casterShadows && engine::active() && !engine::eswc();
     static int s_loads = -1, s_closes = -1, s_removed = -1;
     if (engine::mapLoads() != s_loads || engine::mapCloses() != s_closes) {
         s_loads = engine::mapLoads();
@@ -3903,7 +3942,9 @@ void onPresent(IDirect3DDevice9* device) {
     overlay::Status status;
     status.pipeline = &g_pipeline;
     status.autoQuality = &g_autoQuality;
-    status.depthAvailable = depth::texture() != nullptr;
+    // Watch only under a VR mod hands the game its depth buffer back on purpose (depth::restoreGameDepth):
+    // that isn't the missing depth of an MSAA game (jiink's first start showed "restart with MSAA disabled").
+    status.depthAvailable = depth::texture() != nullptr || hook::observeOnly();
     status.engineHooks = engine::active();
     status.sunKnown = sunDirection(Config::get().settings, status.sunDirection);
     status.shaderError = g_pipeline.lastError().empty() ? nullptr : g_pipeline.lastError().c_str();
@@ -4198,6 +4239,9 @@ void relightOnSwitch(const Settings& s) {
 void bootOnce() {
     QueryPerformanceFrequency(&g_frequency);
     QueryPerformanceCounter(&g_startTime);
+    // TrackMania Nations ESWC: its own log, so a TMNF start doesn't move it to *.prev.log (the
+    // settings and presets in the same folder are shared).
+    if (engine::eswcExecutable()) log::setFileName(L"tmvs-eswc.log");
     TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
     loadDevOptions();
     Config::get().load();

@@ -87,6 +87,17 @@ The same zip carries a `d3d11.dll` for ManiaPlanet's Direct3D 11 renderer (64-bi
 - **Uninstall:** run the setup again and choose *Uninstall*, or delete `d3d11.dll` from the game folder. Settings stay in `Documents\ManiaPlanet\TMVS\`.
 - **Online:** the mod changes the picture. It reads the camera, the sun, the car's position and the map's comments, and writes nothing into the game's memory except the map comments in the map editor when you press *Set as Author's Shader*. Whether a server or competition allows a `d3d11.dll` mod is not confirmed: check its rules. Details and the *Soft sun shadows* note: [maniaplanet/README.md](../maniaplanet/README.md#online-openplanet).
 
+## TrackMania Nations ESWC
+
+Only the unofficial patch *TrackMania Nations ESWC 1.80* (2021, `TmNationsESWC.exe`, reports 0.1.7.9). The original 2006 executable is not supported.
+
+- **Install:** close the game and run the setup, button **Install into another game folder**, and pick the folder with `TmNationsESWC.exe`. Or by hand: copy `TMVibrantShaders.dll` from the zip next to `TmNationsESWC.exe` and rename it to **`d3d9.dll`**. Other mods in the folder that use another name (a `dinput8.dll`, for example) stay as they are.
+- **Keys:** the same as in Nations Forever: `F8` menu, `F7` effects on or off, `F6` photo mode, `F12` capture.
+- **What works:** every look setting that works on the picture: light and shadows, sky, haze, bloom, colour, rain and snow, reflections, water, TAA, FXAA, sharpening, render scale, auto quality, presets per map type, photo mode and photos (with depth of field), F12 captures.
+- **What doesn't:** the mod sees only the game's cameras there, not the map, the race or the car. So no neon trail, car headlights, spray or splashes, no motion blur in replays, no video export settings, no resource packs, no *Misc* page, no real night or game moonlight, no long mesh shadows. The menu doesn't show these. Photo mode doesn't start with the free camera and keeps the game's HUD on screen (photos never have it).
+- **Files:** settings and presets are shared with Nations Forever in `Documents\TrackMania\TMVS\`. The log is `tmvs-eswc.log` there. Its first lines say whether the game was recognised (`engine: TrackMania Nations ESWC ...`).
+- **Uninstall:** delete `d3d9.dll` from the game folder, or run the setup and choose *Uninstall*.
+
 ## Updating
 
 With the ModLoader's update server: nothing to do, the ModLoader installs new versions itself (*Auto Update* in its settings).
