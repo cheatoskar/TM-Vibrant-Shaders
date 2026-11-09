@@ -514,6 +514,9 @@ bool g_beginMatrices = false;
 constexpr int kCameraDepth = 8;
 const void* g_cameraStack[kCameraDepth] = {};
 int g_cameraDepth = 0;
+// ESWC: see eswcProjectionDetour.
+const void* g_eswcOutsideProjection = nullptr; // computed outside every camera, since the last begin
+const void* g_eswcMainProjection = nullptr;    // the struct the main camera's projection goes into
 bool g_hideOverlay = false;      // skip the game's HUD and menus (photo mode)
 using FreeCamFn = void(__fastcall*)(void*, void*, int);
 FreeCamFn g_freeCamSet = nullptr;
@@ -2347,6 +2350,7 @@ void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* cle
     g_cameraDepth++;
     g_lastViewSet = g_lastProjectionSet = false;
     if (g_callbacks.cameraBegin) g_callbacks.cameraBegin(camera);
+    g_eswcOutsideProjection = nullptr; // ESWC: one computed before this begin belongs to this camera, not the next
     g_cameraBegin(self, edx, camera, clearDesc);
 }
 
@@ -2531,10 +2535,25 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
 using EswcProjectionFn = void(__fastcall*)(void*, void*, void*, const void*);
 EswcProjectionFn g_eswcProjection = nullptr;
 
+// The photo zoom never reached the main camera in ESWC (my test, 2026-11-09: no "photo zoom"
+// line in the log), so its projection may be computed before its begin, outside every camera.
+// The projection struct computed last outside a camera is taken as the main camera's when that
+// camera begins (setMainCamera); from then on the same struct counts as the main one.
+int g_eswcProjectionLogs = 0;
+
 void __fastcall eswcProjectionDetour(void* self, void* edx, void* projection, const void* frustum) {
     g_eswcProjection(self, edx, projection, frustum);
     const void* camera = renderingCamera();
-    adjustProjection(static_cast<float*>(projection), camera && camera == g_mainCamera, nullptr);
+    if (!camera) g_eswcOutsideProjection = projection;
+    const bool main = (camera && camera == g_mainCamera) || (projection && projection == g_eswcMainProjection);
+    const float* m = static_cast<const float*>(projection);
+    // Diagnosis: the first calls while zoomed, with what decided "main".
+    if (g_zoom > 1.0f && g_eswcProjectionLogs < 24) {
+        g_eswcProjectionLogs++;
+        TMVS_LOG("engine (eswc): projection %p frustum %p, camera %p (depth %d), main camera %p, main struct %p -> %s; m14 %.3f m27 %.3f", projection,
+                 frustum, camera, g_cameraDepth, g_mainCamera, g_eswcMainProjection, main ? "main" : "other", m[14], m[16 + 11]);
+    }
+    adjustProjection(static_cast<float*>(projection), main, nullptr);
 }
 
 int __fastcall eswcFrameBeginDetour(void* self, void* edx) {
@@ -3502,6 +3521,11 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 
 void setMainCamera(const void* camera) {
     g_mainCamera = camera;
+    if (g_eswc && g_eswcOutsideProjection && g_eswcOutsideProjection != g_eswcMainProjection) {
+        g_eswcMainProjection = g_eswcOutsideProjection;
+        static int s_logged = 0;
+        if (s_logged++ < 4) TMVS_LOG("engine (eswc): the main camera's projection is computed before its begin (struct %p)", g_eswcMainProjection);
+    }
 }
 
 bool eswc() {
