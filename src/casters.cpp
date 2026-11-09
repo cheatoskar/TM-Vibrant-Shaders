@@ -165,6 +165,8 @@ Stats g_stats;
 unsigned g_frameDraws = 0;           // draws handed over this frame
 unsigned g_stride = 1, g_phase = 0;  // this frame checks the draws whose index + phase is a multiple of stride
 bool g_paused = false;               // no pipeline wants the maps: nothing is checked
+float g_exclude[3] = {};             // excludeAround: meshes placed this close to it are not kept now
+float g_excludeRadius2 = 0.0f;       // its radius squared, 0 = none
 DWORD g_lastSweep = 0;
 DWORD g_lastLog = 0;
 bool g_firstLog = false;
@@ -1057,6 +1059,11 @@ void recordDraw(IDirect3DDevice9* device, D3DPRIMITIVETYPE type, INT base, UINT 
         g_stats.otherProjection++;
         return;
     }
+    // Near the car (excludeAround): not kept now, looked at again in a later turn.
+    if (g_excludeRadius2 > 0.0f) {
+        const double dx = w[3][0] - g_exclude[0], dy = w[3][1] - g_exclude[1], dz = w[3][2] - g_exclude[2];
+        if (dx * dx + dy * dy + dz * dz < g_excludeRadius2) return;
+    }
     IDirect3DVertexDeclaration9* decl = nullptr;
     device->GetVertexDeclaration(&decl);
     if (!decl) {
@@ -1443,6 +1450,15 @@ void frameDone() {
 
 void pauseRecording(bool paused) {
     g_paused = paused;
+}
+
+void excludeAround(const float* point, float radius) {
+    if (!point || radius <= 0.0f) {
+        g_excludeRadius2 = 0.0f;
+        return;
+    }
+    memcpy(g_exclude, point, sizeof(g_exclude));
+    g_excludeRadius2 = radius * radius;
 }
 
 void runtimeShaders(std::vector<gfx::ShaderSource>& out) {
