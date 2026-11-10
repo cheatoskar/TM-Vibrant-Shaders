@@ -2,10 +2,16 @@
 
 ## 1.5.0 (in testing)
 
-More of the mod in TrackMania Nations ESWC.
+TrackMania Nations ESWC gets the car and the race, and TrackMania 2 catches up with TrackMania Nations/United: photo zoom, hi-res photos, TAA jitter, "only in replays", Hide car and the Misc page.
 
-**New**
+**New (TrackMania Nations ESWC)**
 - **TrackMania Nations ESWC: the car and the race.** I read the race, your car and its speed from the game's own objects once a frame (only *Hide car* changes something there) and hook its map loads. That brings the *Neon trail*, *Car headlights* (also *Horror*), *Spray*, *Long mesh shadows*, *Hide car* in photo mode (the game's own visible bit of each car, and its shadow), and on the *Misc* page the split times, the Session panel and the finish effects (compared with your best; ESWC maps aren't on TMX). The trail starts over on a new map, starts a new run at the start line and a new line after a respawn. Motion blur and *Cinematic in replays only* are back: a replay you watch (or shoot as a video) and the replay editor count as watching, driving doesn't. Still not there: the video export (the game has its own, not hooked yet), water (its Stadium has none), the game's materials and light, the minimap. `tmvs-eswc.log` says what was found (`engine (eswc): ...`).
+
+**New (TrackMania 2)**
+- **Game camera** (Settings page, panel *ManiaPlanet*, off by default): photo zoom (`Shift`+wheel), hi-res photos (`Shift+F12`, tiles put together) and *TAA jitter*. I change the FovRect of the game's main camera, the engine's own way of zooming into a part of the view, so its projection, culling and shadows follow by themselves. This writes into the game's memory: not tested against ManiaPlanet's anti-cheat, so it stays off unless you switch it on. What the engine did is measured from its constants every frame (`gamecamera:` in `tmvs-mp.log`).
+- **Only in replays** now knows replays: depth of field and motion blur run in the replay editor (watching, editing, *Shoot video*) and in photo mode, not while driving.
+- **Hide car** in photo mode: the cars' draws are skipped, also their shadow-map draws.
+- **Misc page**: split times at each checkpoint against your best run on the map, the Session panel and finish effects (confetti, fireworks for a new best). Read from the game only, so fine online. Your best runs are kept in `Documents\ManiaPlanet\TMVS\splits.ini`. No minimap in TrackMania 2.
 
 ## 1.4.3 (in testing)
 

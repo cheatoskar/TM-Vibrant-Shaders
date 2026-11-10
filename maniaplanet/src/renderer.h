@@ -66,6 +66,8 @@ struct EngineView {
     double time = 0.0;                    // seconds (animated effects)
     bool photo = false;
     bool video = false;                   // the replay editor's Shoot video renders this frame (VideoExportBest)
+    bool replay = false;                  // the replay editor is open (game.cpp): a replay, not driving
+    float jitter[2] = {};                 // TAA jitter of this frame's projection (uv shift of the image)
     float focus[2] = {-1.0f, -1.0f};      // photo mode: the focus point clicked (uv), -1 = auto focus
 };
 

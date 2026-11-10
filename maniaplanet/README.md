@@ -57,10 +57,49 @@ knows (its normals, material colours, sun shadow maps, motion vectors and HDR im
 - **Author's Shaders:** a look stored in the map's comments is applied when the map loads; in the
   editor *Set as Author's Shader* writes it into the map (save the map to keep it).
 
-What ManiaPlanet can't do (yet): long-range shadows (the engine has its own shadow maps), TAA jitter, hi-res photos and zoom (they
-need the engine's projection), "only in replays" (replays aren't told from driving yet: with it on,
-depth of field and motion blur run in photo mode only), the TMNF mod's own water surface (waves,
-far reflections: TrackMania 2 keeps the engine's), grass detail.
+- **Game camera** (Settings page, panel *ManiaPlanet*; `GameCamera` in `maniaplanet.ini`, **off by
+  default**): photo zoom (`Shift`+wheel, `Shift`+middle click resets it), hi-res photos (`Shift+F12`,
+  2 x 2 to 4 x 4 tiles put together, the engine's exposure frozen at the first tile) and *TAA jitter*.
+  ManiaPlanet's camera (`CHmsCamera`) has a *FovRect*: where its whole field of view lands relative
+  to its *DrawRect*. The engine's frustum maps one onto the other, and its own tiled render uses
+  it the same way. So the mod sets a FovRect larger than the DrawRect (zoom), shifted (a tile) or
+  moved by a fraction of a pixel (jitter), and the engine computes the projection, the culling, the
+  shadow splits and every pass's constants from it. The camera is `CGameCtnApp::GameCamera` (0x2E8)
+  -> `SceneCamera` (0xF0) -> its `CHmsCamera` (0x48), each checked by class id; FovRect at 0x2F0, its
+  switch at 0x30C (the setters' code is checked first: another build leaves it off). What the engine
+  did is measured from its SceneV projection every frame: which way the FovRect's axes run is learnt
+  from it, a tile counts only once its projection is in, and TAA takes the jitter the projection
+  really has. **This writes into the game's memory** (five values of the camera; nothing else):
+  not tested against ManiaPlanet's anti-cheat. Off, nothing is written and zoom and hi-res photos
+  say they need it. The log: `gamecamera: the camera's FovRect found`, `gamecamera: main camera
+  ..., DrawRect ...`, `gamecamera: the engine's projection now: scale ..., offset ...`,
+  `gamecamera: the FovRect's x runs the other way ... turned` (once, if so),
+  `photo: hi-res photo of N tiles put together`, `cinema: TAA takes the projection's jitter`.
+- **Only in replays** (`CinematicOnlyInReplays`): the replay editor (`CGameCtnMediaTracker` in the
+  app's Editor slot: watching, editing or exporting a replay) counts as a replay, read from the game
+  every frame. The log says what the game has open (`game: editor class ..., playground class ...`).
+- **Hide car** (photo mode): the cars' draws are skipped by their shaders (`Tech3/CarSkin_*`,
+  `CarDetails_*`, `CarGlass_*`, the Techno3 car materials), and the shadow-map draws
+  (`Engines/ZOnly`) that bind a car's vertex constants. Every car, ghosts too (as in TMNF). The log:
+  `hooks: Hide car: the cars' draws skipped`, `hooks: Hide car: a shadow draw with a car's vertex
+  constants skipped`.
+- **Misc page**: split times at each checkpoint against your best run on the map (blue faster, red
+  slower, the newest gap big for 3 s), the Session panel (runs, finishes, best, last, average, your
+  best, your best sectors added up) and finish effects (confetti; *Big*: fireworks for a new best).
+  The run is read from the game: `CurrentPlayground` -> `GameTerminals[0]` -> `ControlledPlayer`
+  (`CTrackManiaPlayer`): its race state (0x2D0), the race's checkpoint times (0x460), respawns,
+  the HUD's speed. Your best runs are in `splits.ini` (per map: name and author). Only reads, so
+  allowed online (TMX allows split times). The log: `splits: map ...`, `splits: your run: read` (or
+  where reading stopped, with the class there), `splits: finish ...`.
+
+What ManiaPlanet can't do: long-range shadows (not needed: the engine's sun shadows cover the whole
+map, five splits near the camera and two static shadow maps of the whole map), the TMNF mod's own
+water surface (waves, far reflections: TrackMania 2 keeps the engine's surface; replacing it would
+mean replacing the engine's water shader), grass detail (TMNF's draws the grass again with its own
+geometry; TrackMania 2's grass is the engine's), the minimap (TMX allows it only in the replay editor
+and the video export, and the mod would have to read the map's blocks from the game), resource packs
+(ManiaPlanet has its own mod system, set per map and in the game's options; switching it from the
+mod would need hooks in its loading code), *Auto photo mode* with the free camera (not found yet).
 
 ## Install
 
@@ -84,6 +123,8 @@ the launcher starts `ManiaPlanet32.exe`, switch the launcher to 64-bit.
 | F5 | Effects off/on (compare with the game's own image; TMNF: F7, which is ManiaPlanet's friends list) |
 | F12 | Capture one frame (for bug reports and development); in photo mode: a photo (PNG) |
 | F6 | Photo mode: no interface, full quality, depth of field on a clicked point |
+| Shift+F12 | Photo mode: a hi-res photo (needs *Game camera*) |
+| Shift+wheel / Shift+middle click | Photo mode: zoom / zoom off (needs *Game camera*) |
 | Shift+F6 / Ctrl+Shift+wheel | Photo mode: compare split (the game's own image or a preset on one side) / move its line |
 
 | Middle click / Ctrl+middle click / Ctrl+wheel | Photo mode: focus here / no focus / aperture |
@@ -166,8 +207,13 @@ The log (`tmvs-mp.log`), LUTs (`luts\*.cube`) and captures are in `Documents\Man
 ## Online, Openplanet
 
 - The mod changes the picture. From the game it reads the camera, the sun and the car's position,
-  axes and wheels (from the constants the engine draws with) and the map's comments (for Author's Shaders). It
-  writes only the comments of the map open in the editor, when you click *Set as Author's Shader*.
+  axes and wheels (from the constants the engine draws with), the map's comments (for Author's Shaders),
+  whether the replay editor is open, and your run (checkpoint times, race state, respawns, speed) for
+  the split times. It writes only the comments of the map open in the editor, when you click *Set as
+  Author's Shader*, and, with *Game camera* on (off by default), the main camera's FovRect (photo
+  zoom, hi-res photos, TAA jitter; every frame while TAA jitter is on, also in a race online).
+- *Game camera* writes into the game's memory: whether ManiaPlanet's anti-cheat minds that is not
+  known. Leave it off online unless you know it is fine where you play. Hide car only skips draws.
 - Whether servers or competitions allow a `d3d11.dll` mod is not confirmed. Check the rules of where you play.
 - *Soft sun shadows* (on by default, 1°) draws the engine's sun shadow pass with the mod's own shader.
   Nothing in the game's memory changes, but whether the anti-cheat minds a replaced shader is not known.
@@ -382,6 +428,9 @@ It checks that:
 | `src/effects_water.cpp`, `shaders/weather.hlsl` | Water splash: the surface near the car, the splash |
 | `src/softshadow.cpp`, `shaders/softshadow*.hlsl*` | Soft sun shadows: the engine's shadow variants, the swap at its draw, the PCSS shader |
 | `tools/shadowtest.cpp` | Offline test of the soft shadows against the engine's shadow shader |
+| `src/game.cpp` | ManiaPlanet's objects (app, class checks), the replay editor, your run, the map's name |
+| `src/gamecamera.cpp` | Game camera: the main camera's FovRect (zoom, hi-res tiles, TAA jitter) and what the engine did with it |
+| `src/splits11.cpp` | Misc page: split times, Session panel, finish effects |
 | `src/overlay.cpp` | F8 menu (ImGui, DX11) |
 | `src/capture.cpp` | Frame capture (trace, DDS/BMP) |
 | `src/settings.cpp` | Presets and `settings.ini` |

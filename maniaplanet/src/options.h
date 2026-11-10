@@ -38,6 +38,16 @@ struct Options {
     // The frame rate of the replay editor's Shoot video, for the effects' clock while it renders
     // (VideoExportBest, hooks.cpp). The game doesn't tell it on the D3D11 side: set it to match.
     float videoFps = 30.0f;
+    // Photo zoom, hi-res photos and TAA jitter through the game's main camera (gamecamera.cpp): the
+    // mod writes the camera's FovRect into the game's memory. Off by default: whether ManiaPlanet's
+    // anti-cheat minds that is not known.
+    bool gameCamera = false;
+    // The Misc page ([Misc] in maniaplanet.ini, splits11.cpp): split times at each checkpoint
+    // against your best run on the map, the Session panel under them, and an effect at the finish
+    // (0 off, 1 subtle, 2 big: fireworks for a new best). Read from the game's memory only.
+    bool splits = false;
+    bool session = true;
+    int finishEffect = 0;
 };
 
 namespace options {

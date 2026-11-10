@@ -89,7 +89,8 @@ struct Host {
     std::function<void()> photoOn;
     // TrackMania Nations/United: photo mode can leave the cars out (the *Hide car* switch).
     bool photoHideCar = false;
-    // ... and its replay editor's panels (the *Hide editor* switch; false: TM Nations ESWC).
+    // ... and its replay editor's panels (the *Hide editor* switch; false: TM Nations ESWC and
+    // TrackMania 2, whose replay editor the mod doesn't hide).
     bool photoHideEditor = true;
     // Photo mode starts with the game's free camera and hides the game's HUD (false: TM Nations
     // ESWC, which has neither hook: no *Auto photo mode* and *Hide HUD* switches).

@@ -48,6 +48,8 @@ const Stats& stats();
 Effects* effects();
 // What auto quality turned off right now (null: nothing).
 const char* autoQualityReduced();
+// The replay editor's Shoot video is rendering (VideoExportBest's detection).
+bool videoExport();
 
 } // namespace hooks
 } // namespace tmvs_mp
