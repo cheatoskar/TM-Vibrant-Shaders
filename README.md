@@ -24,6 +24,10 @@ A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (Trac
 
 ![TrackMania 2 Stadium, photo mode's compare split: left the game, right with the mod and the black hole sky](docs/images/tm2-black-hole-split.jpg)
 
+**New in the 1.4.3 pre-release: TrackMania Nations ESWC** (experimental). The same DLL as `d3d9.dll` next to the unofficial 1.80 patch's `TmNationsESWC.exe`: the look, photo mode and captures. Details in [docs/install.md](docs/install.md#trackmania-nations-eswc).
+
+![TrackMania Nations ESWC, photo mode's compare split: left the game, right Golden Hour](docs/images/eswc-golden-hour-split.jpg)
+
 ---
 
 ## Install
