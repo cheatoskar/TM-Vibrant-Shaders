@@ -1,0 +1,60 @@
+#pragma once
+#include <d3d9.h>
+#include <string>
+
+// Instant replay clips ("TM Clips"): the game is encoded into a buffer in memory all the time, and a
+// run (its start minus a few seconds to its finish plus a few) is saved as an MP4 with the game's
+// sound right after the finish, or the last seconds on a key. Nothing is rendered again, no replay is
+// saved, nothing in the game is changed.
+//
+// One code base, two hosts:
+//  - TM Vibrant Shaders (Host::Tmvs): its Present calls present(), its menu shows the settings
+//    (Video page), its overlay draws the message. With "Without HUD" the picture is the scene it
+//    shaded before the HUD (sceneDone()).
+//  - TM Clips, the standalone mod (Host::Standalone, src/clips/standalone): its own Present hook and
+//    a small window of its own.
+// Both installed: TM Vibrant Shaders records, TM Clips stays idle, whichever loads first. TM Vibrant
+// Shaders holds the named mutex Local\TMClips_Host_<pid> (made in boot()); TM Clips looks for it
+// before it hooks anything and every 2 s while it runs, and goes idle when it is there. Each says in
+// its log who records.
+//
+// Not yet: TrackMania Nations ESWC (its race isn't read, clips.cpp's reads find no known build there:
+// only the save key works; its race and map need the old engine's offsets, see race.h) and
+// TrackMania 2 (maniaplanet/: a D3D11 grabber, the race from ManiaPlanet's app, the menu's host).
+namespace tmshaders {
+namespace clips {
+
+enum class Host { Tmvs, Standalone };
+
+void boot(Host host);
+// The standalone: TM Vibrant Shaders (with clips) runs in this process.
+bool tmvsRecords();
+// The standalone found TM Vibrant Shaders and stays idle (stopped recording).
+bool idle();
+
+// Every Present, on the device's thread, before anything of the host's own is drawn over the game
+// (menus, messages): this is the picture that is recorded.
+void present(IDirect3DDevice9* device);
+// TM Vibrant Shaders: the scene is shaded, the HUD not drawn yet (with "Without HUD" the picture is
+// taken here).
+bool wantsScene();
+void sceneDone(IDirect3DDevice9* device, IDirect3DSurface9* target);
+// The host's video export runs: no recording meanwhile.
+void setPaused(bool paused);
+void setInternalCalls(void (*begin)(), void (*end)());
+
+void preReset();
+void postReset();
+// At the end (not at process exit: the threads are gone then).
+void shutdown();
+
+// The UI, between ImGui::NewFrame and Render. drawPanel: the settings and the last clips.
+void drawPanel();
+// The "Clip saved" message (fades): drawn when toastActive().
+bool toastActive();
+void drawToast();
+// The standalone's window key (settings: MenuKey).
+std::string menuKey();
+
+} // namespace clips
+} // namespace tmshaders

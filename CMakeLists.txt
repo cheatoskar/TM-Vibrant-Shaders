@@ -184,6 +184,85 @@ add_library(tm_vibrant_shaders SHARED
 )
 target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm shell32 winhttp)
 
+# Instant replay clips (src/clips, see clips.h): built into TM Vibrant Shaders and into the standalone
+# TM Clips (TMClips.dll, below). Its two NV12 passes are compiled at build time like the pipeline's.
+set(TMCLIPS_VERSION "0.1.0")
+set(TMCLIPS_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/clips.hlsl")
+set(TMCLIPS_SHADER_HEADERS)
+foreach(entry PS_ClipLuma PS_ClipChroma)
+  set(out "${TMVS_SHADER_OUT}/${entry}.h")
+  add_custom_command(
+    OUTPUT "${out}"
+    COMMAND "${TMVS_FXC}" /nologo /O3 /T ps_3_0 /E ${entry} /Vn g_${entry} /Fh "${out}" "${TMCLIPS_SHADER}"
+    DEPENDS "${TMCLIPS_SHADER}"
+    COMMENT "fxc ${entry}"
+    VERBATIM)
+  list(APPEND TMCLIPS_SHADER_HEADERS "${out}")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/clips_shaders.h.in"
+  "#pragma once\n#include <windows.h>\n#include \"shaders/PS_ClipLuma.h\"\n#include \"shaders/PS_ClipChroma.h\"\n")
+configure_file("${CMAKE_CURRENT_BINARY_DIR}/clips_shaders.h.in" "${CMAKE_CURRENT_BINARY_DIR}/clips_shaders.h" COPYONLY)
+add_library(tmvs_clips STATIC
+  src/clips/settings.cpp
+  src/clips/race.cpp
+  src/clips/ring.cpp
+  src/clips/encoder.cpp
+  src/clips/mftencoder.cpp
+  src/clips/recorder.cpp
+  src/clips/grabber.cpp
+  src/clips/clips.cpp
+  ${TMCLIPS_SHADER_HEADERS})
+target_include_directories(tmvs_clips PRIVATE ${imgui_SOURCE_DIR})
+target_link_libraries(tmvs_clips PUBLIC tmvs_core)
+target_compile_options(tmvs_clips PRIVATE ${TMVS_OPTIONS})
+target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_clips)
+
+# TM Clips, the standalone mod for the ModLoader (TMClips.dll): the clips with a Present hook and a
+# small window of its own; idle when TM Vibrant Shaders runs in the same game.
+string(REGEX MATCHALL "[0-9]+" TMCLIPS_VERSION_PARTS "${TMCLIPS_VERSION}")
+list(GET TMCLIPS_VERSION_PARTS 0 TMCLIPS_V0)
+list(GET TMCLIPS_VERSION_PARTS 1 TMCLIPS_V1)
+list(GET TMCLIPS_VERSION_PARTS 2 TMCLIPS_V2)
+configure_file(src/clips/standalone/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/clips_version.rc" @ONLY)
+add_library(tm_clips SHARED
+  src/clips/standalone/standalone.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/clips_version.rc"
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp)
+target_include_directories(tm_clips PRIVATE ${imgui_SOURCE_DIR})
+target_compile_definitions(tm_clips PRIVATE TMCLIPS_VERSION="${TMCLIPS_VERSION}")
+target_compile_options(tm_clips PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
+target_link_libraries(tm_clips PRIVATE tmvs_clips tmvs_core shell32)
+set_target_properties(tm_clips PROPERTIES OUTPUT_NAME "TMClips" PREFIX "")
+
+# Clips test: the run tracker, the buffer's cuts, the encoders (NVENC, Media Foundation) and the MP4
+# of a synthetic run with a tone; --device: the NV12 passes on a D3D9 device (development tool).
+add_executable(tmvs_clipstest tools/clipstest.cpp)
+target_link_libraries(tmvs_clipstest PRIVATE tmvs_clips tmvs_core winmm)
+target_compile_options(tmvs_clipstest PRIVATE ${TMVS_OPTIONS})
+
+# The standalone's ModLoader folder: cmake --build build --config Release --target clips_zip
+#   dist/TM-Clips.zip: TM Clips/description.yaml, TM Clips/<version>/description.yaml + TMClips.dll, README.txt
+set(TMCLIPS_STAGE "${CMAKE_CURRENT_BINARY_DIR}/package-clips")
+set(TMCLIPS_STAGE_PRODUCT "${TMCLIPS_STAGE}/TM Clips")
+add_custom_target(clips_zip
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${TMCLIPS_STAGE}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${TMCLIPS_STAGE_PRODUCT}/${TMCLIPS_VERSION}" "${CMAKE_CURRENT_SOURCE_DIR}/dist"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/clips/description.yaml" "${TMCLIPS_STAGE_PRODUCT}/description.yaml"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/clips/version.yaml" "${TMCLIPS_STAGE_PRODUCT}/${TMCLIPS_VERSION}/description.yaml"
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tm_clips> "${TMCLIPS_STAGE_PRODUCT}/${TMCLIPS_VERSION}/"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/clips/README.txt" "${TMCLIPS_STAGE}/README.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${TMCLIPS_STAGE}/LICENSE.txt"
+  COMMAND ${CMAKE_COMMAND} -E chdir "${TMCLIPS_STAGE}"
+          ${CMAKE_COMMAND} -E tar cf "${CMAKE_CURRENT_SOURCE_DIR}/dist/TM-Clips.zip" --format=zip "TM Clips" "README.txt" "LICENSE.txt"
+  DEPENDS tm_clips
+  COMMENT "Packaging dist/TM-Clips.zip"
+  VERBATIM)
+
 # The Misc page's tools (src/misc, see its README.md): the minimap, split times against your best and
 # a replay, finish effects. OFF removes them all: no page, no overlays, no downloads.
 option(TMVS_MISC_TOOLS "Build the Misc page (minimap, split times, finish effects)" ON)

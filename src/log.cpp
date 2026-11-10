@@ -14,8 +14,14 @@ FILE* g_file = nullptr;
 
 } // namespace
 
+std::wstring g_dataDirOverride; // setDataDir: the standalone clips mod's own folder
+
 const std::wstring& dataDir() {
     static std::wstring dir = [] {
+        if (!g_dataDirOverride.empty()) {
+            CreateDirectoryW(g_dataDirOverride.c_str(), nullptr);
+            return g_dataDirOverride;
+        }
         WCHAR docs[MAX_PATH] = {};
         std::wstring path;
         if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, 0, docs))) {
@@ -32,6 +38,10 @@ const std::wstring& dataDir() {
 }
 
 std::wstring g_fileName = L"tmvs.log";
+
+void setDataDir(const std::wstring& dir) {
+    g_dataDirOverride = dir;
+}
 
 void setFileName(const wchar_t* name) {
     std::lock_guard<std::mutex> lock(g_mutex);

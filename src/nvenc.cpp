@@ -547,7 +547,7 @@ bool Session::open(const Options& o, double cq, int qp, double maxRate, std::str
         num = static_cast<UINT32>(std::lround(o.fps * 1000.0));
         den = 1000;
     }
-    const uint32_t gop = static_cast<uint32_t>(std::max(1L, std::lround(o.fps * 2.0)));
+    const uint32_t gop = static_cast<uint32_t>(std::max(1L, std::lround(o.fps * (o.gopSeconds > 0.0 ? o.gopSeconds : 2.0))));
     if (m->hdr) {
         // BT.2020 primaries and D65 in 0.00002 steps, the peak and 0.005 nits in 0.0001 steps.
         m->mastering.g = {8500, 39850};
