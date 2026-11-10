@@ -1,5 +1,6 @@
 // Clips test (src/clips): the run tracker (start, respawn, restart, finish), the buffer's cuts (key
-// frames, the sound), the file names, then a synthetic run through each encoder this PC has (NVENC,
+// frames, the sound in chunks against the old cut), the memory limit, key frames from the bitstream,
+// the file names, the recorder's stop (never waits), then a synthetic run through each encoder this PC has (NVENC,
 // the graphics card's Media Foundation encoder, and with --software Windows' own) into an MP4 with a
 // tone: 20 s at 60 fps, the run from 5 s to 15 s, cut 3 s before and after. The file is checked with
 // ffprobe when it is on the PATH (duration, streams, size), else by its MP4 boxes. --device: the NV12
@@ -12,6 +13,7 @@
 #include "clips/race.h"
 #include "clips/recorder.h"
 #include "clips/ring.h"
+#include "clips/settings.h"
 #include "videoencoder.h"
 #include <windows.h>
 #include <mmreg.h>
@@ -21,6 +23,8 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -37,9 +41,7 @@ void check(bool ok, const char* what) {
 }
 
 std::string narrow(const std::wstring& w) {
-    char out[1024] = {};
-    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, out, sizeof(out), nullptr, nullptr);
-    return out;
+    return utf8(w);
 }
 
 // --- The run tracker --------------------------------------------------------------------------
@@ -101,9 +103,10 @@ void testTracker() {
     q.time = 2000;
     p.update(21.0, q);
     check(std::fabs(p.runStart() - 9.0) < 1e-6, "pause: run start unchanged");
-    // The map is left mid-run, a new map's run starts: not a restart.
+    // The map is left mid-run (two reads without a race), a new map's run starts: not a restart.
     RaceSample none;
     p.update(22.0, none);
+    p.update(22.01, none);
     int race2 = 0;
     q.race = &race2;
     q.startClock = 7;
@@ -115,6 +118,33 @@ void testTracker() {
     RaceSample done = s;
     e = f.update(1.0, done);
     check(e.kind == RunEvent::None, "a run first seen finished gives no event");
+    // One read without a race right at the finish (the time read out of range for a frame): the
+    // finish still counts.
+    RunTracker g;
+    RaceSample r = s;
+    r.finished = false;
+    r.startClock = 9;
+    r.time = 20;
+    e = g.update(50.02, r);
+    check(e.kind == RunEvent::Start, "transient: run started");
+    r.time = 30000;
+    g.update(80.0, r);
+    g.update(80.016, none);
+    r.finished = true;
+    r.time = 30020;
+    e = g.update(80.033, r);
+    check(e.kind == RunEvent::Finish && e.raceTime == 30020 && std::fabs(e.runStart - 50.0) < 1e-6, "one invalid read doesn't lose the finish");
+    // Two in a row do end the run: a finish seen after that has no start, no event.
+    RunTracker h;
+    r.finished = false;
+    r.time = 20;
+    h.update(50.02, r);
+    h.update(60.0, none);
+    h.update(60.016, none);
+    r.finished = true;
+    r.time = 10000;
+    e = h.update(60.033, r);
+    check(e.kind == RunEvent::None, "two invalid reads end the run");
 }
 
 void testNames() {
@@ -126,6 +156,72 @@ void testNames() {
     check(fileSafe("") == "Clip", "empty name");
     check(formatTime(42370) == "0:42.37", "0:42.37");
     check(formatTime(3723450) == "1:02:03.45", "1:02:03.45");
+    // Two saves in the same second: names handed out are taken until their save reports
+    // (clips.cpp's clipPath keeps them in a set), so the second gets " (2)".
+    std::set<std::wstring> reserved;
+    auto taken = [&](const std::wstring& p) { return reserved.count(p) > 0; };
+    const std::wstring dir = L"C:\\Clips";
+    const std::wstring a = uniqueClipPath(dir, L"A01_2026-11-10_12-00-00", taken);
+    reserved.insert(a);
+    const std::wstring b = uniqueClipPath(dir, L"A01_2026-11-10_12-00-00", taken);
+    reserved.insert(b);
+    const std::wstring c = uniqueClipPath(dir, L"A01_2026-11-10_12-00-00", taken);
+    check(a == dir + L"\\A01_2026-11-10_12-00-00.mp4" && b == dir + L"\\A01_2026-11-10_12-00-00 (2).mp4" &&
+              c == dir + L"\\A01_2026-11-10_12-00-00 (3).mp4",
+          "same second: (2), (3)");
+    reserved.erase(a); // its save reported
+    check(uniqueClipPath(dir, L"A01_2026-11-10_12-00-00", taken) == a, "a name is free again once its save reported");
+    // Long names: the temporary .part.mp4 of the longest name still under MAX_PATH.
+    const std::wstring longDir(200, L'd');
+    std::wstring longName(100, L'n');
+    const size_t room = MAX_PATH - 1 - longDir.size() - 1 - clipNameReserve();
+    longName[room - 1] = 0xD83D; // a surrogate pair across the cut
+    longName[room] = 0xDE00;
+    const std::wstring fitted = fitName(longName, room);
+    check(fitted.size() <= room && fitted.back() != 0xD83D, "name cut to fit, not inside a surrogate pair");
+    const std::wstring worst = longDir + L"\\" + fitted + L" (999).part.mp4";
+    check(worst.size() < MAX_PATH, "the temporary file's path stays under MAX_PATH");
+    // Dynamic text conversion (no fixed buffers).
+    const std::wstring wideText(3000, L'\x00e9');
+    check(utf8(wideText).size() == 6000 && utf16(utf8(wideText)) == wideText, "UTF-8 / UTF-16 of 3000 characters");
+}
+
+// --- The memory limit ---------------------------------------------------------------------------
+
+void testMemory() {
+    printf("memory\n");
+    bool fits = true;
+    for (int bitrate = 2; bitrate <= 80; bitrate++) {
+        for (int sound = 0; sound < 2; sound++) {
+            const int most = maxBufferSeconds(bitrate, sound != 0);
+            const size_t total = videoLimit(bitrate * 1e6, most) + (sound ? soundBytes(most) : 0);
+            if (most > 10 && total > kMemoryLimit) fits = false;
+            // One second more would not fit (the longest that fits, not less).
+            const size_t more = videoLimit(bitrate * 1e6, most + 1) + (sound ? soundBytes(most + 1) : 0);
+            if (most > 10 && more <= kMemoryLimit) fits = false;
+        }
+    }
+    check(fits, "the longest buffer fits the limit at every bitrate (2..80 Mbit/s)");
+    Settings s;
+    s.bitrate = 50;
+    s.bufferSeconds = 300;
+    s.keySeconds = 120;
+    const bool clamped = clampBuffer(s);
+    char what[160];
+    snprintf(what, sizeof(what), "50 Mbit/s x 300 s shortened to %d s (%.0f MB)", s.bufferSeconds,
+             (videoLimit(50e6, s.bufferSeconds) + soundBytes(s.bufferSeconds)) / 1048576.0);
+    check(clamped && s.bufferSeconds < 300 && videoLimit(50e6, s.bufferSeconds) + soundBytes(s.bufferSeconds) <= kMemoryLimit &&
+              s.keySeconds <= s.bufferSeconds,
+          what);
+    Settings defaults;
+    check(!clampBuffer(defaults) && defaults.bufferSeconds == 60, "the default (60 s, 12 Mbit/s) stays");
+    Settings ini;
+    ini.bitrate = 80;
+    ini.bufferSeconds = 600;
+    clampBuffer(ini);
+    check(videoLimit(80e6, ini.bufferSeconds) + soundBytes(ini.bufferSeconds) <= kMemoryLimit, "clips.ini's most (80 Mbit/s, 600 s) clamped too");
+    // The sound's circle is chunks, about what soundBytes says.
+    check(SoundRing::bytesFor(kSoundRate, kSoundChannels, 310.0) <= soundBytes(300) + SoundRing::kChunkFrames * 4, "the sound's chunks");
 }
 
 // --- The buffer -------------------------------------------------------------------------------
@@ -173,6 +269,130 @@ void testRing() {
     check(frames == 48000 && cut[100] == 0, "sound no longer kept is silence");
     cut = s.cut(1000000000 + 95000000, 1000000000 + 105000000, frames); // 9.5..10.5 s: half there
     check(frames == 48000 && cut[2 * 100] != 0 && cut[2 * 47000] == 0, "sound after the end is silence");
+    // An encoder that marks no key frame: the byte limit holds anyway (it grew without end).
+    PictureRing none;
+    none.setLimits(10.0, 100 * 1000);
+    for (int i = 0; i < 5000; i++) none.push({i * frame, false, bytes(1000)});
+    check(none.bytes() <= 100 * 1000 && none.count() > 0, "no key frames: the byte limit holds");
+    PictureRing one;
+    one.setLimits(10.0, 100 * 1000);
+    for (int i = 0; i < 5000; i++) one.push({i * frame, i == 0, bytes(1000)});
+    check(one.bytes() <= 100 * 1000, "one key frame only: the byte limit holds");
+}
+
+// The sound's cut as it was before the chunks (one circle, a % per frame): what the chunks' copies
+// must give, sample for sample.
+struct OldSound {
+    int channels = 2;
+    int64_t start = 0;
+    uint64_t total = 0, capacity = 0;
+    int rate = 48000;
+    std::vector<int16_t> data;
+    void push(const int16_t* samples, size_t frames) {
+        for (size_t i = 0; i < frames; i++) {
+            const size_t at = static_cast<size_t>((total + i) % capacity) * channels;
+            for (int c = 0; c < channels; c++) data[at + c] = samples[i * channels + c];
+        }
+        total += frames;
+    }
+    std::vector<int16_t> cut(int64_t from, int64_t to, size_t& frames) const {
+        frames = to > from ? static_cast<size_t>((to - from) * rate / 10000000) : 0;
+        std::vector<int16_t> out(frames * channels, 0);
+        if (!capacity || !frames) return out;
+        const uint64_t kept = std::min<uint64_t>(total, capacity);
+        const uint64_t firstKept = total - kept;
+        const int64_t first = from >= start ? static_cast<int64_t>((from - start) * rate / 10000000) : -static_cast<int64_t>((start - from) * rate / 10000000);
+        for (size_t i = 0; i < frames; i++) {
+            const int64_t n = first + static_cast<int64_t>(i);
+            if (n < static_cast<int64_t>(firstKept) || n >= static_cast<int64_t>(total)) continue;
+            const size_t at = static_cast<size_t>(static_cast<uint64_t>(n) % capacity) * channels;
+            for (int c = 0; c < channels; c++) out[i * channels + c] = data[at + c];
+        }
+        return out;
+    }
+};
+
+void testSoundChunks() {
+    printf("sound in chunks\n");
+    const int64_t start = 7000000000;
+    SoundRing ring;
+    ring.reset(48000, 2, 5.0, start);
+    OldSound old;
+    old.start = start;
+    old.capacity = ring.capacity();
+    old.data.assign(static_cast<size_t>(old.capacity) * 2, 0);
+    check(ring.capacity() >= 5 * 48000 && ring.capacity() % SoundRing::kChunkFrames == 0, "whole chunks, at least the length asked");
+    // 17 s in odd pieces (as the capture hands them over): the circle wraps three times.
+    std::mt19937 random(12345);
+    std::vector<int16_t> piece;
+    uint64_t pushed = 0;
+    while (pushed < 17 * 48000) {
+        const size_t n = 1 + random() % 5000;
+        piece.resize(n * 2);
+        for (size_t i = 0; i < n; i++) {
+            piece[i * 2] = static_cast<int16_t>((pushed + i) & 0x7fff);
+            piece[i * 2 + 1] = static_cast<int16_t>(~(pushed + i) & 0x7fff);
+        }
+        ring.push(piece.data(), n);
+        old.push(piece.data(), n);
+        pushed += n;
+    }
+    bool same = true;
+    int worstCopies = 0;
+    size_t worstFrames = 0;
+    for (int k = 0; k < 400 && same; k++) {
+        // Spans before the stream, across the wrap, past the end, short and long.
+        const int64_t from = start + static_cast<int64_t>(random() % 200000000) - 10000000;
+        const int64_t to = from + static_cast<int64_t>(random() % 80000000);
+        size_t a = 0, b = 0;
+        const std::vector<int16_t> mine = ring.cut(from, to, a);
+        const std::vector<int16_t> theirs = old.cut(from, to, b);
+        if (a != b || mine != theirs) same = false;
+        int copies = 0;
+        SoundRing::copy(ring.span(from, to), &copies);
+        if (copies > worstCopies) {
+            worstCopies = copies;
+            worstFrames = a;
+        }
+    }
+    check(same, "chunked cut = the old cut, 400 spans (before the start, across the wrap, past the end)");
+    char what[160];
+    snprintf(what, sizeof(what), "one memcpy per chunk touched (at most %d for %zu frames)", worstCopies, worstFrames);
+    check(worstCopies <= static_cast<int>(worstFrames / SoundRing::kChunkFrames) + 2, what);
+    // The span holds its chunks: the ring freed meanwhile, the copy still reads them.
+    const int64_t lastSecond = start + static_cast<int64_t>(pushed * 10000000 / 48000) - 10000000;
+    SoundRing::Span held = ring.span(lastSecond, lastSecond + 5000000);
+    size_t frames = 0;
+    const std::vector<int16_t> before = ring.cut(lastSecond, lastSecond + 5000000, frames);
+    ring.clear();
+    check(SoundRing::copy(held) == before && ring.bytes() == 0, "a span outlives the ring's clear()");
+    // The margin: frames the capture writes over next count as gone.
+    SoundRing m;
+    m.reset(48000, 2, 2.0, 0);
+    std::vector<int16_t> ones(48000 * 2, 1);
+    for (int i = 0; i < 4; i++) m.push(ones.data(), 48000);
+    const uint64_t oldestKept = m.total() - m.capacity();
+    const int64_t oldestTime = m.timeOf(oldestKept);
+    const std::vector<int16_t> withMargin = SoundRing::copy(m.span(oldestTime, oldestTime + 10000000, 24000));
+    check(withMargin.size() == 48000 * 2 && withMargin[0] == 0 && withMargin[2 * 23990] == 0 && withMargin[2 * 24010] == 1,
+          "the margin's frames are silence, the rest is there");
+}
+
+// --- Key frames from the bitstream -----------------------------------------------------------------
+
+void testNal() {
+    printf("key frames from the bitstream\n");
+    const std::vector<uint8_t> idr = {0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28, 0xac, 0, 0, 0, 1, 0x68, 0xee, 0x3c, 0x80, 0, 0, 1, 0x65, 0x88, 0x84, 0x00, 0x10};
+    const std::vector<uint8_t> p = {0, 0, 0, 1, 0x41, 0x9a, 0x02, 0x04, 0x10};
+    const std::vector<uint8_t> seiIdr = {0, 0, 0, 1, 0x09, 0x10, 0, 0, 1, 0x06, 0x05, 0x01, 0x80, 0, 0, 1, 0x25, 0x88, 0x80}; // nal_ref_idc 1
+    const std::vector<uint8_t> audP = {0, 0, 0, 1, 0x09, 0x30, 0, 0, 1, 0x01, 0x9a, 0x02};
+    check(hasIdr(idr.data(), idr.size()), "SPS, PPS, IDR: a key frame");
+    check(!hasIdr(p.data(), p.size()), "a P slice: no key frame");
+    check(hasIdr(seiIdr.data(), seiIdr.size()), "AUD, SEI, IDR: a key frame");
+    check(!hasIdr(audP.data(), audP.size()), "AUD, non-reference slice: no key frame");
+    check(!hasIdr(nullptr, 0) && !hasIdr(idr.data(), 3), "nothing / cut short: no key frame");
+    const std::vector<uint8_t> sets = parameterSets(idr.data(), idr.size());
+    check(sets.size() == 17 && sets[4] == 0x67 && sets[13] == 0x68, "the parameter sets of a key frame");
 }
 
 // --- Encoders and the MP4 ---------------------------------------------------------------------
@@ -318,7 +538,7 @@ void testEncoder(const char* label, std::unique_ptr<PictureEncoder> enc, const s
     std::vector<int64_t> times;
     std::vector<uint8_t> header;
     double encodeMs = 0.0, worst = 0.0;
-    int encoded = 0, keys = 0;
+    int encoded = 0, keys = 0, keysAgree = 0;
     const int64_t origin = 50000000000; // an arbitrary clock
     const PictureSink sink = [&](const EncodedPicture& p) {
         Picture pic;
@@ -326,6 +546,7 @@ void testEncoder(const char* label, std::unique_ptr<PictureEncoder> enc, const s
         pic.key = p.key;
         pic.data = std::make_shared<const std::vector<uint8_t>>(p.data, p.data + p.size);
         if (p.key) keys++;
+        if (hasIdr(p.data, p.size) == p.key) keysAgree++;
         if (header.empty() && p.key) header = parameterSets(p.data, p.size);
         ring.push(pic);
         encoded++;
@@ -355,6 +576,7 @@ void testEncoder(const char* label, std::unique_ptr<PictureEncoder> enc, const s
            ring.bytes() / 1048576.0);
     check(encoded == n, "a picture for every frame");
     check(keys >= 19 && keys <= 22, "a key frame every second");
+    check(keysAgree == encoded, "the bitstream's IDR slices are exactly the pictures marked key");
     check(!header.empty(), "parameter sets found");
     // The tone.
     SoundRing sound;
@@ -403,6 +625,86 @@ void testEncoder(const char* label, std::unique_ptr<PictureEncoder> enc, const s
     check(ok, ok ? "MP4 written" : ("MP4 written: " + error).c_str());
     if (ok) checkFile(path, 16.0, true, w, h);
     if (ok && !keep) DeleteFileW(path.c_str());
+}
+
+// --- The recorder's stop: never waits ----------------------------------------------------------
+
+bool waitRunning(Recorder& rec) {
+    for (int i = 0; i < 500 && rec.state() == Recorder::State::Starting; i++) Sleep(10);
+    return rec.state() == Recorder::State::Running;
+}
+
+void testRecorderStop(const std::wstring& folder, bool keep, bool software) {
+    printf("recorder: stop without waiting\n");
+    Recorder rec;
+    RecorderSetup setup;
+    setup.width = 1280;
+    setup.height = 720;
+    setup.fps = 30;
+    setup.bitrate = 80e6;
+    setup.seconds = 600; // clips.ini's most: the recorder holds the memory limit itself too
+    setup.sound = false;
+    rec.start(setup);
+    check(rec.stats().bufferLimit <= kMemoryLimit, "600 s at 80 Mbit/s: the pictures' limit stays under the memory limit");
+    if (!waitRunning(rec) && software) {
+        printf("  no hardware encoder (%s): Windows' own\n", rec.failure().c_str());
+        setup.encoder = 2;
+        setup.softwareOnly = true;
+        rec.start(setup);
+        waitRunning(rec);
+    }
+    if (rec.state() != Recorder::State::Running) {
+        printf("  no encoder here (%s): skipped\n", rec.failure().c_str());
+        return;
+    }
+    printf("  %s\n", rec.description().c_str());
+    std::vector<uint8_t> frame(static_cast<size_t>(setup.width) * setup.height * 3 / 2);
+    const int64_t t0 = now100ns();
+    for (int i = 0; i < 90; i++) { // 3 s at 30 fps
+        makeFrame(frame, setup.width, setup.height, i);
+        while (now100ns() - t0 < static_cast<int64_t>(i) * 333333) Sleep(1);
+        if (uint8_t* dst = rec.acquire()) {
+            memcpy(dst, frame.data(), frame.size());
+            rec.submit(now100ns());
+        }
+    }
+    // A run's save whose span ends 2 s from now (the seconds after a finish); the recording stops
+    // meanwhile (a setting changed): the caller must not wait for the save.
+    SaveJob job;
+    job.path = folder + L"\\clipstest_stop.mp4";
+    job.to = now100ns() + 20000000;
+    job.from = job.to - 40000000;
+    job.what = "stop test";
+    rec.save(job);
+    Sleep(100); // the saver waits for the span's end now
+    const int64_t s0 = now100ns();
+    rec.stop();
+    const double stopMs = static_cast<double>(now100ns() - s0) / 1e4;
+    char what[200];
+    snprintf(what, sizeof(what), "stop() returns at once while a save waits (%.2f ms)", stopMs);
+    check(stopMs < 50.0, what);
+    check(rec.state() == Recorder::State::Off && rec.acquire() == nullptr, "stopped: no frame taken any more");
+    SaveResult r;
+    bool got = false;
+    for (int i = 0; i < 1000 && !(got = rec.takeResult(r)); i++) Sleep(10);
+    printf("  %s\n", got ? r.line.c_str() : "(no result)");
+    check(got && r.ok, "the waiting save is written by the stopped recording, its result comes through");
+    for (int i = 0; i < 500 && rec.retiring() > 0; i++) Sleep(10);
+    check(rec.retiring() == 0, "the stopped recording's thread ended");
+    // Start and stop in quick turns (settings dragged in the menu): never a wait.
+    double worst = 0.0;
+    for (int k = 0; k < 5; k++) {
+        rec.start(setup);
+        Sleep(k * 40);
+        const int64_t a = now100ns();
+        rec.stop();
+        worst = std::max(worst, static_cast<double>(now100ns() - a) / 1e4);
+    }
+    for (int i = 0; i < 1000 && rec.retiring() > 0; i++) Sleep(10);
+    snprintf(what, sizeof(what), "start/stop five times: the slowest stop %.2f ms, all ended", worst);
+    check(worst < 50.0 && rec.retiring() == 0, what);
+    if (got && r.ok) checkFile(job.path, r.seconds, false, setup.width, setup.height);
+    if (got && r.ok && !keep) DeleteFileW(job.path.c_str());
 }
 
 // --- The NV12 passes on a device, and the recorder end to end ---------------------------------
@@ -471,7 +773,7 @@ void testDevice(const std::wstring& folder, bool keep) {
     setup.seconds = 30;
     setup.sound = true;
     rec.start(setup);
-    for (int i = 0; i < 300 && rec.state() == Recorder::State::Starting; i++) Sleep(10);
+    waitRunning(rec); // the sound's source may take up to 3 s to be ready, the encoder on top
     check(rec.state() == Recorder::State::Running, ("recorder running: " + rec.description() + rec.failure()).c_str());
     double grabMs = 0.0, collectMs = 0.0, worst = 0.0;
     int grabbed = 0;
@@ -552,7 +854,10 @@ int main(int argc, char** argv) {
     timeBeginPeriod(1); // Sleep(1) of 1 ms: the device test presents at 60 fps as a game does
     testTracker();
     testNames();
+    testMemory();
     testRing();
+    testSoundChunks();
+    testNal();
     EncoderSetup e;
     e.width = 1920;
     e.height = 1080;
@@ -575,6 +880,7 @@ int main(int argc, char** argv) {
         auto sw = openMft(e, why);
         testEncoder("Media Foundation software", std::move(sw), folder, keep);
     }
+    testRecorderStop(folder, keep, software);
     if (device) testDevice(folder, keep);
     printf("%s (%d failed)\n", g_failures ? "FAILED" : "passed", g_failures);
     return g_failures ? 1 : 0;

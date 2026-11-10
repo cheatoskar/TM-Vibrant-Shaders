@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -43,6 +44,8 @@ struct EncoderSetup {
     double gopSeconds = 1.0; // a key frame this often
     int choice = 0;          // 0 auto, 1 NVIDIA only, 2 Media Foundation only
     bool softwareOnly = false;  // Media Foundation: Windows' software encoder only (tests: the synchronous path)
+    // Set when the recorder stops: an encoder waiting for its hardware gives up (Media Foundation).
+    const std::atomic<bool>* cancel = nullptr;
 };
 
 // The first that works, every refusal in `log` ("NVENC: ...; Media Foundation: ..."). Null: none.
@@ -52,6 +55,9 @@ std::unique_ptr<PictureEncoder> openMft(const EncoderSetup& setup, std::string& 
 
 // The parameter sets (SPS and PPS, with start codes) of an Annex B key frame, empty if none.
 std::vector<uint8_t> parameterSets(const uint8_t* data, size_t size);
+// An Annex B picture holds an IDR slice (NAL type 5): a clip can start there, whatever the encoder
+// marked (some Media Foundation encoders leave MFSampleExtension_CleanPoint out).
+bool hasIdr(const uint8_t* data, size_t size);
 
 } // namespace clips
 } // namespace tmshaders

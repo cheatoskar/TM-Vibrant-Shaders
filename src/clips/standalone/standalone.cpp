@@ -38,6 +38,9 @@ inlinehook::Hook g_presentHook, g_resetHook;
 PresentFn g_present = nullptr;
 ResetFn g_reset = nullptr;
 IDirect3DDevice9* g_device = nullptr; // the game's (the first hardware device that presents)
+HWND g_focus = nullptr;               // its window
+volatile LONG g_gameFrames = 0;       // its Presents seen
+DWORD g_lastGameFrame = 0;            // GetTickCount at the last one
 
 // The window.
 bool g_imgui = false;
@@ -108,6 +111,8 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     return CallWindowProcW(g_wndProc, hwnd, msg, wparam, lparam);
 }
 
+HWND g_subclassed = nullptr; // the window whose procedure is ours
+
 void initImGui(IDirect3DDevice9* device) {
     D3DDEVICE_CREATION_PARAMETERS cp{};
     if (FAILED(device->GetCreationParameters(&cp)) || !cp.hFocusWindow) return;
@@ -123,8 +128,24 @@ void initImGui(IDirect3DDevice9* device) {
     style.FrameRounding = 4.0f;
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX9_Init(device);
-    g_wndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(wndProc)));
+    // The window procedure once per window (a new device on the same window keeps it).
+    if (g_subclassed != g_hwnd) {
+        if (g_subclassed && IsWindow(g_subclassed) && GetWindowLongPtrW(g_subclassed, GWLP_WNDPROC) == reinterpret_cast<LONG_PTR>(wndProc))
+            SetWindowLongPtrW(g_subclassed, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_wndProc));
+        g_wndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(wndProc)));
+        g_subclassed = g_hwnd;
+    }
     g_imgui = true;
+}
+
+// The window's drawing goes with the old device (ImGui holds a reference to it, so it is still there).
+void shutdownImGui() {
+    if (!g_imgui) return;
+    publishMouse(false);
+    ImGui_ImplDX9_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+    g_imgui = false;
 }
 
 bool menuKeyPressed() {
@@ -211,10 +232,27 @@ void drawOverlay(IDirect3DDevice9* device) {
 }
 
 bool gameDevice(IDirect3DDevice9* device) {
-    if (g_device) return device == g_device;
+    if (device == g_device) {
+        InterlockedIncrement(&g_gameFrames);
+        g_lastGameFrame = GetTickCount();
+        return true;
+    }
+    // Another device: the game's own only when the one we had stopped presenting for 3 s and the new
+    // one has the same window (the game made a new device); a helper device of another mod is left
+    // alone.
+    if (g_device && GetTickCount() - g_lastGameFrame < 3000) return false;
     D3DDEVICE_CREATION_PARAMETERS cp{};
     if (FAILED(device->GetCreationParameters(&cp)) || cp.DeviceType != D3DDEVTYPE_HAL || !cp.hFocusWindow) return false;
+    if (g_device && cp.hFocusWindow != g_focus) return false;
+    g_focus = cp.hFocusWindow;
+    if (g_device) {
+        TMVS_LOG("hook: another device presents (%p, the game's was %p and stopped): it is the game's now", static_cast<void*>(device),
+                 static_cast<void*>(g_device));
+        shutdownImGui();
+    }
     g_device = device;
+    InterlockedIncrement(&g_gameFrames);
+    g_lastGameFrame = GetTickCount();
     IDirect3DSurface9* back = nullptr;
     D3DSURFACE_DESC desc{};
     if (SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &back)) && back) {
@@ -313,7 +351,14 @@ DWORD WINAPI bootThread(LPVOID) {
         Sleep(250);
     }
     boot(Host::Standalone);
-    if (!installHooks()) TMVS_LOG("clips: no hooks, no clips");
+    if (!installHooks()) {
+        TMVS_LOG("clips: no hooks, no clips");
+        return 0;
+    }
+    // A hook that never sees the game's frames (another mod's Present hook that goes around it):
+    // said in the log, nothing else.
+    for (int i = 0; i < 300 && g_gameFrames == 0; i++) Sleep(100);
+    if (g_gameFrames == 0) TMVS_LOG("hook: no frame of the game's 30 s after hooking Present: if it stays so, no clips (another mod's hook may go around ours)");
     return 0;
 }
 

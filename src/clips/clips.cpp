@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,19 @@ RunTracker g_tracker;
 bool g_paused = false;
 bool g_idle = false;
 HANDLE g_hostMutex = nullptr;
+IDirect3DDevice9* g_lastDevice = nullptr; // the device present() saw last
+std::set<std::wstring> g_reserved;        // clip names handed out whose saves haven't reported yet
+
+// TM Vibrant Shaders' clips ran Present: a counter in a small named mapping
+// (Local\TMClips_Beat_<pid>), counted up by TM Vibrant Shaders every frame, read by the standalone.
+volatile LONG* g_beat = nullptr;
+struct Handshake {
+    bool announced = false;     // the standalone logged that TM Vibrant Shaders is loaded
+    bool seen = false;          // a beat came
+    LONG last = 0;
+    int framesWithout = 0;      // the standalone's usable frames without a beat
+    bool tmvsRuns = false;
+} g_hand;
 
 // What the recorder runs with.
 struct Active {
@@ -69,15 +83,11 @@ double seconds() {
 }
 
 std::string narrow(const std::wstring& text) {
-    char out[1024] = {};
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, out, sizeof(out), nullptr, nullptr);
-    return out;
+    return utf8(text);
 }
 
 std::wstring widen(const std::string& text) {
-    wchar_t out[512] = {};
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, out, 512);
-    return out;
+    return utf16(text);
 }
 
 const char* hostName() {
@@ -119,16 +129,34 @@ unsigned modsHeld() {
     return m;
 }
 
+// Saves whose span hasn't ended (a run's last seconds after its finish) go to the recording that
+// holds their start before it stops: the clip ends where the recording stopped, but it is written.
+void handOverPending() {
+    if (g_pending.empty()) return;
+    const bool running = g_recorder && g_recorder->state() == Recorder::State::Running;
+    for (const Pending& p : g_pending) {
+        if (running) {
+            g_recorder->save(p.job);
+            TMVS_LOG("clips: the save of %s is written now, up to where the recording stops", p.job.what.c_str());
+        } else {
+            g_reserved.erase(p.job.path);
+            TMVS_LOG("clips: the save of %s was dropped: the recording wasn't running", p.job.what.c_str());
+        }
+    }
+    g_pending.clear();
+}
+
 void stopRecording(const char* why) {
     if (!g_active.have) return;
-    if (g_recorder) g_recorder->stop();
+    handOverPending();
+    if (g_recorder) g_recorder->stop(); // returns at once (the recording ends on a thread of its own)
     g_grabber.releaseDevice();
-    g_pending.clear();
     g_active = Active();
     TMVS_LOG("clips: recording stopped (%s)", why);
 }
 
 void startRecording(int width, int height) {
+    handOverPending();
     if (g_recorder) g_recorder->stop();
     g_grabber.releaseDevice();
     RecorderSetup r;
@@ -167,6 +195,8 @@ std::string dateText() {
     return text;
 }
 
+// A clip's file: never one that exists or that a save still writes (two saves in the same second get
+// " (2)"), short enough for the MP4 writer's temporary name (".part.mp4") under MAX_PATH.
 std::wstring clipPath(const std::string& map, const std::string& raceTime) {
     std::string name = fileSafe(map.empty() ? std::string("Clip") : map) + "_" + dateText();
     if (!raceTime.empty()) {
@@ -174,12 +204,12 @@ std::wstring clipPath(const std::string& map, const std::string& raceTime) {
         std::replace(t.begin(), t.end(), ':', '-');
         name += "_" + t;
     }
-    std::wstring path = clipsDir() + L"\\" + widen(name) + L".mp4";
-    for (int n = 2; GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES && n < 100; n++) {
-        wchar_t suffix[16];
-        swprintf(suffix, 16, L" (%d)", n);
-        path = clipsDir() + L"\\" + widen(name) + suffix + L".mp4";
-    }
+    const std::wstring dir = clipsDir();
+    const int room = static_cast<int>(MAX_PATH) - 1 - static_cast<int>(dir.size()) - 1 - static_cast<int>(clipNameReserve());
+    const std::wstring path = uniqueClipPath(dir, fitName(widen(name), static_cast<size_t>(std::max(room, 8))), [](const std::wstring& p) {
+        return g_reserved.count(p) > 0 || GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES;
+    });
+    g_reserved.insert(path);
     return path;
 }
 
@@ -288,11 +318,72 @@ void logStats(double now) {
 void takeResults() {
     SaveResult r;
     while (g_recorder && g_recorder->takeResult(r)) {
+        g_reserved.erase(r.path);
         TMVS_LOG("clips: %s", r.line.c_str());
         if (!g_settings.toast) continue;
         if (r.ok) showToast("Clip saved " + (r.what.rfind("last", 0) == 0 ? std::string("(") + r.what + ")" : r.what), true);
         else showToast("Clip not saved", false);
     }
+}
+
+// The MP4s a save was writing when the game ended (*.part.mp4) are deleted: the ones not written to
+// for 5 minutes (another game running may be writing one now).
+void removeUnfinished() {
+    const std::wstring dir = clipsDir();
+    WIN32_FIND_DATAW data;
+    HANDLE find = FindFirstFileW((dir + L"\\*.part.mp4").c_str(), &data);
+    if (find == INVALID_HANDLE_VALUE) return;
+    FILETIME nowFile;
+    GetSystemTimeAsFileTime(&nowFile);
+    const ULONGLONG now = (static_cast<ULONGLONG>(nowFile.dwHighDateTime) << 32) | nowFile.dwLowDateTime;
+    int removed = 0;
+    do {
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        const ULONGLONG written = (static_cast<ULONGLONG>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+        if (now > written && now - written < 5ull * 60 * 10000000) continue;
+        if (DeleteFileW((dir + L"\\" + data.cFileName).c_str())) removed++;
+    } while (FindNextFileW(find, &data));
+    FindClose(find);
+    if (removed) TMVS_LOG("clips: %d unfinished clip%s deleted (the game ended while saving)", removed, removed == 1 ? "" : "s");
+}
+
+std::wstring beatName() {
+    return mutexName(L"Beat");
+}
+
+// The standalone: may it record? Not while TM Vibrant Shaders' clips run in this game (their
+// counter moves); when TM Vibrant Shaders is loaded, not before its first beat either (no time in
+// which both record). It records again when TM Vibrant Shaders' clips stop: 300 usable frames of
+// ours without a beat (a lost device stops both, those frames don't count).
+bool standaloneMayRecord(IDirect3DDevice9* device) {
+    if (!g_beat) {
+        HANDLE mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, beatName().c_str());
+        if (mapping) {
+            g_beat = static_cast<volatile LONG*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(LONG))); // kept for the process's life
+            if (!g_beat) CloseHandle(mapping);
+        }
+        if (!g_beat) return true;
+    }
+    if (!g_hand.announced) {
+        g_hand.announced = true;
+        TMVS_LOG("clips: TM Vibrant Shaders is loaded: TM Clips waits for its clips and stays idle while they run");
+    }
+    if (device->TestCooperativeLevel() != D3D_OK) return false;
+    const LONG v = *g_beat;
+    if (v != g_hand.last) {
+        g_hand.last = v;
+        g_hand.seen = true;
+        g_hand.framesWithout = 0;
+    } else if (g_hand.framesWithout < 1000000) {
+        g_hand.framesWithout++;
+    }
+    const bool runs = g_hand.seen ? g_hand.framesWithout < 300 : g_hand.framesWithout < 600;
+    if (runs != g_hand.tmvsRuns) {
+        g_hand.tmvsRuns = runs;
+        if (runs) TMVS_LOG("clips: TM Vibrant Shaders records the clips: TM Clips stays idle");
+        else TMVS_LOG("clips: TM Vibrant Shaders is loaded but its clips don't run (%d frames without them): TM Clips records", g_hand.framesWithout);
+    }
+    return !runs;
 }
 
 } // namespace
@@ -301,12 +392,17 @@ void boot(Host host) {
     if (g_booted) return;
     g_booted = true;
     g_host = host;
-    load(g_settings);
+    if (load(g_settings))
+        TMVS_LOG("clips: buffer shortened to %d s: at %d Mbit/s a longer one would take more than %.0f MB", g_settings.bufferSeconds,
+                 g_settings.bitrate, kMemoryLimit / 1048576.0);
     g_saved = g_settings;
     if (!save(g_settings)) TMVS_LOG("clips: can't write %s", narrow(dataDir() + L"\\clips.ini").c_str());
+    removeUnfinished();
     g_recorder = new Recorder();
     if (host == Host::Tmvs) {
         g_hostMutex = CreateMutexW(nullptr, FALSE, mutexName(L"Host").c_str()); // kept for the life of the process
+        HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, 4096, beatName().c_str());
+        if (mapping) g_beat = static_cast<volatile LONG*>(MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, sizeof(LONG))); // kept for the life of the process
     }
     const char* build = raceBuild();
     TMVS_LOG("clips: %s records the clips (settings %s; clips into %s); %s; save key %s, save on finish %s", hostName(),
@@ -359,20 +455,29 @@ void present(IDirect3DDevice9* device) {
     if (!g_booted || !device) return;
     g_frames++;
     const double now = seconds();
-    // The standalone: TM Vibrant Shaders (with clips) came along: it records, we stop.
-    if (g_host == Host::Standalone && !g_idle) {
-        static double s_checked = -10.0;
-        if (now - s_checked >= 2.0) {
-            s_checked = now;
-            if (tmvsRecords()) {
-                g_idle = true;
-                stopRecording("TM Vibrant Shaders records the clips");
-                TMVS_LOG("clips: TM Vibrant Shaders runs in this game and records the clips: TM Clips stays idle");
-                return;
-            }
+    if (g_host == Host::Tmvs && g_beat) InterlockedIncrement(g_beat); // the standalone sees our clips run
+    // The standalone: TM Vibrant Shaders (with clips) came along: it records, we stop (and record
+    // again should its clips stop).
+    if (g_host == Host::Standalone) {
+        const bool may = standaloneMayRecord(device);
+        if (!may && !g_idle) {
+            g_idle = true;
+            stopRecording("TM Vibrant Shaders records the clips");
+        } else if (may && g_idle) {
+            g_idle = false;
         }
     }
-    if (g_idle) return;
+    if (g_idle) {
+        takeResults(); // a save the stopped recording still writes
+        return;
+    }
+    // Another device (the game made a new one): what belongs to the old one is left behind.
+    if (g_lastDevice && device != g_lastDevice) {
+        TMVS_LOG("clips: the game's device changed (%p, was %p): recording starts over", static_cast<void*>(device), static_cast<void*>(g_lastDevice));
+        g_grabber.abandonDevice(); // first: stopRecording would release them on the old device
+        stopRecording("the device changed");
+    }
+    g_lastDevice = device;
     if (g_host == Host::Tmvs && g_frames == 1 && mutexExists(L"Standalone"))
         TMVS_LOG("clips: TM Clips (the standalone mod) is loaded too: it stays idle, TM Vibrant Shaders records");
     syncSettings(now);
@@ -388,8 +493,12 @@ void present(IDirect3DDevice9* device) {
     // Saves whose span has ended go to the recorder.
     for (size_t i = 0; i < g_pending.size();) {
         if (now >= g_pending[i].at) {
-            if (recording()) g_recorder->save(g_pending[i].job);
-            else TMVS_LOG("clips: a save was dropped: recording stopped meanwhile");
+            if (recording()) {
+                g_recorder->save(g_pending[i].job);
+            } else {
+                g_reserved.erase(g_pending[i].job.path);
+                TMVS_LOG("clips: a save was dropped: recording stopped meanwhile");
+            }
             g_pending.erase(g_pending.begin() + static_cast<long>(i));
         } else {
             i++;
@@ -432,9 +541,10 @@ void present(IDirect3DDevice9* device) {
     case Recorder::State::Running: {
         if (!g_active.startLogged) {
             g_active.startLogged = true;
-            TMVS_LOG("clips: recording %dx%d (the game's %ux%u) at %d fps, %d Mbit/s, into a %d s buffer (about %.0f MB)%s: %s", w, h, desc.Width,
-                     desc.Height, g_settings.fps, g_settings.bitrate, g_settings.bufferSeconds, memoryEstimate(g_settings) / 1048576.0,
-                     wantsScene() ? ", without the HUD" : "", g_recorder->description().c_str());
+            const RecorderStats limits = g_recorder->stats();
+            TMVS_LOG("clips: recording %dx%d (the game's %ux%u) at %d fps, %d Mbit/s, into a %d s buffer (about %.0f MB, at most %.0f)%s: %s", w, h,
+                     desc.Width, desc.Height, g_settings.fps, g_settings.bitrate, g_settings.bufferSeconds, memoryEstimate(g_settings) / 1048576.0,
+                     (limits.bufferLimit + limits.soundBytes) / 1048576.0, wantsScene() ? ", without the HUD" : "", g_recorder->description().c_str());
         }
         char text[128];
         const RecorderStats st = g_recorder->stats();
@@ -489,7 +599,8 @@ void postReset() {}
 
 void shutdown() {
     // Nothing is joined here: at process exit the threads are gone already, and the DLL is never
-    // unloaded while the game runs.
+    // unloaded while the game runs. A clip being written then stays as *.part.mp4 (not listed);
+    // the next boot deletes it (removeUnfinished).
 }
 
 // --- UI ----------------------------------------------------------------------------------------
@@ -590,9 +701,15 @@ void drawPanel() {
         for (int vk = 0; vk < 256; vk++) g_keyWasDown[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
     }
     if (ImGui::SliderInt("Key saves", &s.keySeconds, 5, std::max(10, s.bufferSeconds), "last %d s")) edited();
-    if (ImGui::SliderInt("Buffer", &s.bufferSeconds, 10, 300, "%d s")) edited();
+    // The buffer's length is held to what fits the memory limit at the bitrate (the game is 32-bit).
+    const int longest = std::min(300, maxBufferSeconds(s.bitrate, s.sound));
+    if (ImGui::SliderInt("Buffer", &s.bufferSeconds, 10, longest, "%d s")) {
+        s.bufferSeconds = std::clamp(s.bufferSeconds, 10, longest);
+        edited();
+    }
     ImGui::SameLine();
     ImGui::TextDisabled("about %.0f MB", memoryEstimate(s) / 1048576.0);
+    if (longest < 300) ImGui::TextDisabled("At most %d s at %d Mbit/s (memory)", longest, s.bitrate);
     const char* sizeItems[] = {"Game size", "720p", "1080p", "1440p"};
     int size = s.height == 0 ? 0 : s.height <= 720 ? 1 : s.height <= 1080 ? 2 : 3;
     if (ImGui::Combo("Size", &size, sizeItems, 4)) {
@@ -606,11 +723,17 @@ void drawPanel() {
         s.fps = rate ? 60 : 30;
         edited();
     }
-    if (ImGui::SliderInt("Bitrate", &s.bitrate, 4, 50, "%d Mbit/s")) edited();
+    if (ImGui::SliderInt("Bitrate", &s.bitrate, 4, 50, "%d Mbit/s")) {
+        clampBuffer(s); // a higher bitrate shortens the buffer
+        edited();
+    }
     const char* encoderItems[] = {"Auto", "NVIDIA", "Media Foundation"};
     if (ImGui::Combo("Encoder", &s.encoder, encoderItems, 3)) edited();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: NVIDIA's encoder, else the graphics card's through Windows.");
-    if (ImGui::Checkbox("Sound", &s.sound)) edited();
+    if (ImGui::Checkbox("Sound", &s.sound)) {
+        clampBuffer(s);
+        edited();
+    }
     if (g_host == Host::Tmvs) {
         ImGui::SameLine();
         if (ImGui::Checkbox("Without HUD", &s.noHud)) edited();

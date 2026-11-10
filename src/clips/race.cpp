@@ -166,12 +166,16 @@ std::string mapUid() {
 RunEvent RunTracker::update(double now, const RaceSample& s) {
     RunEvent e;
     if (!s.valid) {
-        // No race (the menu, the editor, a replay, another map loading): what ran is over.
+        // No race (the menu, the editor, a replay, another map loading): what ran is over. One read
+        // alone doesn't say so (the race's time can read out of range for a frame around the
+        // finish): two in a row do.
+        if (++m_invalid < 2) return e;
         m_running = m_finished = m_aborted = false;
         m_race = nullptr;
         m_startClock = 0;
         return e;
     }
+    m_invalid = 0;
     if (!s.started) {
         // The countdown (a new run comes): a run that didn't finish was restarted.
         if (m_running && !m_finished) m_aborted = true;
@@ -261,6 +265,34 @@ std::string fileSafe(const std::string& text) {
         out.resize(cut);
     }
     return out.empty() ? std::string("Clip") : out;
+}
+
+std::wstring uniqueClipPath(const std::wstring& dir, const std::wstring& name, const std::function<bool(const std::wstring&)>& taken) {
+    std::wstring path = dir + L"\\" + name + L".mp4";
+    for (int n = 2; taken(path); n++) {
+        if (n > 999) {
+            // Everything taken (it never is): the time in ms makes it new.
+            path = dir + L"\\" + name + L" (" + std::to_wstring(GetTickCount64()) + L").mp4";
+            break;
+        }
+        path = dir + L"\\" + name + L" (" + std::to_wstring(n) + L").mp4";
+    }
+    return path;
+}
+
+size_t clipNameReserve() {
+    return 6 + 9; // " (999)" ".part.mp4"
+}
+
+std::wstring fitName(const std::wstring& name, size_t most) {
+    std::wstring out = name;
+    if (out.size() > most) {
+        size_t cut = most;
+        if (cut > 0 && out[cut - 1] >= 0xD800 && out[cut - 1] <= 0xDBFF) cut--; // not half a surrogate pair
+        out.resize(cut);
+    }
+    while (!out.empty() && (out.back() == L' ' || out.back() == L'.')) out.pop_back();
+    return out.empty() ? std::wstring(L"Clip") : out;
 }
 
 } // namespace clips

@@ -10,6 +10,11 @@
 // thread only copies a frame into a pooled buffer; when the worker falls behind, frames are dropped
 // (counted), the game never waits. The encoder is opened on the worker too (NVENC takes a moment):
 // until it is ready, frames are dropped.
+//
+// stop() never waits either: the running recording is handed to a thread of its own, which ends
+// the worker, writes the saves asked for until then (their results still come through
+// takeResult()) and frees the memory. Out of memory on a worker or a save ends the recording
+// (State::Failed, the buffer freed) instead of the game.
 namespace tmshaders {
 namespace clips {
 
@@ -47,6 +52,8 @@ struct RecorderStats {
     double encodeMaxMs = 0.0;
     size_t bufferBytes = 0;
     double bufferSeconds = 0.0;
+    size_t bufferLimit = 0;   // the most the pictures may take
+    size_t soundBytes = 0;
 };
 
 class Recorder {
@@ -54,9 +61,10 @@ public:
     enum class State { Off, Starting, Running, Failed };
 
     Recorder();
-    ~Recorder(); // stops (waits for the worker; a save that runs finishes first)
+    ~Recorder(); // stops (without waiting, see stop())
 
     void start(const RecorderSetup& setup);
+    // Returns at once: the recording ends on a thread of its own (saves asked for are written).
     void stop();
     State state() const;
     std::string failure() const;      // State::Failed: why
@@ -71,15 +79,20 @@ public:
     // Saving: the span is taken out of the buffer once the buffer reached its end (or 2 s later).
     void save(const SaveJob& job);
     bool takeResult(SaveResult& out);
+    // A save waits or runs (this recording's, or one stopped before).
     bool saving() const;
+    // Recordings stopped whose threads haven't ended yet.
+    int retiring() const;
 
     RecorderStats stats() const;
     int64_t newest() const;
 
     struct Impl;
+    struct Shared;
 
 private:
     std::unique_ptr<Impl> m;
+    std::shared_ptr<Shared> m_shared;
 };
 
 } // namespace clips

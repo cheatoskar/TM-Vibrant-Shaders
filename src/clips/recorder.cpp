@@ -1,5 +1,6 @@
 #include "clips/recorder.h"
 #include "clips/encoder.h"
+#include "clips/settings.h"
 #include "loopback.h"
 #include "videoencoder.h"
 #include <windows.h>
@@ -10,7 +11,10 @@
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
+#include <exception>
 #include <mutex>
+#include <new>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -36,21 +40,35 @@ double msSince(int64_t start) {
     return static_cast<double>(now100ns() - start) / 1e4;
 }
 
-std::string narrow(const std::wstring& text) {
-    char out[1024] = {};
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, out, sizeof(out), nullptr, nullptr);
-    return out;
-}
+constexpr int kSlots = 4; // frames on their way to the encoder
 
-constexpr int kSlots = 4;         // frames on their way to the encoder
-constexpr int kSoundRate = 48000;
-constexpr int kSoundChannels = 2;
+// The pictures' byte limit: the bitrate's, and never more than the memory limit leaves next to the
+// sound.
+size_t ringLimit(const RecorderSetup& s) {
+    const size_t sound = s.sound ? soundBytes(s.seconds) : 0;
+    const size_t room = sound + (16u << 20) < kMemoryLimit ? kMemoryLimit - sound : (16u << 20);
+    return std::min(videoLimit(s.bitrate, s.seconds), room);
+}
 
 } // namespace
 
+// What outlives one recording: the saves' results (a stopped recording's saves still report).
+struct Recorder::Shared {
+    std::mutex lock;
+    std::deque<SaveResult> results;
+    std::atomic<int> retiring{0};
+
+    void post(SaveResult r) {
+        std::lock_guard<std::mutex> guard(lock);
+        results.push_back(std::move(r));
+    }
+};
+
 struct Recorder::Impl {
+    std::shared_ptr<Shared> shared;
     RecorderSetup setup;
     std::atomic<int> state{static_cast<int>(State::Off)};
+    std::atomic<bool> cancel{false}; // stop() ran: the encoder stops waiting
     std::string failure, description;
     size_t frameBytes = 0;
 
@@ -79,18 +97,53 @@ struct Recorder::Impl {
     mutable std::mutex saveLock;
     std::condition_variable saveWake;
     std::deque<SaveJob> jobs;
-    std::deque<SaveResult> results;
     bool saveBusy = false;
     bool saveStop = false;
     std::thread saver;
 
     void run();
+    void work();
     void runSaver();
+    void saveLoop();
     SaveResult write(const SaveJob& job);
+    // State::Failed, the buffer's memory given back. `lock` held / not held.
+    void failLocked(const std::string& why);
+    void fail(const std::string& why);
+    // Ends the threads (the saves asked for are written first). Not on the game's thread.
+    void finish();
 };
+
+void Recorder::Impl::failLocked(const std::string& why) {
+    if (state != static_cast<int>(State::Failed)) failure = why;
+    state = static_cast<int>(State::Failed);
+    ring.clear();
+    sound.clear();
+    soundOn = false;
+    stats.bufferBytes = 0;
+    stats.bufferSeconds = 0.0;
+}
+
+void Recorder::Impl::fail(const std::string& why) {
+    std::lock_guard<std::mutex> guard(lock);
+    failLocked(why);
+}
 
 void Recorder::Impl::run() {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    // An exception here would end the game (std::terminate): the recording ends instead.
+    try {
+        work();
+    } catch (const std::bad_alloc&) {
+        fail("not enough memory (the buffer was freed)");
+    } catch (const std::exception& e) {
+        fail(std::string("the worker failed: ") + e.what());
+    } catch (...) {
+        fail("the worker failed");
+    }
+    if (com == S_OK || com == S_FALSE) CoUninitialize();
+}
+
+void Recorder::Impl::work() {
     EncoderSetup e;
     e.width = setup.width;
     e.height = setup.height;
@@ -99,13 +152,13 @@ void Recorder::Impl::run() {
     e.gopSeconds = 1.0;
     e.choice = setup.encoder;
     e.softwareOnly = setup.softwareOnly;
+    e.cancel = &cancel;
     std::string why;
     std::unique_ptr<PictureEncoder> encoder = openEncoder(e, why);
     if (!encoder) {
         std::lock_guard<std::mutex> guard(lock);
         failure = why.empty() ? std::string("no encoder") : why;
         state = static_cast<int>(State::Failed);
-        if (com == S_OK || com == S_FALSE) CoUninitialize();
         return;
     }
     loopback::Capture capture;
@@ -113,10 +166,18 @@ void Recorder::Impl::run() {
     if (setup.sound) {
         capture.prepare(kSoundRate, kSoundChannels);
         if (capture.waitReady(3000) && capture.start()) {
-            std::lock_guard<std::mutex> guard(lock);
-            sound.reset(kSoundRate, kSoundChannels, setup.seconds + 10.0, counterTo100ns(capture.startCounter()));
-            soundOn = true;
-            soundText = "sound: " + capture.description();
+            // The circle is allocated here, not under the lock the game's thread takes too.
+            SoundRing fresh;
+            try {
+                fresh.reset(kSoundRate, kSoundChannels, setup.seconds + 10.0, counterTo100ns(capture.startCounter()));
+                std::lock_guard<std::mutex> guard(lock);
+                sound = std::move(fresh);
+                soundOn = true;
+                soundText = "sound: " + capture.description();
+            } catch (const std::bad_alloc&) {
+                capture.stop();
+                soundText = "no sound (not enough memory for it)";
+            }
         } else {
             soundText = "no sound (" + (capture.error().empty() ? std::string("no loopback") : capture.error()) + ")";
         }
@@ -124,11 +185,15 @@ void Recorder::Impl::run() {
     {
         std::lock_guard<std::mutex> guard(lock);
         description = encoder->description() + "; " + soundText;
+        if (state == static_cast<int>(State::Failed)) return;
         state = static_cast<int>(State::Running);
     }
     std::deque<int64_t> times; // the frames in the encoder, by number from `base`
-    int64_t base = 0, sent = 0;
+    int64_t base = 0;
     std::vector<int16_t> pcm;
+    bool outOfMemory = false;
+    int sinceKey = 0; // pictures since the last key frame (or since the start)
+    const int noKeyLimit = std::max(600, static_cast<int>(setup.fps * 10.0));
     const PictureSink sink = [&](const EncodedPicture& p) {
         int64_t time = 0;
         while (base <= p.frame && !times.empty()) {
@@ -139,23 +204,29 @@ void Recorder::Impl::run() {
         Picture picture;
         picture.time = time;
         picture.key = p.key;
-        picture.data = std::make_shared<const std::vector<uint8_t>>(p.data, p.data + p.size);
-        std::lock_guard<std::mutex> guard(lock);
-        if (header.empty() && p.key) {
-            header = parameterSets(p.data, p.size);
-            if (header.empty()) header = encoder->header();
+        sinceKey = p.key ? 0 : sinceKey + 1;
+        // Out of memory inside the encoder's call is noted, not thrown through it.
+        try {
+            picture.data = std::make_shared<const std::vector<uint8_t>>(p.data, p.data + p.size);
+            std::lock_guard<std::mutex> guard(lock);
+            if (header.empty() && p.key) {
+                header = parameterSets(p.data, p.size);
+                if (header.empty()) header = encoder->header();
+            }
+            ring.push(std::move(picture));
+            stats.framesEncoded++;
+            stats.bufferBytes = ring.bytes();
+            stats.bufferSeconds = static_cast<double>(ring.newest() - ring.oldest()) / 1e7;
+        } catch (const std::bad_alloc&) {
+            outOfMemory = true;
         }
-        ring.push(std::move(picture));
-        stats.framesEncoded++;
-        stats.bufferBytes = ring.bytes();
-        stats.bufferSeconds = static_cast<double>(ring.newest() - ring.oldest()) / 1e7;
     };
     for (;;) {
         Queued job{-1, 0};
         {
             std::unique_lock<std::mutex> guard(lock);
             wake.wait_for(guard, std::chrono::milliseconds(10), [this] { return stopping || !queue.empty(); });
-            if (stopping) break;
+            if (stopping || state == static_cast<int>(State::Failed)) break;
             if (!queue.empty()) {
                 job = queue.front();
                 queue.pop_front();
@@ -163,7 +234,6 @@ void Recorder::Impl::run() {
         }
         if (job.slot >= 0) {
             times.push_back(job.time);
-            sent++;
             const int64_t t0 = now100ns();
             std::string error;
             const bool ok = encoder->encode(slots[job.slot].data(), sink, error);
@@ -173,8 +243,15 @@ void Recorder::Impl::run() {
             stats.encodeMs += ms;
             stats.encodeMaxMs = std::max(stats.encodeMaxMs, ms);
             if (!ok) {
-                failure = "the encoder stopped: " + error;
-                state = static_cast<int>(State::Failed);
+                if (!cancel) failLocked("the encoder stopped: " + error);
+                break;
+            }
+            if (outOfMemory) {
+                failLocked("not enough memory for the buffer (it was freed)");
+                break;
+            }
+            if (sinceKey > noKeyLimit) {
+                failLocked("the encoder sends no key frames: clips could not start anywhere");
                 break;
             }
         }
@@ -190,7 +267,6 @@ void Recorder::Impl::run() {
     }
     if (soundOn) capture.stop();
     encoder.reset();
-    if (com == S_OK || com == S_FALSE) CoUninitialize();
 }
 
 SaveResult Recorder::Impl::write(const SaveJob& job) {
@@ -199,19 +275,18 @@ SaveResult Recorder::Impl::write(const SaveJob& job) {
     r.what = job.what;
     const int64_t t0 = now100ns();
     std::vector<Picture> pictures;
-    std::vector<int16_t> pcm;
-    size_t frames = 0;
+    SoundRing::Span span;
     std::vector<uint8_t> parameters;
-    bool withSound = false;
     int rate = kSoundRate, channels = kSoundChannels;
     {
+        // Only what is quick under the lock (the game's thread takes it every frame): the pictures
+        // are shared pointers, the sound's chunks too; the samples are copied after it.
         std::lock_guard<std::mutex> guard(lock);
         pictures = ring.cut(job.from, job.to);
         parameters = header;
         if (!pictures.empty() && soundOn) {
             const int64_t end = pictures.back().time + static_cast<int64_t>(1e7 / setup.fps);
-            pcm = sound.cut(pictures.front().time, end, frames);
-            withSound = frames > 0;
+            span = sound.span(pictures.front().time, end, static_cast<uint64_t>(sound.rate())); // 1 s of margin
             rate = sound.rate();
             channels = sound.channels();
         }
@@ -220,6 +295,10 @@ SaveResult Recorder::Impl::write(const SaveJob& job) {
         r.line = "nothing in the buffer for that time";
         return r;
     }
+    const std::vector<int16_t> pcm = SoundRing::copy(span);
+    span.chunks.clear();
+    const size_t frames = span.frames;
+    const bool withSound = frames > 0 && !pcm.empty();
     const std::vector<int64_t> durations = PictureRing::durations(pictures, static_cast<int64_t>(1e7 / setup.fps));
     std::vector<venc::Mp4Picture> list(pictures.size());
     uint64_t bytes = 0;
@@ -248,19 +327,33 @@ SaveResult Recorder::Impl::write(const SaveJob& job) {
     r.ok = venc::writeMp4(job.path, venc::Codec::H264, setup.width, setup.height, setup.fps, parameters, list, withSound ? &s : nullptr, error);
     if (com == S_OK || com == S_FALSE) CoUninitialize();
     r.seconds = static_cast<double>(pictures.back().time + durations.back() - pictures.front().time) / 1e7;
-    char line[1400];
+    const std::string path = utf8(job.path);
+    char line[512];
     if (r.ok) {
-        snprintf(line, sizeof(line), "saved %s: %.1f s, %d pictures, %.1f MB, %s, in %.0f ms (from %.2f s %s the asked start)", narrow(job.path).c_str(), r.seconds,
+        snprintf(line, sizeof(line), ": %.1f s, %d pictures, %.1f MB, %s, in %.0f ms (from %.2f s %s the asked start)", r.seconds,
                  static_cast<int>(pictures.size()), bytes / 1048576.0, withSound ? "with sound" : "no sound", msSince(t0),
                  std::abs(static_cast<double>(job.from - pictures.front().time)) / 1e7, pictures.front().time <= job.from ? "before" : "after");
+        r.line = "saved " + path + line;
     } else {
-        snprintf(line, sizeof(line), "could not save %s: %s", narrow(job.path).c_str(), error.c_str());
+        r.line = "could not save " + path + ": " + error;
     }
-    r.line = line;
     return r;
 }
 
 void Recorder::Impl::runSaver() {
+    // As run(): nothing thrown may leave the thread.
+    try {
+        saveLoop();
+    } catch (const std::bad_alloc&) {
+        fail("not enough memory for a save (the buffer was freed)");
+    } catch (...) {
+        fail("the saving thread failed");
+    }
+    std::lock_guard<std::mutex> guard(saveLock);
+    saveBusy = false;
+}
+
+void Recorder::Impl::saveLoop() {
     for (;;) {
         SaveJob job;
         {
@@ -283,14 +376,61 @@ void Recorder::Impl::runSaver() {
             if (newest >= job.to || now100ns() > giveUp || state != static_cast<int>(State::Running)) break;
             Sleep(20);
         }
-        SaveResult r = write(job);
+        SaveResult r;
+        try {
+            r = write(job);
+        } catch (const std::bad_alloc&) {
+            // The game needs the memory more than the buffer does.
+            fail("not enough memory for a save (the buffer was freed)");
+            r = SaveResult();
+            r.path = job.path;
+            r.what = job.what;
+            r.line = "could not save " + utf8(job.path) + ": not enough memory (the recording stopped and freed its buffer)";
+            DeleteFileW((job.path.substr(0, job.path.size() >= 4 ? job.path.size() - 4 : 0) + L".part.mp4").c_str());
+        }
+        shared->post(std::move(r));
         std::lock_guard<std::mutex> guard(saveLock);
-        results.push_back(std::move(r));
         saveBusy = false;
     }
 }
 
-Recorder::Recorder() : m(std::make_unique<Impl>()) {}
+void Recorder::Impl::finish() {
+    cancel = true;
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        stopping = true;
+    }
+    wake.notify_all();
+    if (worker.joinable()) worker.join();
+    // No frame comes any more: the saves take what the buffer holds, at once.
+    if (state != static_cast<int>(State::Failed)) state = static_cast<int>(State::Off);
+    {
+        std::lock_guard<std::mutex> guard(saveLock);
+        saveStop = true;
+    }
+    saveWake.notify_all();
+    if (saver.joinable()) saver.join();
+}
+
+namespace {
+
+DWORD WINAPI retireThread(LPVOID param) {
+    Recorder::Impl* impl = static_cast<Recorder::Impl*>(param);
+    std::shared_ptr<Recorder::Shared> shared = impl->shared;
+    try {
+        impl->finish();
+        delete impl; // the buffer's memory goes here, not on the game's thread
+    } catch (...) {
+    }
+    shared->retiring--;
+    return 0;
+}
+
+} // namespace
+
+Recorder::Recorder() : m(std::make_unique<Impl>()), m_shared(std::make_shared<Shared>()) {
+    m->shared = m_shared;
+}
 
 Recorder::~Recorder() {
     stop();
@@ -298,57 +438,79 @@ Recorder::~Recorder() {
 
 void Recorder::start(const RecorderSetup& setup) {
     stop();
-    m->setup = setup;
-    m->frameBytes = static_cast<size_t>(setup.width) * setup.height * 3 / 2;
-    m->failure.clear();
-    m->description.clear();
-    m->stats = RecorderStats();
-    m->header.clear();
-    m->ring.clear();
-    // At most a quarter more than the bitrate asks: a picture-heavy stretch must not take the game's
-    // address space (32-bit, 2 GB).
-    m->ring.setLimits(setup.seconds, static_cast<size_t>(setup.bitrate / 8.0 * setup.seconds * 1.25) + (16u << 20));
-    m->soundOn = false;
+    Impl& i = *m;
+    i.setup = setup;
+    i.frameBytes = static_cast<size_t>(setup.width) * setup.height * 3 / 2;
+    i.failure.clear();
+    i.description.clear();
+    i.stats = RecorderStats();
+    i.header.clear();
+    i.ring.clear();
+    // The game is 32-bit: the pictures and the sound together stay under kMemoryLimit (settings.h).
+    i.ring.setLimits(setup.seconds, ringLimit(setup));
+    i.stats.bufferLimit = i.ring.maxBytes();
+    i.soundOn = false;
+    i.cancel = false;
     try {
-        m->slots.assign(kSlots, std::vector<uint8_t>(m->frameBytes));
+        i.slots.assign(kSlots, std::vector<uint8_t>(i.frameBytes));
     } catch (const std::bad_alloc&) {
-        m->failure = "not enough memory for the frames";
-        m->state = static_cast<int>(State::Failed);
+        i.slots.clear();
+        i.failure = "not enough memory for the frames";
+        i.state = static_cast<int>(State::Failed);
         return;
     }
-    m->freeSlots.clear();
-    for (int i = 0; i < kSlots; i++) m->freeSlots.push_back(i);
-    m->queue.clear();
-    m->acquired = -1;
-    m->stopping = false;
-    m->saveStop = false;
-    m->state = static_cast<int>(State::Starting);
-    m->worker = std::thread([this] { m->run(); });
-    m->saver = std::thread([this] { m->runSaver(); });
+    i.freeSlots.clear();
+    for (int k = 0; k < kSlots; k++) i.freeSlots.push_back(k);
+    i.queue.clear();
+    i.acquired = -1;
+    i.stopping = false;
+    i.saveStop = false;
+    i.state = static_cast<int>(State::Starting);
+    // The threads get the Impl itself: stop() hands it on while they run.
+    Impl* impl = m.get();
+    try {
+        i.worker = std::thread([impl] { impl->run(); });
+        i.saver = std::thread([impl] { impl->runSaver(); });
+    } catch (const std::system_error&) {
+        i.fail("no thread for the recording");
+    }
 }
 
 void Recorder::stop() {
-    {
-        std::lock_guard<std::mutex> guard(m->saveLock);
-        m->saveStop = true;
+    Impl* old = m.get();
+    if (!old->worker.joinable() && !old->saver.joinable()) {
+        // Nothing runs: only tidy up.
+        if (old->state != static_cast<int>(State::Failed)) old->state = static_cast<int>(State::Off);
+        std::lock_guard<std::mutex> guard(old->lock);
+        old->ring.clear();
+        old->sound.clear();
+        old->slots.clear();
+        old->slots.shrink_to_fit();
+        old->freeSlots.clear();
+        old->queue.clear();
+        old->acquired = -1;
+        old->soundOn = false;
+        return;
     }
-    m->saveWake.notify_all();
-    if (m->saver.joinable()) m->saver.join(); // the saves asked for are written first
-    {
-        std::lock_guard<std::mutex> guard(m->lock);
-        m->stopping = true;
+    // The running recording goes to a thread of its own; a fresh one takes its place at once.
+    auto fresh = std::make_unique<Impl>();
+    fresh->shared = m_shared;
+    if (old->state == static_cast<int>(State::Failed)) {
+        std::lock_guard<std::mutex> guard(old->lock);
+        fresh->failure = old->failure;
+        fresh->state = static_cast<int>(State::Failed);
     }
-    m->wake.notify_all();
-    if (m->worker.joinable()) m->worker.join();
-    if (m->state != static_cast<int>(State::Failed)) m->state = static_cast<int>(State::Off);
-    std::lock_guard<std::mutex> guard(m->lock);
-    m->ring.clear();
-    m->slots.clear();
-    m->slots.shrink_to_fit();
-    m->freeSlots.clear();
-    m->queue.clear();
-    m->acquired = -1;
-    m->soundOn = false;
+    old->cancel = true;
+    std::unique_ptr<Impl> retired = std::move(m);
+    m = std::move(fresh);
+    m_shared->retiring++;
+    Impl* raw = retired.release();
+    HANDLE thread = CreateThread(nullptr, 0, retireThread, raw, 0, nullptr);
+    if (thread) {
+        CloseHandle(thread);
+    } else {
+        retireThread(raw); // no thread: here then
+    }
 }
 
 Recorder::State Recorder::state() const {
@@ -397,21 +559,31 @@ void Recorder::save(const SaveJob& job) {
 }
 
 bool Recorder::takeResult(SaveResult& out) {
-    std::lock_guard<std::mutex> guard(m->saveLock);
-    if (m->results.empty()) return false;
-    out = std::move(m->results.front());
-    m->results.pop_front();
+    std::lock_guard<std::mutex> guard(m_shared->lock);
+    if (m_shared->results.empty()) return false;
+    out = std::move(m_shared->results.front());
+    m_shared->results.pop_front();
     return true;
 }
 
 bool Recorder::saving() const {
-    std::lock_guard<std::mutex> guard(m->saveLock);
-    return m->saveBusy || !m->jobs.empty();
+    {
+        std::lock_guard<std::mutex> guard(m->saveLock);
+        if (m->saveBusy || !m->jobs.empty()) return true;
+    }
+    return m_shared->retiring > 0;
+}
+
+int Recorder::retiring() const {
+    return m_shared->retiring;
 }
 
 RecorderStats Recorder::stats() const {
     std::lock_guard<std::mutex> guard(m->lock);
-    return m->stats;
+    RecorderStats s = m->stats;
+    s.bufferLimit = m->ring.maxBytes();
+    s.soundBytes = m->sound.bytes();
+    return s;
 }
 
 int64_t Recorder::newest() const {

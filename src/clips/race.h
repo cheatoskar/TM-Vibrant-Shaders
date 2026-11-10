@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <string>
 
 // The race as the clips see it: read from the game's memory, never written, no hook into the game's
@@ -55,6 +56,7 @@ private:
     bool m_finished = false;
     bool m_aborted = false;   // a run went back to its countdown unfinished
     int m_lastTime = 0;
+    int m_invalid = 0;        // reads in a row without a race
     double m_runStart = 0.0;
 };
 
@@ -64,6 +66,12 @@ std::string formatTime(int ms);
 std::string fileSafe(const std::string& text);
 // TrackMania's formatting codes ($o, $fff, $l[...]) taken out.
 std::string stripCodes(const std::string& text);
+// A clip's path: dir\name.mp4, else dir\name (2).mp4 and on, the first one `taken` says no to.
+std::wstring uniqueClipPath(const std::wstring& dir, const std::wstring& name, const std::function<bool(const std::wstring&)>& taken);
+// What uniqueClipPath and the MP4 writer add to a name at most (" (999)" and ".part.mp4").
+size_t clipNameReserve();
+// `name` cut to at most `most` characters (not inside a surrogate pair, no space or dot at the end).
+std::wstring fitName(const std::wstring& name, size_t most);
 
 } // namespace clips
 } // namespace tmshaders

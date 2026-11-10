@@ -14,9 +14,12 @@
 //  - TM Clips, the standalone mod (Host::Standalone, src/clips/standalone): its own Present hook and
 //    a small window of its own.
 // Both installed: TM Vibrant Shaders records, TM Clips stays idle, whichever loads first. TM Vibrant
-// Shaders holds the named mutex Local\TMClips_Host_<pid> (made in boot()); TM Clips looks for it
-// before it hooks anything and every 2 s while it runs, and goes idle when it is there. Each says in
-// its log who records.
+// Shaders holds the named mutex Local\TMClips_Host_<pid> and a counter in the named mapping
+// Local\TMClips_Beat_<pid> (both made in boot()), counted up in every present(). TM Clips looks for
+// the mutex before it hooks anything (found: no hooks at all); once hooked it looks for the mapping
+// every frame: there, it doesn't record (from the first frame on, so the two never record at once)
+// and waits for the counter; it records again only when the counter stood still for 300 of its
+// frames (TM Vibrant Shaders' clips don't run). Each says in its log who records.
 //
 // Not yet: TrackMania Nations ESWC (its race isn't read, clips.cpp's reads find no known build there:
 // only the save key works; its race and map need the old engine's offsets, see race.h) and

@@ -28,6 +28,8 @@ public:
     // Frames whose read-back finished, oldest first (`all`: also those still on their way, waited for).
     void collect(const std::function<void(const PlaneReadback::Frame&, int64_t)>& use, bool all = false);
     void releaseDevice(); // before a reset or when recording stops
+    // Another device took over (the old one may be destroyed): everything is forgotten unreleased.
+    void abandonDevice();
     void releaseQueries();
 
     double lastGrabMs = 0.0; // the game's thread in the last grab()
@@ -45,9 +47,11 @@ private:
     IDirect3DPixelShader9* m_psChroma = nullptr;
     gfx::Quad m_quad;
     PlaneReadback m_readback;
+    IDirect3DStateBlock9* m_state = nullptr; // the device's state, captured again each grab
     std::deque<int64_t> m_times; // of the frames queued for read-back, in order
     bool m_fresh = false;
     bool m_failedOnce = false;
+    int64_t m_retryAt = 0;       // ensure() failed: not again before this (100 ns)
 };
 
 } // namespace clips

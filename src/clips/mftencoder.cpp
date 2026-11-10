@@ -97,6 +97,7 @@ public:
         m_width = s.width;
         m_height = s.height;
         m_fps = s.fps;
+        m_cancel = s.cancel;
         MFT_REGISTER_TYPE_INFO in{MFMediaType_Video, MFVideoFormat_NV12};
         MFT_REGISTER_TYPE_INFO out{MFMediaType_Video, MFVideoFormat_H264};
         IMFActivate** list = nullptr;
@@ -148,8 +149,16 @@ public:
         bool ok = SUCCEEDED(hr);
         if (!ok) error = "a sample: " + hex(hr);
         if (ok && m_async) {
-            // Its wish for a frame first; pictures that come meanwhile go out.
-            while (ok && m_needInput == 0) ok = pump(true, sink, error);
+            // Its wish for a frame first; pictures that come meanwhile go out. An encoder that stops
+            // answering ends the recording after 2 s instead of holding the worker forever.
+            const DWORD start = GetTickCount();
+            while (ok && m_needInput == 0) {
+                ok = pump(true, sink, error);
+                if (ok && m_needInput == 0 && GetTickCount() - start > kWaitMs) {
+                    error = "the encoder did not ask for a frame in 2 s";
+                    ok = false;
+                }
+            }
             if (ok) m_needInput--;
         }
         if (ok) {
@@ -314,12 +323,29 @@ private:
         return true;
     }
 
-    // Asynchronous: the events that are there (wait: until one came).
+    bool cancelled() const { return m_cancel && m_cancel->load(); }
+
+    // Asynchronous: the events that are there (wait: until one came, at most kWaitMs, or until the
+    // recorder stops). Never a blocking GetEvent: one that never returns would hold the worker, and
+    // the recorder's stop with it.
     bool pump(bool wait, const PictureSink& sink, std::string& error) {
+        const DWORD start = GetTickCount();
         for (;;) {
             IMFMediaEvent* event = nullptr;
-            HRESULT hr = m_events->GetEvent(wait ? 0 : MF_EVENT_FLAG_NO_WAIT, &event);
-            if (hr == MF_E_NO_EVENTS_AVAILABLE) return true;
+            HRESULT hr = m_events->GetEvent(MF_EVENT_FLAG_NO_WAIT, &event);
+            if (hr == MF_E_NO_EVENTS_AVAILABLE) {
+                if (!wait) return true;
+                if (cancelled()) {
+                    error = "stopped";
+                    return false;
+                }
+                const DWORD spent = GetTickCount() - start;
+                if (spent > kWaitMs) return true; // the caller decides (encode: gives up)
+                // A hardware encoder answers within a few ms: give the time slice away first, then sleep.
+                if (spent < 4) SwitchToThread();
+                else Sleep(1);
+                continue;
+            }
             if (FAILED(hr)) {
                 error = "GetEvent: " + hex(hr);
                 return false;
@@ -395,7 +421,8 @@ private:
                     e.data = data;
                     e.size = length;
                     e.frame = m_out++;
-                    e.key = clean != 0;
+                    // The bitstream decides too: an IDR slice is a key frame, marked or not.
+                    e.key = clean != 0 || hasIdr(data, length);
                     if (length) sink(e);
                     buffer->Unlock();
                 }
@@ -408,6 +435,8 @@ private:
         return ok;
     }
 
+    static constexpr DWORD kWaitMs = 2000;
+    const std::atomic<bool>* m_cancel = nullptr;
     IMFActivate* m_activate = nullptr;
     IMFTransform* m_mft = nullptr;
     IMFMediaEventGenerator* m_events = nullptr;

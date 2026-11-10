@@ -20,14 +20,20 @@ struct Internal {
 };
 
 // The device as it was: the state block (shaders, constants, states, viewport, textures, streams)
-// and what it doesn't hold (the render target and the depth buffer).
+// and what it doesn't hold (the render target and the depth buffer). One block is kept and captured
+// again each frame (made once, released before a reset: releaseDevice); making one every frame
+// cost the game's thread.
 struct SavedState {
     IDirect3DDevice9* device;
     IDirect3DStateBlock9* block = nullptr;
     IDirect3DSurface9* target = nullptr;
     IDirect3DSurface9* depth = nullptr;
-    explicit SavedState(IDirect3DDevice9* d) : device(d) {
-        if (SUCCEEDED(device->CreateStateBlock(D3DSBT_ALL, &block)) && block) block->Capture();
+    SavedState(IDirect3DDevice9* d, IDirect3DStateBlock9*& kept) : device(d) {
+        if (kept) {
+            if (SUCCEEDED(kept->Capture())) block = kept;
+        } else if (SUCCEEDED(device->CreateStateBlock(D3DSBT_ALL, &kept)) && kept) {
+            block = kept; // holds the state as it is now
+        }
         device->GetRenderTarget(0, &target);
         device->GetDepthStencilSurface(&depth);
     }
@@ -37,7 +43,6 @@ struct SavedState {
         if (block) block->Apply(); // after the target: setting one resets the viewport
         gfx::release(target);
         gfx::release(depth);
-        gfx::release(block);
     }
 };
 
@@ -53,14 +58,19 @@ void Grabber::setInternalCalls(void (*begin)(), void (*end)()) {
 }
 
 bool Grabber::ensure(IDirect3DDevice9* device, int width, int height, D3DFORMAT format) {
-    if (!m_psLuma && FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(g_PS_ClipLuma), &m_psLuma))) return false;
-    if (!m_psChroma && FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(g_PS_ClipChroma), &m_psChroma))) return false;
-    if (!m_quad.init(device)) return false;
+    // After a failure (video memory full, say) not again for 5 s: every frame would log the same.
+    const int64_t now = now100ns();
+    if (m_retryAt && now < m_retryAt) return false;
+    bool ok = true;
+    if (!m_psLuma && FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(g_PS_ClipLuma), &m_psLuma))) ok = false;
+    if (ok && !m_psChroma && FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(g_PS_ClipChroma), &m_psChroma))) ok = false;
+    if (ok && !m_quad.init(device)) ok = false;
     const D3DFORMAT scaledFormat = format == D3DFMT_X8R8G8B8 || format == D3DFMT_A8R8G8B8 ? format : D3DFMT_A8R8G8B8;
-    if (!m_scaled.create(device, static_cast<UINT>(width), static_cast<UINT>(height), scaledFormat)) return false;
-    if (!m_luma.create(device, static_cast<UINT>(width / 4), static_cast<UINT>(height), D3DFMT_A8R8G8B8)) return false;
-    if (!m_chroma.create(device, static_cast<UINT>(width / 4), static_cast<UINT>(height / 2), D3DFMT_A8R8G8B8)) return false;
-    return true;
+    if (ok && !m_scaled.create(device, static_cast<UINT>(width), static_cast<UINT>(height), scaledFormat)) ok = false;
+    if (ok && !m_luma.create(device, static_cast<UINT>(width / 4), static_cast<UINT>(height), D3DFMT_A8R8G8B8)) ok = false;
+    if (ok && !m_chroma.create(device, static_cast<UINT>(width / 4), static_cast<UINT>(height / 2), D3DFMT_A8R8G8B8)) ok = false;
+    m_retryAt = ok ? 0 : now + 50000000;
+    return ok;
 }
 
 bool Grabber::scale(IDirect3DDevice9* device, IDirect3DSurface9* source) {
@@ -99,7 +109,7 @@ bool Grabber::grab(IDirect3DDevice9* device, IDirect3DSurface9* source, int widt
     }
     bool ok = true;
     {
-        SavedState saved(device);
+        SavedState saved(device, m_state);
         if (source) {
             D3DSURFACE_DESC desc{};
             source->GetDesc(&desc);
@@ -174,8 +184,28 @@ void Grabber::releaseDevice() {
     m_luma.destroy();
     m_chroma.destroy();
     gfx::release(m_resolve);
+    gfx::release(m_state); // state blocks go before a reset
     m_fresh = false;
-    // The shaders and the quad live through a reset (managed by the device), but go with recording.
+    m_retryAt = 0;
+    // The shaders and the quad live through a reset (managed by the device).
+}
+
+void Grabber::abandonDevice() {
+    // The device may be gone: its objects are forgotten, not released (a few MB left behind, once).
+    m_readback = PlaneReadback();
+    m_times.clear();
+    m_scaled = gfx::Target();
+    m_luma = gfx::Target();
+    m_chroma = gfx::Target();
+    m_resolve = nullptr;
+    m_resolveW = m_resolveH = 0;
+    m_resolveFormat = D3DFMT_UNKNOWN;
+    m_psLuma = nullptr;
+    m_psChroma = nullptr;
+    m_quad = gfx::Quad();
+    m_state = nullptr;
+    m_fresh = false;
+    m_retryAt = 0;
 }
 
 } // namespace clips

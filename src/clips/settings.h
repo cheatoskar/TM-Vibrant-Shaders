@@ -35,13 +35,32 @@ struct Settings {
 const std::wstring& dataDir();
 const std::wstring& clipsDir();
 
-void load(Settings& s);
+// True: the buffer was shortened to fit the memory limit (clampBuffer).
+bool load(Settings& s);
 bool save(const Settings& s);
 // The file changed since load() or save() (the other build wrote it).
 bool changedOnDisk();
 
+// The game is 32-bit (2 GB of address space, most of it the game's): the buffer's pictures and its
+// sound take at most this much together.
+constexpr size_t kMemoryLimit = 350u << 20;
+constexpr int kSoundRate = 48000;
+constexpr int kSoundChannels = 2;
+// The most the pictures may take (a quarter more than the bitrate asks, plus 16 MB), and the sound's
+// circle (the buffer plus 10 s), bytes.
+size_t videoLimit(double bitsPerSecond, double seconds);
+size_t soundBytes(double seconds);
+// The longest buffer that fits kMemoryLimit at this bitrate (Mbit/s).
+int maxBufferSeconds(int bitrate, bool sound);
+// Shortens the buffer (and the save key's seconds) to what fits. True: shortened.
+bool clampBuffer(Settings& s);
+
 // Memory the buffer takes at these settings (video at the bitrate plus the sound), bytes.
 size_t memoryEstimate(const Settings& s);
+
+// UTF-8 and UTF-16, any length.
+std::string utf8(const std::wstring& text);
+std::wstring utf16(const std::string& text);
 
 // Personal bests per map (bests.ini): the best time (ms) saved for `map`, -1 none.
 int bestTime(const std::string& map);

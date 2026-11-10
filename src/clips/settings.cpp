@@ -54,18 +54,56 @@ std::string readText(const wchar_t* key, const char* def) {
     wchar_t text[64] = {};
     GetPrivateProfileStringW(L"Clips", key, L"", text, 64, iniPath().c_str());
     if (!text[0]) return def;
-    char narrow[64] = {};
-    WideCharToMultiByte(CP_UTF8, 0, text, -1, narrow, 64, nullptr, nullptr);
-    return narrow;
+    return utf8(text);
 }
 
 std::wstring wide(const std::string& s) {
-    wchar_t text[256] = {};
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, text, 256);
-    return text;
+    return utf16(s);
 }
 
 } // namespace
+
+std::string utf8(const std::wstring& text) {
+    if (text.empty()) return std::string();
+    const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return std::string();
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), &out[0], n, nullptr, nullptr);
+    return out;
+}
+
+std::wstring utf16(const std::string& text) {
+    if (text.empty()) return std::wstring();
+    const int n = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (n <= 0) return std::wstring();
+    std::wstring out(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), &out[0], n);
+    return out;
+}
+
+size_t videoLimit(double bitsPerSecond, double seconds) {
+    return static_cast<size_t>(std::max(0.0, bitsPerSecond / 8.0 * seconds * 1.25)) + (16u << 20);
+}
+
+size_t soundBytes(double seconds) {
+    return static_cast<size_t>((seconds + 10.0) * kSoundRate) * kSoundChannels * sizeof(int16_t);
+}
+
+int maxBufferSeconds(int bitrate, bool sound) {
+    // video(s) + sound(s) <= limit, both linear in s.
+    const double perSecond = bitrate * 1e6 / 8.0 * 1.25 + (sound ? static_cast<double>(kSoundRate) * kSoundChannels * 2 : 0.0);
+    const double fixed = static_cast<double>(16u << 20) + (sound ? 10.0 * kSoundRate * kSoundChannels * 2 : 0.0);
+    const double room = static_cast<double>(kMemoryLimit) - fixed;
+    return std::max(10, static_cast<int>(room / perSecond));
+}
+
+bool clampBuffer(Settings& s) {
+    const int most = maxBufferSeconds(s.bitrate, s.sound);
+    if (s.bufferSeconds <= most) return false;
+    s.bufferSeconds = most;
+    s.keySeconds = std::min(s.keySeconds, std::max(10, most));
+    return true;
+}
 
 const std::wstring& dataDir() {
     static const std::wstring dir = [] {
@@ -85,7 +123,7 @@ const std::wstring& clipsDir() {
     return dir;
 }
 
-void load(Settings& s) {
+bool load(Settings& s) {
     const Settings d;
     s.enabled = readInt(L"Enabled", d.enabled, 0, 1) != 0;
     s.onFinish = readInt(L"SaveOnFinish", d.onFinish, 0, 2);
@@ -103,6 +141,7 @@ void load(Settings& s) {
     s.saveKey = readText(L"SaveKey", d.saveKey.c_str());
     s.menuKey = readText(L"MenuKey", d.menuKey.c_str());
     g_written = fileTime(iniPath());
+    return clampBuffer(s);
 }
 
 bool save(const Settings& s) {
@@ -145,7 +184,7 @@ bool changedOnDisk() {
 
 size_t memoryEstimate(const Settings& s) {
     const double video = s.bitrate * 1e6 / 8.0 * s.bufferSeconds;
-    const double sound = s.sound ? 48000.0 * 2 * 2 * (s.bufferSeconds + 5) : 0.0;
+    const double sound = s.sound ? static_cast<double>(soundBytes(s.bufferSeconds)) : 0.0;
     return static_cast<size_t>(video + sound);
 }
 

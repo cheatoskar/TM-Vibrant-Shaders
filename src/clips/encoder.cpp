@@ -74,8 +74,11 @@ std::unique_ptr<PictureEncoder> openEncoder(const EncoderSetup& setup, std::stri
     return nullptr;
 }
 
-std::vector<uint8_t> parameterSets(const uint8_t* data, size_t size) {
-    std::vector<uint8_t> out;
+namespace {
+
+// Each NAL unit of an Annex B stream: use(type, first byte, end). use() returns false to stop.
+template <typename Use>
+void eachNal(const uint8_t* data, size_t size, Use use) {
     size_t i = 0;
     auto startCode = [&](size_t at, size_t& len) {
         if (at + 3 <= size && data[at] == 0 && data[at + 1] == 0 && data[at + 2] == 1) {
@@ -98,16 +101,38 @@ std::vector<uint8_t> parameterSets(const uint8_t* data, size_t size) {
         size_t end = nal;
         size_t next = 0;
         while (end < size && !startCode(end, next)) end++;
-        if (nal < size) {
-            const int type = data[nal] & 0x1f;
-            if (type == 7 || type == 8) {
-                out.insert(out.end(), {0, 0, 0, 1});
-                out.insert(out.end(), data + nal, data + end);
-            }
-        }
+        if (nal < size && !use(data[nal] & 0x1f, nal, end)) return;
         i = end;
     }
+}
+
+} // namespace
+
+std::vector<uint8_t> parameterSets(const uint8_t* data, size_t size) {
+    std::vector<uint8_t> out;
+    if (!data) return out;
+    eachNal(data, size, [&](int type, size_t nal, size_t end) {
+        if (type == 7 || type == 8) {
+            out.insert(out.end(), {0, 0, 0, 1});
+            out.insert(out.end(), data + nal, data + end);
+        }
+        return true;
+    });
     return out;
+}
+
+bool hasIdr(const uint8_t* data, size_t size) {
+    if (!data) return false;
+    // The slices come after the parameter sets and SEI: the first slice settles it (no need to walk
+    // through the slice's bytes).
+    for (size_t i = 0; i + 3 < size; i++) {
+        if (data[i] != 0 || data[i + 1] != 0 || data[i + 2] != 1) continue;
+        const int type = data[i + 3] & 0x1f;
+        if (type == 5) return true;
+        if (type == 1) return false;
+        i += 3;
+    }
+    return false;
 }
 
 } // namespace clips
