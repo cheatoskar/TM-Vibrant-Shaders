@@ -2556,9 +2556,12 @@ void __fastcall eswcProjectionDetour(void* self, void* edx, void* projection, co
     adjustProjection(static_cast<float*>(projection), main, nullptr);
 }
 
+void eswcPoll();
+
 int __fastcall eswcFrameBeginDetour(void* self, void* edx) {
     g_cameraDepth = 0; // nothing renders between frames
     g_engineFrames++;
+    eswcPoll(); // the race, its car and the map, before the plugin's frame begins
     if (g_callbacks.frameBegin) g_callbacks.frameBegin();
     return g_frameBegin(self, edx);
 }
@@ -2576,6 +2579,429 @@ int __cdecl eswcReadInputDetour(void* port, void* state, unsigned long size) {
         }
     }
     return result;
+}
+
+// --- TM Nations ESWC: the race, its local player and car, the map -----------------------------------
+// The game's own objects, read once a frame at RenderFrameBegin (the game's thread, between its
+// updates): nothing is called and nothing written, Hide car excepted (eswcHideCars). The offsets come
+// from the classes' reflection tables (SMwMemberInfo: name, offset, class) and the code that uses them.
+// Every object is told by its vtable before it is read: each class has exactly one, whose slot 2
+// (GetMwClassId) is `mov eax, <class id>; ret` (checked at install, eswcCheckClasses).
+struct EswcClass {
+    uintptr_t vtable;
+    DWORD id;
+    const char* name;
+};
+// The app (CTrackMania : CConstructionGame): CConstructionGame's constructor (0x007086a0) stores it at
+// 0x00caee50 (mov [0x00caee50], esi at 0x00708873), the destructor clears it (0x0070908c).
+constexpr uintptr_t kEswcGamePointer = 0x00caee50;
+constexpr EswcClass kEswcGame = {0x00af2420, 0x24001000, "CTrackMania"};
+// CConstructionGame (reflection): Network +0x100, Challenge +0x11c (SetChallenge 0x00710290 below),
+// CurrentRace +0x140; CTrackMania's Editor +0x2e4 (CTrackMania::SetEditor 0x006f3dc0).
+constexpr size_t kEswcGameNetwork = 0x100, kEswcGameChallenge = 0x11c, kEswcGameRace = 0x140, kEswcGameEditor = 0x2e4;
+constexpr EswcClass kEswcChallenge = {0x00af25b0, 0x24003000, "CConstructionChallenge"};
+constexpr size_t kEswcChallengeName = 0x124; // ChallengeName (m_Name, a CFastStringInt: size, text)
+// The replay editor (made at 0x006e9fb3, handed to SetEditor at 0x006e9fc6).
+constexpr EswcClass kEswcReplayEditor = {0x00af3580, 0x2405d000, "CConstructionEditorReplay"};
+// A replay watched or shot as a video: the app's clip viewer at +0x128 (made at 0x006ea968 and, for
+// "Shoot video", at 0x006e74fc, both stored with the ref setter 0x0072fe50; cleared when it ends).
+constexpr size_t kEswcGameClipViewer = 0x128;
+constexpr EswcClass kEswcClipViewer = {0x00af4e30, 0x2408a000, "CCtnMediaClipViewer"};
+// The race classes (every class deriving from CTrackManiaRace; solo: from CTrackManiaRace1P).
+struct EswcRaceClass {
+    EswcClass c;
+    bool solo;
+};
+constexpr EswcRaceClass kEswcRaces[] = {
+    {{0x00af1b70, 0x24014000, "CTrackManiaRace"}, false},          {{0x00af1390, 0x24018000, "CTrackManiaRace1P"}, true},
+    {{0x00aed830, 0x24079000, "CTrackManiaRace1PCrazy"}, true},   {{0x00aed668, 0x24078000, "CTrackManiaRace1PGhosts"}, true},
+    {{0x00aeec30, 0x24055000, "CTrackManiaRace1PSpecial"}, true}, {{0x00aef450, 0x24042000, "CTrackManiaRace2PTurnBased"}, true},
+    {{0x00af3f78, 0x24044000, "CTrackManiaRaceNet"}, false},       {{0x00aeee08, 0x24056000, "CTrackManiaRaceNetLaps"}, false},
+    {{0x00aeff88, 0x24037000, "CTrackManiaRaceNetRounds"}, false}, {{0x00aef630, 0x24045000, "CTrackManiaRaceNetTimeAttack"}, false}};
+// CConstructionRace / CTrackManiaRace: Players +0x20 (CFastBuffer: count, data; LocalPlayerMobil reads
+// data[0]->Mobil, 0x006d2590), Game +0x40; the race's clock +0x33c (ms: OnCheckpoint 0x006d9c80 and
+// OnFinishLine 0x006d9f50 take clock - start as the race time), +0x194 set: the times count from the
+// lap's start; the local player's starts +0x4dc (OnStartLine 0x006d9be0: inc, local player only) and
+// respawns +0x4e0 (RespawnPlayer 0x006d98f0, vtable slot 87 of every race class, also called by
+// ResetPlayer 0x006d9670: inc, local player only).
+constexpr size_t kEswcRacePlayers = 0x20, kEswcRaceGame = 0x40, kEswcRaceLapTimes = 0x194, kEswcRaceClock = 0x33c;
+constexpr size_t kEswcRaceStarts = 0x4dc, kEswcRaceRespawns = 0x4e0;
+// CTrackManiaRace1P (reflection): BestRaceGhost +0x6e8, CurrentRaceGhost +0x6ec, CConstructionGhost
+// whose CGameGhost::ReplayMobil is at +0x64.
+constexpr size_t kEswcRaceBestGhost = 0x6e8, kEswcRaceCurrentGhost = 0x6ec, kEswcGhostMobil = 0x64;
+constexpr EswcClass kEswcGhost = {0x00af1018, 0x2401b000, "CConstructionGhost"};
+// The local player's info: Network +0x1a4 -> its first entry, when its PlayerType (+0xd8) is 0
+// (CTrackManiaRace::GetLocalPlayerInfo 0x0071c730 -> 0x009cf460).
+constexpr size_t kEswcNetworkInfos = 0x1a4, kEswcInfoPlayerType = 0xd8;
+constexpr EswcClass kEswcInfo = {0x00af2df0, 0x24036000, "CTrackManiaPlayerInfo"};
+// CTrackManiaPlayerInfo (reflection): RaceStartTime +0x1f0, RaceTime +0x1f4 (the final time),
+// LapStartTime +0x1fc, LapTime +0x200, RaceState +0x25c (0 before the start, 1 running, 2 finished:
+// 0x0071b350 from OnStartLine and OnFinishLine); the race time at each checkpoint, a CFastBuffer at
+// +0x244 ({time, score} each, -1 not yet: 0x0071b790; written by 0x0071b3c0 from InternalOnCheckpoint
+// 0x006da800), the checkpoints passed in this run +0x284 (the finish included; zeroed with the info,
+// 0x0071b860); its player +0x180 (CConstructionPlayer::SetPlayerInfo 0x007b2df0 links both ways,
+// player +0x34).
+constexpr size_t kEswcInfoStart = 0x1f0, kEswcInfoFinalTime = 0x1f4, kEswcInfoLapStart = 0x1fc, kEswcInfoLapFinalTime = 0x200;
+constexpr size_t kEswcInfoState = 0x25c, kEswcInfoCheckpoints = 0x244, kEswcInfoPassed = 0x284, kEswcInfoPlayer = 0x180;
+constexpr EswcClass kEswcPlayer = {0x00af51d8, 0x24031000, "CTrackManiaPlayer"};
+constexpr size_t kEswcPlayerMobil = 0x24, kEswcPlayerInfo = 0x34; // CGamePlayer::Mobil (reflection)
+// The car (CSceneToyVehicleTrackMania): CSceneMobil::Item +0x3c (a CHmsItem), the item's corpora
+// (Corpuss: CFastBuffer at +0x24), the first one's location (CHmsZoneElem::Location +0x18, a GmIso4:
+// the 3x3 rotation, then the position at +0x24). CSceneMobil::GetInterpolatedLocation (0x0059b9a0, not
+// virtual here) returns exactly that with no sector: where the car is drawn. Its speed: the corpus's
+// dynamic body (+0x48) -> its state (+0x32c), the world speed at +0x40 (m/s, 0x00452f00; times the
+// transposed rotation, its z times 3.6 is the HUD's km/h: 0x005fc940, so forward is the model's z).
+constexpr EswcClass kEswcCar = {0x00ae68e8, 0x0a103000, "CSceneToyVehicleTrackMania"};
+constexpr size_t kEswcMobilItem = 0x3c, kEswcItemCorpora = 0x24, kEswcCorpusLocation = 0x18;
+constexpr size_t kEswcCorpusDyna = 0x48, kEswcDynaState = 0x32c, kEswcStateSpeed = 0x40;
+// Hide car: CSceneMobil::Hide (0x0059bdb0, what the car's own Hide calls first) clears bit 3 of the
+// mobil's tree (item +0x50 -> +0x64: CPlugTree +0x9c, 0x005f6730), Show (0x0059bda0) sets it. The car's
+// own Hide (0x005f9690) also stops its physics (+0x5cc), so only that bit is changed here. Its shadow:
+// CHmsItem +0x48 (shadow textures in the low byte, bit 23; fake shadow bit 27: the word TMNF keeps at
+// +0x18) through the item's own setters SetCountShadowTexCasted and SetShadowFakeEnable (TMNF's code,
+// +0x48 for +0x18; their cases of CHmsItem's parameter setter 0x0043fb20).
+constexpr size_t kEswcItemMainCorpus = 0x50, kEswcCorpusTree = 0x64, kEswcTreeFlags = 0x9c;
+constexpr DWORD kEswcTreeVisible = 8;
+constexpr size_t kEswcItemShadowWord = 0x48;
+constexpr uintptr_t kEswcItemSetShadowTex = 0x00441de0, kEswcItemSetShadowFake = 0x00441eb0;
+constexpr unsigned char kEswcSetShadowTexPrologue[] = {0x8b, 0x41, 0x48, 0x8a, 0x54, 0x24, 0x04};
+constexpr unsigned char kEswcSetShadowFakePrologue[] = {0x8b, 0x41, 0x48, 0x33, 0xd2, 0x56};
+// CConstructionGame::SetChallenge(challenge) (AddRef the new one, Release the old, store it at +0x11c):
+// the map the game runs (race, replay, editor), null back to the menu. Callers 0x006e70c0, 0x006e7123,
+// 0x006eb6d6, 0x007101f9 (null), 0x00718a08 (a replay opened).
+constexpr uintptr_t kEswcSetChallenge = 0x00710290;
+constexpr unsigned char kEswcSetChallengePrologue[] = {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}; // push esi; push edi; mov edi, [esp+0xc]
+
+bool g_eswcClassesOk = false; // every vtable above is where expected: the readers are on
+bool g_eswcShadowSetters = false;
+
+// What the game runs, as read this frame (plain data: read inside __try).
+struct EswcState {
+    void* game = nullptr;
+    void* challenge = nullptr;
+    void* race = nullptr;
+    int raceKind = -1;               // index in kEswcRaces
+    uintptr_t otherRace = 0;         // a race object of no known class (its vtable, for the log)
+    uintptr_t editor = 0;            // the app's editor's vtable (0 none)
+    bool replayEditor = false;
+    bool clipViewer = false;         // a replay plays (watched or shot)
+    DWORD clock = 0, starts = 0, respawns = 0;
+    void* info = nullptr;            // the local player's
+    void* player = nullptr;
+    void* car = nullptr;
+};
+EswcState g_eswcState;
+DWORD g_eswcClockTick = 0; // when the race's clock last moved (0: not since the race appeared)
+char g_eswcMapUid[24] = {}; // "eswc-" and a hash of the map's name ("" none)
+
+bool eswcIs(const void* nod, const EswcClass& c) {
+    return nod && *static_cast<const uintptr_t*>(nod) == rebase(c.vtable);
+}
+
+// The GmIso4 the car is drawn with (see kEswcCar), or null. Inside __try.
+const float* eswcLocation(const void* car) {
+    const BYTE* item = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(car) + kEswcMobilItem);
+    if (!item || *reinterpret_cast<const DWORD*>(item + kEswcItemCorpora) == 0) return nullptr;
+    const BYTE* const* corpora = *reinterpret_cast<const BYTE* const* const*>(item + kEswcItemCorpora + 4);
+    if (!corpora || !corpora[0]) return nullptr;
+    const float* iso = reinterpret_cast<const float*>(corpora[0] + kEswcCorpusLocation);
+    for (int i = 0; i < 12; i++) {
+        if (!(fabsf(iso[i]) < 1e5f)) return nullptr;
+    }
+    return iso;
+}
+
+bool eswcRead(EswcState& s) {
+    s = EswcState();
+    __try {
+        void* game = *reinterpret_cast<void* const*>(rebase(kEswcGamePointer));
+        if (!eswcIs(game, kEswcGame)) return true;
+        s.game = game;
+        const BYTE* g = static_cast<const BYTE*>(game);
+        void* challenge = *reinterpret_cast<void* const*>(g + kEswcGameChallenge);
+        if (eswcIs(challenge, kEswcChallenge)) s.challenge = challenge;
+        void* editor = *reinterpret_cast<void* const*>(g + kEswcGameEditor);
+        s.editor = editor ? *static_cast<const uintptr_t*>(editor) : 0;
+        s.replayEditor = eswcIs(editor, kEswcReplayEditor);
+        s.clipViewer = eswcIs(*reinterpret_cast<void* const*>(g + kEswcGameClipViewer), kEswcClipViewer);
+        void* race = *reinterpret_cast<void* const*>(g + kEswcGameRace);
+        if (!race) return true;
+        for (int k = 0; k < static_cast<int>(sizeof(kEswcRaces) / sizeof(kEswcRaces[0])); k++) {
+            if (eswcIs(race, kEswcRaces[k].c)) s.raceKind = k;
+        }
+        const BYTE* r = static_cast<const BYTE*>(race);
+        if (s.raceKind < 0 || *reinterpret_cast<void* const*>(r + kEswcRaceGame) != game) {
+            s.raceKind = -1;
+            s.otherRace = *static_cast<const uintptr_t*>(race);
+            return true;
+        }
+        s.race = race;
+        s.clock = *reinterpret_cast<const DWORD*>(r + kEswcRaceClock);
+        s.starts = *reinterpret_cast<const DWORD*>(r + kEswcRaceStarts);
+        s.respawns = *reinterpret_cast<const DWORD*>(r + kEswcRaceRespawns);
+        const BYTE* network = *reinterpret_cast<const BYTE* const*>(g + kEswcGameNetwork);
+        if (!network) return true;
+        void* const* infos = *reinterpret_cast<void* const* const*>(network + kEswcNetworkInfos);
+        void* info = infos ? infos[0] : nullptr;
+        if (!eswcIs(info, kEswcInfo) || *reinterpret_cast<const int*>(static_cast<const BYTE*>(info) + kEswcInfoPlayerType) != 0) return true;
+        s.info = info;
+        void* player = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(info) + kEswcInfoPlayer);
+        if (!eswcIs(player, kEswcPlayer) || *reinterpret_cast<void* const*>(static_cast<const BYTE*>(player) + kEswcPlayerInfo) != info) return true;
+        s.player = player;
+        void* car = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(player) + kEswcPlayerMobil);
+        if (eswcIs(car, kEswcCar) && eswcLocation(car)) s.car = car;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        s = EswcState();
+        return false;
+    }
+}
+
+// The race's local car while the race runs (its clock moved within 300 ms: not in the menu, not
+// paused), else null.
+const void* eswcRunningCar() {
+    if (!g_eswcState.car || !g_eswcClockTick || GetTickCount() - g_eswcClockTick > 300) return nullptr;
+    return g_eswcState.car;
+}
+
+// The cars of the race now: its players' and, in solo, the best and the current run's ghost.
+// Inside __try.
+int eswcCars(const EswcState& s, void** out, int max) {
+    int n = 0;
+    auto add = [&](void* car) {
+        if (!eswcIs(car, kEswcCar)) return;
+        for (int i = 0; i < n; i++) {
+            if (out[i] == car) return;
+        }
+        if (n < max) out[n++] = car;
+    };
+    if (!s.race) return 0;
+    const BYTE* r = static_cast<const BYTE*>(s.race);
+    const DWORD count = *reinterpret_cast<const DWORD*>(r + kEswcRacePlayers);
+    void* const* players = *reinterpret_cast<void* const* const*>(r + kEswcRacePlayers + 4);
+    for (DWORD i = 0; players && i < count && i < 64; i++) {
+        if (eswcIs(players[i], kEswcPlayer)) add(*reinterpret_cast<void* const*>(static_cast<const BYTE*>(players[i]) + kEswcPlayerMobil));
+    }
+    if (kEswcRaces[s.raceKind].solo) {
+        const size_t ghosts[2] = {kEswcRaceBestGhost, kEswcRaceCurrentGhost};
+        for (size_t offset : ghosts) {
+            void* ghost = *reinterpret_cast<void* const*>(r + offset);
+            if (eswcIs(ghost, kEswcGhost)) add(*reinterpret_cast<void* const*>(static_cast<const BYTE*>(ghost) + kEswcGhostMobil));
+        }
+    }
+    return n;
+}
+
+int eswcCarsSafe(const EswcState& s, void** out, int max) {
+    __try {
+        return eswcCars(s, out, max);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+// A car's tree flags and its item (see kEswcTreeFlags), null when unreadable.
+DWORD* eswcTreeFlags(void* car, BYTE** item) {
+    __try {
+        BYTE* it = *reinterpret_cast<BYTE**>(static_cast<BYTE*>(car) + kEswcMobilItem);
+        if (!it) return nullptr;
+        BYTE* corpus = *reinterpret_cast<BYTE**>(it + kEswcItemMainCorpus);
+        BYTE* tree = corpus ? *reinterpret_cast<BYTE**>(corpus + kEswcCorpusTree) : nullptr;
+        if (!tree) return nullptr;
+        *item = it;
+        DWORD* flags = reinterpret_cast<DWORD*>(tree + kEswcTreeFlags);
+        volatile DWORD probe = *flags;
+        (void)probe;
+        return flags;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+bool eswcSetBit(DWORD* flags, bool on) {
+    __try {
+        *flags = on ? (*flags | kEswcTreeVisible) : (*flags & ~kEswcTreeVisible);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool eswcReadDword(const void* p, DWORD& value) {
+    __try {
+        value = *static_cast<const DWORD*>(p);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void eswcSetShadow(BYTE* item, DWORD word) {
+    if (!g_eswcShadowSetters) return;
+    using ShadowTexFn = void(__fastcall*)(void*, void*, unsigned char, int);
+    using ShadowFakeFn = void(__fastcall*)(void*, void*, int);
+    __try {
+        reinterpret_cast<ShadowTexFn>(rebase(kEswcItemSetShadowTex))(item, nullptr, static_cast<unsigned char>(word & 0xff), (word >> 23) & 1);
+        reinterpret_cast<ShadowFakeFn>(rebase(kEswcItemSetShadowFake))(item, nullptr, (word >> 27) & 1);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+// Hide car (photo mode): the cars' trees hidden by us and the items whose shadow we took (with the
+// game's word). Applied every frame while hiding (the game shows a car again on its own, e.g. at a
+// respawn); given back only to the cars still in the race (a car that left was freed with its player),
+// forgotten with the map.
+std::unordered_set<uintptr_t> g_eswcHiddenTrees;
+std::unordered_map<uintptr_t, DWORD> g_eswcShadowWords;
+
+void eswcHideCars(const EswcState& s, bool hide) {
+    if (!hide && g_eswcHiddenTrees.empty() && g_eswcShadowWords.empty()) return;
+    void* cars[72];
+    const int n = eswcCarsSafe(s, cars, 72);
+    int hidden = 0, back = 0;
+    for (int i = 0; i < n; i++) {
+        BYTE* item = nullptr;
+        DWORD* flags = eswcTreeFlags(cars[i], &item);
+        if (!flags) continue;
+        const uintptr_t tree = reinterpret_cast<uintptr_t>(flags);
+        if (hide) {
+            DWORD f = 0;
+            if (!eswcReadDword(flags, f)) continue;
+            if ((f & kEswcTreeVisible) && eswcSetBit(flags, false)) {
+                if (g_eswcHiddenTrees.insert(tree).second) hidden++;
+            }
+            DWORD word = 0;
+            if (eswcReadDword(item + kEswcItemShadowWord, word) && ((word & 0xff) || ((word >> 23) & 1) || ((word >> 27) & 1))) {
+                g_eswcShadowWords.emplace(reinterpret_cast<uintptr_t>(item), word); // the first word seen is the game's
+                eswcSetShadow(item, word & ~0x88000ffu);
+            }
+        } else {
+            if (g_eswcHiddenTrees.count(tree) && eswcSetBit(flags, true)) back++;
+            auto kept = g_eswcShadowWords.find(reinterpret_cast<uintptr_t>(item));
+            if (kept != g_eswcShadowWords.end()) eswcSetShadow(item, kept->second);
+        }
+    }
+    static int s_lines = 0;
+    if (hide && hidden > 0 && s_lines < 20) {
+        s_lines++;
+        TMVS_LOG("engine (eswc): hide car: %d car(s) hidden (their tree's visible bit; %u shadow(s) off)", hidden,
+                 static_cast<unsigned>(g_eswcShadowWords.size()));
+    }
+    if (!hide) {
+        if (s_lines < 20) {
+            s_lines++;
+            TMVS_LOG("engine (eswc): hide car: %d of %u car(s) shown again", back, static_cast<unsigned>(g_eswcHiddenTrees.size()));
+        }
+        g_eswcHiddenTrees.clear();
+        g_eswcShadowWords.clear();
+    }
+}
+
+// Once a frame (eswcFrameBeginDetour): what the game runs now, the race's events, Hide car.
+void eswcPoll() {
+    if (!g_eswcClassesOk) return;
+    EswcState s;
+    if (!eswcRead(s)) {
+        static int s_failed = 0;
+        if (s_failed++ < 3) TMVS_LOG("engine (eswc): the game's objects were not readable this frame (left alone)");
+    }
+    const EswcState& last = g_eswcState;
+    if (s.race && s.race == last.race) {
+        if (s.clock != last.clock) g_eswcClockTick = GetTickCount() | 1;
+        if (s.starts != last.starts) InterlockedIncrement(&g_raceResets);
+        if (s.respawns != last.respawns) InterlockedIncrement(&g_respawns);
+    } else if (s.race != last.race) {
+        g_eswcClockTick = 0; // another race: its clock has to move first
+    }
+    // The log: each change of what runs (up to 60 lines).
+    static int s_lines = 0;
+    if (s_lines < 60) {
+        if (s.raceKind != last.raceKind || s.otherRace != last.otherRace) {
+            s_lines++;
+            if (s.raceKind >= 0) TMVS_LOG("engine (eswc): race %s (%p)", kEswcRaces[s.raceKind].c.name, s.race);
+            else if (s.otherRace) TMVS_LOG("engine (eswc): a race object of unknown class (vtable %p): no car, no race times", reinterpret_cast<void*>(s.otherRace));
+            else TMVS_LOG("engine (eswc): no race");
+        }
+        if ((s.car != nullptr) != (last.car != nullptr) || (s.info != nullptr) != (last.info != nullptr)) {
+            s_lines++;
+            TMVS_LOG("engine (eswc): local player %s, car %s", s.info ? "found" : "not found", s.car ? "found (position, axes and speed from the engine)" : "not found");
+        }
+        if (s.editor != last.editor) {
+            s_lines++;
+            TMVS_LOG("engine (eswc): editor %s", !s.editor ? "closed" : (s.replayEditor ? "CConstructionEditorReplay (replay: cinematic)" : "of another kind (not cinematic)"));
+        }
+        if (s.clipViewer != last.clipViewer) {
+            s_lines++;
+            TMVS_LOG("engine (eswc): %s", s.clipViewer ? "a replay plays (the app's clip viewer: cinematic)" : "the replay's clip viewer is gone");
+        }
+    }
+    eswcHideCars(s, g_hideCars);
+    g_eswcState = s;
+}
+
+// The map's identifier for the split times: "eswc-" and a hash of its name (ESWC maps carry no UID
+// the misc tools could use; the name is what its file and menus show).
+void eswcMapUid(const void* challenge) {
+    g_eswcMapUid[0] = '\0';
+    if (!challenge) return;
+    uint32_t hash = 2166136261u;
+    uint32_t size = 0;
+    __try {
+        const FastStringInt* name = reinterpret_cast<const FastStringInt*>(static_cast<const BYTE*>(challenge) + kEswcChallengeName);
+        size = name->size;
+        if (!name->text || size == 0 || size > 256) return;
+        for (uint32_t i = 0; i < size; i++) {
+            hash = (hash ^ static_cast<uint16_t>(name->text[i])) * 16777619u;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    snprintf(g_eswcMapUid, sizeof(g_eswcMapUid), "eswc-%08x", hash);
+}
+
+using EswcSetChallengeFn = void(__fastcall*)(void*, void*, void*);
+EswcSetChallengeFn g_eswcSetChallenge = nullptr;
+
+void* eswcCurrentChallenge(void* game) {
+    __try {
+        return *reinterpret_cast<void* const*>(static_cast<const BYTE*>(game) + kEswcGameChallenge);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+// Every map the game runs passes here: a load (the scene is made right after), or the menu (null).
+void __fastcall eswcSetChallengeDetour(void* game, void* edx, void* challenge) {
+    void* before = eswcCurrentChallenge(game);
+    g_eswcSetChallenge(game, edx, challenge);
+    g_eswcHiddenTrees.clear(); // the cars go with the map: nothing given back to them
+    g_eswcShadowWords.clear();
+    if (challenge) {
+        eswcMapUid(challenge);
+        InterlockedIncrement(&g_raceResets); // a new map
+        InterlockedIncrement(&g_mapLoads);
+        TMVS_LOG("engine (eswc): map loaded (%s)%s", g_eswcMapUid[0] ? g_eswcMapUid : "no name", challenge == before ? ", the same map again" : "");
+    } else if (before) {
+        g_eswcMapUid[0] = '\0';
+        InterlockedIncrement(&g_mapCloses);
+        TMVS_LOG("engine (eswc): map closed");
+    }
+}
+
+// The classes' vtables (GetMwClassId in slot 2) and the functions hooked or called: the readers and
+// hooks only go on when all are where expected.
+bool eswcCheckClasses() {
+    std::vector<const EswcClass*> classes = {&kEswcGame, &kEswcChallenge, &kEswcReplayEditor, &kEswcClipViewer, &kEswcGhost, &kEswcInfo, &kEswcPlayer, &kEswcCar};
+    for (const EswcRaceClass& r : kEswcRaces) classes.push_back(&r.c);
+    for (const EswcClass* c : classes) {
+        const uintptr_t* table = reinterpret_cast<const uintptr_t*>(rebase(c->vtable));
+        const BYTE* getId = readable(table + 2, sizeof(uintptr_t)) ? reinterpret_cast<const BYTE*>(table[2]) : nullptr;
+        if (!getId || !readable(getId, 6) || getId[0] != 0xb8 || *reinterpret_cast<const DWORD*>(getId + 1) != c->id || getId[5] != 0xc3) {
+            TMVS_LOG("engine (eswc): %s's vtable not where expected: no car, race times or map loads", c->name);
+            return false;
+        }
+    }
+    return true;
 }
 
 // TrackMania Nations ESWC (see kEswcTimestamp): the viewport's frame and camera hooks, the view and
@@ -2607,6 +3033,19 @@ bool installEswc() {
     if (readable(read, sizeof(kEswcReadInputPrologue)) && memcmp(read, kEswcReadInputPrologue, sizeof(kEswcReadInputPrologue)) == 0)
         g_eswcReadInput = reinterpret_cast<ReadInputResultFn>(jumpToDetour(read, sizeof(kEswcReadInputPrologue), reinterpret_cast<void*>(&eswcReadInputDetour)));
     if (!g_eswcReadInput) TMVS_LOG("engine: ESWC's keyboard read not where expected: Esc in the menu also reaches the game");
+    // The race, its car and the map (eswcPoll): only with every class where expected.
+    g_eswcClassesOk = eswcCheckClasses();
+    BYTE* setChallenge = reinterpret_cast<BYTE*>(rebase(kEswcSetChallenge));
+    if (g_eswcClassesOk && readable(setChallenge, sizeof(kEswcSetChallengePrologue)) &&
+        memcmp(setChallenge, kEswcSetChallengePrologue, sizeof(kEswcSetChallengePrologue)) == 0)
+        g_eswcSetChallenge = reinterpret_cast<EswcSetChallengeFn>(jumpToDetour(setChallenge, sizeof(kEswcSetChallengePrologue), reinterpret_cast<void*>(&eswcSetChallengeDetour)));
+    const BYTE* shadowTex = reinterpret_cast<const BYTE*>(rebase(kEswcItemSetShadowTex));
+    const BYTE* shadowFake = reinterpret_cast<const BYTE*>(rebase(kEswcItemSetShadowFake));
+    g_eswcShadowSetters = readable(shadowTex, sizeof(kEswcSetShadowTexPrologue)) && readable(shadowFake, sizeof(kEswcSetShadowFakePrologue)) &&
+                          memcmp(shadowTex, kEswcSetShadowTexPrologue, sizeof(kEswcSetShadowTexPrologue)) == 0 &&
+                          memcmp(shadowFake, kEswcSetShadowFakePrologue, sizeof(kEswcSetShadowFakePrologue)) == 0;
+    TMVS_LOG("engine (eswc): race and car readers %s, map loads %s, car shadow setters %s", g_eswcClassesOk ? "on" : "OFF",
+             g_eswcSetChallenge ? "hooked (CConstructionGame::SetChallenge 0x00710290)" : "NOT hooked", g_eswcShadowSetters ? "found" : "not found");
     g_eswc = true;
     return true;
 }
@@ -2992,7 +3431,80 @@ std::string mapComments() {
     return g_mapComments;
 }
 
+namespace {
+// The car's position and up axis from the GmIso4 it is drawn with (see carLocation). Inside __try.
+bool locationFromIso(const float* iso, float position[3], float up[3]) {
+    // GmIso4: a row-major 3x3 (p' = M p + t: its columns are the car's axes), then t.
+    for (int i = 0; i < 3; i++) {
+        position[i] = iso[9 + i];
+        if (!(fabsf(position[i]) < 1e5f)) return false;
+    }
+    if (up) {
+        // The car's up is one column of the 3x3 (the model's y, column 1, if TMNF is like
+        // ManiaPlanet). Which one is taken from the car standing level (at the start: one
+        // column within 18 degrees of the world's up), its sign with it; until then the world's
+        // up. Picked again on every map, and only once the same column and sign held for 30
+        // frames: a car on its roof the moment it was first seen made it upside down for the
+        // whole session. Logged when it differs from the last pick.
+        static int s_axis = -1, s_logged = -1;
+        static float s_sign = 1.0f;
+        static LONG s_loads = -1;
+        static int s_candidate = -1, s_frames = 0;
+        if (s_loads != g_mapLoads) {
+            s_loads = g_mapLoads;
+            s_axis = s_candidate = -1;
+            s_frames = 0;
+        }
+        float column[3][3];
+        float length[3];
+        for (int c = 0; c < 3; c++) {
+            for (int r = 0; r < 3; r++) column[c][r] = iso[r * 3 + c];
+            length[c] = sqrtf(column[c][0] * column[c][0] + column[c][1] * column[c][1] + column[c][2] * column[c][2]);
+        }
+        if (s_axis < 0) {
+            int level = -1; // column * 2 + (negated)
+            for (int c = 0; c < 3 && level < 0; c++) {
+                if (length[c] > 1e-3f && fabsf(column[c][1]) > 0.95f * length[c]) level = c * 2 + (column[c][1] < 0.0f ? 1 : 0);
+            }
+            s_frames = level >= 0 && level == s_candidate ? s_frames + 1 : (level >= 0 ? 1 : 0);
+            s_candidate = level;
+            if (s_frames >= 30) {
+                s_axis = level / 2;
+                s_sign = (level & 1) ? -1.0f : 1.0f;
+                if (level != s_logged) {
+                    s_logged = level;
+                    const int c = s_axis;
+                    TMVS_LOG("engine: the car's up is column %d of its matrix%s (columns %.2f %.2f %.2f / %.2f %.2f %.2f / %.2f %.2f %.2f)",
+                             c, s_sign < 0.0f ? ", negated" : "", column[0][0], column[0][1], column[0][2], column[1][0], column[1][1],
+                             column[1][2], column[2][0], column[2][1], column[2][2]);
+                }
+            }
+        }
+        up[0] = 0.0f;
+        up[1] = 1.0f;
+        up[2] = 0.0f;
+        if (s_axis >= 0 && length[s_axis] > 1e-3f && length[s_axis] < 1e3f) {
+            for (int r = 0; r < 3; r++) up[r] = column[s_axis][r] * s_sign / length[s_axis];
+        }
+    }
+    return true;
+}
+
+// TM Nations ESWC: the race's local car while the race runs (eswcPoll).
+bool eswcCarLocation(float position[3], float up[3]) {
+    const void* car = eswcRunningCar();
+    if (!car) return false;
+    __try {
+        const float* iso = eswcLocation(car);
+        return iso && locationFromIso(iso, position, up);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
 bool carLocation(float position[3], float up[3]) {
+    if (g_eswc) return eswcCarLocation(position, up);
     // Only the player of a race that runs now (the hook calls come every frame); the build's
     // own GetInterpolatedLocation in the slot, or nothing is called.
     if (!g_build || !g_build->interpolatedLocation || !g_racePlayer || GetTickCount() - g_racePlayerTick > 300) return false;
@@ -3006,60 +3518,7 @@ bool carLocation(float position[3], float up[3]) {
         using LocationFn = const float*(__fastcall*)(void*, void*, void*);
         const float* iso = reinterpret_cast<LocationFn>(table[kInterpolatedLocationSlot])(mobil, nullptr, nullptr);
         if (!iso) return false;
-        // GmIso4: a row-major 3x3 (p' = M p + t: its columns are the car's axes), then t.
-        for (int i = 0; i < 3; i++) {
-            position[i] = iso[9 + i];
-            if (!(fabsf(position[i]) < 1e5f)) return false;
-        }
-        if (up) {
-            // The car's up is one column of the 3x3 (the model's y, column 1, if TMNF is like
-            // ManiaPlanet). Which one is taken from the car standing level (at the start: one
-            // column within 18 degrees of the world's up), its sign with it; until then the world's
-            // up. Picked again on every map, and only once the same column and sign held for 30
-            // frames: a car on its roof the moment it was first seen made it upside down for the
-            // whole session. Logged when it differs from the last pick.
-            static int s_axis = -1, s_logged = -1;
-            static float s_sign = 1.0f;
-            static LONG s_loads = -1;
-            static int s_candidate = -1, s_frames = 0;
-            if (s_loads != g_mapLoads) {
-                s_loads = g_mapLoads;
-                s_axis = s_candidate = -1;
-                s_frames = 0;
-            }
-            float column[3][3];
-            float length[3];
-            for (int c = 0; c < 3; c++) {
-                for (int r = 0; r < 3; r++) column[c][r] = iso[r * 3 + c];
-                length[c] = sqrtf(column[c][0] * column[c][0] + column[c][1] * column[c][1] + column[c][2] * column[c][2]);
-            }
-            if (s_axis < 0) {
-                int level = -1; // column * 2 + (negated)
-                for (int c = 0; c < 3 && level < 0; c++) {
-                    if (length[c] > 1e-3f && fabsf(column[c][1]) > 0.95f * length[c]) level = c * 2 + (column[c][1] < 0.0f ? 1 : 0);
-                }
-                s_frames = level >= 0 && level == s_candidate ? s_frames + 1 : (level >= 0 ? 1 : 0);
-                s_candidate = level;
-                if (s_frames >= 30) {
-                    s_axis = level / 2;
-                    s_sign = (level & 1) ? -1.0f : 1.0f;
-                    if (level != s_logged) {
-                        s_logged = level;
-                        const int c = s_axis;
-                        TMVS_LOG("engine: the car's up is column %d of its matrix%s (columns %.2f %.2f %.2f / %.2f %.2f %.2f / %.2f %.2f %.2f)",
-                                 c, s_sign < 0.0f ? ", negated" : "", column[0][0], column[0][1], column[0][2], column[1][0], column[1][1],
-                                 column[1][2], column[2][0], column[2][1], column[2][2]);
-                    }
-                }
-            }
-            up[0] = 0.0f;
-            up[1] = 1.0f;
-            up[2] = 0.0f;
-            if (s_axis >= 0 && length[s_axis] > 1e-3f && length[s_axis] < 1e3f) {
-                for (int r = 0; r < 3; r++) up[r] = column[s_axis][r] * s_sign / length[s_axis];
-            }
-        }
-        return true;
+        return locationFromIso(iso, position, up);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_racePlayer = nullptr;
         return false;
@@ -3174,8 +3633,10 @@ constexpr float kContactHeight = -0.35f; // the road under the tyres (wheel radi
 
 bool carPose(CarPose& pose) {
     pose = CarPose();
-    if (!g_build || !g_build->interpolatedLocation) return false;
-    const bool race = g_racePlayer && GetTickCount() - g_racePlayerTick <= 300;
+    // TM Nations ESWC: the race's local car (eswcPoll); no clip player there.
+    const void* eswcCar = g_eswc ? eswcRunningCar() : nullptr;
+    if (g_eswc ? !eswcCar : (!g_build || !g_build->interpolatedLocation)) return false;
+    const bool race = g_eswc || (g_racePlayer && GetTickCount() - g_racePlayerTick <= 300);
     // Counted in frames (one frame of a 4K export with supersampling takes seconds).
     const bool clip = !race && g_clipPlayer && g_engineFrames - g_clipPlayerFrame <= 3;
     if (!race && !clip) return false;
@@ -3183,9 +3644,13 @@ bool carPose(CarPose& pose) {
     void* vehicle = nullptr;
     int which = -1;
     __try {
-        const BYTE* mobil = race ? *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(g_racePlayer) + kPlayerMobil)
-                                 : clipCar(static_cast<const BYTE*>(g_clipPlayer), which);
-        iso = drawnLocation(mobil, vehicle);
+        if (g_eswc) {
+            iso = eswcLocation(eswcCar);
+        } else {
+            const BYTE* mobil = race ? *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(g_racePlayer) + kPlayerMobil)
+                                     : clipCar(static_cast<const BYTE*>(g_clipPlayer), which);
+            iso = drawnLocation(mobil, vehicle);
+        }
         if (!iso) return false;
         memcpy(pose.position, iso + 9, sizeof(pose.position));
         float column[3][3], length[3];
@@ -3348,6 +3813,8 @@ int mapCloses() {
 }
 
 const void* currentMap() {
+    // TM Nations ESWC: its CConstructionChallenge (the misc tools only compare it, mapview stays off there).
+    if (g_eswc) return g_eswcState.challenge;
     return currentChallenge();
 }
 
@@ -3374,6 +3841,7 @@ std::string idText(const void* id) {
 bool raceGhostTimes(std::vector<int>& checkpoints, int& raceTime) {
     checkpoints.clear();
     raceTime = -1;
+    if (g_eswc) return false; // TM Nations ESWC: its ghosts' checkpoint times are not read
     if (!g_build || !g_race || GetTickCount() - g_racePlayerTick > 5000) return false;
     int times[RaceTimes::kMax];
     int count = 0, best = -1;
@@ -3424,17 +3892,79 @@ bool vehicleSpeed(const BYTE* player, float& speed) {
 
 bool carSpeed(float& metresPerSecond) {
     metresPerSecond = 0.0f;
+    if (g_eswc) {
+        // The car's world speed (kEswcCorpusDyna): its body's state, m/s.
+        const void* car = eswcRunningCar();
+        if (!car) return false;
+        __try {
+            const BYTE* item = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(car) + kEswcMobilItem);
+            if (!item || *reinterpret_cast<const DWORD*>(item + kEswcItemCorpora) == 0) return false;
+            const BYTE* corpus = **reinterpret_cast<const BYTE* const* const*>(item + kEswcItemCorpora + 4);
+            const BYTE* dyna = corpus ? *reinterpret_cast<const BYTE* const*>(corpus + kEswcCorpusDyna) : nullptr;
+            const BYTE* state = dyna ? *reinterpret_cast<const BYTE* const*>(dyna + kEswcDynaState) : nullptr;
+            if (!state) return false;
+            const float* v = reinterpret_cast<const float*>(state + kEswcStateSpeed);
+            metresPerSecond = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            return metresPerSecond < 1000.0f;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
     if (!g_build || !g_build->asyncSpeed || !g_racePlayer || GetTickCount() - g_racePlayerTick > 300) return false;
     return vehicleSpeed(static_cast<const BYTE*>(g_racePlayer), metresPerSecond);
 }
 
 std::string currentMapUid() {
+    if (g_eswc) return g_eswcState.challenge ? std::string(g_eswcMapUid) : std::string();
     const BYTE* challenge = static_cast<const BYTE*>(currentChallenge());
     return challenge ? idText(challenge + kChallengeUid) : std::string();
 }
 
+namespace {
+// TM Nations ESWC: the local player's CTrackManiaPlayerInfo (see kEswcInfoStart), while its race is
+// the one running (its clock moved within the last 5 s: the finish is read in that time).
+bool eswcRaceTimes(RaceTimes& out) {
+    const EswcState& s = g_eswcState;
+    if (!s.race || !s.info || !g_eswcClockTick || GetTickCount() - g_eswcClockTick > 5000) return false;
+    __try {
+        const BYTE* race = static_cast<const BYTE*>(s.race);
+        const BYTE* info = static_cast<const BYTE*>(s.info);
+        const bool lap = *reinterpret_cast<const DWORD*>(race + kEswcRaceLapTimes) != 0;
+        const DWORD state = *reinterpret_cast<const DWORD*>(info + kEswcInfoState);
+        const DWORD start = *reinterpret_cast<const DWORD*>(info + (lap ? kEswcInfoLapStart : kEswcInfoStart));
+        out.finished = state == 2;
+        out.started = state == 1 || state == 2;
+        if (out.finished) out.time = *reinterpret_cast<const int*>(info + (lap ? kEswcInfoLapFinalTime : kEswcInfoFinalTime));
+        else if (state == 1) out.time = static_cast<int>(*reinterpret_cast<const DWORD*>(race + kEswcRaceClock) - start);
+        out.passed = *reinterpret_cast<const int*>(info + kEswcInfoPassed);
+        const DWORD count = *reinterpret_cast<const DWORD*>(info + kEswcInfoCheckpoints);
+        const DWORD* entries = *reinterpret_cast<const DWORD* const*>(info + kEswcInfoCheckpoints + 4);
+        if (count > static_cast<DWORD>(RaceTimes::kMax) || (count && !entries)) return false;
+        out.count = static_cast<int>(count);
+        for (DWORD i = 0; i < count; i++) out.times[i] = static_cast<int>(entries[i * 2]);
+        out.race = s.race;
+        if (out.time < 0 || out.time > 24 * 3600 * 1000 || out.passed < 0 || out.passed > 100000) return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out = RaceTimes();
+        return false;
+    }
+    return true;
+}
+} // namespace
+
 bool raceTimes(RaceTimes& out) {
     out = RaceTimes();
+    if (g_eswc) {
+        const bool ok = eswcRaceTimes(out);
+        if (!ok) out = RaceTimes();
+        // The first time the race's times are read on a map, for the log.
+        static LONG s_logged = -1;
+        if (ok && s_logged != g_mapLoads) {
+            s_logged = g_mapLoads;
+            TMVS_LOG("engine (eswc): race times read: %d checkpoint entries, %d passed, time %d ms", out.count, out.passed, out.time);
+        }
+        return ok;
+    }
     // A few seconds after the race last checked its player: after the finish it soon stops, and
     // the finish's time is read in that moment (setChallengeDetour forgets the race with its map).
     if (!g_build || !g_race || !g_racePlayer || GetTickCount() - g_racePlayerTick > 5000) return false;
@@ -3472,6 +4002,7 @@ bool raceTimes(RaceTimes& out) {
 }
 
 bool mapOpen() {
+    if (g_eswc) return g_eswcState.challenge != nullptr;
     return currentChallenge() != nullptr;
 }
 
@@ -3532,6 +4063,18 @@ bool eswc() {
     return g_eswc;
 }
 
+bool eswcCarPosition(float position[3]) {
+    if (!g_eswc || !g_eswcState.car) return false;
+    __try {
+        const float* iso = eswcLocation(g_eswcState.car);
+        if (!iso) return false;
+        memcpy(position, iso + 9, 3 * sizeof(float));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 bool eswcExecutable() {
     wchar_t path[MAX_PATH] = {};
     if (!GetModuleFileNameW(nullptr, path, MAX_PATH)) return false;
@@ -3583,7 +4126,8 @@ void setProjectionZoom(float zoom) {
 }
 
 bool hidingCars() {
-    return g_hideCars;
+    // TM Nations ESWC hides its cars in the game itself (eswcHideCars): no draw is skipped at the device.
+    return g_hideCars && !g_eswc;
 }
 
 bool carDrawNow() {
@@ -3647,6 +4191,7 @@ void carShadows(bool hide) {
 void hideCars(bool hide) {
     if (hide != g_hideCars) TMVS_LOG("engine: the cars' draws %s", hide ? "skipped (photo mode)" : "back");
     g_hideCars = hide;
+    if (g_eswc) return; // applied once a frame by eswcPoll (the game's thread)
     carShadows(hide);
 }
 
@@ -3746,6 +4291,9 @@ bool freeCamActive() {
 }
 
 bool cinematicActive() {
+    // TM Nations ESWC: watching is a replay played by the app's clip viewer (watched or shot) or the
+    // replay editor; without its readers, as without hooks below.
+    if (g_eswc && g_eswcClassesOk) return g_eswcState.clipViewer || g_eswcState.replayEditor;
     // Without the hooks there is no way to tell: treat everything as cinematic, so the
     // settings behave as before.
     if (!g_tracksUpdate && !g_updateCams && !g_doShoot) return true;
@@ -3758,6 +4306,7 @@ bool clipInRace() {
     // there, "sources 1" for the clips on the track). The race checks its player's trigger zones
     // every frame it runs, also while such a clip plays.
     const DWORD now = GetTickCount();
+    if (g_eswc) return false; // no clips of the map in TM Nations ESWC's races
     if (!cinematicActive() || !g_tracksUpdate || (g_lastNotClip != 0 && now - g_lastNotClip < 500)) return false;
     return g_racePlayer && now - g_racePlayerTick <= 300;
 }

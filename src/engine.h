@@ -40,11 +40,16 @@ bool install(const Callbacks& callbacks);
 void forceShadows(int mode);
 bool active();
 // The game is TrackMania Nations ESWC (TmNationsESWC.exe of the unofficial 1.80 patch, 2006
-// engine): only the viewport's frame and camera hooks, the view, the projection and the keyboard
-// read; nothing of the map, the race, the cars, replays, the video export or the materials.
+// engine): the viewport's frame and camera hooks, the view, the projection and the keyboard read;
+// map loads (SetChallenge), the race's local car (position, axes, speed), its starts, respawns and
+// checkpoint times, the replay editor and Hide car read from the game's objects once a frame.
+// Nothing of the materials, the clip player or the video export.
 bool eswc();
 // The game's executable is TmNationsESWC.exe (by its file name, before any hook is checked).
 bool eswcExecutable();
+// TM Nations ESWC: where the race's local car is drawn, also while the race is paused or before its
+// clock runs (carLocation answers only while it runs). False: no race or no car.
+bool eswcCarPosition(float position[3]);
 
 // Camera info of the camera currently between RenderCameraBegin/End (or the last one).
 const CameraInfo& currentCamera();

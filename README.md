@@ -181,7 +181,7 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 | TrackMania Nations Forever | Yes |
 | TrackMania United Forever | Yes (the mod detects the game build and the map's environment) |
 | TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) |
-| TrackMania Nations ESWC | Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)). The look, photos and F12 captures; no car, map, replay or video features |
+| TrackMania Nations ESWC | Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)). The look, photos and F12 captures, neon trail, headlights, spray, long mesh shadows, Hide car, split times; no video export, water or minimap |
 | Trackmania (2020) | No |
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
 | CenterSpeed (speedometer) | Yes. With both loaded, this mod's menu opens with `F5` (CenterSpeed uses `F8`) |

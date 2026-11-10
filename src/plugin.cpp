@@ -3586,8 +3586,14 @@ void castersTick() {
     const Settings& s = Config::get().settings;
     // Not with the effects (F7): switched off to compare, the meshes stay (the recording pauses
     // below, nothing uses the maps) and the shadows are back at once, not rebuilt over seconds.
-    // Not in TM Nations ESWC: no map loads seen, the meshes of the last map would keep casting.
-    const bool on = s.casterShadows && engine::active() && !engine::eswc();
+    const bool on = s.casterShadows && engine::active();
+    // TM Nations ESWC: no draw's material is known, so the car is told by its place (a car standing
+    // at the start or in a pause would be kept as a static mesh).
+    if (engine::eswc()) {
+        float car[3];
+        if (engine::eswcCarPosition(car)) casters::excludeAround(car, 4.0f);
+        else casters::excludeAround(nullptr, 0.0f);
+    }
     static int s_loads = -1, s_closes = -1, s_removed = -1;
     if (engine::mapLoads() != s_loads || engine::mapCloses() != s_closes) {
         s_loads = engine::mapLoads();

@@ -246,10 +246,9 @@ void drawPhotoPanel() {
     ImGui::PopItemWidth();
     if (ImGui::Button("Clear focus")) photo::clearFocus();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to automatic focus. Middle click in the picture sets it.");
-    // TM Nations ESWC: no hooks for the car's draws, the editor or the interface (photos never
-    // include the HUD anyway).
+    if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
+    // TM Nations ESWC: no hooks for the editor or the interface (photos never include the HUD anyway).
     if (!engine::eswc()) {
-        if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
         if (ImGui::Checkbox("Hide editor", &config.photoHideEditor)) config.markDirty();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The replay editor's panels (the game's Tab key); the 3D view fills the screen.");
         if (ImGui::Checkbox("Hide HUD", &config.photoHideHud)) config.markDirty();
@@ -608,23 +607,19 @@ void drawStatusLine(IDirect3DDevice9* device) {
     ImGui::PopStyleVar(4);
 }
 
-// TrackMania Nations ESWC (engine::eswc): the 2006 engine, hooked for its frame and cameras only.
-// What needs the map, the race, the car, replays, the video export, the game's materials or its
-// light is not shown (nothing there would happen); the rest works as in Nations Forever.
+// TrackMania Nations ESWC (engine::eswc): the 2006 engine, hooked for its frame and cameras, its
+// map loads, and its race and local car read once a frame. What needs the video export, the game's
+// materials or its light is not shown (nothing there would happen); the rest works as in Nations Forever.
 static bool eswcSupports(const Field& f) {
     static const char* const kHidden[] = {
-        // the car (position, axes, speed): no race hook
-        "NeonTrail", "TrailColor", "TrailWidth", "TrailTyres", "TrailDuration", "TrailKeepRuns", "Spray", "WaterSplash", "CarHeadlights",
-        "CarHeadlightRange", "CarHeadlightBeam",
-        // replays and the video export: no clip player, no export
-        "MotionBlur", "CinematicOnlyInReplays", "VideoCodec", "VideoQuality", "Video10Bit", "VideoBitrate", "VideoEncoder", "VideoFfmpegPreset",
-        "VideoExportBest", "VideoOwnFrames", "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak",
-        "VideoHdrWhite",
-        // the map's light and weather, the game's FX, its materials and shaders, the block order, map loads
-        "GameNight", "EngineMoon", "GameSkyClouds", "DisableGameFX", "GameMaterials", "GameGBuffer", "GameLight", "CasterShadows",
-        "CasterAlphaTest", "OverlapFix", "ToneCurve",
-        // no water in its Stadium; without the game's materials grey road was taken for water
-        "WaterSurfaces", "WaterClarity", "CleanWater", "WaterFarReflections"};
+        // the video export: the game has one (the replay's "Shoot video", AVI), not hooked yet
+        "VideoCodec", "VideoQuality", "Video10Bit", "VideoBitrate", "VideoEncoder", "VideoFfmpegPreset", "VideoExportBest", "VideoOwnFrames",
+        "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
+        // the map's light and weather, the game's FX, its materials and shaders, the block order
+        "GameNight", "EngineMoon", "GameSkyClouds", "DisableGameFX", "GameMaterials", "GameGBuffer", "GameLight", "OverlapFix", "ToneCurve",
+        // no water in its Stadium (no water blocks, only the grass zone); without the game's materials
+        // grey road was taken for water
+        "WaterSurfaces", "WaterClarity", "CleanWater", "WaterFarReflections", "WaterSplash"};
     if (!strncmp(f.key, "Vr", 2)) return false; // the VR mod is TMNF's
     for (const char* key : kHidden) {
         if (!strcmp(f.key, key)) return false;
@@ -634,12 +629,11 @@ static bool eswcSupports(const Field& f) {
 
 static void eswcHost(menu::Host& host) {
     host.resourcePacks = nullptr; // no mod packs hook
-    host.miscPage = nullptr;      // minimap, splits, finish effects: no race hooks
     host.vrState = nullptr;
-    host.photoHideCar = false;
+    host.photoHideCar = true;     // the game's own visible bit of each car (engine.cpp, eswcHideCars)
+    host.photoHideEditor = false; // no hook on the replay editor's panels
     host.photoGameHooks = false;
     host.supports = eswcSupports;
-    host.tips.push_back({"DepthOfField", "Blurs what is in front of and behind the point in focus. In TM Nations ESWC only in photo mode."});
 }
 
 static ExternalTarget* g_ext = nullptr;
