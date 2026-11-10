@@ -325,7 +325,7 @@ std::wstring pickGameDir(const std::wstring& suggestion) {
     DWORD options = 0;
     dialog->GetOptions(&options);
     dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-    dialog->SetTitle(L"Select your game folder (with TmForever.exe or ManiaPlanet.exe)");
+    dialog->SetTitle(L"Select your game folder (with TmForever.exe, TmNationsESWC.exe or ManiaPlanet.exe)");
     if (!suggestion.empty()) {
         IShellItem* folder = nullptr;
         if (SUCCEEDED(SHCreateItemFromParsingName(suggestion.c_str(), nullptr, IID_PPV_ARGS(&folder)))) {
@@ -589,8 +589,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         buttons.push_back({200 + static_cast<int>(i), buttonTexts.back().c_str()});
     }
 
-    buttonTexts.push_back(games.empty() ? L"Install into a game folder\nChoose the folder with TmForever.exe or ManiaPlanet.exe yourself."
-                                        : L"Install into another game folder\nChoose the folder with TmForever.exe or ManiaPlanet.exe yourself.");
+    buttonTexts.push_back(games.empty() ? L"Install into a game folder\nChoose the folder with TmForever.exe, TmNationsESWC.exe or ManiaPlanet.exe yourself."
+                                        : L"Install into another game folder\nChoose the folder with TmForever.exe, TmNationsESWC.exe or ManiaPlanet.exe yourself.");
     buttons.push_back({102, buttonTexts.back().c_str()});
 
     if (inLoader || inGame) {
