@@ -747,7 +747,8 @@ void draw(IDirect3DDevice9* device) {
         g_packs.device = device;
         host.resourcePacks = &g_packs;
         if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
-        host.clipsPanel = [] { clips::drawPanel(); };
+        host.clipsPanel = [] { clips::drawRecording(); };
+        host.clipsSaving = [] { clips::drawSaving(); };
         host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
         if (engine::eswc()) eswcHost(host);
         host.hideDetached = capturing;

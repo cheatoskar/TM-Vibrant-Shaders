@@ -9,7 +9,7 @@
 //
 // One code base, two hosts:
 //  - TM Vibrant Shaders (Host::Tmvs): its Present calls present(), its menu shows the settings
-//    (Video page), its overlay draws the message. With "Without HUD" the picture is the scene it
+//    (Clips page), its overlay draws the message. With "Without HUD" the picture is the scene it
 //    shaded before the HUD (sceneDone()).
 //  - TM Clips, the standalone mod (Host::Standalone, src/clips/standalone): its own Present hook and
 //    a small window of its own.
@@ -51,8 +51,12 @@ void postReset();
 // At the end (not at process exit: the threads are gone then).
 void shutdown();
 
-// The UI, between ImGui::NewFrame and Render. drawPanel: the settings and the last clips.
+// The UI, between ImGui::NewFrame and Render. drawPanel: all of it (the standalone's window);
+// TM Vibrant Shaders' Clips page shows its two halves side by side: drawSaving (save on finish, the
+// keys, the last runs, the last clips) and drawRecording (buffer, size, encoder, sound).
 void drawPanel();
+void drawSaving();
+void drawRecording();
 // The "Clip saved" message (fades): drawn when toastActive().
 bool toastActive();
 void drawToast();

@@ -28,6 +28,9 @@ double g_lastEdit = -1.0;   // the panel changed a setting (seconds)
 Recorder* g_recorder = nullptr; // made at boot, never freed (its threads may still run at process exit)
 Grabber g_grabber;
 RunTracker g_tracker;
+RunLog g_runs;              // the last finished runs (Save last run, the Clips page's list)
+int g_authorMs = -1;        // the loaded map's author time (the last map's while none is loaded)
+double g_authorRead = -10.0;
 bool g_paused = false;
 bool g_idle = false;
 HANDLE g_hostMutex = nullptr;
@@ -49,6 +52,7 @@ struct Handshake {
 struct Active {
     bool have = false;
     int width = 0, height = 0;
+    int seconds = 0;          // the buffer (the adaptive one's length for the map)
     Settings settings;
     bool startLogged = false;
     bool failLogged = false;
@@ -156,6 +160,14 @@ void stopRecording(const char* why) {
     TMVS_LOG("clips: recording stopped (%s)", why);
 }
 
+// The buffer's length now: the setting's, or with Adaptive buffer the map's (author time x 1.5 +
+// 10 s, at least 60 s and the save key's seconds), both within the memory limit.
+int effectiveBuffer() {
+    const int most = maxBufferSeconds(g_settings.bitrate, g_settings.sound);
+    if (!g_settings.adaptiveBuffer) return std::min(g_settings.bufferSeconds, most);
+    return adaptiveBufferSeconds(g_authorMs, g_settings.keySeconds, std::min(600, most));
+}
+
 void startRecording(int width, int height) {
     handOverPending();
     if (g_recorder) g_recorder->stop();
@@ -167,12 +179,14 @@ void startRecording(int width, int height) {
     r.bitrate = g_settings.bitrate * 1e6;
     r.encoder = g_settings.encoder;
     r.sound = g_settings.sound;
-    r.seconds = g_settings.bufferSeconds;
+    r.soundSource = g_settings.soundSource;
+    r.seconds = effectiveBuffer();
     g_recorder->start(r);
     g_active = Active();
     g_active.have = true;
     g_active.width = width;
     g_active.height = height;
+    g_active.seconds = static_cast<int>(r.seconds);
     g_active.settings = g_settings;
     g_nextDue = 0.0;
     g_cost = Cost();
@@ -237,6 +251,14 @@ void onFinish(const RunEvent& e) {
              !save ? (g_settings.onFinish == 0 ? "not saved (Save on finish is off)" : "not saved (not a personal best)")
                    : (recording() ? "saving the run" : "not saved (not recording)"));
     TMVS_LOG("%s", line);
+    RunMarker run;
+    run.runStart = e.runStart;
+    run.finishAt = e.finishAt;
+    run.raceTime = e.raceTime;
+    run.pb = pb;
+    run.map = map;
+    run.saved = save && recording();
+    g_runs.add(run);
     if (!save || !recording()) return;
     SaveJob job;
     job.from = static_cast<int64_t>((e.runStart - g_settings.before) * 1e7);
@@ -244,6 +266,79 @@ void onFinish(const RunEvent& e) {
     job.what = time;
     job.path = clipPath(map, time);
     queueSave(e.finishAt + g_settings.after, job);
+}
+
+// The oldest second the buffer holds, -1 none.
+double bufferOldest() {
+    if (!recording()) return -1.0;
+    const int64_t t = g_recorder->oldest();
+    return t < 0 ? -1.0 : static_cast<double>(t) / 1e7;
+}
+
+// A finished run from the list (Save last run, the page's Save): its start minus Before start to
+// its finish plus After finish, as far as the buffer still holds it. Also after a restart, a
+// respawn or a new run: the buffer keeps recording, the span stays where it was.
+void saveRun(RunMarker& run, const char* how) {
+    const std::string time = formatTime(run.raceTime);
+    if (!recording()) {
+        TMVS_LOG("clips: %s: not recording (%s)", how, g_status.c_str());
+        showToast("Not recording", false);
+        return;
+    }
+    const double from = run.runStart - g_settings.before, to = run.finishAt + g_settings.after;
+    const InBuffer in = spanInBuffer(from, to, bufferOldest());
+    if (in == InBuffer::Gone) {
+        TMVS_LOG("clips: %s: the run %s is no longer in the buffer", how, time.c_str());
+        showToast("Run no longer in the buffer", false);
+        return;
+    }
+    SaveJob job;
+    job.from = static_cast<int64_t>(from * 1e7);
+    job.to = static_cast<int64_t>(to * 1e7);
+    job.what = time;
+    job.path = clipPath(run.map, time);
+    run.saved = true;
+    TMVS_LOG("clips: %s: saving the run %s%s (finished %.0f s ago)%s", how, time.c_str(), run.pb ? " (personal best)" : "",
+             seconds() - run.finishAt, in == InBuffer::Part ? ", its start no longer in the buffer: from the oldest second kept" : "");
+    queueSave(std::max(seconds(), to), job);
+}
+
+void saveLastRun() {
+    RunMarker* run = g_runs.last();
+    if (!run) {
+        TMVS_LOG("clips: last run key: no finished run yet");
+        showToast("No finished run yet", false);
+        return;
+    }
+    if (run->saved) {
+        TMVS_LOG("clips: last run key: the run %s is saved already", formatTime(run->raceTime).c_str());
+        showToast("Run already saved", true);
+        return;
+    }
+    saveRun(*run, "last run key");
+}
+
+// The run that runs now, from its start (minus Before start) to now.
+void saveRunSoFar() {
+    if (!recording()) {
+        TMVS_LOG("clips: run so far: not recording (%s)", g_status.c_str());
+        showToast("Not recording", false);
+        return;
+    }
+    if (!g_tracker.running()) {
+        TMVS_LOG("clips: run so far: no run now");
+        showToast("No run now", false);
+        return;
+    }
+    const double now = seconds();
+    SaveJob job;
+    job.from = static_cast<int64_t>((g_tracker.runStart() - g_settings.before) * 1e7);
+    job.to = static_cast<int64_t>(now * 1e7);
+    const std::string time = formatTime(static_cast<int>((now - g_tracker.runStart()) * 1000.0));
+    job.what = "run so far " + time;
+    job.path = clipPath(mapName(), std::string());
+    TMVS_LOG("clips: run so far: saving %s from the run's start", time.c_str());
+    queueSave(now, job);
 }
 
 void saveLast() {
@@ -296,7 +391,19 @@ public:
 private:
     bool m_down = false;
 };
-KeyEdge g_saveKey;
+KeyEdge g_saveKey, g_lastRunKey, g_runSoFarKey;
+
+// The loaded map's author time, read once a second; kept while no map is loaded (the menus), so the
+// adaptive buffer doesn't start over for every visit there.
+void readAuthorTime(double now) {
+    if (now - g_authorRead < 1.0) return;
+    g_authorRead = now;
+    const int ms = mapAuthorTime();
+    if (ms > 0 && ms != g_authorMs) {
+        g_authorMs = ms;
+        if (g_settings.adaptiveBuffer) TMVS_LOG("clips: author time %s: the adaptive buffer is %d s", formatTime(ms).c_str(), effectiveBuffer());
+    }
+}
 
 void logStats(double now) {
     if (!recording() || now - g_cost.since < 60.0) return;
@@ -322,7 +429,9 @@ void takeResults() {
         g_reserved.erase(r.path);
         TMVS_LOG("clips: %s", r.line.c_str());
         if (!g_settings.toast) continue;
-        if (r.ok) showToast("Clip saved " + (r.what.rfind("last", 0) == 0 ? std::string("(") + r.what + ")" : r.what), true);
+        // A run's time as it is ("Clip saved 0:42.37"), the others in brackets ("Clip saved (last 30 s)").
+        const bool time = !r.what.empty() && r.what[0] >= '0' && r.what[0] <= '9';
+        if (r.ok) showToast("Clip saved " + (time ? r.what : std::string("(") + r.what + ")"), true);
         else showToast("Clip not saved", false);
     }
 }
@@ -410,13 +519,16 @@ void boot(Host host) {
              narrow(dataDir() + L"\\clips.ini").c_str(), narrow(clipsDir()).c_str(),
              build ? (std::string("race read from TrackMania ") + build).c_str() : "this game's race is unknown: only the save key works",
              g_settings.saveKey.c_str(), g_settings.onFinish == 2 ? "every finish" : g_settings.onFinish == 1 ? "personal best only" : "off");
+    TMVS_LOG("clips: last run key %s, run so far key %s, the save key saves the last %d s, buffer %s", g_settings.lastRunKey.c_str(),
+             g_settings.runSoFarKey.c_str(), g_settings.keySeconds, g_settings.adaptiveBuffer ? "adaptive (from the map's author time)" : "fixed");
     if (host == Host::Tmvs) {
-        keys::Binding b;
-        if (keys::parse(g_settings.saveKey.c_str(), b)) {
+        for (const std::string* key : {&g_settings.saveKey, &g_settings.lastRunKey, &g_settings.runSoFarKey}) {
+            keys::Binding b;
+            if (!keys::parse(key->c_str(), b)) continue;
             for (int a = 0; a < static_cast<int>(keys::Action::Count); a++) {
                 const keys::Action action = static_cast<keys::Action>(a);
                 if (keys::info(action).available && keys::get(action) == b)
-                    TMVS_LOG("clips: the save key %s is also the menu's %s: change one of them", g_settings.saveKey.c_str(), keys::info(action).label);
+                    TMVS_LOG("clips: the key %s is also the menu's %s: change one of them", key->c_str(), keys::info(action).label);
             }
         }
     }
@@ -486,6 +598,9 @@ void present(IDirect3DDevice9* device) {
     syncSettings(now);
     takeResults();
     if (g_settings.enabled && g_saveKey.pressed(g_settings.saveKey)) saveLast();
+    if (g_settings.enabled && g_lastRunKey.pressed(g_settings.lastRunKey)) saveLastRun();
+    if (g_settings.enabled && g_runSoFarKey.pressed(g_settings.runSoFarKey)) saveRunSoFar();
+    readAuthorTime(now);
     // The race, for the runs' clips (read even before the recorder is ready: a run's start counts).
     {
         RaceSample s;
@@ -525,9 +640,14 @@ void present(IDirect3DDevice9* device) {
         back->Release();
         return;
     }
-    const bool differs = !g_active.have || g_active.width != w || g_active.height != h || !g_active.settings.sameRecording(g_settings);
+    const int bufferNow = effectiveBuffer();
+    const bool sameOtherwise = g_active.have && g_active.width == w && g_active.height == h && g_active.settings.sameRecording(g_settings);
+    const bool differs = !sameOtherwise || g_active.seconds != bufferNow;
     if (differs && (g_lastEdit < 0.0 || now - g_lastEdit > 1.0)) {
-        if (g_active.have) TMVS_LOG("clips: recording again (%dx%d, the size or a setting changed)", w, h);
+        if (sameOtherwise)
+            TMVS_LOG("clips: recording again with a %d s buffer (was %d s): this map's author time", bufferNow, g_active.seconds);
+        else if (g_active.have)
+            TMVS_LOG("clips: recording again (%dx%d, the size or a setting changed)", w, h);
         startRecording(w, h);
     }
     switch (g_recorder->state()) {
@@ -545,9 +665,11 @@ void present(IDirect3DDevice9* device) {
         if (!g_active.startLogged) {
             g_active.startLogged = true;
             const RecorderStats limits = g_recorder->stats();
-            TMVS_LOG("clips: recording %dx%d (the game's %ux%u) at %d fps, %d Mbit/s, into a %d s buffer (about %.0f MB, at most %.0f)%s: %s", w, h,
-                     desc.Width, desc.Height, g_settings.fps, g_settings.bitrate, g_settings.bufferSeconds, memoryEstimate(g_settings) / 1048576.0,
-                     (limits.bufferLimit + limits.soundBytes) / 1048576.0, wantsScene() ? ", without the HUD" : "", g_recorder->description().c_str());
+            TMVS_LOG("clips: recording %dx%d (the game's %ux%u) at %d fps, %d Mbit/s, into a %d s buffer%s (about %.0f MB, at most %.0f)%s: %s", w,
+                     h, desc.Width, desc.Height, g_settings.fps, g_settings.bitrate, g_active.seconds,
+                     g_settings.adaptiveBuffer ? (g_authorMs > 0 ? " (adaptive, from the author time)" : " (adaptive, no author time yet)") : "",
+                     memoryEstimate(g_settings, g_active.seconds) / 1048576.0, (limits.bufferLimit + limits.soundBytes) / 1048576.0,
+                     wantsScene() ? ", without the HUD" : "", g_recorder->description().c_str());
         }
         char text[128];
         const RecorderStats st = g_recorder->stats();
@@ -611,6 +733,7 @@ void shutdown() {
 namespace {
 
 bool g_capturingKey = false;
+int g_capturingFor = 0; // which key row waits for a key
 bool g_keyWasDown[256] = {};
 
 // The next key pressed (with its modifiers), for "Change". Esc cancels.
@@ -675,43 +798,157 @@ std::vector<ClipFile> listClips() {
 
 } // namespace
 
-void drawPanel() {
+namespace {
+
+// A key setting's row: its name, the key, Change (the next key pressed, Esc cancels).
+void keyRow(const char* label, std::string& key, int id) {
+    ImGui::PushID(id);
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%s: %s", label, key.c_str());
+    ImGui::SameLine();
+    if (g_capturingKey && g_capturingFor == id) {
+        std::string pressed;
+        ImGui::TextDisabled("press a key (Esc: cancel)");
+        if (captureKey(pressed)) {
+            key = pressed;
+            edited();
+        }
+    } else if (ImGui::SmallButton("Change")) {
+        g_capturingKey = true;
+        g_capturingFor = id;
+        for (int vk = 0; vk < 256; vk++) g_keyWasDown[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
+    }
+    ImGui::PopID();
+}
+
+void drawRuns() {
+    const std::vector<RunMarker>& runs = g_runs.runs();
+    if (runs.empty()) return;
+    ImGui::Spacing();
+    ImGui::TextDisabled("Last runs");
+    const double oldest = bufferOldest();
+    const double now = seconds();
+    // Newest first.
+    for (size_t k = runs.size(); k-- > 0;) {
+        const RunMarker& run = runs[k];
+        ImGui::PushID(run.id);
+        const InBuffer in = spanInBuffer(run.runStart - g_settings.before, run.finishAt + g_settings.after, oldest);
+        if (run.saved) {
+            ImGui::TextDisabled("Saved");
+        } else {
+            ImGui::BeginDisabled(in == InBuffer::Gone);
+            if (ImGui::SmallButton("Save")) {
+                if (RunMarker* r = g_runs.find(run.id)) saveRun(*r, "the page's Save");
+            }
+            ImGui::EndDisabled();
+            if (in == InBuffer::Part && ImGui::IsItemHovered()) ImGui::SetTooltip("Its start is no longer in the buffer.");
+        }
+        ImGui::SameLine();
+        const int ago = static_cast<int>(now - run.finishAt);
+        char when[32];
+        if (ago < 60) snprintf(when, sizeof(when), "%d s ago", ago);
+        else snprintf(when, sizeof(when), "%d min ago", ago / 60);
+        ImGui::Text("%s%s", formatTime(run.raceTime).c_str(), run.pb ? "  PB" : "");
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s%s", when, in == InBuffer::Gone ? ", gone" : "");
+        ImGui::PopID();
+    }
+}
+
+void drawClipFiles() {
+    static std::vector<ClipFile> s_files;
+    static double s_listed = -10.0;
+    if (seconds() - s_listed > 2.0) {
+        s_files = listClips();
+        s_listed = seconds();
+    }
+    if (s_files.empty()) return;
+    ImGui::Spacing();
+    ImGui::TextDisabled("Last clips");
+    const size_t shown = std::min<size_t>(s_files.size(), 6);
+    for (size_t i = 0; i < shown; i++) {
+        ImGui::PushID(static_cast<int>(i));
+        if (ImGui::SmallButton("Play")) ShellExecuteW(nullptr, L"open", (clipsDir() + L"\\" + s_files[i].name).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        ImGui::SameLine();
+        ImGui::Text("%s  (%.1f MB)", narrow(s_files[i].name).c_str(), s_files[i].size / 1048576.0);
+        ImGui::PopID();
+    }
+}
+
+} // namespace
+
+void drawSaving() {
     Settings& s = g_settings;
     if (g_idle) {
-        ImGui::TextWrapped("TM Vibrant Shaders records the clips: its menu (Video page) has these settings.");
+        ImGui::TextWrapped("TM Vibrant Shaders records the clips: its menu (Clips page) has these settings.");
         return;
     }
-    ImGui::TextDisabled("%s", g_status.c_str());
-    if (ImGui::Checkbox("Record clips", &s.enabled)) edited();
     ImGui::BeginDisabled(!s.enabled);
     const char* finishItems[] = {"Off", "Personal best", "Every finish"};
     if (ImGui::Combo("Save on finish", &s.onFinish, finishItems, 3)) edited();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Saves the run from %.0f s before the start to %.0f s after the finish.", s.before, s.after);
     if (ImGui::SliderFloat("Before start", &s.before, 0.0f, 10.0f, "%.1f s")) edited();
     if (ImGui::SliderFloat("After finish", &s.after, 0.0f, 10.0f, "%.1f s")) edited();
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Save key: %s", s.saveKey.c_str());
-    ImGui::SameLine();
-    if (g_capturingKey) {
-        std::string key;
-        ImGui::TextDisabled("press a key (Esc: cancel)");
-        if (captureKey(key)) {
-            s.saveKey = key;
-            edited();
-        }
-    } else if (ImGui::SmallButton("Change##clipkey")) {
-        g_capturingKey = true;
-        for (int vk = 0; vk < 256; vk++) g_keyWasDown[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
-    }
-    if (ImGui::SliderInt("Key saves", &s.keySeconds, 5, std::max(10, s.bufferSeconds), "last %d s")) edited();
-    // The buffer's length is held to what fits the memory limit at the bitrate (the game is 32-bit).
-    const int longest = std::min(300, maxBufferSeconds(s.bitrate, s.sound));
-    if (ImGui::SliderInt("Buffer", &s.bufferSeconds, 10, longest, "%d s")) {
-        s.bufferSeconds = std::clamp(s.bufferSeconds, 10, longest);
+    ImGui::Spacing();
+    keyRow("Save last run", s.lastRunKey, 2);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Also after a restart, while the run is in the buffer.");
+    keyRow("Save run so far", s.runSoFarKey, 3);
+    keyRow("Save last seconds", s.saveKey, 1);
+    int length = s.keySeconds <= 30 ? 0 : s.keySeconds <= 60 ? 1 : 2;
+    const char* lengthItems[] = {"30 s", "60 s", "90 s"};
+    if (ImGui::Combo("Last seconds", &length, lengthItems, 3)) {
+        const int lengths[] = {30, 60, 90};
+        s.keySeconds = lengths[length];
         edited();
     }
+    ImGui::EndDisabled();
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!s.enabled);
+    ImGui::BeginDisabled(g_runs.last() == nullptr);
+    if (ImGui::Button("Last run")) saveLastRun();
+    ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::TextDisabled("about %.0f MB", memoryEstimate(s) / 1048576.0);
+    ImGui::BeginDisabled(!g_tracker.running());
+    if (ImGui::Button("Run so far")) saveRunSoFar();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    char lastText[32];
+    snprintf(lastText, sizeof(lastText), "Last %d s", s.keySeconds);
+    if (ImGui::Button(lastText)) saveLast();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Open folder")) ShellExecuteW(nullptr, L"open", clipsDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    drawRuns();
+    drawClipFiles();
+}
+
+void drawRecording() {
+    Settings& s = g_settings;
+    if (g_idle) {
+        ImGui::TextWrapped("TM Vibrant Shaders records the clips: its menu (Clips page) has these settings.");
+        return;
+    }
+    ImGui::TextDisabled("%s", g_status.c_str());
+    if (ImGui::Checkbox("Record clips", &s.enabled)) edited();
+    ImGui::BeginDisabled(!s.enabled);
+    // The buffer: from the map's author time, or a fixed length; held to what fits the memory limit
+    // at the bitrate (the game is 32-bit).
+    const int longest = std::min(300, maxBufferSeconds(s.bitrate, s.sound));
+    if (ImGui::Checkbox("Adaptive buffer", &s.adaptiveBuffer)) edited();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Author time x 1.5 + 10 s, at least 60 s.");
+    if (s.adaptiveBuffer) {
+        ImGui::SameLine();
+        const int now = effectiveBuffer();
+        if (g_authorMs > 0) ImGui::TextDisabled("%d s for this map (%.0f MB)", now, memoryEstimate(s, now) / 1048576.0);
+        else ImGui::TextDisabled("%d s (%.0f MB)", now, memoryEstimate(s, now) / 1048576.0);
+    } else {
+        if (ImGui::SliderInt("Buffer", &s.bufferSeconds, 10, longest, "%d s")) {
+            s.bufferSeconds = std::clamp(s.bufferSeconds, 10, longest);
+            edited();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("about %.0f MB", memoryEstimate(s) / 1048576.0);
+    }
     if (longest < 300) ImGui::TextDisabled("At most %d s at %d Mbit/s (memory)", longest, s.bitrate);
     const char* sizeItems[] = {"Game size", "720p", "1080p", "1440p"};
     int size = s.height == 0 ? 0 : s.height <= 720 ? 1 : s.height <= 1080 ? 2 : 3;
@@ -733,39 +970,32 @@ void drawPanel() {
     const char* encoderItems[] = {"Auto", "NVIDIA", "Media Foundation"};
     if (ImGui::Combo("Encoder", &s.encoder, encoderItems, 3)) edited();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Auto: NVIDIA's encoder, else the graphics card's through Windows.");
-    if (ImGui::Checkbox("Sound", &s.sound)) {
+    int sound = s.sound ? s.soundSource + 1 : 0;
+    const char* soundItems[] = {"Off", "Game", "Game + mic", "All sound"};
+    if (ImGui::Combo("Sound", &sound, soundItems, 4)) {
+        s.sound = sound > 0;
+        if (sound > 0) s.soundSource = sound - 1;
         clampBuffer(s);
         edited();
     }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Game + mic: your default microphone too. All sound: everything the PC plays.");
     if (g_host == Host::Tmvs) {
-        ImGui::SameLine();
         if (ImGui::Checkbox("Without HUD", &s.noHud)) edited();
+        ImGui::SameLine();
     }
-    ImGui::SameLine();
     if (ImGui::Checkbox("Saved message", &s.toast)) edited();
     ImGui::EndDisabled();
-    if (ImGui::Button("Save now")) saveLast();
-    ImGui::SameLine();
-    if (ImGui::Button("Open folder")) ShellExecuteW(nullptr, L"open", clipsDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    // The last clips.
-    static std::vector<ClipFile> s_files;
-    static double s_listed = -10.0;
-    if (seconds() - s_listed > 2.0) {
-        s_files = listClips();
-        s_listed = seconds();
+}
+
+void drawPanel() {
+    if (g_idle) {
+        ImGui::TextWrapped("TM Vibrant Shaders records the clips: its menu (Clips page) has these settings.");
+        return;
     }
-    if (!s_files.empty()) {
-        ImGui::Spacing();
-        ImGui::TextDisabled("Last clips");
-        const size_t shown = std::min<size_t>(s_files.size(), 6);
-        for (size_t i = 0; i < shown; i++) {
-            ImGui::PushID(static_cast<int>(i));
-            if (ImGui::SmallButton("Play")) ShellExecuteW(nullptr, L"open", (clipsDir() + L"\\" + s_files[i].name).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-            ImGui::SameLine();
-            ImGui::Text("%s  (%.1f MB)", narrow(s_files[i].name).c_str(), s_files[i].size / 1048576.0);
-            ImGui::PopID();
-        }
-    }
+    drawSaving();
+    ImGui::Spacing();
+    ImGui::Separator();
+    drawRecording();
 }
 
 std::string menuKey() {

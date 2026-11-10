@@ -29,6 +29,7 @@ struct RecorderSetup {
     int encoder = 0;          // EncoderSetup::choice
     bool softwareOnly = false;
     bool sound = true;
+    int soundSource = 0;      // Settings::soundSource: 0 the game, 1 the game and the microphone, 2 everything the PC plays
     double seconds = 60.0;    // the buffer
 };
 
@@ -86,6 +87,8 @@ public:
 
     RecorderStats stats() const;
     int64_t newest() const;
+    // The oldest picture the buffer holds (100 ns), -1 none.
+    int64_t oldest() const;
 
     struct Impl;
     struct Shared;

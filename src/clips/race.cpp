@@ -37,6 +37,9 @@ constexpr size_t kInfoFinalTime = 0x2b0;
 constexpr size_t kInfoFinished = 0x33c;
 constexpr size_t kChallengeName = 0x108;
 constexpr size_t kChallengeUid = 0xdc;
+constexpr size_t kChallengeParameters = 0xb4; // CGameCtnChallengeParameters*
+constexpr size_t kParametersAuthorTime = 0x20;
+constexpr size_t kParametersGoldTime = 0x1c;
 
 uintptr_t rebase(uintptr_t link) {
     return link - kPreferredBase + reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
@@ -112,6 +115,25 @@ bool readMapName(wchar_t* out, size_t size) {
     }
 }
 
+bool readAuthorTime(int& out) {
+    __try {
+        const BYTE* a = app();
+        if (!a) return false;
+        const BYTE* challenge = *reinterpret_cast<const BYTE* const*>(a + kAppChallenge);
+        if (!challenge) return false;
+        const BYTE* parameters = *reinterpret_cast<const BYTE* const*>(challenge + kChallengeParameters);
+        if (!parameters) return false;
+        const DWORD author = *reinterpret_cast<const DWORD*>(parameters + kParametersAuthorTime);
+        const DWORD gold = *reinterpret_cast<const DWORD*>(parameters + kParametersGoldTime);
+        // A time (not -1, at most 24 h), the gold medal's not faster.
+        if (author == 0 || author > 24u * 3600 * 1000 || (gold != 0xffffffffu && gold < author)) return false;
+        out = static_cast<int>(author);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 using IdGetStringFn = const char*(__fastcall*)(const void*, void*);
 
 bool readMapUid(char* out, size_t size) {
@@ -152,6 +174,34 @@ std::string mapName() {
     char narrow[768] = {};
     WideCharToMultiByte(CP_UTF8, 0, text, -1, narrow, sizeof(narrow), nullptr, nullptr);
     return stripCodes(narrow);
+}
+
+int mapAuthorTime() {
+    int ms = -1;
+    return readAuthorTime(ms) ? ms : -1;
+}
+
+int RunLog::add(RunMarker run) {
+    run.id = m_next++;
+    m_runs.push_back(run);
+    if (m_runs.size() > kKept) m_runs.erase(m_runs.begin(), m_runs.begin() + static_cast<long>(m_runs.size() - kKept));
+    return run.id;
+}
+
+RunMarker* RunLog::find(int id) {
+    for (RunMarker& r : m_runs) {
+        if (r.id == id) return &r;
+    }
+    return nullptr;
+}
+
+RunMarker* RunLog::last() {
+    return m_runs.empty() ? nullptr : &m_runs.back();
+}
+
+InBuffer spanInBuffer(double from, double to, double oldest) {
+    if (oldest < 0.0 || to <= oldest) return InBuffer::Gone;
+    return from >= oldest - 0.25 ? InBuffer::Whole : InBuffer::Part;
 }
 
 std::string mapUid() {

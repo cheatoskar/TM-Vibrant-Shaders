@@ -658,7 +658,7 @@ bool containsNoCase(const char* text, const char* query) {
 
 // New pages last: the page's number is saved (MenuPage); the bar shows Video and Resource packs
 // before Settings.
-enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPacks, kMisc, kPageCount };
+enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPacks, kMisc, kClips, kPageCount };
 
 const ImVec4 kAccent(1.00f, 0.62f, 0.22f, 1.0f);
 
@@ -2044,12 +2044,22 @@ bool drawVideoPage(Config& config, Settings& s) {
     panels.push_back(settingsPanel("Rendering", s,
                                    {{"VideoExportBest", nullptr}, {"VideoShutter", nullptr}, {"VideoLensDof", nullptr},
                                     {"VideoGrain", nullptr}, {"VideoAspect", nullptr}}));
-    if (g_host->clipsPanel) {
-        panels.push_back({"Clips", 17.0f, [] {
-                              g_host->clipsPanel();
-                              return false;
-                          }});
-    }
+    return panelColumns(panels, 380.0f);
+}
+
+// Instant replays (src/clips): the game is recorded into memory all the time, a run or the last
+// seconds are saved as an MP4. Its own page, apart from the replay editor's video export.
+bool drawClipsPage() {
+    pageTitle("Clips", "Your runs saved as MP4 videos, right after the finish or on a key.");
+    std::vector<PanelDef> panels;
+    panels.push_back({"Saving", 18.0f, [] {
+                          if (g_host->clipsSaving) g_host->clipsSaving();
+                          return false;
+                      }});
+    panels.push_back({"Recording", 15.0f, [] {
+                          g_host->clipsPanel();
+                          return false;
+                      }});
     return panelColumns(panels, 380.0f);
 }
 
@@ -2463,6 +2473,7 @@ const PageDef kPageTable[] = {
          drawVrSection(s);
          return false;
      }},
+    {kClips, "clips", "Clips", "Instant replays of your runs", [] { return static_cast<bool>(g_host->clipsPanel); }, [](Config&, Settings&, const Names&) { return drawClipsPage(); }},
     {kSettings, "settings", "Settings", "General options", nullptr, [](Config& c, Settings& s, const Names&) { return drawSettings(c, s); }},
     {kAbout, "about", "About", "Version, updates, help", nullptr, [](Config& c, Settings&, const Names&) { drawAbout(c); return false; }},
 };

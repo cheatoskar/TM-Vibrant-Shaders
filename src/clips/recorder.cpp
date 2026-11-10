@@ -162,10 +162,17 @@ void Recorder::Impl::work() {
         return;
     }
     loopback::Capture capture;
+    // "Game + mic": the default recording device, mixed into the same track (it starts with the
+    // game's sound, both kept on time by their own clocks, loopback.h).
+    loopback::Capture microphone;
+    bool micOn = false;
     std::string soundText = "no sound";
     if (setup.sound) {
-        capture.prepare(kSoundRate, kSoundChannels);
+        capture.prepare(kSoundRate, kSoundChannels, setup.soundSource == 2 ? loopback::Mode::SystemOnly : loopback::Mode::Auto);
+        if (setup.soundSource == 1) microphone.prepare(kSoundRate, kSoundChannels, loopback::Mode::Microphone);
+        const bool micReady = setup.soundSource == 1 && microphone.waitReady(3000);
         if (capture.waitReady(3000) && capture.start()) {
+            if (micReady) micOn = microphone.start();
             // The circle is allocated here, not under the lock the game's thread takes too.
             SoundRing fresh;
             try {
@@ -174,8 +181,14 @@ void Recorder::Impl::work() {
                 sound = std::move(fresh);
                 soundOn = true;
                 soundText = "sound: " + capture.description();
+                if (setup.soundSource == 1) {
+                    soundText += micOn ? ", with " + microphone.description()
+                                       : ", no microphone (" + (microphone.error().empty() ? std::string("not ready") : microphone.error()) + ")";
+                }
             } catch (const std::bad_alloc&) {
                 capture.stop();
+                if (micOn) microphone.stop();
+                micOn = false;
                 soundText = "no sound (not enough memory for it)";
             }
         } else {
@@ -190,7 +203,7 @@ void Recorder::Impl::work() {
     }
     std::deque<int64_t> times; // the frames in the encoder, by number from `base`
     int64_t base = 0;
-    std::vector<int16_t> pcm;
+    std::vector<int16_t> pcm, mic;
     bool outOfMemory = false;
     int sinceKey = 0; // pictures since the last key frame (or since the start)
     const int noKeyLimit = std::max(600, static_cast<int>(setup.fps * 10.0));
@@ -260,12 +273,22 @@ void Recorder::Impl::work() {
             if (n) {
                 pcm.resize(n * kSoundChannels);
                 capture.read(pcm.data(), n);
+                if (micOn) {
+                    // As many frames of the microphone (silence where it has fewer), added.
+                    mic.resize(n * kSoundChannels);
+                    microphone.read(mic.data(), n);
+                    for (size_t k = 0; k < pcm.size(); k++) {
+                        const int v = static_cast<int>(pcm[k]) + mic[k];
+                        pcm[k] = static_cast<int16_t>(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+                    }
+                }
                 std::lock_guard<std::mutex> guard(lock);
                 sound.push(pcm.data(), n);
             }
         }
     }
     if (soundOn) capture.stop();
+    if (micOn) microphone.stop();
     encoder.reset();
 }
 
@@ -589,6 +612,12 @@ RecorderStats Recorder::stats() const {
 int64_t Recorder::newest() const {
     std::lock_guard<std::mutex> guard(m->lock);
     return m->ring.newest();
+}
+
+int64_t Recorder::oldest() const {
+    std::lock_guard<std::mutex> guard(m->lock);
+    if (m->ring.count() == 0) return -1;
+    return m->ring.oldest();
 }
 
 } // namespace clips

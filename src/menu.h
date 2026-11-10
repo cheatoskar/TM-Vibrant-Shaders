@@ -60,8 +60,10 @@ struct Host {
     // ... with the minimap (false: TM Nations ESWC and TrackMania 2, whose Misc page has only the
     // split times, the Session panel and the finish effects; its tab says so).
     bool miscMinimap = true;
-    // The instant replay clips' settings (src/clips), a panel on the Video page (null: none).
+    // The instant replay clips (src/clips), the Clips page (null: no such page, TrackMania 2): its
+    // recording settings, and its saving (keys, the last runs, the last clips).
     std::function<void()> clipsPanel;
+    std::function<void()> clipsSaving;
     // The VR mod (TrackMania Forever OpenXR): 0 not running, 1 running with only the menu in the
     // headset, 2 with the effects in both eyes. Null: this game has none.
     std::function<int()> vrState;

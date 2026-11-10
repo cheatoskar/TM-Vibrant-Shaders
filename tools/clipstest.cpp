@@ -1,6 +1,7 @@
-// Clips test (src/clips): the run tracker (start, respawn, restart, finish), the buffer's cuts (key
+// Clips test (src/clips): the run tracker (start, respawn, restart, finish), the last runs (Save last
+// run after a restart, what the buffer still holds), the adaptive buffer, the buffer's cuts (key
 // frames, the sound in chunks against the old cut), the memory limit, key frames from the bitstream,
-// the file names, the recorder's stop (never waits), then a synthetic run through each encoder this PC has (NVENC,
+// the file names, the recorder's stop (never waits), a run saved from the buffer after more driving, then a synthetic run through each encoder this PC has (NVENC,
 // the graphics card's Media Foundation encoder, and with --software Windows' own) into an MP4 with a
 // tone: 20 s at 60 fps, the run from 5 s to 15 s, cut 3 s before and after. The file is checked with
 // ffprobe when it is on the PATH (duration, streams, size), else by its MP4 boxes. --device: the NV12
@@ -707,6 +708,163 @@ void testRecorderStop(const std::wstring& folder, bool keep, bool software) {
     if (got && r.ok && !keep) DeleteFileW(job.path.c_str());
 }
 
+// --- The last runs, Save last run after a restart, the adaptive buffer ----------------------------
+
+void testRunLog() {
+    printf("last runs\n");
+    RunLog log;
+    check(log.last() == nullptr, "no run yet: nothing to save");
+    int ids[7] = {};
+    for (int i = 0; i < 7; i++) {
+        RunMarker m;
+        m.runStart = 100.0 + i * 50.0;
+        m.finishAt = m.runStart + 40.0;
+        m.raceTime = 40000 + i;
+        m.pb = i == 3;
+        ids[i] = log.add(m);
+    }
+    check(log.runs().size() == RunLog::kKept, "keeps the last five");
+    check(log.runs().front().raceTime == 40002 && log.last() && log.last()->raceTime == 40006, "the oldest two went, the newest is last");
+    check(log.find(ids[0]) == nullptr && log.find(ids[6]) == log.last(), "found by id; a dropped one is gone");
+    check(ids[6] != ids[5], "every run its own id");
+    if (RunMarker* r = log.find(ids[4])) r->saved = true;
+    check(log.find(ids[4]) && log.find(ids[4])->saved, "marked saved");
+
+    // The tracker and the log together: a run finishes, the player restarts at once and drives on;
+    // the last run is still the finished one, its span unchanged.
+    RunTracker t;
+    RunLog runs;
+    int race = 0;
+    RaceSample s;
+    s.valid = true;
+    s.race = &race;
+    double now = 10.0;
+    s.started = false;
+    t.update(now, s);
+    s.started = true;
+    s.startClock = 1000;
+    s.time = 0;
+    t.update(now, s); // start at 10.0
+    now = 52.5;
+    s.time = 42500;
+    s.finished = true;
+    RunEvent e = t.update(now, s);
+    check(e.kind == RunEvent::Finish, "finish seen");
+    RunMarker m;
+    m.runStart = e.runStart;
+    m.finishAt = e.finishAt;
+    m.raceTime = e.raceTime;
+    runs.add(m);
+    // Restart: the countdown, then a new run that drives for 20 s.
+    now = 54.0;
+    s.finished = false;
+    s.started = false;
+    s.time = 0;
+    t.update(now, s);
+    now = 57.0;
+    s.started = true;
+    s.startClock = 9000;
+    e = t.update(now, s);
+    check(e.kind == RunEvent::Start, "the restart's run started");
+    now = 77.0;
+    s.time = 20000;
+    t.update(now, s);
+    RunMarker* last = runs.last();
+    check(last && std::fabs(last->runStart - 10.0) < 1e-6 && std::fabs(last->finishAt - 52.5) < 1e-6 && last->raceTime == 42500,
+          "after the restart the last run is still the finished one, its span as it was");
+    check(t.running() && std::fabs(t.runStart() - 57.0) < 1e-6, "the run so far starts at the restart's start");
+    // In the buffer? A 60 s buffer at 77 s holds 17 s on: the run's 7 s (its start minus 3 s) is
+    // gone, its end is there; a buffer from 0 s on holds all of it.
+    const double from = last->runStart - 3.0, to = last->finishAt + 3.0;
+    check(spanInBuffer(from, to, 0.0) == InBuffer::Whole, "a buffer from before the run holds the whole run");
+    check(spanInBuffer(from, to, 77.0 - 60.0) == InBuffer::Part, "a 60 s buffer holds its end only");
+    check(spanInBuffer(from, to, 60.0) == InBuffer::Gone, "a buffer from after the finish holds nothing of it");
+    check(spanInBuffer(from, to, -1.0) == InBuffer::Gone, "an empty buffer holds nothing");
+    check(spanInBuffer(7.0, 55.5, 7.2) == InBuffer::Whole, "a quarter second of slack (key frames)");
+}
+
+void testAdaptiveBuffer() {
+    printf("adaptive buffer\n");
+    check(adaptiveBufferSeconds(-1, 30, 300) == 60, "no author time: 60 s");
+    check(adaptiveBufferSeconds(25000, 30, 300) == 60, "a 25 s map: at least 60 s");
+    check(adaptiveBufferSeconds(112300, 30, 300) == 179, "1:52.30: 1.5 x + 10 = 179 s");
+    check(adaptiveBufferSeconds(25000, 90, 300) == 90, "at least what the save key saves (90 s)");
+    check(adaptiveBufferSeconds(600000, 30, 300) == 300, "a 10 min map: held to the most");
+    const int most = maxBufferSeconds(50, true);
+    check(adaptiveBufferSeconds(600000, 30, most) == most && videoLimit(50e6, most) + soundBytes(most) <= kMemoryLimit,
+          "at 50 Mbit/s: held to the memory limit");
+    Settings s;
+    check(s.adaptiveBuffer && s.soundSource == 0 && s.keySeconds == 30 && s.lastRunKey == "Ctrl+F3" && s.runSoFarKey == "Ctrl+Shift+F3",
+          "defaults: adaptive, game sound, 30 s, Ctrl+F3 / Ctrl+Shift+F3");
+    check(s.saveKey != s.lastRunKey && s.saveKey != s.runSoFarKey && s.lastRunKey != s.runSoFarKey && s.menuKey != s.lastRunKey &&
+              s.menuKey != s.runSoFarKey,
+          "the four keys differ (TM Clips' window: Shift+F3)");
+    Settings other = s;
+    other.soundSource = 1;
+    check(!s.sameRecording(other), "another sound source records again");
+    other = s;
+    other.adaptiveBuffer = false;
+    check(!s.sameRecording(other), "adaptive on / off records again");
+}
+
+// The recorder end to end: a run from 0.5 s to 2.5 s, then 3 s more of driving (a restart), then the
+// run saved from the buffer: the clip is the run's span, not the last seconds.
+void testLastRunSave(const std::wstring& folder, bool keep, bool software) {
+    printf("recorder: last run saved after a restart\n");
+    Recorder rec;
+    RecorderSetup setup;
+    setup.width = 1280;
+    setup.height = 720;
+    setup.fps = 30;
+    setup.bitrate = 8e6;
+    setup.seconds = 60;
+    setup.sound = false;
+    rec.start(setup);
+    if (!waitRunning(rec) && software) {
+        setup.encoder = 2;
+        setup.softwareOnly = true;
+        rec.start(setup);
+        waitRunning(rec);
+    }
+    if (rec.state() != Recorder::State::Running) {
+        printf("  no encoder here (%s): skipped\n", rec.failure().c_str());
+        return;
+    }
+    check(rec.oldest() < 0, "an empty buffer: no oldest picture");
+    std::vector<uint8_t> frame(static_cast<size_t>(setup.width) * setup.height * 3 / 2);
+    const int64_t t0 = now100ns();
+    for (int i = 0; i < 165; i++) { // 5.5 s at 30 fps
+        makeFrame(frame, setup.width, setup.height, i);
+        while (now100ns() - t0 < static_cast<int64_t>(i) * 333333) Sleep(1);
+        if (uint8_t* dst = rec.acquire()) {
+            memcpy(dst, frame.data(), frame.size());
+            rec.submit(now100ns());
+        }
+    }
+    Sleep(200); // the encoder's last pictures
+    const double oldest = rec.oldest() / 1e7;
+    const double runFrom = t0 / 1e7 + 0.5, runTo = t0 / 1e7 + 2.5;
+    check(oldest > 0.0 && spanInBuffer(runFrom, runTo, oldest) == InBuffer::Whole, "the run is in the buffer 3 s after its end");
+    SaveJob job;
+    job.path = folder + L"\\clipstest_lastrun.mp4";
+    job.from = static_cast<int64_t>(runFrom * 1e7);
+    job.to = static_cast<int64_t>(runTo * 1e7);
+    job.what = "0:02.00";
+    rec.save(job);
+    SaveResult r;
+    bool got = false;
+    for (int i = 0; i < 1000 && !(got = rec.takeResult(r)); i++) Sleep(10);
+    printf("  %s\n", got ? r.line.c_str() : "(no result)");
+    // The cut starts at the key frame before the span (one a second): 2.0 to 2.5 s long.
+    char what[160];
+    snprintf(what, sizeof(what), "saved the run's span, not the last seconds (%.2f s)", got ? r.seconds : 0.0);
+    check(got && r.ok && r.seconds >= 1.9 && r.seconds <= 2.7, what);
+    rec.stop();
+    if (got && r.ok) checkFile(job.path, r.seconds, false, setup.width, setup.height);
+    if (got && r.ok && !keep) DeleteFileW(job.path.c_str());
+    for (int i = 0; i < 500 && rec.retiring() > 0; i++) Sleep(10);
+}
+
 // --- The NV12 passes on a device, and the recorder end to end ---------------------------------
 
 void testDevice(const std::wstring& folder, bool keep) {
@@ -853,6 +1011,8 @@ int main(int argc, char** argv) {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     timeBeginPeriod(1); // Sleep(1) of 1 ms: the device test presents at 60 fps as a game does
     testTracker();
+    testRunLog();
+    testAdaptiveBuffer();
     testNames();
     testMemory();
     testRing();
@@ -881,6 +1041,7 @@ int main(int argc, char** argv) {
         testEncoder("Media Foundation software", std::move(sw), folder, keep);
     }
     testRecorderStop(folder, keep, software);
+    testLastRunSave(folder, keep, software);
     if (device) testDevice(folder, keep);
     printf("%s (%d failed)\n", g_failures ? "FAILED" : "passed", g_failures);
     return g_failures ? 1 : 0;

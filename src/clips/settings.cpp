@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cwchar>
 
@@ -128,6 +129,7 @@ bool load(Settings& s) {
     s.enabled = readInt(L"Enabled", d.enabled, 0, 1) != 0;
     s.onFinish = readInt(L"SaveOnFinish", d.onFinish, 0, 2);
     s.bufferSeconds = readInt(L"BufferSeconds", d.bufferSeconds, 10, 600);
+    s.adaptiveBuffer = readInt(L"AdaptiveBuffer", d.adaptiveBuffer, 0, 1) != 0;
     s.keySeconds = readInt(L"KeySeconds", d.keySeconds, 5, 600);
     s.before = readFloat(L"Before", d.before, 0.0f, 30.0f);
     s.after = readFloat(L"After", d.after, 0.0f, 30.0f);
@@ -136,10 +138,13 @@ bool load(Settings& s) {
     s.bitrate = readInt(L"Bitrate", d.bitrate, 2, 80);
     s.encoder = readInt(L"Encoder", d.encoder, 0, 2);
     s.sound = readInt(L"Sound", d.sound, 0, 1) != 0;
+    s.soundSource = readInt(L"SoundSource", d.soundSource, 0, 2);
     s.noHud = readInt(L"WithoutHud", d.noHud, 0, 1) != 0;
     s.toast = readInt(L"SavedMessage", d.toast, 0, 1) != 0;
     s.saveKey = readText(L"SaveKey", d.saveKey.c_str());
     s.menuKey = readText(L"MenuKey", d.menuKey.c_str());
+    s.lastRunKey = readText(L"LastRunKey", d.lastRunKey.c_str());
+    s.runSoFarKey = readText(L"RunSoFarKey", d.runSoFarKey.c_str());
     g_written = fileTime(iniPath());
     return clampBuffer(s);
 }
@@ -160,6 +165,7 @@ bool save(const Settings& s) {
     setInt(L"Enabled", s.enabled);
     setInt(L"SaveOnFinish", s.onFinish);
     setInt(L"BufferSeconds", s.bufferSeconds);
+    setInt(L"AdaptiveBuffer", s.adaptiveBuffer);
     setInt(L"KeySeconds", s.keySeconds);
     setFloat(L"Before", s.before);
     setFloat(L"After", s.after);
@@ -168,10 +174,13 @@ bool save(const Settings& s) {
     setInt(L"Bitrate", s.bitrate);
     setInt(L"Encoder", s.encoder);
     setInt(L"Sound", s.sound);
+    setInt(L"SoundSource", s.soundSource);
     setInt(L"WithoutHud", s.noHud);
     setInt(L"SavedMessage", s.toast);
     ini.set(L"Clips", L"SaveKey", wide(s.saveKey).c_str());
     ini.set(L"Clips", L"MenuKey", wide(s.menuKey).c_str());
+    ini.set(L"Clips", L"LastRunKey", wide(s.lastRunKey).c_str());
+    ini.set(L"Clips", L"RunSoFarKey", wide(s.runSoFarKey).c_str());
     const bool ok = ini.save(iniPath());
     g_written = fileTime(iniPath());
     return ok;
@@ -182,10 +191,20 @@ bool changedOnDisk() {
     return CompareFileTime(&now, &g_written) != 0;
 }
 
-size_t memoryEstimate(const Settings& s) {
-    const double video = s.bitrate * 1e6 / 8.0 * s.bufferSeconds;
-    const double sound = s.sound ? static_cast<double>(soundBytes(s.bufferSeconds)) : 0.0;
+size_t memoryEstimate(const Settings& s, int seconds) {
+    const double video = s.bitrate * 1e6 / 8.0 * seconds;
+    const double sound = s.sound ? static_cast<double>(soundBytes(seconds)) : 0.0;
     return static_cast<size_t>(video + sound);
+}
+
+size_t memoryEstimate(const Settings& s) {
+    return memoryEstimate(s, s.bufferSeconds);
+}
+
+int adaptiveBufferSeconds(int authorMs, int keySeconds, int most) {
+    int seconds = std::max(60, keySeconds);
+    if (authorMs > 0) seconds = std::max(seconds, static_cast<int>(std::ceil(authorMs / 1000.0 * 1.5 + 10.0)));
+    return std::max(10, std::min(seconds, most));
 }
 
 int bestTime(const std::string& map) {

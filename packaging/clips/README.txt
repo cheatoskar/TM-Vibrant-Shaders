@@ -11,13 +11,15 @@ IN GAME
   The game is recorded into memory all the time (60 s by default).
   After a finish with a personal best, the run is saved: 3 s before the
   start to 3 s after the finish, with the game's sound.
-  F3         save the last 30 s
-  Shift+F3   settings and the last clips
+  F3             save the last 30 s (or 60 / 90 s)
+  Ctrl+F3        save the last finished run, also after a restart
+  Ctrl+Shift+F3  save the run you drive now, from its start
+  Shift+F3       settings, the last runs and the last clips
   Clips: Documents\TrackMania\Clips
   Settings: Documents\TrackMania\TMClips\clips.ini (log: tmclips.log)
 
 WITH TM VIBRANT SHADERS
-  TM Vibrant Shaders has the same clips built in (Video page of its F8
+  TM Vibrant Shaders has the same clips built in (Clips page of its F8
   menu). With both installed, TM Vibrant Shaders records and TM Clips stays
   idle. The settings file is shared.
 

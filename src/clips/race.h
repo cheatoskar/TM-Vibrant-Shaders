@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <string>
+#include <vector>
 
 // The race as the clips see it: read from the game's memory, never written, no hook into the game's
 // code (TrackMania Nations / United Forever, both TmForever.exe builds). The same reads in TM Vibrant
@@ -33,6 +34,9 @@ bool readRace(RaceSample& out);
 // The open map's name without its colour codes ("" none) and UID ("" none).
 std::string mapName();
 std::string mapUid();
+// The open map's author time (ms), -1 none or not known (CGameCtnChallenge +0xb4, its
+// ChallengeParameters, +0x20 AuthorTime: the reflection tables of both builds).
+int mapAuthorTime();
 
 // Runs from samples (pure logic, tools/clipstest.cpp). Times in seconds of the same clock.
 struct RunEvent {
@@ -59,6 +63,39 @@ private:
     int m_invalid = 0;        // reads in a row without a race
     double m_runStart = 0.0;
 };
+
+// The last finished runs, newest last (pure logic, tools/clipstest.cpp): what "Save last run" saves
+// after a restart, a respawn or a new run, and what the Clips page lists, as long as the buffer
+// still holds them.
+struct RunMarker {
+    int id = 0;
+    double runStart = 0.0;    // seconds, the clips' clock
+    double finishAt = 0.0;
+    int raceTime = 0;         // ms
+    bool pb = false;          // a personal best when it finished
+    std::string map;
+    bool saved = false;       // a save of it was asked (on finish or by hand)
+};
+
+class RunLog {
+public:
+    static constexpr size_t kKept = 5;
+    // Keeps the newest kKept; returns the run's id.
+    int add(RunMarker run);
+    const std::vector<RunMarker>& runs() const { return m_runs; }
+    RunMarker* find(int id);
+    RunMarker* last();        // the newest finished run, null none
+
+private:
+    std::vector<RunMarker> m_runs;
+    int m_next = 1;
+};
+
+// How much of a span [from, to] a buffer that holds pictures from `oldest` on still has (seconds;
+// oldest < 0: an empty buffer). Whole: all of it (a quarter second of slack, the cut starts at a key
+// frame); Part: its end, not its start; Gone: nothing.
+enum class InBuffer { Whole, Part, Gone };
+InBuffer spanInBuffer(double from, double to, double oldest);
 
 // "0:42.37", "1:02:03.45" (ms).
 std::string formatTime(int ms);

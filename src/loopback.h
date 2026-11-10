@@ -17,8 +17,10 @@
 namespace tmshaders {
 namespace loopback {
 
-enum class Source { None, Process, System };
-enum class Mode { Auto, ProcessOnly, SystemOnly, SystemMixFormat }; // the last: the playback device in its own format (tests the converter)
+enum class Source { None, Process, System, Microphone };
+// SystemMixFormat: the playback device in its own format (tests the converter). Microphone: the
+// default recording device (not a loopback), for the clips' "Game + mic".
+enum class Mode { Auto, ProcessOnly, SystemOnly, SystemMixFormat, Microphone };
 const char* sourceName(Source source);
 
 struct Stats {
