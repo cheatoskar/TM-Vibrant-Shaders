@@ -869,29 +869,105 @@ void hookDevice(IDirect3DDevice9* device) {
 
 using CreateDeviceFn = HRESULT(APIENTRY*)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
 constexpr int kCreateDeviceIndex = 16;
-CreateDeviceFn g_realCreateDevice = nullptr;
+
+// The factories' method tables whose CreateDevice slot holds our detour (d3d9.dll's one table for
+// every IDirect3D9; a second one only if another mod hands out a wrapper factory). Per table: what
+// our detour calls on into, and what the slot held the first time (the way out when another hook
+// that chains back into ours calls us again).
+//
+// The slot does not stay ours by itself: Windows' compatibility shims (apphelp.dll) write their own
+// CreateDevice into it on every Direct3DCreate9 call, whoever makes that call, and another mod may
+// write it too. A device created after that went around our detour: no game device, no menu, no
+// effects (my test 2026-11-10 with CenterSpeed, whose own Direct3D start-up made ours run before the
+// game's Direct3DCreate9). So the slot is checked again after every Direct3DCreate9 through the
+// game's import and, until the game's device is there, every 50 ms (watchFactory); written over, ours
+// goes in front again and calls on into what is there now.
+struct FactoryTable {
+    void** table = nullptr;
+    CreateDeviceFn next = nullptr;
+    CreateDeviceFn first = nullptr;
+};
+constexpr int kMaxFactoryTables = 4;
+FactoryTable g_factoryTables[kMaxFactoryTables];
+volatile LONG g_factoryTableCount = 0;
+CreateDeviceFn g_realCreateDevice = nullptr; // set once the first table is ours (install's test)
+volatile LONG g_factoryRewrites = 0;         // times the slot was found written over and ours put back
+volatile LONG g_create9Calls = 0;            // Direct3DCreate9 calls through the game's import
+volatile DWORD g_createDeviceThread = 0;     // the thread inside our detour's call on (re-entry test)
+CreateDeviceFn g_d3d9CreateDevice = nullptr; // a slot value seen inside the system d3d9.dll: its own CreateDevice, chains to nobody
+LARGE_INTEGER g_installTime = {};
+
+bool inSystemD3D9(const void* address) {
+    HMODULE module = nullptr;
+    return address &&
+           GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              static_cast<LPCWSTR>(address), &module) &&
+           module && module == proxy::systemD3D9();
+}
+
+FactoryTable* factoryTableOf(void** table) {
+    const LONG count = g_factoryTableCount;
+    for (LONG i = 0; i < count; i++) {
+        if (g_factoryTables[i].table == table) return &g_factoryTables[i];
+    }
+    return nullptr;
+}
+
+// Milliseconds since install(), for the log lines that tell the order of events.
+long msSinceInstall() {
+    if (!g_installTime.QuadPart) return 0;
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    return static_cast<long>((now.QuadPart - g_installTime.QuadPart) * 1000 / frequency.QuadPart);
+}
 
 HRESULT APIENTRY createDeviceDetour(IDirect3D9* self, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags,
                                     D3DPRESENT_PARAMETERS* params, IDirect3DDevice9** out) {
+    void* caller = _ReturnAddress();
+    void** table = self ? *reinterpret_cast<void***>(self) : nullptr;
+    const FactoryTable* entry = factoryTableOf(table);
+    if (!entry) entry = &g_factoryTables[0];
+    // Called again from inside our own call on: another hook written over ours (which we then
+    // put in front again) chains back into ours. d3d9's own CreateDevice finishes the call (it
+    // chains to nobody), else the slot's first value.
+    const DWORD thread = GetCurrentThreadId();
+    if (g_createDeviceThread == thread) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            TMVS_LOG("hook: CreateDevice came back into ours from the hook after ours: finished by %s",
+                     g_d3d9CreateDevice ? "d3d9's own CreateDevice" : "the slot's first value");
+        }
+        return (g_d3d9CreateDevice ? g_d3d9CreateDevice : entry->first)(self, adapter, type, window, flags, params, out);
+    }
+    char from[160];
+    describeAddress(caller, from, sizeof(from));
     // The game renders with a hardware device that has a depth buffer. Other mods in the same
     // process (overlays such as Twinkie) create helper devices of their own - no depth, often
     // 0x0 or a reference device. Taking one of those for the game's moved every hook onto it:
     // no readable depth, F7/F8 dead.
     const bool gameDevice = type == D3DDEVTYPE_HAL && params && params->EnableAutoDepthStencil;
     if (!gameDevice) {
-        HRESULT hr = g_realCreateDevice(self, adapter, type, window, flags, params, out);
-        TMVS_LOG("CreateDevice -> 0x%08lx flags=0x%lx type=%d %ux%u autoDepth=%d: not the game's device, left alone", hr, flags,
-                 static_cast<int>(type), params ? params->BackBufferWidth : 0, params ? params->BackBufferHeight : 0,
-                 params ? params->EnableAutoDepthStencil : 0);
+        g_createDeviceThread = thread;
+        HRESULT hr = entry->next(self, adapter, type, window, flags, params, out);
+        g_createDeviceThread = 0;
+        TMVS_LOG("CreateDevice -> 0x%08lx flags=0x%lx type=%d %ux%u autoDepth=%d: not the game's device, left alone (called from %s, "
+                 "%ld ms after the hook)",
+                 hr, flags, static_cast<int>(type), params ? params->BackBufferWidth : 0, params ? params->BackBufferHeight : 0,
+                 params ? params->EnableAutoDepthStencil : 0, from, msSinceInstall());
         return hr;
     }
     if (g_callbacks.adjustPresentParams) g_callbacks.adjustPresentParams(params);
-    HRESULT hr = g_realCreateDevice(self, adapter, type, window, flags, params, out);
+    g_createDeviceThread = thread;
+    HRESULT hr = entry->next(self, adapter, type, window, flags, params, out);
+    g_createDeviceThread = 0;
     if (params) {
-        TMVS_LOG("CreateDevice -> 0x%08lx flags=0x%lx %ux%u fmt=%s ms=%d autoDepth=%d %s windowed=%d", hr, flags,
-                 params->BackBufferWidth, params->BackBufferHeight, tracer::formatName(params->BackBufferFormat),
+        TMVS_LOG("CreateDevice -> 0x%08lx flags=0x%lx %ux%u fmt=%s ms=%d autoDepth=%d %s windowed=%d (called from %s, %ld ms after the "
+                 "hook)",
+                 hr, flags, params->BackBufferWidth, params->BackBufferHeight, tracer::formatName(params->BackBufferFormat),
                  params->MultiSampleType, params->EnableAutoDepthStencil, tracer::formatName(params->AutoDepthStencilFormat),
-                 params->Windowed);
+                 params->Windowed, from, msSinceInstall());
     }
     if (SUCCEEDED(hr) && out && *out) {
         g_gameDevice = *out;
@@ -905,12 +981,43 @@ HRESULT APIENTRY createDeviceDetour(IDirect3D9* self, UINT adapter, D3DDEVTYPE t
     return hr;
 }
 
-void patchFactory(IDirect3D9* factory) {
-    void** vtable = *reinterpret_cast<void***>(factory);
-    if (!g_realCreateDevice) {
-        g_realCreateDevice = reinterpret_cast<CreateDeviceFn>(vtable[kCreateDeviceIndex]);
-        writePointer(&vtable[kCreateDeviceIndex], reinterpret_cast<void*>(&createDeviceDetour));
+// Puts our detour into this factory's CreateDevice slot when something else is there. why: who
+// asked (the log). True when the slot is ours afterwards.
+bool patchFactory(IDirect3D9* factory, const char* why) {
+    if (!factory) return false;
+    void** vtable = nullptr;
+    if (!readPointer(factory, reinterpret_cast<void**>(&vtable)) || !vtable) return false;
+    void* now = nullptr;
+    if (!readPointer(&vtable[kCreateDeviceIndex], &now)) return false;
+    if (now == reinterpret_cast<void*>(&createDeviceDetour)) return true;
+    if (!g_d3d9CreateDevice && inSystemD3D9(now)) g_d3d9CreateDevice = reinterpret_cast<CreateDeviceFn>(now);
+    char tableAt[160], holder[220];
+    describeAddress(vtable, tableAt, sizeof(tableAt));
+    describeCode(now, holder, sizeof(holder));
+    FactoryTable* entry = factoryTableOf(vtable);
+    if (!entry) {
+        if (g_factoryTableCount >= kMaxFactoryTables) return false;
+        entry = &g_factoryTables[g_factoryTableCount];
+        entry->table = vtable;
+        entry->first = reinterpret_cast<CreateDeviceFn>(now);
+        entry->next = entry->first;
+        if (!writePointer(&vtable[kCreateDeviceIndex], reinterpret_cast<void*>(&createDeviceDetour))) return false;
+        InterlockedIncrement(&g_factoryTableCount);
+        if (!g_realCreateDevice) g_realCreateDevice = entry->next;
+        TMVS_LOG("hook: IDirect3D9::CreateDevice hooked in the factory table at %s (%s, %ld ms after the hook started); the slot held %s",
+                 tableAt, why, msSinceInstall(), holder);
+        return true;
     }
+    // Written over since: what is there now runs after ours.
+    entry->next = reinterpret_cast<CreateDeviceFn>(now);
+    if (!writePointer(&vtable[kCreateDeviceIndex], reinterpret_cast<void*>(&createDeviceDetour))) return false;
+    const LONG rewrites = InterlockedIncrement(&g_factoryRewrites);
+    if (rewrites <= 5) {
+        TMVS_LOG("hook: IDirect3D9::CreateDevice in the factory table at %s was written over (%s, %ld ms after the hook started; now "
+                 "%s): ours put in front again, it runs after ours%s",
+                 tableAt, why, msSinceInstall(), holder, rewrites == 5 ? " (not logged again)" : "");
+    }
+    return true;
 }
 
 using Create9Fn = IDirect3D9*(WINAPI*)(UINT);
@@ -918,8 +1025,32 @@ Create9Fn g_realCreate9 = nullptr;
 
 IDirect3D9* WINAPI create9Detour(UINT sdk) {
     IDirect3D9* factory = g_realCreate9 ? g_realCreate9(sdk) : nullptr;
-    if (factory) patchFactory(factory);
+    const LONG calls = InterlockedIncrement(&g_create9Calls);
+    if (calls <= 5) {
+        char from[160];
+        describeAddress(_ReturnAddress(), from, sizeof(from));
+        TMVS_LOG("hook: Direct3DCreate9 through the game's import (call %ld, from %s, %ld ms after the hook started) -> %p", calls, from,
+                 msSinceInstall(), static_cast<void*>(factory));
+    }
+    if (factory) patchFactory(factory, "the game's Direct3DCreate9");
     return factory;
+}
+
+// Until the game's device is there (at most 60 s): every 50 ms, is the CreateDevice slot still ours?
+DWORD WINAPI watchFactory(LPVOID) {
+    for (int i = 0; i < 1200 && !g_gameDevice; i++) {
+        Sleep(50);
+        const LONG count = g_factoryTableCount;
+        for (LONG t = 0; t < count; t++) {
+            void* now = nullptr;
+            void** table = g_factoryTables[t].table;
+            if (!readPointer(&table[kCreateDeviceIndex], &now) || now == reinterpret_cast<void*>(&createDeviceDetour)) continue;
+            // A factory pointer is all patchFactory needs: a stand-in whose first field is the table.
+            void* standIn = table;
+            patchFactory(reinterpret_cast<IDirect3D9*>(&standIn), "found by the 50 ms check");
+        }
+    }
+    return 0;
 }
 
 bool patchImport(const char* dll, const char* function, void* replacement, void** originalOut) {
@@ -1046,22 +1177,70 @@ bool attachDevice(IDirect3DDevice9* device, bool observeOnly) {
 bool install(const DeviceCallbacks& callbacks) {
     g_callbacks = callbacks;
     if (g_realCreateDevice) return true;
+    if (!g_installTime.QuadPart) QueryPerformanceCounter(&g_installTime);
 
-    bool imported = patchImport("d3d9.dll", "Direct3DCreate9", reinterpret_cast<void*>(&create9Detour),
-                                reinterpret_cast<void**>(&g_realCreate9));
-    TMVS_LOG("hook: Direct3DCreate9 import %s", imported ? "patched" : "not found");
+    if (!g_realCreate9) {
+        bool imported = patchImport("d3d9.dll", "Direct3DCreate9", reinterpret_cast<void*>(&create9Detour),
+                                    reinterpret_cast<void**>(&g_realCreate9));
+        char held[160] = "-";
+        if (imported) describeAddress(reinterpret_cast<void*>(g_realCreate9), held, sizeof(held));
+        TMVS_LOG("hook: Direct3DCreate9 import %s%s%s", imported ? "patched (it led to " : "not found", imported ? held : "",
+                 imported ? ")" : "");
+    }
 
     // The game's device is hooked when the game creates it (createDeviceDetour). The factory's
-    // table is shared by every IDirect3D9, so patching our own covers the game's too. There is no
-    // probe device any more: hooking a probe's methods at boot raced other mods hooking the same
-    // code from their own threads in that moment (CenterSpeed), and a probe with software vertex
-    // processing has other methods than the game's device.
+    // table is shared by every IDirect3D9, so patching our own covers the game's too (as long as
+    // nothing writes over the slot: see watchFactory). There is no probe device any more: hooking a
+    // probe's methods at boot raced other mods hooking the same code from their own threads in that
+    // moment (CenterSpeed), and a probe with software vertex processing has other methods than the
+    // game's device.
     // The system d3d9 by full path: in standalone mode this DLL is "d3d9.dll" itself.
     if (IDirect3D9* d3d = proxy::createDirect3D9(D3D_SDK_VERSION)) {
-        patchFactory(d3d);
+        patchFactory(d3d, "our own factory");
         d3d->Release();
+        // Our own Direct3DCreate9 just now may have been the one that put a shim's CreateDevice back.
+        if (g_factoryTableCount > 0) {
+            void* standIn = g_factoryTables[0].table;
+            patchFactory(reinterpret_cast<IDirect3D9*>(&standIn), "after our own factory's release");
+        }
+    } else {
+        TMVS_LOG("hook: our own Direct3DCreate9 failed (%ld ms after the hook started)", msSinceInstall());
+    }
+    if (g_realCreateDevice && !g_gameDevice) {
+        if (HANDLE thread = CreateThread(nullptr, 0, watchFactory, nullptr, 0, nullptr)) CloseHandle(thread);
     }
     return g_realCreateDevice != nullptr;
+}
+
+bool attachMissedDevice(IDirect3DDevice9* device, const char* where) {
+    if (!device || g_gameDevice) return false;
+    // Which way did the game's CreateDevice go? The factory slot as it is now, and how often it was
+    // put back.
+    char slot[220] = "no factory table hooked";
+    if (g_factoryTableCount > 0) {
+        void* now = nullptr;
+        if (readPointer(&g_factoryTables[0].table[kCreateDeviceIndex], &now)) {
+            if (now == reinterpret_cast<void*>(&createDeviceDetour)) snprintf(slot, sizeof(slot), "ours");
+            else describeCode(now, slot, sizeof(slot));
+        }
+    }
+    TMVS_LOG("hook: the game's device %p (read from %s) was created without passing our CreateDevice hook (%ld ms after the hook "
+             "started; Direct3DCreate9 through the game's import %ld times; the factory's CreateDevice slot now: %s; put back %ld "
+             "times): hooked now, late",
+             static_cast<void*>(device), where, msSinceInstall(), static_cast<long>(g_create9Calls), slot,
+             static_cast<long>(g_factoryRewrites));
+    g_gameDevice = device;
+    hookDevice(device);
+    if (g_callbacks.deviceCreated) {
+        g_internal++;
+        g_callbacks.deviceCreated(device);
+        g_internal--;
+    }
+    return true;
+}
+
+bool hasGameDevice() {
+    return g_gameDevice != nullptr;
 }
 
 void remove() {

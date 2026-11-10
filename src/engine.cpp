@@ -2296,6 +2296,11 @@ void __fastcall tileHeightDetour(void* self, void* edx, float height) {
 
 int g_loggedShadowMode = -2;
 
+// CVisionViewportDx9's IDirect3DDevice9* (RenderFrameEnd calls its EndScene and Present through
+// it: mov eax, [esi+0x9f8], call [vtable+0x44]; TMNF 0x009a46f4, TMUF 0x009a4474).
+constexpr size_t kViewportDevice = 0x9f8;
+void* g_frameViewport = nullptr; // the viewport of the frame that runs now (frameBeginDetour)
+
 // The game's display settings from the launcher (CSystemConfigDisplay, the windowed or the
 // fullscreen one), once: what the game itself spends its frame on.
 void logDisplayConfig() {
@@ -2318,6 +2323,7 @@ void logDisplayConfig() {
 }
 
 int __fastcall frameBeginDetour(void* self, void* edx) {
+    g_frameViewport = self;
     // CHmsViewport::m_Shadows lives at +0x248 (see CHmsViewport::RenderShadowsSet).
     int mode = *reinterpret_cast<const int*>(static_cast<const BYTE*>(self) + 0x248);
     if (g_forcedShadows >= 0 && mode != g_forcedShadows) {
@@ -3197,6 +3203,22 @@ bool install(const Callbacks& callbacks) {
 
 bool active() {
     return g_active;
+}
+
+void* viewportDevice() {
+    if (!g_build || !g_frameViewport) return nullptr;
+    void* device = nullptr;
+    __try {
+        device = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(g_frameViewport) + kViewportDevice);
+        // A device: its method table readable, with code in a module (d3d9.dll or a wrapper's).
+        if (device) {
+            void* const* table = *reinterpret_cast<void* const* const*>(device);
+            if (!table || !table[17]) device = nullptr; // Present
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        device = nullptr;
+    }
+    return device;
 }
 
 void setModPackChooser(ModPackAnswer (*choose)(const ModPackAsk& ask)) {

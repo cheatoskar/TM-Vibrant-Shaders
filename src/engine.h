@@ -39,6 +39,10 @@ bool install(const Callbacks& callbacks);
 // Overrides the game's shadow quality (-1 = keep the game's setting).
 void forceShadows(int mode);
 bool active();
+// The game's Direct3D device as its viewport (CVisionViewportDx9) holds it, read in the frame that
+// runs now (TrackMania Nations/United Forever; null elsewhere or before the first frame). For a
+// device whose creation our CreateDevice hook never saw.
+void* viewportDevice();
 // The game is TrackMania Nations ESWC (TmNationsESWC.exe of the unofficial 1.80 patch, 2006
 // engine): the viewport's frame and camera hooks, the view, the projection and the keyboard read;
 // map loads (SetChallenge), the race's local car (position, axes, speed), its starts, respawns and

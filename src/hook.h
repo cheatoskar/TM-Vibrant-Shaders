@@ -53,6 +53,11 @@ bool install(const DeviceCallbacks& callbacks);
 
 // Hooks a device that another mod created (see hook.cpp). observeOnly: watch Present / Reset only.
 bool attachDevice(IDirect3DDevice9* device, bool observeOnly);
+// The game's device found where the game keeps it (its viewport) although our CreateDevice detour
+// never saw it created: hooked fully now. where: for the log. False when a device is hooked already.
+bool attachMissedDevice(IDirect3DDevice9* device, const char* where);
+// The game's device is hooked (created through our detour, handed over or found late).
+bool hasGameDevice();
 // True when another mod handed over the device and TMVS only watches (no depth or target changes).
 bool observeOnly();
 // True when another mod (the VR mod) handed over the device.

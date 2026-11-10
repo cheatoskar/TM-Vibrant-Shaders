@@ -21,6 +21,7 @@ namespace {
 
 Host g_host = Host::Tmvs;
 bool g_booted = false;
+volatile bool g_ready = false; // boot() done: present() may run (TMVS boots clips on its own thread after the device hook)
 Settings g_settings;
 Settings g_saved;           // what clips.ini holds
 double g_lastEdit = -1.0;   // the panel changed a setting (seconds)
@@ -419,6 +420,8 @@ void boot(Host host) {
             }
         }
     }
+    MemoryBarrier();
+    g_ready = true;
 }
 
 bool tmvsRecords() {
@@ -452,7 +455,7 @@ void sceneDone(IDirect3DDevice9* device, IDirect3DSurface9* target) {
 }
 
 void present(IDirect3DDevice9* device) {
-    if (!g_booted || !device) return;
+    if (!g_ready || !device) return;
     g_frames++;
     const double now = seconds();
     if (g_host == Host::Tmvs && g_beat) InterlockedIncrement(g_beat); // the standalone sees our clips run

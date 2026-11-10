@@ -3191,6 +3191,16 @@ void updateJitter() {
 
 void onFrameBegin() {
     tracer::event("## RenderFrameBegin");
+    // The game draws but our CreateDevice hook never saw its device (another mod's or Windows'
+    // hook in the factory's slot when it was made): taken from the game's viewport after 60 frames
+    // (a mod that hands its device over, the VR mod, does so right after creating it).
+    static int s_framesWithoutDevice = 0;
+    if (!hook::hasGameDevice() && !hook::handedOver() && ++s_framesWithoutDevice == 60) {
+        if (void* device = engine::viewportDevice())
+            hook::attachMissedDevice(static_cast<IDirect3DDevice9*>(device), "the game's viewport, 60 frames after the first");
+        else
+            TMVS_LOG("hook: the game draws (60 frames) without a device we know of, and its viewport holds none either");
+    }
     hook::diagFrame();
     photo::beginFrame();
     {
@@ -4264,8 +4274,6 @@ void bootOnce() {
     TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
     loadDevOptions();
     Config::get().load();
-    clips::boot(clips::Host::Tmvs);
-    clips::setInternalCalls(hook::beginInternal, hook::endInternal);
     misc::boot();
     lut::writeBuiltInLooks();
     gameshaders::install();
@@ -4320,6 +4328,10 @@ void bootOnce() {
         if (thread) CloseHandle(thread);
     }
     if (HANDLE watch = CreateThread(nullptr, 0, watchForDevice, nullptr, 0, nullptr)) CloseHandle(watch);
+    // Clips after the device hook: its settings file and the folder scan took 20-30 ms that the
+    // device hook waited for (1.4.3 had none of it before the hook).
+    clips::boot(clips::Host::Tmvs);
+    clips::setInternalCalls(hook::beginInternal, hook::endInternal);
 }
 
 } // namespace
