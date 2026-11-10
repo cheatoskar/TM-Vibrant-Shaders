@@ -244,12 +244,12 @@ void save(IniFile& ini) {
 void drawPage() {
     Settings& s = g_settings;
     bool changed = false;
-    ImGui::TextWrapped("Only the track's shape and your times: no checkpoint positions, no ghost paths. "
-                       "Drag and resize the windows while this menu is open.");
-    ImGui::Spacing();
-
     // TM Nations ESWC: no minimap (TMX allows it only in the replay editor and the video export).
     const bool minimap = !engine::eswc();
+    ImGui::TextWrapped("%s: no checkpoint positions, no ghost paths. Drag and resize the windows while this menu is open.",
+                       minimap ? "Only the track's shape and your times" : "Only your times");
+    ImGui::Spacing();
+
     if (minimap) {
         ImGui::SeparatorText("Minimap");
         changed |= ImGui::Checkbox("Minimap", &s.minimap);

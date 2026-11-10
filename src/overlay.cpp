@@ -632,7 +632,9 @@ static void eswcHost(menu::Host& host) {
     host.vrState = nullptr;
     host.photoHideCar = true;     // the game's own visible bit of each car (engine.cpp, eswcHideCars)
     host.photoHideEditor = false; // no hook on the replay editor's panels
-    host.photoGameHooks = false;
+    host.photoAutoMode = false;   // no hook on its free camera
+    host.photoHideHud = false;    // nor on its interface (photos never include the HUD anyway)
+    host.miscMinimap = false;     // split times and finish effects only (misc.cpp)
     host.supports = eswcSupports;
 }
 

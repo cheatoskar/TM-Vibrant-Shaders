@@ -516,8 +516,12 @@ void frame(ID3D11RenderTargetView* backBuffer) {
             // editor isn't hidden by the mod.
             h.photoHideCar = true;
             h.photoHideEditor = false;
-            // The Misc page: split times, the Session panel, finish effects (splits11.cpp).
+            // No Auto photo mode: the game's free camera isn't hooked (photo11.cpp never reads
+            // PhotoAuto). Hide HUD works (hooks.cpp, hideInterfaceDraw).
+            h.photoAutoMode = false;
+            // The Misc page: split times, the Session panel, finish effects (splits11.cpp); no minimap.
             h.miscPage = splits::drawPage;
+            h.miscMinimap = false;
             h.mapComments = [](std::string& comments) { return maplook::editorComments(comments); };
             h.setMapComments = [](const std::string& comments) { return maplook::setEditorComments(comments); };
             h.gamePanelTitle = "ManiaPlanet";

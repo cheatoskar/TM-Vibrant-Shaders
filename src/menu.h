@@ -54,9 +54,12 @@ struct ResourcePacks {
 struct Host {
     // The Resource packs page (null: no such page, TrackMania 2).
     ResourcePacks* resourcePacks = nullptr;
-    // The Misc page: minimap, split times, finish effects (null: no such page, TrackMania 2 or a build
-    // without TMVS_MISC_TOOLS). Draws the page's content.
+    // The Misc page: minimap, split times, finish effects (null: no such page, a build without
+    // TMVS_MISC_TOOLS). Draws the page's content.
     std::function<void()> miscPage;
+    // ... with the minimap (false: TM Nations ESWC and TrackMania 2, whose Misc page has only the
+    // split times, the Session panel and the finish effects; its tab says so).
+    bool miscMinimap = true;
     // The VR mod (TrackMania Forever OpenXR): 0 not running, 1 running with only the menu in the
     // headset, 2 with the effects in both eyes. Null: this game has none.
     std::function<int()> vrState;
@@ -92,9 +95,12 @@ struct Host {
     // ... and its replay editor's panels (the *Hide editor* switch; false: TM Nations ESWC and
     // TrackMania 2, whose replay editor the mod doesn't hide).
     bool photoHideEditor = true;
-    // Photo mode starts with the game's free camera and hides the game's HUD (false: TM Nations
-    // ESWC, which has neither hook: no *Auto photo mode* and *Hide HUD* switches).
-    bool photoGameHooks = true;
+    // Photo mode can start by itself with the game's free camera (the *Auto photo mode* switch;
+    // false: TM Nations ESWC and TrackMania 2, where that camera isn't hooked).
+    bool photoAutoMode = true;
+    // Photo mode can hide the game's HUD (the *Hide HUD* switch; false: TM Nations ESWC, no hook on
+    // its interface).
+    bool photoHideHud = true;
     // A photo, a capture or the video export is running: no detached windows this frame.
     bool hideDetached = false;
     // The settings this game can do (null: all); the others are not shown.

@@ -2096,16 +2096,18 @@ bool drawSettings(Config& config, Settings& s) {
     }
     panels.push_back(settingsPanel("Game integration", s, game));
     panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) +
-                                        (g_host->photoHideCar ? (g_host->photoHideEditor ? 2.0f : 1.0f) : 0.0f) - (g_host->photoGameHooks ? 0.0f : 2.0f),
+                                        (g_host->photoHideCar ? (g_host->photoHideEditor ? 2.0f : 1.0f) : 0.0f) - (g_host->photoAutoMode ? 0.0f : 1.0f) -
+                                        (g_host->photoHideHud ? 0.0f : 1.0f),
                       [&config] {
                           const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
-                          if (g_host->photoGameHooks) {
+                          if (g_host->photoAutoMode) {
                               switchRow("Auto photo mode", &config.photoAuto,
                                         ("Photo mode starts with the free camera (cam 7): no HUD, full quality.\n" + photoKey +
                                          " toggles it anywhere.").c_str());
-                              switchRow("Hide HUD", &config.photoHideHud, "Off: the HUD stays visible in photo mode. Photos never include it.");
                           }
+                          if (g_host->photoHideHud)
+                              switchRow("Hide HUD", &config.photoHideHud, "Off: the HUD stays visible in photo mode. Photos never include it.");
                           if (g_host->photoHideCar && g_host->photoHideEditor)
                               switchRow("Hide editor", &config.photoHideEditor, "In the replay editor (MediaTracker): photo mode hides the editor's panels, as its Tab key does, and the 3D view fills the screen. They are back when photo mode ends.");
                           if (g_host->photoHideCar)
@@ -2469,6 +2471,12 @@ const char* pageTitle(const PageDef& page) {
     return page.title;
 }
 
+// The tab's tooltip; Misc names what this game's page has (no minimap in TM Nations ESWC and TrackMania 2).
+const char* pageHint(const PageDef& page) {
+    if (page.id == kMisc && !g_host->miscMinimap) return "Split times, finish effects";
+    return page.hint;
+}
+
 const PageDef* findPage(int id) {
     for (const PageDef& page : kPageTable) {
         if (page.id == id) return &page;
@@ -2558,7 +2566,7 @@ void drawNavigation(Config& config) {
         if (hovered) {
             if (detached) ImGui::SetTooltip("%s is in its own window. Click to bring the window to the front.", pageTitle(page));
             else if (onIcon) ImGui::SetTooltip("Open %s in its own window", pageTitle(page));
-            else ImGui::SetTooltip("%s", page.hint);
+            else ImGui::SetTooltip("%s", pageHint(page));
         }
         if (active || hovered) draw->AddRectFilled(p, ImVec2(p.x + w, p.y + h), active ? colour(kAccent, 0.16f) : IM_COL32(255, 255, 255, 14), 6.0f * g_scale);
         if (active) draw->AddRectFilled(ImVec2(p.x, p.y + h * 0.22f), ImVec2(p.x + 3.0f * g_scale, p.y + h * 0.78f), colour(kAccent, 1.0f), 2.0f);

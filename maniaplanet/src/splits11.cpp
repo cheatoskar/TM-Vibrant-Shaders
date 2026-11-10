@@ -412,7 +412,6 @@ void drawPage() {
         }
         if (!g.present && o.splits) ImGui::TextDisabled("No run of yours now: %s", game::raceStatus());
     }
-    ImGui::TextDisabled("No minimap: TrackMania 2 doesn't give the mod the map's blocks.");
 }
 
 } // namespace splits
