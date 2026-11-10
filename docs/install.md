@@ -89,6 +89,8 @@ The same zip carries a `d3d11.dll` for ManiaPlanet's Direct3D 11 renderer (64-bi
 
 ## TrackMania Nations ESWC
 
+![TrackMania Nations ESWC with the black hole sky; the game's HUD stays untouched](images/eswc-black-hole.jpg)
+
 Only the unofficial patch *TrackMania Nations ESWC 1.80* (2021, `TmNationsESWC.exe`, reports 0.1.7.9). The original 2006 executable is not supported.
 
 - **Install:** close the game and run the setup, button **Install into another game folder**, and pick the folder with `TmNationsESWC.exe`. Or by hand: copy `TMVibrantShaders.dll` from the zip next to `TmNationsESWC.exe` and rename it to **`d3d9.dll`**. Other mods in the folder that use another name (a `dinput8.dll`, for example) stay as they are.

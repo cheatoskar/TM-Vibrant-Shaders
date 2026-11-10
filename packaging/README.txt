@@ -20,6 +20,9 @@ INSTALL - the easy way
        - "Install into another game folder" lets you pick the game folder
          yourself. Windows asks for admin rights if the game is in
          "Program Files".
+       - TrackMania Nations ESWC (experimental): only the unofficial 1.80
+         patch (TmNationsESWC.exe 0.1.7.9). Choose "Install into another
+         game folder" and pick the folder with TmNationsESWC.exe.
 
 INSTALL - by hand, no .exe
   With the ModLoader:
@@ -31,6 +34,10 @@ INSTALL - by hand, no .exe
     Copy "TM Vibrant Shaders\<version>\TMVibrantShaders.dll" into your
     TrackMania folder (next to TmForever.exe) and rename it to d3d9.dll.
     Use only one of the two ways at a time.
+  TrackMania Nations ESWC (unofficial 1.80 patch only):
+    Copy the same TMVibrantShaders.dll next to TmNationsESWC.exe and
+    rename it to d3d9.dll. Leave other mods' DLLs (dinput8.dll) as they
+    are.
   TrackMania 2 / ManiaPlanet:
     Copy d3d11.dll from this zip next to ManiaPlanet.exe and start
     ManiaPlanet 64-bit (the mod is 64-bit only).
@@ -74,6 +81,9 @@ INSTALLIEREN - der einfache Weg
        - Mit "Install into another game folder" wählst du den Ordner mit der
          TmForever.exe oder ManiaPlanet.exe selbst. Liegt das Spiel unter
          "Programme", fragt Windows nach Admin-Rechten.
+       - TrackMania Nations ESWC (experimentell): nur der inoffizielle
+         Patch 1.80 (TmNationsESWC.exe 0.1.7.9). "Install into another
+         game folder" wählen und den Ordner mit der TmNationsESWC.exe.
 
 INSTALLIEREN - von Hand, ohne .exe
   Mit ModLoader:
@@ -85,6 +95,10 @@ INSTALLIEREN - von Hand, ohne .exe
     "TM Vibrant Shaders\<Version>\TMVibrantShaders.dll" in den
     TrackMania-Ordner kopieren (neben TmForever.exe) und in d3d9.dll
     umbenennen. Bitte nur einen der beiden Wege gleichzeitig nutzen.
+  TrackMania Nations ESWC (nur der inoffizielle Patch 1.80):
+    Dieselbe TMVibrantShaders.dll neben die TmNationsESWC.exe kopieren
+    und in d3d9.dll umbenennen. DLLs anderer Mods (dinput8.dll) bleiben
+    unverändert.
   TrackMania 2 / ManiaPlanet:
     d3d11.dll aus dieser ZIP neben die ManiaPlanet.exe kopieren und
     ManiaPlanet 64-bit starten (der Mod gibt es nur in 64-bit).
