@@ -1,5 +1,9 @@
 # Writes SHA256SUMS.txt for the release files in DIR (sha256sum format).
 set(files TM-Vibrant-Shaders.zip TMVibrantShaders.dll)
+# The standalone clips mod, once clips_zip made it.
+if(EXISTS "${DIR}/TM-Clips.zip")
+  list(APPEND files TM-Clips.zip)
+endif()
 set(out "")
 foreach(file ${files})
   file(SHA256 "${DIR}/${file}" hash)

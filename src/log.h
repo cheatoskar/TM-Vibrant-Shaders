@@ -10,6 +10,8 @@ const std::wstring& dataDir();
 // Log file name in dataDir() (default tmvs.log). Set before the first write: the previewer
 // uses its own file so it never truncates the game's log.
 void setFileName(const wchar_t* name);
+// Another folder instead (TM Clips' own, Documents\TrackMania\TMClips). Before the first dataDir() call.
+void setDataDir(const std::wstring& dir);
 
 void write(const char* fmt, ...);
 

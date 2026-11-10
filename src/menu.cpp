@@ -2044,6 +2044,12 @@ bool drawVideoPage(Config& config, Settings& s) {
     panels.push_back(settingsPanel("Rendering", s,
                                    {{"VideoExportBest", nullptr}, {"VideoShutter", nullptr}, {"VideoLensDof", nullptr},
                                     {"VideoGrain", nullptr}, {"VideoAspect", nullptr}}));
+    if (g_host->clipsPanel) {
+        panels.push_back({"Clips", 17.0f, [] {
+                              g_host->clipsPanel();
+                              return false;
+                          }});
+    }
     return panelColumns(panels, 380.0f);
 }
 

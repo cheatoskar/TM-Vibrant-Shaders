@@ -3,6 +3,7 @@
 #include "capture.h"
 #include "capwriter.h"
 #include "casters.h"
+#include "clips/clips.h"
 #include "perflog.h"
 #include "config.h"
 #include "depth.h"
@@ -3644,6 +3645,13 @@ void onCameraEnd(void* camera, const engine::CameraInfo&) {
             fillFromScaled(g_device, target);
             if (target) target->Release();
         }
+        // Clips "Without HUD": the shaded scene, before the game draws its HUD over it.
+        if (clips::wantsScene()) {
+            IDirect3DSurface9* target = nullptr;
+            g_device->GetRenderTarget(0, &target);
+            clips::sceneDone(g_device, target);
+            if (target) target->Release();
+        }
         perflog::mark(g_device, perflog::Mark::ModEnd);
     }
     g_scene.inMainCamera = false;
@@ -3727,6 +3735,7 @@ void onPreReset() {
     casters::releaseDevice();
     misc::releaseDevice(); // the minimap's picture from above (default pool)
     depth::onPreReset();
+    clips::preReset();
     overlay::preReset();
 }
 
@@ -3944,6 +3953,10 @@ void onPresent(IDirect3DDevice9* device) {
     g_shadedThisFrame = false;
     g_gameplayLastFrame = g_gameplayThisFrame;
     g_gameplayThisFrame = false;
+
+    // Clips: the picture as the player sees it, before the menu and the mod's windows are drawn.
+    clips::setPaused(g_exporting || photo::tiling()); // the export's frames, a hi-res photo's tiles
+    clips::present(device);
 
     overlay::Status status;
     status.pipeline = &g_pipeline;
@@ -4251,6 +4264,8 @@ void bootOnce() {
     TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
     loadDevOptions();
     Config::get().load();
+    clips::boot(clips::Host::Tmvs);
+    clips::setInternalCalls(hook::beginInternal, hook::endInternal);
     misc::boot();
     lut::writeBuiltInLooks();
     gameshaders::install();
@@ -4357,6 +4372,7 @@ void boot() {
 }
 
 void shutdown() {
+    clips::shutdown();
     capwriter::shutdown();
     overlay::shutdown();
     audio::shutdown();

@@ -1,6 +1,7 @@
 #include "overlay.h"
 #include "menu.h"
 #include "autoquality.h"
+#include "clips/clips.h"
 #include "config.h"
 #include "engine.h"
 #include "hook.h"
@@ -686,7 +687,7 @@ void draw(IDirect3DDevice9* device) {
     g_pinned = pinned && !menu;
     if (!menu) {
         Config::get().previewPreset.clear();
-        if (!*photoHint && !pinned && !toolsWanted && !statusLine) {
+        if (!*photoHint && !pinned && !toolsWanted && !statusLine && !clips::toastActive()) {
             g_splitBar = false;
             g_photoPanel = false;
             publishMouseOwner(false);
@@ -703,6 +704,7 @@ void draw(IDirect3DDevice9* device) {
     ImGui::GetIO().MouseDrawCursor = (menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
     if (statusLine) drawStatusLine(device);
+    if (clips::toastActive()) clips::drawToast(); // never in a clip: the clip's picture was taken before
     if (toolsWanted) misc::drawOverlay(tools); // before the menu: it stays on top
     if (menu || pinned) {
         // The pipeline's GPU timings for the Performance page.
@@ -745,6 +747,7 @@ void draw(IDirect3DDevice9* device) {
         g_packs.device = device;
         host.resourcePacks = &g_packs;
         if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
+        host.clipsPanel = [] { clips::drawPanel(); };
         host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
         if (engine::eswc()) eswcHost(host);
         host.hideDetached = capturing;

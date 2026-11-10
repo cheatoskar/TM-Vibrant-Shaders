@@ -2496,5 +2496,129 @@ std::string describeEncoders(const std::wstring& ffmpegPath) {
     return out;
 }
 
+bool writeMp4(const std::wstring& path, Codec codec, int width, int height, double fps, const std::vector<uint8_t>& header,
+              const std::vector<Mp4Picture>& pictures, const Mp4Sound* sound, std::string& error) {
+    Api& mf = api();
+    if (!mf.ok) {
+        error = mf.error;
+        return false;
+    }
+    if (pictures.empty() || !pictures.front().key) {
+        error = pictures.empty() ? "no pictures" : "the first picture is no key frame";
+        return false;
+    }
+    if (codec == Codec::AV1) {
+        error = "AV1 is not written here";
+        return false;
+    }
+    // The sink writer picks the container by the extension: a temporary .mp4 next to the clip.
+    const std::wstring temp = stem(path) + L".part.mp4";
+    DeleteFileW(temp.c_str());
+    Options o;
+    o.codec = codec;
+    o.width = width;
+    o.height = height;
+    o.fps = fps;
+    UINT32 num = 0, den = 1;
+    rational(fps, num, den);
+    const bool withSound = sound && sound->samples && sound->frames > 0 && sound->format.nBlockAlign == sound->format.nChannels * 2 &&
+                           (sound->format.nSamplesPerSec == 44100 || sound->format.nSamplesPerSec == 48000);
+    IMFSinkWriter* writer = nullptr;
+    IMFAttributes* attributes = nullptr;
+    IMFMediaType* video = nullptr;
+    IMFMediaType* aac = nullptr;
+    IMFMediaType* pcm = nullptr;
+    DWORD videoStream = 0, audioStream = 0;
+    HRESULT hr = mf.createAttributes(&attributes, 1);
+    if (SUCCEEDED(hr)) attributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
+    if (SUCCEEDED(hr)) hr = mf.createSinkWriter(temp.c_str(), nullptr, attributes, &writer);
+    if (SUCCEEDED(hr)) {
+        video = videoType(subtypeOf(codec), o, num, den);
+        hr = video ? S_OK : E_OUTOFMEMORY;
+    }
+    if (SUCCEEDED(hr)) {
+        if (!header.empty()) video->SetBlob(MF_MT_MPEG_SEQUENCE_HEADER, header.data(), static_cast<UINT32>(header.size()));
+        uint64_t bytes = 0;
+        for (const Mp4Picture& p : pictures) bytes += p.size;
+        const int64_t span = pictures.back().time + pictures.back().duration - pictures.front().time;
+        const double seconds = std::max(1e-3, static_cast<double>(span) / 1e7);
+        video->SetUINT32(MF_MT_AVG_BITRATE, static_cast<UINT32>(std::min(4.0e9, static_cast<double>(bytes) * 8.0 / seconds)));
+        video->SetUINT32(MF_MT_MPEG2_PROFILE, codec == Codec::HEVC ? eAVEncH265VProfile_Main_420_8 : eAVEncH264VProfile_High);
+        hr = writer->AddStream(video, &videoStream);
+    }
+    if (SUCCEEDED(hr)) hr = writer->SetInputMediaType(videoStream, video, nullptr);
+    if (SUCCEEDED(hr) && withSound) {
+        aac = aacType(sound->format);
+        pcm = pcmType(sound->format);
+        hr = aac && pcm ? writer->AddStream(aac, &audioStream) : E_OUTOFMEMORY;
+        if (SUCCEEDED(hr)) hr = writer->SetInputMediaType(audioStream, pcm, nullptr);
+    }
+    if (SUCCEEDED(hr)) hr = writer->BeginWriting();
+    const int64_t origin = pictures.front().time;
+    // The sound in pieces of 1/10 s between the pictures (interleaved), from its own start on.
+    const size_t rate = withSound ? sound->format.nSamplesPerSec : 0;
+    const size_t piece = rate / 10;
+    size_t soundDone = 0;
+    auto soundTime = [&](size_t frame) { return sound->time - origin + static_cast<int64_t>(frame * 10000000ull / rate); };
+    auto feedSound = [&](int64_t until) {
+        while (withSound && soundDone < sound->frames && soundTime(soundDone) <= until) {
+            const size_t n = std::min(piece, sound->frames - soundDone);
+            const int64_t t0 = soundTime(soundDone);
+            const int64_t t1 = soundTime(soundDone + n);
+            const size_t channels = sound->format.nChannels;
+            if (t1 > 0 && !writeBuffer(writer, audioStream, sound->samples + soundDone * channels, static_cast<DWORD>(n * channels * 2),
+                                       std::max<int64_t>(t0, 0), t1 - std::max<int64_t>(t0, 0)))
+                return false;
+            soundDone += n;
+        }
+        return true;
+    };
+    size_t k = 0;
+    for (; SUCCEEDED(hr) && k < pictures.size(); k++) {
+        const Mp4Picture& p = pictures[k];
+        const LONGLONG time = p.time - origin;
+        if (!feedSound(time + 5000000)) {
+            hr = E_FAIL;
+            break;
+        }
+        IMFMediaBuffer* buffer = nullptr;
+        IMFSample* sample = nullptr;
+        BYTE* dst = nullptr;
+        hr = mf.createMemoryBuffer(p.size, &buffer);
+        if (SUCCEEDED(hr)) hr = buffer->Lock(&dst, nullptr, nullptr);
+        if (SUCCEEDED(hr)) {
+            memcpy(dst, p.data, p.size);
+            buffer->Unlock();
+            buffer->SetCurrentLength(p.size);
+            hr = mf.createSample(&sample);
+        }
+        if (SUCCEEDED(hr)) hr = sample->AddBuffer(buffer);
+        if (SUCCEEDED(hr)) hr = sample->SetSampleTime(time);
+        if (SUCCEEDED(hr)) hr = sample->SetSampleDuration(std::max<LONGLONG>(p.duration, 1));
+        if (SUCCEEDED(hr)) hr = sample->SetUINT32(MFSampleExtension_CleanPoint, p.key ? TRUE : FALSE);
+        if (SUCCEEDED(hr)) hr = writer->WriteSample(videoStream, sample);
+        release(sample);
+        release(buffer);
+    }
+    if (SUCCEEDED(hr) && !feedSound(LLONG_MAX)) hr = E_FAIL;
+    if (SUCCEEDED(hr)) hr = writer->Finalize();
+    release(pcm);
+    release(aac);
+    release(video);
+    release(attributes);
+    release(writer);
+    if (FAILED(hr)) {
+        error = "Media Foundation's MP4 writer: " + hex(hr) + (k < pictures.size() ? strf(" at picture %d of %d", static_cast<int>(k), static_cast<int>(pictures.size())) : std::string());
+        DeleteFileW(temp.c_str());
+        return false;
+    }
+    if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        error = strf("cannot rename the finished file (%lu)", GetLastError());
+        DeleteFileW(temp.c_str());
+        return false;
+    }
+    return true;
+}
+
 } // namespace venc
 } // namespace tmshaders
