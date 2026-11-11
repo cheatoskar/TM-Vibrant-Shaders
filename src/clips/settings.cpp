@@ -11,7 +11,13 @@ namespace tmshaders {
 namespace clips {
 namespace {
 
+std::wstring g_documentsRoot; // setDocumentsRoot (tests)
+
 std::wstring documentsTrackMania() {
+    if (!g_documentsRoot.empty()) {
+        CreateDirectoryW(g_documentsRoot.c_str(), nullptr);
+        return g_documentsRoot;
+    }
     WCHAR docs[MAX_PATH] = {};
     std::wstring path;
     if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, 0, docs))) {
@@ -106,6 +112,10 @@ bool clampBuffer(Settings& s) {
     return true;
 }
 
+void setDocumentsRoot(const std::wstring& root) {
+    g_documentsRoot = root;
+}
+
 const std::wstring& dataDir() {
     static const std::wstring dir = [] {
         std::wstring path = documentsTrackMania() + L"\\TMClips";
@@ -141,6 +151,7 @@ bool load(Settings& s) {
     s.soundSource = readInt(L"SoundSource", d.soundSource, 0, 2);
     s.noHud = readInt(L"WithoutHud", d.noHud, 0, 1) != 0;
     s.toast = readInt(L"SavedMessage", d.toast, 0, 1) != 0;
+    s.checkpointClips = readInt(L"CheckpointClips", d.checkpointClips, 0, 1) != 0;
     s.saveKey = readText(L"SaveKey", d.saveKey.c_str());
     s.menuKey = readText(L"MenuKey", d.menuKey.c_str());
     s.lastRunKey = readText(L"LastRunKey", d.lastRunKey.c_str());
@@ -177,6 +188,7 @@ bool save(const Settings& s) {
     setInt(L"SoundSource", s.soundSource);
     setInt(L"WithoutHud", s.noHud);
     setInt(L"SavedMessage", s.toast);
+    setInt(L"CheckpointClips", s.checkpointClips);
     ini.set(L"Clips", L"SaveKey", wide(s.saveKey).c_str());
     ini.set(L"Clips", L"MenuKey", wide(s.menuKey).c_str());
     ini.set(L"Clips", L"LastRunKey", wide(s.lastRunKey).c_str());

@@ -1,4 +1,5 @@
 #include "clips/race.h"
+#include "clips/clips.h"
 #include <windows.h>
 #include <algorithm>
 #include <cctype>
@@ -343,6 +344,27 @@ std::wstring fitName(const std::wstring& name, size_t most) {
     }
     while (!out.empty() && (out.back() == L' ' || out.back() == L'.')) out.pop_back();
     return out.empty() ? std::wstring(L"Clip") : out;
+}
+
+// Checkpoint clips (clips.h): pure logic, also for tools/modulelogictest.cpp.
+bool CheckpointTracker::update(const void* race, int passed, bool finished, int lastTime, SectorClip& out) {
+    // Another race (a new map or mode), a restart (fewer passed), or no run: start over.
+    if (race != m_race || passed < m_passed) {
+        m_race = race;
+        m_passed = passed;
+        m_lastTime = passed > 0 ? lastTime : -1;
+        return false;
+    }
+    if (passed == m_passed) return false;
+    const int previous = m_lastTime;
+    m_passed = passed;
+    m_lastTime = lastTime;
+    // The finish's sector is in the run's clip (Save on finish); a time not read yet is skipped.
+    if (finished || lastTime <= 0) return false;
+    out.index = passed;
+    out.fromMs = previous;
+    out.toMs = lastTime;
+    return true;
 }
 
 } // namespace clips

@@ -139,6 +139,18 @@ void lookEdited(Config& config, Settings& s);
 // into windows of their own (those with "Keep open when the menu closes" also while it is closed).
 // Host::hideDetached: a photo or a capture is being taken, no detached windows.
 void draw(const Host& host);
+// Page ids (menu.cpp's Page enum), and the pages only Horizon's menu shows (TMVS 2.0 as Horizon modules).
+namespace pages {
+enum : int {
+    kShaders = 0, kCustomize = 1, kStudio = 2, kMaps = 3, kPerformance = 4, kSettings = 5, kAbout = 6, kVideo = 7, kPacks = 8,
+    kMisc = 9, kClips = 10,
+    kCaptureSettings = 100, // photo mode and the folders (the Capture module's Settings tab)
+    kUpscaling = 101        // Render scale and FSR (the Upscaling module's Settings tab)
+};
+} // namespace pages
+// One page's body (Page ids as in menu.cpp: 4 Performance, 5 Settings, ...) inside a window someone else
+// made: Horizon Host's panel (src/horizonplugin.cpp). False: no such page in this game.
+bool drawPageForHost(int id, const Host& host);
 // A detached window wants to stay on screen with the menu closed: the host must keep calling draw
 // and let the mouse reach it the way it does for the compare split's bar.
 bool pinnedWindows();

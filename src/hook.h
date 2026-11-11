@@ -51,6 +51,19 @@ struct DeviceCallbacks {
 
 bool install(const DeviceCallbacks& callbacks);
 
+// Hosted by Horizon Host (TMVS 2.0 modules, src/modules): instead of install(). The host's Direct3D
+// hook owns Direct3DCreate9, CreateDevice, Present and Reset and calls these from its device callbacks
+// (HorizonDeviceCallbacks); the device's other methods are hooked here as in install()'s mode. Reset
+// and Present are never hooked here then: one hook layer for them, the host's.
+void installHosted(const DeviceCallbacks& callbacks);
+bool hosted();
+// device_created: params null when the device existed before the plugins loaded. False: known already.
+bool hostedDeviceCreated(IDirect3DDevice9* device, const D3DPRESENT_PARAMETERS* params);
+void hostedAdjustPresentParams(D3DPRESENT_PARAMETERS* params); // before CreateDevice and every Reset
+void hostedBeforeReset(IDirect3DDevice9* device);
+void hostedAfterReset(IDirect3DDevice9* device, HRESULT hr);
+void hostedPresent(IDirect3DDevice9* device); // the host's pre_present: before its own UI is drawn
+
 // Hooks a device that another mod created (see hook.cpp). observeOnly: watch Present / Reset only.
 bool attachDevice(IDirect3DDevice9* device, bool observeOnly);
 // The game's device found where the game keeps it (its viewport) although our CreateDevice detour

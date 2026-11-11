@@ -39,6 +39,9 @@ void setExternal(ExternalTarget* target); // nullptr: the menu draws itself into
 bool externalActive();                    // an outside caller has been drawing the menu
 bool takeExternalFrame();                 // it drew the menu since the last call (once a frame, at Present)
 void pollHotkeys();                       // the hotkeys alone, for a frame the outside caller left out
+// One page of the menu drawn into the current ImGui window (Horizon Host's panel, src/horizonplugin.cpp;
+// the caller made the host's ImGui context current). False: not ready yet or no such page.
+bool drawPageForHorizon(int page);
 // Set when the user asks for a shader reload from the menu; cleared by the caller.
 bool consumeReloadRequest();
 

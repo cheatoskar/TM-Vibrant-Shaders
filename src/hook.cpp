@@ -85,6 +85,9 @@ IDirect3DDevice9* g_device = nullptr; // the game's device, for the memory repor
 // CenterSpeed's dummy, Twinkie's) run into the same hooked code: they pass through untouched.
 IDirect3DDevice9* g_gameDevice = nullptr;
 bool foreignDevice(IDirect3DDevice9* device) { return g_gameDevice && device != g_gameDevice; }
+// Hosted by Horizon Host (TMVS 2.0 modules, installHosted): the host's Direct3D hook owns CreateDevice,
+// Present and Reset and calls the hosted* functions; Reset and Present are not hooked here.
+bool g_hosted = false;
 
 // A call of the game's own (not the plugin's, not another device's): the callbacks see it.
 bool gameCall(IDirect3DDevice9* device) { return g_internal == 0 && !foreignDevice(device); }
@@ -801,6 +804,7 @@ void hookDevice(IDirect3DDevice9* device) {
     TMVS_LOG("hook diag: vtable %s; Reset was %s; Present was %s", table, reset, present);
     int atEntry = 0, chained = 0, slots = 0, known = 0;
     for (const Detour& d : kDetours) {
+        if (g_hosted && (d.slot == kReset || d.slot == kPresent)) continue; // the host's
         void* function = vtable[d.slot];
         SlotHooks& s = g_slots[d.slot];
         bool done = false;
@@ -1239,6 +1243,105 @@ bool attachMissedDevice(IDirect3DDevice9* device, const char* where) {
     return true;
 }
 
+// --- Hosted (Horizon Host owns Direct3DCreate9, CreateDevice, Present and Reset) ---------------
+
+namespace {
+D3DPRESENT_PARAMETERS g_hostedParams = {}; // the last parameters adjusted (for the Reset line)
+bool g_hostedHaveParams = false;
+} // namespace
+
+void installHosted(const DeviceCallbacks& callbacks) {
+    g_callbacks = callbacks;
+    g_hosted = true;
+    if (!g_installTime.QuadPart) QueryPerformanceCounter(&g_installTime);
+    TMVS_LOG("hook: hosted by Horizon Host: its Direct3D hook creates the device and calls our Present and Reset; "
+             "the device's other methods are hooked here once it exists");
+}
+
+bool hosted() {
+    return g_hosted;
+}
+
+bool hostedDeviceCreated(IDirect3DDevice9* device, const D3DPRESENT_PARAMETERS* params) {
+    if (!g_hosted || !device || device == g_gameDevice) return false;
+    if (g_gameDevice) {
+        TMVS_LOG("hook: hosted: the game made a new device %p (was %p): hooks moved to it", static_cast<void*>(device),
+                 static_cast<void*>(g_gameDevice));
+    } else if (params) {
+        TMVS_LOG("hook: hosted: the game's device %p created (%ux%u fmt=%s ms=%d autoDepth=%d %s windowed=%d)", static_cast<void*>(device),
+                 params->BackBufferWidth, params->BackBufferHeight, tracer::formatName(params->BackBufferFormat), params->MultiSampleType,
+                 params->EnableAutoDepthStencil, tracer::formatName(params->AutoDepthStencilFormat), params->Windowed);
+    } else {
+        // The plugins were loaded after the game made its device (the host hands it over at once): MSAA
+        // and the game's depth buffer are as the game made them until its next Reset.
+        TMVS_LOG("hook: hosted: the game's device %p existed already when the modules loaded: hooked late, the depth "
+                 "buffer is swapped from the game's next depth bind on",
+                 static_cast<void*>(device));
+    }
+    g_gameDevice = device;
+    g_device = device;
+    hookDevice(device);
+    if (g_callbacks.deviceCreated) {
+        g_internal++;
+        g_callbacks.deviceCreated(device);
+        g_internal--;
+    }
+    return true;
+}
+
+void hostedAdjustPresentParams(D3DPRESENT_PARAMETERS* params) {
+    if (!g_hosted || !params) return;
+    if (g_callbacks.adjustPresentParams) g_callbacks.adjustPresentParams(params);
+    g_hostedParams = *params;
+    g_hostedHaveParams = true;
+}
+
+void hostedBeforeReset(IDirect3DDevice9* device) {
+    if (!g_hosted || foreignDevice(device)) return;
+    if (g_callbacks.preReset) g_callbacks.preReset();
+}
+
+void hostedAfterReset(IDirect3DDevice9* device, HRESULT hr) {
+    if (!g_hosted || foreignDevice(device)) return;
+    static unsigned s_failed = 0; // failed Resets in a row
+    if (FAILED(hr) && s_failed++ > 0) return; // logged at the first of the series
+    const D3DPRESENT_PARAMETERS& p = g_hostedParams;
+    TMVS_LOG("Reset -> 0x%08lx (%ux%u fmt=%s ms=%d autoDepth=%d %s windowed=%d; through Horizon Host)", hr,
+             g_hostedHaveParams ? p.BackBufferWidth : 0, g_hostedHaveParams ? p.BackBufferHeight : 0, tracer::formatName(p.BackBufferFormat),
+             p.MultiSampleType, p.EnableAutoDepthStencil, tracer::formatName(p.AutoDepthStencilFormat), p.Windowed);
+    if (FAILED(hr)) {
+        const HRESULT coop = device->TestCooperativeLevel();
+        TMVS_LOG("Reset failed: 0x%08lx %s, TestCooperativeLevel 0x%08lx. Usually a D3DPOOL_DEFAULT resource still alive (this "
+                 "mod's or another's); the next failures in a row are not logged",
+                 hr, resultName(hr), coop);
+        logMemory("after the failed reset");
+        return;
+    }
+    if (s_failed) TMVS_LOG("Reset: worked again after %u failed in a row", s_failed);
+    s_failed = 0;
+    g_device = device;
+    logMemory("after reset");
+    if (g_callbacks.postReset) {
+        g_internal++;
+        g_callbacks.postReset(device);
+        g_internal--;
+    }
+}
+
+void hostedPresent(IDirect3DDevice9* device) {
+    if (!g_hosted || !device || foreignDevice(device)) return;
+    InterlockedIncrement(&g_diagPresents);
+    g_device = device;
+    if (g_callbacks.present) {
+        g_internal++;
+        g_callbacks.present(device);
+        g_internal--;
+    }
+    if (tracingGame(device)) tracer::event("Present");
+    tracer::onPresent(device);
+    drawStatsFrame();
+}
+
 bool hasGameDevice() {
     return g_gameDevice != nullptr;
 }
@@ -1288,6 +1391,7 @@ void diagFrame() {
     if (readable) {
         void** t = static_cast<void**>(table);
         for (const Detour& d : kDetours) {
+            if (g_hosted && (d.slot == kReset || d.slot == kPresent)) continue; // the host's
             void* now = nullptr;
             if (!readPointer(&t[d.slot], &now) || now == d.function) continue;
             if (g_vtableSlot[d.slot]) {

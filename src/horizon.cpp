@@ -19,6 +19,8 @@ uint32_t g_lastSearch = 0;
 int g_searches = 0;
 bool g_capturing = false;
 bool g_oldHostLogged = false;
+uint32_t (*g_hostedUi)() = nullptr;      // useHosted
+void (*g_hostedCapture)(bool) = nullptr;
 
 // The legacy loader's host, then the ModLoader product's (TrackMania Forever).
 const wchar_t* const kModules[] = {L"host.dll", L"HorizonHost.dll"};
@@ -69,6 +71,7 @@ uint32_t version() {
 }
 
 uint32_t uiState() {
+    if (g_hostedUi) return g_hostedUi();
     return g_found ? g_getUiState() : 0u;
 }
 
@@ -77,6 +80,12 @@ bool menuOpen() {
 }
 
 void capture(bool active) {
+    if (g_hostedCapture) {
+        if (active != g_capturing) TMVS_LOG("horizon: capture flag %s", active ? "on (its bar and the windows set to hide in photos leave)" : "off");
+        g_hostedCapture(active);
+        g_capturing = active;
+        return;
+    }
     if (!g_found) return;
     // Every frame while on (the host ends a capture 10 s after the last call); off once.
     if (active) {
@@ -95,6 +104,13 @@ bool capturing() {
 
 void release() {
     capture(false);
+}
+
+void useHosted(uint32_t (*uiState)(), void (*capture)(bool active), uint32_t version) {
+    g_hostedUi = uiState;
+    g_hostedCapture = capture;
+    g_version = version;
+    g_found = true; // tick() searches no more
 }
 
 int searches() {

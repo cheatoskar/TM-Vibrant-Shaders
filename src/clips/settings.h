@@ -24,6 +24,7 @@ struct Settings {
     int soundSource = 0;      // 0 the game, 1 the game and the microphone, 2 everything the PC plays
     bool noHud = false;       // TM Vibrant Shaders: the picture before the HUD
     bool toast = true;        // "Clip saved" in the game
+    bool checkpointClips = false; // a clip of each sector when a checkpoint is passed (TM Vibrant Shaders: the race's checkpoint times)
     std::string saveKey = "F3";
     std::string lastRunKey = "Ctrl+F3";       // the last finished run, also after a restart
     std::string runSoFarKey = "Ctrl+Shift+F3"; // the run that runs now, from its start
@@ -35,6 +36,8 @@ struct Settings {
     }
 };
 
+// Tests (TMVS 2.0's fake-host runs): this folder instead of Documents\TrackMania. Before dataDir()/clipsDir().
+void setDocumentsRoot(const std::wstring& root);
 // Documents\TrackMania\TMClips (settings, bests, the standalone's log) and Documents\TrackMania\Clips.
 const std::wstring& dataDir();
 const std::wstring& clipsDir();

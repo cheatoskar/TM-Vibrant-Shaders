@@ -70,5 +70,38 @@ void drawToast();
 // The standalone's window key (settings: MenuKey).
 std::string menuKey();
 
+// --- TMVS 2.0 as Horizon modules (src/modules), never called by the standalone builds ---------
+// The Capture module is on: false stops the recording (its memory freed) and present() does nothing,
+// not even the heartbeat TM Clips waits for.
+void setAllowed(bool allowed);
+bool allowed();
+// The keys are Horizon's (its hotkey table calls run()): the clips' own keys are not read, the page
+// says where they are set.
+void setHostKeys(bool hostKeys);
+enum class Action { SaveLast, SaveLastRun, SaveRunSoFar };
+void run(Action action);
+// Checkpoint clips (setting CheckpointClips): the host reads the race's checkpoint times once a frame
+// while this is true and reports them with raceProgress (passed: checkpoints passed in this run, the
+// finish included; lastTime: the race time at the last of them, ms). Each checkpoint saves its sector
+// (from the previous checkpoint, or Before start before the start, to 1 s after the checkpoint).
+bool wantsCheckpoints();
+void raceProgress(const void* race, int passed, bool finished, int lastTime);
+// Pure logic of the above, for tools/clipstest.cpp: the sector to save when `passed` went up, in race
+// time (ms; fromMs < 0: from the run's start minus Before start). False: nothing to save.
+struct SectorClip {
+    int index = 0;  // 1-based checkpoint number
+    int fromMs = -1;
+    int toMs = 0;
+};
+class CheckpointTracker {
+public:
+    bool update(const void* race, int passed, bool finished, int lastTime, SectorClip& out);
+
+private:
+    const void* m_race = nullptr;
+    int m_passed = 0;
+    int m_lastTime = -1;
+};
+
 } // namespace clips
 } // namespace tmshaders

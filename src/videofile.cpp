@@ -1,4 +1,5 @@
 #include "videofile.h"
+#include "modules/modules.h"
 #include "config.h"
 #include "engine.h"
 #include "log.h"
@@ -95,8 +96,10 @@ std::wstring mp4Path(const std::wstring& avi) {
     return dir + name;
 }
 
+// TMVS 2.0 as Horizon modules: the MP4 (and the mod's own frames) belong to the Capture module; without
+// it the game writes its own AVI.
 bool mp4Codec(const Settings& s) {
-    return s.videoCodec >= 1 && s.videoCodec <= 3;
+    return s.videoCodec >= 1 && s.videoCodec <= 3 && modules::on(modules::kCapture);
 }
 
 // VideoAspect: the picture's height for the game's width (multiples of 8, never taller than the

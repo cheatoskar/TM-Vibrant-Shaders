@@ -1,4 +1,5 @@
 #include "overlay.h"
+#include "modules/modules.h"
 #include "menu.h"
 #include "autoquality.h"
 #include "clips/clips.h"
@@ -298,7 +299,7 @@ void handleHotkeys() {
                                keys::Action::Capture, keys::Action::Reload, keys::Action::Trace})
             keys::take(a);
     }
-    if (keys::take(keys::Action::Menu)) {
+    if (keys::take(keys::Action::Menu) && !modules::hosted()) { // TMVS 2.0 as Horizon modules: Horizon's menu only
         config.showOverlay = !config.showOverlay;
         g_menuWhy = "its key";
     }
@@ -675,8 +676,68 @@ bool takeExternalFrame() {
 }
 void pollHotkeys() { handleHotkeys(); }
 
+// The pipeline's GPU timings for the Performance page.
+struct Timings : menu::PassTimings {
+    const Pipeline* p = nullptr;
+    int count() const override { return p->passCount(); }
+    const char* name(int pass) const override { return Pipeline::passName(pass); }
+    float time(int pass) const override { return p->passTime(pass); }
+    float total() const override { return p->totalTime(); }
+} g_timings;
+
+// What the menu's pages get from this game (the F8 menu, and a page shown in Horizon's menu).
+void fillHost(menu::Host& host, IDirect3DDevice9* device, bool capturing) {
+    g_timings.p = g_status.pipeline;
+    host.depthAvailable = g_status.depthAvailable;
+    host.engineHooks = g_status.engineHooks;
+    host.sunKnown = g_status.sunKnown;
+    memcpy(host.sunDirection, g_status.sunDirection, sizeof(host.sunDirection));
+    host.shaderError = g_status.shaderError;
+    host.timings = g_status.pipeline ? &g_timings : nullptr;
+    host.picture = [device](const std::string& preset) {
+        return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::get(device, preset)));
+    };
+    host.icon = [device](int size) { return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::icon(device, size))); };
+    const AutoQuality* aq = g_status.autoQuality;
+    host.autoQualityReduced = [aq]() -> const char* { return aq && aq->reducedCount() ? aq->summary() : nullptr; };
+    host.mapComments = [](std::string& comments) { return engine::currentMapComments(comments); };
+    host.setMapComments = [](const std::string& comments) { return engine::setCurrentMapComments(comments); };
+    host.fNumber = [](float dof) { return photo::fNumber(dof); };
+    host.splitOn = &photo::splitOn();
+    host.splitPosition = &photo::splitPosition();
+    host.splitSwapped = &photo::splitSwapped();
+    host.splitPreset = &photo::splitPreset();
+    host.photoHideCar = true;
+    host.photoOn = [] {
+        if (!photo::active()) photo::toggle();
+    };
+    host.supports = [](const Field& f) {
+        if (!strncmp(f.key, "Vr", 2)) return hook::handedOver(); // only with the VR mod
+        return strcmp(f.key, "ToneCurve") != 0;                    // ManiaPlanet only
+    };
+    g_packs.device = device;
+    host.resourcePacks = &g_packs;
+    if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
+    host.clipsPanel = [] { clips::drawRecording(); };
+    host.clipsSaving = [] { clips::drawSaving(); };
+    host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
+    if (engine::eswc()) eswcHost(host);
+    host.hideDetached = capturing;
+    host.horizon = horizon::found();
+}
+
+IDirect3DDevice9* g_drawDevice = nullptr; // the device draw() last ran on
+
+bool drawPageForHorizon(int page) {
+    if (!g_initialized || !g_drawDevice) return false;
+    menu::Host host;
+    fillHost(host, g_drawDevice, false);
+    return menu::drawPageForHost(page, host);
+}
+
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
+    g_drawDevice = device;
     if (!g_initialized) init(device);
     {
         const bool hides = Config::get().hideForHorizon && horizon::menuOpen();
@@ -695,6 +756,8 @@ void draw(IDirect3DDevice9* device) {
         g_horizonHides = hides;
     }
     handleHotkeys(); // also without the overlay (Capture, Reload and Trace)
+    // TMVS 2.0 as Horizon modules: the pages are Horizon's panels; the F8 menu and its windows never show.
+    if (modules::hosted()) Config::get().showOverlay = false;
     if (!g_initialized) return;
     {
         // The menu opening and closing, for the log (my report: it closed by itself).
@@ -730,7 +793,7 @@ void draw(IDirect3DDevice9* device) {
     // Detached windows: never in a hi-res photo's tiles or the video export's frames.
     engine::VideoExport exporting;
     const bool capturing = photo::tiling() || engine::videoExport(exporting);
-    const bool pinned = !capturing && menu::pinnedWindows();
+    const bool pinned = !capturing && !modules::hosted() && menu::pinnedWindows();
     g_pinned = pinned && !menu;
     if (!menu) {
         Config::get().previewPreset.clear();
@@ -754,52 +817,8 @@ void draw(IDirect3DDevice9* device) {
     if (clips::toastActive()) clips::drawToast(); // never in a clip: the clip's picture was taken before
     if (toolsWanted) misc::drawOverlay(tools); // before the menu: it stays on top
     if (menu || pinned) {
-        // The pipeline's GPU timings for the Performance page.
-        struct Timings : menu::PassTimings {
-            const Pipeline* p;
-            explicit Timings(const Pipeline* pipeline) : p(pipeline) {}
-            int count() const override { return p->passCount(); }
-            const char* name(int pass) const override { return Pipeline::passName(pass); }
-            float time(int pass) const override { return p->passTime(pass); }
-            float total() const override { return p->totalTime(); }
-        } timings(g_status.pipeline);
         menu::Host host;
-        host.depthAvailable = g_status.depthAvailable;
-        host.engineHooks = g_status.engineHooks;
-        host.sunKnown = g_status.sunKnown;
-        memcpy(host.sunDirection, g_status.sunDirection, sizeof(host.sunDirection));
-        host.shaderError = g_status.shaderError;
-        host.timings = g_status.pipeline ? &timings : nullptr;
-        host.picture = [device](const std::string& preset) {
-            return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::get(device, preset)));
-        };
-        host.icon = [device](int size) { return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::icon(device, size))); };
-        const AutoQuality* aq = g_status.autoQuality;
-        host.autoQualityReduced = [aq]() -> const char* { return aq && aq->reducedCount() ? aq->summary() : nullptr; };
-        host.mapComments = [](std::string& comments) { return engine::currentMapComments(comments); };
-        host.setMapComments = [](const std::string& comments) { return engine::setCurrentMapComments(comments); };
-        host.fNumber = [](float dof) { return photo::fNumber(dof); };
-        host.splitOn = &photo::splitOn();
-        host.splitPosition = &photo::splitPosition();
-        host.splitSwapped = &photo::splitSwapped();
-        host.splitPreset = &photo::splitPreset();
-        host.photoHideCar = true;
-        host.photoOn = [] {
-            if (!photo::active()) photo::toggle();
-        };
-        host.supports = [](const Field& f) {
-            if (!strncmp(f.key, "Vr", 2)) return hook::handedOver(); // only with the VR mod
-            return strcmp(f.key, "ToneCurve") != 0;                    // ManiaPlanet only
-        };
-        g_packs.device = device;
-        host.resourcePacks = &g_packs;
-        if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
-        host.clipsPanel = [] { clips::drawRecording(); };
-        host.clipsSaving = [] { clips::drawSaving(); };
-        host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
-        if (engine::eswc()) eswcHost(host);
-        host.hideDetached = capturing;
-        host.horizon = horizon::found();
+        fillHost(host, device, capturing);
         menu::draw(host);
     }
     if (*photoHint) {

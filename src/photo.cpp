@@ -1,4 +1,5 @@
 #include "photo.h"
+#include "modules/modules.h"
 #include "config.h"
 #include "engine.h"
 #include "image.h"
@@ -231,7 +232,8 @@ void beginFrame() {
     }
     const Config& config = Config::get();
     // Also with the shaders off (F7): free camera, zoom and photos of the game's own image.
-    const bool wanted = (g_manual >= 0 ? g_manual == 1 : (config.photoAuto && freeCam));
+    // TMVS 2.0 as Horizon modules: photo mode belongs to the Capture module.
+    const bool wanted = modules::on(modules::kCapture) && (g_manual >= 0 ? g_manual == 1 : (config.photoAuto && freeCam));
     if (wanted != g_active) {
         g_active = wanted;
         TMVS_LOG("photo: mode %s", wanted ? "on" : "off");

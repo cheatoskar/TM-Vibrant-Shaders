@@ -78,6 +78,12 @@ bool take(Action a);
 // An action that came as a window message nobody pressed (scan code 0: dev.ini's key actions,
 // posted): polling never sees those, so they wait for take() too.
 void push(Action a);
+// Horizon Host owns the hotkeys (src/horizonplugin.cpp: they are registered with it, it calls push()):
+// poll() and resolve() see none of ours, so the keys reach the game and Horizon untouched.
+void setHostOwned(bool owned);
+// Horizon's "hi-res photo" key (its own entry in Horizon's table): the action as if Shift were held.
+void pushShifted(Action a);
+bool hostOwned();
 // GetTickCount() when poll() last saw `vk` fire, 0 = never; lastPressAt: of any hotkey.
 DWORD polledAt(unsigned vk);
 DWORD lastPressAt();
