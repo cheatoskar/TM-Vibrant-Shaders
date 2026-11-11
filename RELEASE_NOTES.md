@@ -1,34 +1,39 @@
-## TM Vibrant Shaders 1.4.3 (pre-release)
+## TM Vibrant Shaders 1.5.0 (pre-release)
 
-Fixes for **TrackMania Nations & United Forever**, the mod now works next to the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR), and it runs in **TrackMania Nations ESWC** (experimental). TrackMania 2 is unchanged.
+New: **instant replay clips** for TrackMania Nations & United Forever, the car and the race in **TrackMania Nations ESWC**, and photo zoom, hi-res photos, Hide car and the Misc page in **TrackMania 2**.
 
-Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
+Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`, in TrackMania 2 `tmvs-mp.log`, in ESWC `tmvs-eswc.log`).
 
 ---
 
-### Fixed
+### Clips (Nations & United Forever, new)
 
-- **Dirt no longer mirrors walls** after you were in the replay editor (also online): the mod kept the old materials' kinds for new ones the game put at the same place in memory.
-- **Your car stays smooth with TAA**, driving and standing still. It used to look grainy while driving, more so with *Sharpening*.
-- **No foam on the water above a sunken car.**
-- **The effects run on maps where `F7` changed nothing** (a TMUnlimiter map of mine set no camera view of its own). On such maps the image also shook; it doesn't any more.
-- When the effects are on but nothing is shaded for 2 seconds, `tmvs.log` now says why.
-- **Opening the menu (`F8`) right after the game started could close it** (in the first 10 seconds, while the version badge shows). Competition Patch works, 1.5.3 and 2.0.
-- When another mod keeps this one from starting (no menu, no effects), `tmvs.log` now says so after 30 seconds and lists the other mods in the game.
+The game is recorded into memory all the time, and after a finish the run is saved as an MP4 with the game's sound: 3 s before the start to 3 s after the finish, within about a second, without a replay and without rendering anything. By default only after a personal best.
 
-### VR (experimental)
+- `F3` saves the last 30 s (or 60, 90). `Ctrl+F3` saves the last finished run, also after a restart. `Ctrl+Shift+F3` saves the run you drive now, from its start.
+- The buffer follows the map (author time x 1.5 + 10 s, at least 60 s), within the memory limit of the 32-bit game.
+- Sound: the game's own, the game and your microphone, everything the PC plays, or none.
+- Clips go to `Documents\TrackMania\Clips`. Settings are on the new *Clips* page of the menu.
+- NVIDIA's encoder (NVENC) driven directly, else the graphics card's H.264 encoder through Windows (AMD, Intel).
+- It reads the race from the game's memory and writes nothing, so it is fine online.
+- **TM Clips** is the same as a mod of its own for the ModLoader (`TM-Clips.zip`), with a small window on `Shift+F3`. With both installed, TM Vibrant Shaders records and TM Clips stays idle.
 
-![In the headset: the TM Vibrant Shaders menu next to the cockpit, Golden Hour on the start of A06 (wial663's test)](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/{{TAG}}/docs/images/vr-golden-hour.jpg)
-
-With the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR) both mods now run together (both from the ModLoader). The mod's menu (`F8`) shows in the headset. *Effects in VR* (page *Misc & VR*, off; restart the game after switching it) shades both eyes, with *Comfort*, *Quality in VR*, *TAA in VR* and *Rain on the windshield*. Both eyes get the same exposure, sky and rain; without *TAA in VR* the eyes are shaded without a history over frames, which stopped lamps and the Rain sky from flickering in an earlier test build. Tell me if anything still flickers (with `tmvs.log`: it now says every 10 s what was shaded in the headset).
-
-New in rc.2: with *Game HDR* on the headset no longer goes black (*Game HDR* and *Render scale* stay off while the VR mod draws the eyes), no false "Depth buffer unavailable" message with *Effects in VR* off, and the effects no longer switch size every other frame at a race's start.
-
-This needs a VR mod build that hands its device to this mod. That change is a [pull request to the VR mod](https://github.com/jiink/TrackManiaForeverOpenXR/pull/27); until it is merged, use the build from [my fork](https://github.com/cheatoskar/TrackManiaForeverOpenXR-TMVS). The hand-over is by @wial663, who also tested it in the headset. Thanks!
+All of it in [docs/clips.md](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/clips.md).
 
 ### TrackMania Nations ESWC (experimental)
 
-The same DLL runs in **TrackMania Nations ESWC**, but only with the unofficial community patch 1.80 (`TmNationsESWC.exe` 0.1.7.9), not the StarForce original. Put `TMVibrantShaders.dll` next to `TmNationsESWC.exe` as `d3d9.dll` (or use the setup's *Install into another game folder*). You get the menu (`F8`), the look, photo mode and captures, with the HUD left out of the effects. The car, map, replay and video features need more of the old game than I found so far: the menu doesn't show them there. The log is `Documents\TrackMania\TMVS\tmvs-eswc.log`.
+The car and the race: *Neon trail*, *Car headlights* (also *Horror*), *Spray*, *Long mesh shadows*, *Hide car*, motion blur and *Cinematic in replays only*, and on the *Misc* page the split times, the Session panel and the finish effects. Still not there: the video export, water, the game's materials and light, the minimap. Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9).
+
+### TrackMania 2
+
+- **Game camera** (*Settings*, off by default): photo zoom (`Shift`+wheel), hi-res photos (`Shift+F12`) and *TAA jitter*. This writes into the game's memory and is not tested against ManiaPlanet's anti-cheat, so it stays off unless you switch it on.
+- **Only in replays** knows replays: depth of field and motion blur run in the replay editor and in photo mode, not while driving.
+- **Hide car** in photo mode.
+- **Misc page**: split times against your best run, the Session panel and finish effects. Read from the game only, so fine online.
+
+### Fixed
+
+- **With CenterSpeed loaded the menu and the effects never started** ("no game device 30 s after the start" in `tmvs.log`). The mod now puts its hook in front of the game's device again if something overwrote it, and takes the device from the game's viewport if it still went past.
 
 ---
 
@@ -40,7 +45,7 @@ The same DLL runs in **TrackMania Nations ESWC**, but only with the unofficial c
   - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'
 ```
 
-Then tick *TM Vibrant Shaders* in your profile. New versions arrive on their own from then on. This is a pre-release: that server keeps 1.4.2. To get the pre-releases through the ModLoader, use `https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/` instead.
+Then tick *TM Vibrant Shaders* in your profile. New versions arrive on their own from then on. This is a pre-release: that server keeps the last stable version. To get the pre-releases through the ModLoader, use `https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/` instead.
 
 **With the setup:** download `TM-Vibrant-Shaders.zip`, extract it and run `TM-Vibrant-Shaders-Setup.exe`.
 
