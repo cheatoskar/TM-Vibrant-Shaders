@@ -29,14 +29,16 @@
       "type": "gallery",
       "title": "Screenshots",
       "images": [
+        { "url": "docs/showcase/photo_041.jpg", "caption": "Low sun over a Stadium build, with light shafts and a lens glow", "alt": "A large Stadium track build in warm low sunlight" },
+        { "url": "docs/showcase/photo_040.jpg", "caption": "Haze and sun rays between the towers of a long track", "alt": "Track towers in hazy sunlight, sun rays across the grass" },
+        { "url": "docs/showcase/photo_038.jpg", "caption": "Black hole: a starry night sky above the stadium", "alt": "A black hole glowing in the starry sky above a Stadium track" },
+        { "url": "docs/showcase/photo_022.jpg", "caption": "Aurora: northern lights over the flags and the big screen", "alt": "Green northern lights above the stadium flags and screen" },
         { "url": "docs/images/storm-checkpoint.jpg", "caption": "Storm: rain on a wet Stadium track, the checkpoint mirrored in the road", "alt": "A Stadium checkpoint in heavy rain, mirrored in the wet road" },
-        { "url": "docs/images/compare-rain.jpg", "caption": "Rain: original (left) and Storm (right)", "alt": "Split image of a checkpoint, original and in a storm" },
         { "url": "docs/images/realistic-start.jpg", "caption": "Realistic: the start line in the late sun, with haze and soft shadows", "alt": "The start line in low sun with haze and soft shadows" },
-        { "url": "docs/images/aurora.jpg", "caption": "Aurora: northern lights over the stadium", "alt": "Green northern lights in the night sky above a track" },
-        { "url": "docs/images/ring-world.jpg", "caption": "Ring World: a ringed planet seen from right next to the rings", "alt": "A planet and its rings filling the sky above the track" },
         { "url": "docs/images/tm2-black-hole-split.jpg", "caption": "TrackMania 2: the game and the mod side by side", "alt": "TrackMania 2 Stadium in a split screen, without and with the mod" },
-        { "url": "docs/images/vr-golden-hour.jpg", "caption": "VR: the menu in the headset, Golden Hour on the start of A06", "alt": "The in-game menu next to the cockpit in VR" },
-        { "url": "docs/images/1.4.2-menu-misc.jpg", "caption": "The menu with its windows: video export, resource packs and the minimap", "alt": "The mod menu with the video export, resource pack and minimap windows open" }
+        { "url": "docs/images/menu.jpg", "caption": "The settings menu in the game", "alt": "The TM Vibrant Shaders menu open in the game" },
+        { "url": "docs/images/1.4.2-menu-misc.jpg", "caption": "The menu with its windows: video export, resource packs and the minimap", "alt": "The mod menu with the video export, resource pack and minimap windows open" },
+        { "url": "docs/images/vr-golden-hour.jpg", "caption": "VR: the menu in the headset, Golden Hour on the start of A06", "alt": "The in-game menu next to the cockpit in VR" }
       ]
     },
     {
