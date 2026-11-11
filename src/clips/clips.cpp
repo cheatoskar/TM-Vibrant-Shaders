@@ -1049,7 +1049,6 @@ void drawRecording() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Game + mic: your default microphone too. All sound: everything the PC plays.");
     if (g_host == Host::Tmvs) {
         if (ImGui::Checkbox("Without HUD", &s.noHud)) edited();
-        ImGui::SameLine();
     }
     if (ImGui::Checkbox("Saved message", &s.toast)) edited();
     ImGui::EndDisabled();
