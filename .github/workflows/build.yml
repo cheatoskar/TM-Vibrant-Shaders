@@ -68,7 +68,8 @@ jobs:
           }
           Write-Host "OK - both DLLs carry $want"
 
-      # dist/: TM-Vibrant-Shaders.zip (TMNF/TMUF and TM2), TMVibrantShaders.dll, SHA256SUMS.txt
+      # dist/: TM-Vibrant-Shaders.zip (TMNF/TMUF and TM2), TMVibrantShaders.dll, TMVS-<version>-horizon.zip
+      # (the four Horizon Host modules, docs/horizon-modules.md), SHA256SUMS.txt
       - name: Package
         run: cmake --build build --config Release --target release_zip
 
@@ -113,6 +114,7 @@ jobs:
             dist/TM-Vibrant-Shaders.zip
             dist/TMVibrantShaders.dll
             dist/TM-Clips.zip
+            dist/TMVS-*-horizon.zip
             dist/SHA256SUMS.txt
           body_path: dist/release-notes.md
           fail_on_unmatched_files: true

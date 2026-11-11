@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.0 (unreleased)
+
+TM Vibrant Shaders also as four modules for Horizon Host, TM Horizon's in-game menu ([docs/horizon-modules.md](docs/horizon-modules.md)). The standalone mod stays as it is.
+
+**New**
+- **Horizon modules** (TrackMania Nations/United Forever, TrackMania Nations ESWC): *TM Vibrant Shaders* (the shaders), *TMVS Capture* (photos, clips, video export), *TMVS Upscaling* (FSR render scale) and *TMVS Packs* (resource packs), each with its own page, switch and keys in the Horizon menu. Capture and Upscaling also work with the shaders off. They come as `TMVS-<version>-horizon.zip`; all four use `tmvs-core.dll` in the `tmvs` folder.
+- **Only one copy runs**: with the standalone mod and the modules both installed, the one the game loads first runs and the other stays passive; `tmvs.log`, Horizon's log and the module pages say which.
+- **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector, from the previous checkpoint (or the start) to one second after this one, saved as `<map>_<date>_CP<n>_<time>.mp4`. Read from the game only, as the finish clips.
+- In Horizon, photos, clips and the video export never show Horizon's interface (Horizon's capture flag).
+
+**Changed**
+- Same settings in both forms (`Documents\TrackMania\TMVS`, `Documents\TrackMania\TMClips\clips.ini`); 2.0 adds `SettingsVersion=2` to `settings.ini`, 1.5 reads the file as before.
+- In Horizon the keys are Horizon's: the modules put theirs into Horizon's *Hotkeys* list (defaults from your settings files); the menu is Horizon's (`Insert`).
+- `tmvs.log` says which form starts (`starting (standalone (d3d9.dll))`, `(standalone (ModLoader))` or `(Horizon modules (tmvs-core.dll))`).
+
 ## 1.5.0 (in testing)
 
 TrackMania Nations ESWC gets the car and the race, and TrackMania 2 catches up with TrackMania Nations/United: photo zoom, hi-res photos, TAA jitter, "only in replays", Hide car and the Misc page.
