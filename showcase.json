@@ -7,7 +7,7 @@
       "type": "hero",
       "title": "TM Vibrant Shaders",
       "tagline": "Real-time lighting, weather and skies for TrackMania Nations Forever, United Forever and TrackMania 2.",
-      "image": "docs/images/black-hole.jpg",
+      "image": "docs/images/black-hole-loop.jpg",
       "badges": ["TMNF, TMUF, TM2", "Open source", "MIT"]
     },
     {
@@ -30,17 +30,13 @@
       "title": "Screenshots",
       "images": [
         { "url": "docs/images/storm-checkpoint.jpg", "caption": "Storm: rain on a wet Stadium track, the checkpoint mirrored in the road", "alt": "A Stadium checkpoint in heavy rain, mirrored in the wet road" },
+        { "url": "docs/images/compare-rain.jpg", "caption": "Rain: original (left) and Storm (right)", "alt": "Split image of a checkpoint, original and in a storm" },
         { "url": "docs/images/realistic-start.jpg", "caption": "Realistic: the start line in the late sun, with haze and soft shadows", "alt": "The start line in low sun with haze and soft shadows" },
         { "url": "docs/images/aurora.jpg", "caption": "Aurora: northern lights over the stadium", "alt": "Green northern lights in the night sky above a track" },
         { "url": "docs/images/ring-world.jpg", "caption": "Ring World: a ringed planet seen from right next to the rings", "alt": "A planet and its rings filling the sky above the track" },
-        { "url": "docs/images/event-horizon.jpg", "caption": "A ringed planet over a night stadium", "alt": "A car on the track under a starry sky with a ringed planet" },
-        { "url": "docs/images/compare-day.jpg", "caption": "Day: original (left) and Golden Hour (right)", "alt": "Split image of the same day scene, original and Golden Hour" },
-        { "url": "docs/images/compare-sunset.jpg", "caption": "Sunset: original (left) and Vibrant (right)", "alt": "Split image of a sunset scene, original and Vibrant" },
-        { "url": "docs/images/compare-rain.jpg", "caption": "Rain: original (left) and Storm (right)", "alt": "Split image of a checkpoint, original and in a storm" },
         { "url": "docs/images/tm2-black-hole-split.jpg", "caption": "TrackMania 2: the game and the mod side by side", "alt": "TrackMania 2 Stadium in a split screen, without and with the mod" },
-        { "url": "docs/images/vr-golden-hour.jpg", "caption": "VR: the mod's menu in the headset, Golden Hour on the start of A06", "alt": "The in-game menu next to the cockpit in VR" },
-        { "url": "docs/images/menu.jpg", "caption": "The F8 menu with every preset as a card", "alt": "The mod's menu with a picture card for each preset" },
-        { "url": "docs/images/compare-night.jpg", "caption": "Night: original (left) and Neon Night (right)", "alt": "Split image of a night track, original and Neon Night" }
+        { "url": "docs/images/vr-golden-hour.jpg", "caption": "VR: the menu in the headset, Golden Hour on the start of A06", "alt": "The in-game menu next to the cockpit in VR" },
+        { "url": "docs/images/1.4.2-menu-misc.jpg", "caption": "The menu with its windows: video export, resource packs and the minimap", "alt": "The mod menu with the video export, resource pack and minimap windows open" }
       ]
     },
     {
