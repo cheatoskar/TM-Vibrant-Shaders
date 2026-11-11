@@ -1,0 +1,93 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cheatoskar/tm-horizon/main/packages/shared/showcase.schema.json",
+  "version": 1,
+  "theme": { "accent": "orange" },
+  "blocks": [
+    {
+      "type": "hero",
+      "title": "TM Vibrant Shaders",
+      "tagline": "Real-time lighting, weather and skies for TrackMania Nations Forever, United Forever and TrackMania 2.",
+      "image": "docs/images/black-hole-loop.jpg",
+      "badges": ["TMNF, TMUF, TM2", "Open source", "MIT"]
+    },
+    {
+      "type": "features",
+      "title": "What it adds",
+      "items": [
+        { "icon": "sun", "title": "Light and shadow", "text": "Ambient occlusion, sun and long-range shadows, light shafts, bounce light and glowing neon borders." },
+        { "icon": "droplets", "title": "Weather", "text": "Rain with sound and lightning, wet roads with reflections, snow, storms and water with waves." },
+        { "icon": "sparkles", "title": "Skies", "text": "Volumetric clouds, starry nights, aurora, a black hole that lights the track and the Ring World." },
+        { "icon": "camera", "title": "Camera and photo mode", "text": "HDR bloom, auto exposure, LUT looks, anti-aliasing and a photo mode without the HUD." },
+        { "icon": "film", "title": "Video export", "text": "Shoot video in the replay editor: encoded on the graphics card, HDR10, with the game's own sound." },
+        { "icon": "palette", "title": "Presets to share", "text": "A menu with a card and live preview for every preset. Share any look as one line of text." },
+        { "icon": "map", "title": "Author's Shader", "text": "A map can carry its own look. Everyone with the mod sees the map the way its author set it up." },
+        { "icon": "gauge", "title": "Auto quality", "text": "Turns off the most expensive effects when your frame rate drops, and brings them back later." },
+        { "icon": "gamepad-2", "title": "VR (experimental)", "text": "Runs next to the VR mod TrackMania Forever OpenXR, with the menu in the headset." }
+      ]
+    },
+    {
+      "type": "gallery",
+      "title": "Screenshots",
+      "images": [
+        { "url": "docs/showcase/photo_041.jpg", "caption": "Low sun over a Stadium build, with light shafts and a lens glow", "alt": "A large Stadium track build in warm low sunlight" },
+        { "url": "docs/showcase/photo_040.jpg", "caption": "Haze and sun rays between the towers of a long track", "alt": "Track towers in hazy sunlight, sun rays across the grass" },
+        { "url": "docs/showcase/photo_038.jpg", "caption": "Black hole: a starry night sky above the stadium", "alt": "A black hole glowing in the starry sky above a Stadium track" },
+        { "url": "docs/showcase/photo_022.jpg", "caption": "Aurora: northern lights over the flags and the big screen", "alt": "Green northern lights above the stadium flags and screen" },
+        { "url": "docs/images/storm-checkpoint.jpg", "caption": "Storm: rain on a wet Stadium track, the checkpoint mirrored in the road", "alt": "A Stadium checkpoint in heavy rain, mirrored in the wet road" },
+        { "url": "docs/images/realistic-start.jpg", "caption": "Realistic: the start line in the late sun, with haze and soft shadows", "alt": "The start line in low sun with haze and soft shadows" },
+        { "url": "docs/images/tm2-black-hole-split.jpg", "caption": "TrackMania 2: the game and the mod side by side", "alt": "TrackMania 2 Stadium in a split screen, without and with the mod" },
+        { "url": "docs/images/menu.jpg", "caption": "The settings menu in the game", "alt": "The TM Vibrant Shaders menu open in the game" },
+        { "url": "docs/images/1.4.2-menu-misc.jpg", "caption": "The menu with its windows: video export, resource packs and the minimap", "alt": "The mod menu with the video export, resource pack and minimap windows open" },
+        { "url": "docs/images/vr-golden-hour.jpg", "caption": "VR: the menu in the headset, Golden Hour on the start of A06", "alt": "The in-game menu next to the cockpit in VR" }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Install",
+      "markdown": "**With the ModLoader (TMLoader), it updates itself.** Close the ModLoader, open `%LOCALAPPDATA%\\TMLoader\\config.yaml` and add this line under `servers:`:\n\n```\n  - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'\n```\n\nStart the ModLoader, tick *TM Vibrant Shaders* in your profile and start the game.\n\n**With the setup.** Download `TM-Vibrant-Shaders.zip` from the latest release, extract it, close the game and run `TM-Vibrant-Shaders-Setup.exe`. It installs into the ModLoader, into Nations or United Forever (as `d3d9.dll`), or into TrackMania 2 (as `d3d11.dll`).\n\nPress `F8` in the game for the menu. Settings and presets stay in `Documents\\TrackMania\\TMVS`."
+    },
+    {
+      "type": "hotkeys",
+      "rows": [
+        { "keys": "F8", "action": "Open or close the menu (F5 when CenterSpeed is loaded)" },
+        { "keys": "F7", "action": "Effects on or off (TMNF and TMUF)" },
+        { "keys": "F5", "action": "Effects on or off (TM2)" },
+        { "keys": "F6", "action": "Photo mode" },
+        { "keys": "Shift+F6", "action": "Photo mode: split screen, game without and with the mod" },
+        { "keys": "F12", "action": "Screenshot and frame capture (a photo in photo mode)" }
+      ]
+    },
+    {
+      "type": "compat",
+      "rows": [
+        { "game": "tmnf", "status": "works" },
+        { "game": "tmuf", "status": "works" },
+        { "game": "tm2-canyon", "status": "works", "note": "d3d11.dll, 64-bit" },
+        { "game": "tm2-stadium", "status": "works", "note": "d3d11.dll, 64-bit" },
+        { "game": "tm2-valley", "status": "works", "note": "d3d11.dll, 64-bit" },
+        { "game": "tm2-lagoon", "status": "works", "note": "d3d11.dll, 64-bit" },
+        { "game": "eswc", "status": "partial", "note": "Unofficial 1.80 patch only; the look and photos, no car or video features" },
+        { "game": "tm2020", "status": "no" }
+      ]
+    },
+    { "type": "changelog", "count": 2 },
+    {
+      "type": "faq",
+      "items": [
+        { "q": "How strong a PC do I need?", "a": "A GTX 1050 at 1080p with the Performance preset is the minimum. A GTX 1080 Ti at 1440p runs at 70 to 90 FPS. Auto quality is on by default and holds your frame rate." },
+        { "q": "How do I open the menu?", "a": "Press F8 in the game. F5 if CenterSpeed is loaded, because CenterSpeed uses F8." },
+        { "q": "Does it work with CenterSpeed and Competition Patch?", "a": "Yes, both. With CenterSpeed loaded the menu opens with F5." },
+        { "q": "Something flickers or looks wrong.", "a": "Press F12 there and attach the screenshot and the capture to an issue on GitHub, with tmvs.log from Documents\\TrackMania\\TMVS." },
+        { "q": "Windows warns about the setup.", "a": "The setup is not code-signed. Choose More info, then Run anyway, or install through the ModLoader or by hand." }
+      ]
+    },
+    {
+      "type": "cta",
+      "buttons": [
+        { "kind": "install", "label": "Install" },
+        { "kind": "link", "label": "Settings guide", "url": "https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/docs/settings.md", "style": "ghost" },
+        { "kind": "link", "label": "Releases", "url": "https://github.com/cheatoskar/TM-Vibrant-Shaders/releases", "style": "ghost" }
+      ]
+    }
+  ]
+}
