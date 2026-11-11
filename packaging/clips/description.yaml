@@ -1,7 +1,7 @@
 name: TM Clips
 author: cheatoskar
 type: modification
-homepage: 'https://github.com/cheatoskar/TM-Vibrant-Shaders'
+homepage: 'https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/docs/clips.md'
 description: 'Instant replay clips for TrackMania Nations/United Forever: the game is recorded into memory all the time, and after a finish the run (3 s before the start to 3 s after the finish) is saved as an MP4 with the game''s sound, or the last 30 s with F3. Clips go to Documents\TrackMania\Clips. Settings with Shift+F3. With TM Vibrant Shaders installed, its menu has these settings and this mod stays idle.'
 executable: TMClips.dll
 dependencies:

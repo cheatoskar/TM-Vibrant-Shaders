@@ -24,6 +24,8 @@ A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (Trac
 
 ![TrackMania 2 Stadium, photo mode's compare split: left the game, right with the mod and the black hole sky](docs/images/tm2-black-hole-split.jpg)
 
+**New in the 1.5.0 pre-release: Clips** (TrackMania Nations/United). The game is recorded into memory all the time, and after a finish the run is saved as an MP4 with the game's sound, or the last seconds on `F3`. It is the *Clips* page in the menu, and also a mod of its own for the ModLoader (TM Clips). Details in [docs/clips.md](docs/clips.md). The same release brings the car and the race to TrackMania Nations ESWC and photo zoom, hi-res photos, Hide car and the Misc page to TrackMania 2.
+
 **New in the 1.4.3 pre-release: TrackMania Nations ESWC** (experimental). The same DLL as `d3d9.dll` next to the unofficial 1.80 patch's `TmNationsESWC.exe`: the look, photo mode and captures. Details in [docs/install.md](docs/install.md#trackmania-nations-eswc).
 
 ![TrackMania Nations ESWC, photo mode's compare split: left the game, right Golden Hour](docs/images/eswc-golden-hour-split.jpg)
@@ -158,7 +160,7 @@ Default keys; every one can be changed in the menu (*Settings* → *Hotkeys*, [d
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
 | `Ctrl+F9` | Reload the shaders (development). Not `F9`: that opens the menu of the 100% TMX mod. Hotkeys only react while the game window is in front |
 | `F11` | Trace the next frame (development) |
-| `F3` | Save the last 30 s as a clip (TrackMania Nations/United; 30, 60 or 90 s; the keys are on the *Clips* page, not under *Hotkeys*) |
+| `F3` | Save the last 30 s as a clip (TrackMania Nations/United; 30, 60 or 90 s; the keys are on the *Clips* page, not under *Hotkeys*; [details](docs/clips.md)) |
 | `Ctrl+F3` | Save the last finished run as a clip, also after a restart |
 | `Ctrl+Shift+F3` | Save the run you drive now, from its start |
 | `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms, `Shift+F6` splits the screen: the game without and with the mod |
@@ -214,6 +216,7 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 |---|---|
 | [Installation](docs/install.md) | Setup, manual install, ModLoader or game folder, updating, uninstalling, recommended game settings |
 | [Settings](docs/settings.md) | Every setting in the menu, mood presets, your own presets |
+| [Clips](docs/clips.md) | Instant replay clips of your runs as MP4: keys, buffer, sound, settings, the standalone TM Clips |
 | [Performance](docs/performance.md) | Hardware, measured costs, what to turn off for more FPS |
 | [Troubleshooting](docs/troubleshooting.md) | No effects, no sound, low FPS, HUD problems, how to report a bug |
 | [How it works](docs/how-it-works.md) | Hooks, depth buffer, the render passes, the two game builds |
