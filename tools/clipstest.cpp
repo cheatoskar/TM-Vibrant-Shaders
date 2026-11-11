@@ -920,6 +920,27 @@ void testDevice(const std::wstring& folder, bool keep) {
         snprintf(what, sizeof(what), "RGB %d %d %d -> Y %d U %d V %d (expected %d %d %d)", c.r, c.g, c.b, y, u, v, ey, eu, ev);
         check(grabbed && std::abs(y - ey) <= 1 && std::abs(u - eu) <= 1 && std::abs(v - ev) <= 1, what);
     }
+    // TM Vibrant Shaders' frame end (clips::frameEnd): the finished frame copied while the game's scene is
+    // still open, then another mod's Present hook (Horizon Host) draws over the back buffer, then the
+    // grab at Present takes the copy: the other mod's colour must not be in the clip.
+    {
+        device->BeginScene();
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(200, 100, 50), 1.0f, 0);
+        const bool copied = g.copy(device, back, 1920, 1080);
+        device->EndScene();
+        device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(255, 0, 255), 1.0f, 0); // "Horizon's menu"
+        const bool grabbed = g.grab(device, nullptr, 1920, 1080, 0);
+        int y = -1;
+        g.collect([&](const PlaneReadback::Frame& f, int64_t) {
+            std::vector<uint8_t> nv12(PlaneReadback::packedBytes(f));
+            PlaneReadback::pack(f, nv12.data());
+            y = nv12[1920 * 540 + 960];
+        }, true);
+        const int game = static_cast<int>(std::lround(16 + 219 * (0.2126 * 200 / 255.0 + 0.7152 * 100 / 255.0 + 0.0722 * 50 / 255.0)));
+        char what[160];
+        snprintf(what, sizeof(what), "frame end copy inside the scene, other mod drew after: Y %d (the game's %d)", y, game);
+        check(copied && grabbed && std::abs(y - game) <= 1, what);
+    }
     // Cost on the "game's" thread: 600 frames of a changing picture, read back as the game would
     // (the frame before's), into the recorder.
     Recorder rec;

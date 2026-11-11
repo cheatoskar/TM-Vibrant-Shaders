@@ -626,8 +626,13 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             changed |= ImGui::ColorEdit3(label, reinterpret_cast<float*>(base + f.offset), ImGuiColorEditFlags_NoInputs);
             break;
         default:
-            changed |= ImGui::SliderFloat(label, reinterpret_cast<float*>(base + f.offset), f.min, f.max,
-                                          !strcmp(f.key, "TargetFPS") ? "%.0f" : "%.2f");
+        {
+            const float value = *reinterpret_cast<const float*>(base + f.offset);
+            const char* format = !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "VideoShutter") ? "%.0f"
+                                 : !strcmp(f.key, "VideoBitrate")                                ? (value <= 0.0f ? "Auto" : "%.1f")
+                                                                                                 : "%.2f";
+            changed |= ImGui::SliderFloat(label, reinterpret_cast<float*>(base + f.offset), f.min, f.max, format);
+        }
             break;
     }
     if (f.kind != Field::Bool || !strcmp(f.key, "VideoHdr")) hovered = ImGui::IsItemHovered();
@@ -725,7 +730,13 @@ void drawHotkeys() {
             if (mine) ImGui::TextColored(kAccent, "Press a key...");
             else ImGui::TextUnformatted(keyText(a).c_str());
             ImGui::TableNextColumn();
-            if (ImGui::Button(mine ? "Cancel" : "Change", ImVec2(-FLT_MIN, 0.0f))) {
+            if (!mine) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.17f, 0.21f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.23f, 0.28f, 1.0f));
+            }
+            const bool pressed = ImGui::Button(mine ? "Cancel" : "Change", ImVec2(-FLT_MIN, 0.0f));
+            if (!mine) ImGui::PopStyleColor(2);
+            if (pressed) {
                 if (mine) keys::cancelCapture();
                 else keys::beginCapture(a);
             }
@@ -741,21 +752,35 @@ void drawHotkeys() {
 
 bool switchRow(const char* label, bool* value, const char* tooltip) {
     ImGui::PushID(label);
+    resetButton(false, ""); // the reset column of the settings' rows (empty): the switches line up
+    const bool flipped = toggle("switch", value);
+    bool hovered = ImGui::IsItemHovered();
+    ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - ImGui::GetFrameHeight() * 1.8f));
-    const bool flipped = toggle("switch", value);
-    if (tooltip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+    hovered |= ImGui::IsItemHovered();
+    if (tooltip && hovered) ImGui::SetTooltip("%s", tooltip);
     ImGui::PopID();
     if (flipped) Config::get().markDirty();
     return flipped;
 }
 
-// A page title with a line of explanation under it.
+// A slider or list in a panel of switch rows: behind the same empty reset column, as wide as a setting's.
+void rowIndent() {
+    resetButton(false, "");
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() - ImGui::GetFrameHeight() - 4.0f);
+}
+
+// A page drawn in a window of its own: the window's title bar names it already.
+bool g_inWindow = false;
+
+// A page title with a line of explanation under it (in a window of its own: the line only).
 void pageTitle(const char* title, const char* hint) {
-    ImGui::PushFont(g_fontTitle);
-    ImGui::TextUnformatted(title);
-    ImGui::PopFont();
+    if (!g_inWindow) {
+        ImGui::PushFont(g_fontTitle);
+        ImGui::TextUnformatted(title);
+        ImGui::PopFont();
+    }
     ImGui::TextDisabled("%s", hint);
     ImGui::Spacing();
 }
@@ -2089,10 +2114,13 @@ bool drawSettings(Config& config, Settings& s) {
                           }
                           return false;
                       }});
-    panels.push_back({"Menu", 3.0f, [&config] {
+    panels.push_back({"Menu", g_host->horizon ? 4.0f : 3.0f, [&config] {
                           switchRow("Live preview", &config.hoverPreview, "Hovering over a preset shows it in the game.");
                           switchRow("Full-screen menu", &config.menuFull, "Off: the right part of the game stays visible.");
                           switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
+                          if (g_host->horizon)
+                              switchRow("Hide when Horizon is open", &config.hideForHorizon,
+                                        "Hides this menu and its windows while the Horizon menu is open. They come back when it closes.");
                           return false;
                       }});
     panels.push_back({"Hotkeys", 11.0f, [] {
@@ -2128,12 +2156,12 @@ bool drawSettings(Config& config, Settings& s) {
                               switchRow("Hide editor", &config.photoHideEditor, "In the replay editor (MediaTracker): photo mode hides the editor's panels, as its Tab key does, and the 3D view fills the screen. They are back when photo mode ends.");
                           if (g_host->photoHideCar)
                               switchRow("Hide car", &config.photoHideCar, "Hides cars and their shadows in photo mode and photos. Smoke and tyre marks stay.");
-                          ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                          rowIndent();
                           char factor[48];
                           snprintf(factor, sizeof(factor), "%d x %d tiles = %.1fx", config.photoTiles, config.photoTiles, config.photoTiles * 0.84f);
                           if (ImGui::SliderInt("Hi-res photo", &config.photoTiles, 2, 4, factor)) config.markDirty();
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+%s takes a photo this many times the screen size. Pause the replay while it renders.", capKey.c_str());
-                          ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                          rowIndent();
                           char aperture[32];
                           snprintf(aperture, sizeof(aperture), "f/%.1f", (g_host->fNumber ? g_host->fNumber(config.photoDof) : 0.0f));
                           if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
@@ -2154,7 +2182,7 @@ bool drawSettings(Config& config, Settings& s) {
                               if (std::string* other = g_host->splitPreset) {
                                   // The other side: the game's image or a preset (your look stays on the mod's side;
                                   // to compare two presets, pick one as your look and the other here).
-                                  ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                                  rowIndent();
                                   if (ImGui::BeginCombo("Other side", other->empty() ? "The game's image" : other->c_str())) {
                                       if (ImGui::Selectable("The game's image", other->empty())) other->clear();
                                       for (const std::string& name : config.presetNames()) {
@@ -2167,11 +2195,10 @@ bool drawSettings(Config& config, Settings& s) {
                                                         "A preset runs the effects twice (photo mode only).");
                                   switchRow("Photo labels", &config.splitPhotoLabels, tooltipFor("SplitPhotoLabels"));
                               }
-                              ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
+                              rowIndent();
                               ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");
                               if (ImGui::IsItemHovered()) ImGui::SetTooltip("Line position from the left. Ctrl+Shift+wheel in the game.");
-                              ImGui::Checkbox("Swap sides", g_host->splitSwapped);
-                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the game's image on the right.");
+                              switchRow("Swap sides", g_host->splitSwapped, "Shows the game's image on the right.");
                               ImGui::EndDisabled();
                           }
                           ImGui::TextDisabled("%s photo  |  Shift+%s hi-res  |  middle click: focus", capKey.c_str(), capKey.c_str());
@@ -2733,7 +2760,9 @@ void drawDetachedWindow(const PageDef& page, Config& config, bool menuOpen) {
         ImGui::Separator();
         // Its own scroll area under the options, like the menu's page area.
         ImGui::BeginChild("body", ImVec2(0.0f, 0.0f));
+        g_inWindow = true;
         drawPageBody(page, config, config.settings, config.presetNames());
+        g_inWindow = false;
         ImGui::EndChild();
     }
     ImGui::End();

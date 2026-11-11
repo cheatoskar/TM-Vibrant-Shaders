@@ -104,6 +104,7 @@ public:
     bool hoverPreview = true;  // F8 menu: pointing at a preset shows it in the game
     bool menuFull = false;     // F8 menu over the whole screen (else the game stays in view on the right)
     bool checkUpdates = true;  // ask GitHub for a newer release when the game starts
+    bool hideForHorizon = true; // F8 menu and its windows hidden while Horizon Host's menu is open
     // Photo mode (not in presets): on by itself with the free camera (cam 7), tiles per side
     // of a hi-res photo (2..4, ~0.84x the screen each), depth of field on the clicked point.
     bool photoAuto = true;

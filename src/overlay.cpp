@@ -5,6 +5,7 @@
 #include "config.h"
 #include "engine.h"
 #include "hook.h"
+#include "horizon.h"
 #include "keys.h"
 #include "pipeline.h"
 #include "log.h"
@@ -46,6 +47,10 @@ Status g_status;
 // frame: it takes the mouse over it, also with the menu closed.
 bool g_splitBar = false;
 bool g_photoPanel = false; // photo mode's panel is on screen this frame (it takes the mouse over itself)
+// Horizon Host's menu is open (and the switch says to give way): nothing of ours is drawn, our ImGui
+// takes no input, and only the effects key works. The menu's own state (open, page, windows) stays as
+// it is and comes back when Horizon's menu closes. Set once a frame by draw().
+bool g_horizonHides = false;
 
 // Sharing the mouse with the other mod that hooks this window (100% TMX + Bingo). The property's
 // value is the HMODULE of the mod that wants the mouse right now; whoever finds it taken by a mod
@@ -285,6 +290,14 @@ void handleHotkeys() {
     Config& config = Config::get();
     const bool typing = g_initialized && config.showOverlay && ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
     keys::poll(typing);
+    if (g_horizonHides) {
+        // The keys of things that would draw over Horizon's menu, or that only make sense with ours,
+        // wait until it closes (dropped, not kept for later). Capture, Reload and Trace too: plugin.cpp
+        // takes them after this.
+        for (keys::Action a : {keys::Action::Menu, keys::Action::Photo, keys::Action::PhotoSplit, keys::Action::PhotoPanel,
+                               keys::Action::Capture, keys::Action::Reload, keys::Action::Trace})
+            keys::take(a);
+    }
     if (keys::take(keys::Action::Menu)) {
         config.showOverlay = !config.showOverlay;
         g_menuWhy = "its key";
@@ -317,7 +330,15 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         return false;
     }
-    if (keys::capturing() && !config.showOverlay) keys::cancelCapture(); // the menu was closed meanwhile
+    if (keys::capturing() && (!config.showOverlay || g_horizonHides)) keys::cancelCapture(); // the menu was closed or hidden meanwhile
+    if (g_horizonHides) {
+        if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lparam & (1 << 30)) &&
+            keys::resolve(static_cast<unsigned>(wparam), false) == keys::Action::Effects) {
+            hotkeyMessage(static_cast<unsigned>(wparam), keys::Action::Effects, lparam);
+            return true;
+        }
+        return false;
+    }
     // The menu's "Change" button waits for the next key: nothing else sees it (not the hotkeys,
     // not the menu, not the game's window procedure). Esc cancels; the game's Esc is held back
     // the way it is for closing the menu.
@@ -657,6 +678,22 @@ void pollHotkeys() { handleHotkeys(); }
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
     if (!g_initialized) init(device);
+    {
+        const bool hides = Config::get().hideForHorizon && horizon::menuOpen();
+        if (hides != g_horizonHides) {
+            static int s_lines = 0;
+            if (s_lines++ < 100) TMVS_LOG("menu: %s", hides ? "hidden while the Horizon menu is open" : "back (the Horizon menu closed)");
+            // What our ImGui held when it stopped getting messages (a button, a key) is let go, so
+            // nothing sticks when it is back.
+            if (ImGui::GetCurrentContext()) {
+                ImGuiIO& io = ImGui::GetIO();
+                for (int b = 0; b < ImGuiMouseButton_COUNT; b++) io.AddMouseButtonEvent(b, false);
+                io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+                io.ClearInputKeys();
+            }
+        }
+        g_horizonHides = hides;
+    }
     handleHotkeys(); // also without the overlay (Capture, Reload and Trace)
     if (!g_initialized) return;
     {
@@ -677,8 +714,18 @@ void draw(IDirect3DDevice9* device) {
     misc::Frame tools;
     tools.device = device;
     tools.menuOpen = menu;
-    tools.hide = g_status.hideTools || photo::active();
+    tools.hide = g_status.hideTools || photo::active() || g_horizonHides;
     const bool toolsWanted = misc::wantsOverlay(tools); // once a frame: it also follows the race
+    if (g_horizonHides) {
+        // Nothing of ours over Horizon's menu: not the menu, its windows, photo mode's line and panel,
+        // the split's bar, the Misc page's windows, the welcome badge or the clip message.
+        g_splitBar = false;
+        g_photoPanel = false;
+        g_pinned = false;
+        publishMouseOwner(false);
+        removeTop();
+        return;
+    }
     const bool statusLine = statusLineWanted();
     // Detached windows: never in a hi-res photo's tiles or the video export's frames.
     engine::VideoExport exporting;
@@ -752,6 +799,7 @@ void draw(IDirect3DDevice9* device) {
         host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
         if (engine::eswc()) eswcHost(host);
         host.hideDetached = capturing;
+        host.horizon = horizon::found();
         menu::draw(host);
     }
     if (*photoHint) {

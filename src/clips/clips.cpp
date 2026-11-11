@@ -78,6 +78,7 @@ struct Toast {
 struct Cost {
     double grabMs = 0.0, collectMs = 0.0, maxMs = 0.0;
     int frames = 0, grabbed = 0, skipped = 0;
+    int covered = 0; // left out: Horizon's interface on the back buffer at Present
     double since = 0.0;
 } g_cost;
 
@@ -411,9 +412,9 @@ void logStats(double now) {
     static RecorderStats s_last;
     const int in = r.framesIn - s_last.framesIn, encoded = r.framesEncoded - s_last.framesEncoded;
     const double encodeMs = encoded > 0 ? (r.encodeMs - s_last.encodeMs) / encoded : 0.0;
-    TMVS_LOG("clips: last %.0f s: %d frames taken, %d left out (read-back busy), %d dropped (encoder behind); game thread %.2f ms a frame "
+    TMVS_LOG("clips: last %.0f s: %d frames taken, %d left out (read-back busy), %d left out (Horizon on screen), %d dropped (encoder behind); game thread %.2f ms a frame "
              "taken (copy and convert %.2f, read back %.2f, slowest %.2f); encoder %.2f ms a frame (slowest %.1f); buffer %.0f s, %.1f MB",
-             now - g_cost.since, g_cost.grabbed, g_cost.skipped, r.framesDropped - s_last.framesDropped,
+             now - g_cost.since, g_cost.grabbed, g_cost.skipped, g_cost.covered, r.framesDropped - s_last.framesDropped,
              g_cost.grabbed ? (g_cost.grabMs + g_cost.collectMs) / g_cost.grabbed : 0.0, g_cost.grabbed ? g_cost.grabMs / g_cost.grabbed : 0.0,
              g_cost.grabbed ? g_cost.collectMs / g_cost.grabbed : 0.0, g_cost.maxMs, encodeMs, r.encodeMaxMs, r.bufferSeconds,
              r.bufferBytes / 1048576.0);
@@ -566,10 +567,108 @@ void sceneDone(IDirect3DDevice9* device, IDirect3DSurface9* target) {
     g_grabber.copy(device, target, g_active.width, g_active.height);
 }
 
+namespace {
+
+// TM Vibrant Shaders' frame end (frameEnd): it ran this frame, and it copied the finished frame for the
+// grab at present() (both until the next present()).
+bool g_frameEndSeen = false;
+bool g_frameEndCopy = false;
+bool g_presentCovered = false; // the back buffer at present() carries another mod's interface
+
+// The readbacks that came back go to the encoder, then this frame is taken if it is due: from the copy
+// made before (the scene of "Without HUD", or the frame end's: frameEndSeen, frameEndCopy), else from the
+// back buffer. backUsable false: it carries another mod's interface, only a copy may be taken.
+void takeFrame(IDirect3DDevice9* device, IDirect3DSurface9* back, int w, int h, double now, bool frameEndSeen, bool frameEndCopy,
+               bool backUsable) {
+    // Frames back from the card go to the encoder.
+    const int64_t c0 = now100ns();
+    g_grabber.collect([](const PlaneReadback::Frame& f, int64_t time) {
+        uint8_t* dst = g_recorder->acquire();
+        if (!dst) return;
+        PlaneReadback::pack(f, dst);
+        g_recorder->submit(time);
+    });
+    const double collectMs = static_cast<double>(now100ns() - c0) / 1e4;
+    // This frame, if it is due.
+    const double period = 1.0 / std::max(1, g_settings.fps);
+    // "Without HUD": a frame whose scene came without a copy (it wasn't due yet then) is left out
+    // rather than taken with its HUD; a frame without a scene (the menus) is taken as it is. The same
+    // with the frame end: a frame it didn't copy is left out, never taken with Horizon's interface.
+    const bool copied = (wantsScene() && g_grabber.fresh()) || frameEndCopy;
+    const bool copyMissed = ((wantsScene() && g_sceneThisFrame) || frameEndSeen) && !copied;
+    g_sceneThisFrame = false;
+    if (g_paused || copyMissed || now + period * 0.25 < g_nextDue) return;
+    // Horizon's menu or bar on the back buffer (no frame end to copy it before): left out, the clip
+    // holds the last clean frame meanwhile.
+    if (!copied && !backUsable) {
+        g_cost.covered++;
+        return;
+    }
+    g_nextDue += period;
+    if (g_nextDue < now - period) g_nextDue = now;
+    if (g_grabber.grab(device, copied ? nullptr : back, w, h, static_cast<int64_t>(now * 1e7))) {
+        g_cost.grabbed++;
+        g_cost.grabMs += g_grabber.lastGrabMs;
+        g_cost.collectMs += collectMs;
+        g_cost.maxMs = std::max(g_cost.maxMs, g_grabber.lastGrabMs + collectMs);
+    } else {
+        g_cost.skipped++;
+        if (!g_grabber.lastError.empty()) {
+            TMVS_LOG("clips: %s", g_grabber.lastError.c_str());
+            g_grabber.lastError.clear();
+        }
+    }
+}
+
+} // namespace
+
+void setPresentCovered(bool covered) {
+    g_presentCovered = covered;
+}
+
+void frameEnd(IDirect3DDevice9* device) {
+    if (!g_ready || !device || g_idle || g_host != Host::Tmvs || !g_settings.enabled || !g_recorder) return;
+    if (device != g_lastDevice || !g_active.have || g_recorder->state() != Recorder::State::Running) return; // present() sets it up
+    // "Without HUD" copied the scene this frame: that is the picture.
+    if (wantsScene() && g_sceneThisFrame) return;
+    if (device->TestCooperativeLevel() != D3D_OK) return;
+    IDirect3DSurface9* back = nullptr;
+    if (FAILED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &back)) || !back) return;
+    D3DSURFACE_DESC desc{};
+    back->GetDesc(&desc);
+    int w = 0, h = 0;
+    videoSize(desc.Width, desc.Height, w, h);
+    // Another size: present() starts the recording again first (and takes this frame itself).
+    if (w == g_active.width && h == g_active.height) {
+        g_frameEndSeen = true;
+        // Only a copy here (the game's scene is still open: the conversion passes and the read-back
+        // follow at present(), from this copy). Only for a frame that will be taken, as sceneDone().
+        const double period = 1.0 / std::max(1, g_settings.fps);
+        if (!g_paused && seconds() + period * 0.25 >= g_nextDue) g_frameEndCopy = g_grabber.copy(device, back, w, h);
+    }
+    back->Release();
+}
+
 void present(IDirect3DDevice9* device) {
     if (!g_ready || !device) return;
     g_frames++;
     const double now = seconds();
+    const bool frameEndSeen = g_frameEndSeen, frameEndCopy = g_frameEndCopy;
+    g_frameEndSeen = g_frameEndCopy = false;
+    {
+        // How the frames are taken, when that changes (copied at the frame end, or at Present with or
+        // without another mod's interface on it).
+        static int s_how = -1;
+        const int how = frameEndSeen ? 0 : (g_presentCovered ? 2 : 1);
+        if (how != s_how && recording()) {
+            static int s_lines = 0;
+            if (s_lines++ < 20)
+                TMVS_LOG("clips: frames taken %s", how == 0   ? "at the game's frame end (before other mods draw at Present)"
+                                                   : how == 1 ? "at Present"
+                                                              : "at Present, left out while Horizon's interface is on screen");
+            s_how = how;
+        }
+    }
     if (g_host == Host::Tmvs && g_beat) InterlockedIncrement(g_beat); // the standalone sees our clips run
     // The standalone: TM Vibrant Shaders (with clips) came along: it records, we stop (and record
     // again should its clips stop).
@@ -675,38 +774,7 @@ void present(IDirect3DDevice9* device) {
         const RecorderStats st = g_recorder->stats();
         snprintf(text, sizeof(text), "Recording %dx%d, %.0f s in memory (%.0f MB)", w, h, st.bufferSeconds, st.bufferBytes / 1048576.0);
         g_status = text;
-        // Frames back from the card go to the encoder.
-        const int64_t c0 = now100ns();
-        g_grabber.collect([](const PlaneReadback::Frame& f, int64_t time) {
-            uint8_t* dst = g_recorder->acquire();
-            if (!dst) return;
-            PlaneReadback::pack(f, dst);
-            g_recorder->submit(time);
-        });
-        const double collectMs = static_cast<double>(now100ns() - c0) / 1e4;
-        // This frame, if it is due.
-        const double period = 1.0 / std::max(1, g_settings.fps);
-        // "Without HUD": a frame whose scene came without a copy (it wasn't due yet then) is left out
-        // rather than taken with its HUD; a frame without a scene (the menus) is taken as it is.
-        const bool scene = wantsScene() && g_grabber.fresh();
-        const bool sceneMissed = wantsScene() && g_sceneThisFrame && !scene;
-        g_sceneThisFrame = false;
-        if (!g_paused && !sceneMissed && now + period * 0.25 >= g_nextDue) {
-            g_nextDue += period;
-            if (g_nextDue < now - period) g_nextDue = now;
-            if (g_grabber.grab(device, scene ? nullptr : back, w, h, static_cast<int64_t>(now * 1e7))) {
-                g_cost.grabbed++;
-                g_cost.grabMs += g_grabber.lastGrabMs;
-                g_cost.collectMs += collectMs;
-                g_cost.maxMs = std::max(g_cost.maxMs, g_grabber.lastGrabMs + collectMs);
-            } else {
-                g_cost.skipped++;
-                if (!g_grabber.lastError.empty()) {
-                    TMVS_LOG("clips: %s", g_grabber.lastError.c_str());
-                    g_grabber.lastError.clear();
-                }
-            }
-        }
+        takeFrame(device, back, w, h, now, frameEndSeen, frameEndCopy, !frameEndSeen && !g_presentCovered);
         if (g_paused) g_status = "Paused (video export or photo)";
         break;
     }
@@ -981,7 +1049,6 @@ void drawRecording() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Game + mic: your default microphone too. All sound: everything the PC plays.");
     if (g_host == Host::Tmvs) {
         if (ImGui::Checkbox("Without HUD", &s.noHud)) edited();
-        ImGui::SameLine();
     }
     if (ImGui::Checkbox("Saved message", &s.toast)) edited();
     ImGui::EndDisabled();

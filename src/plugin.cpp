@@ -12,6 +12,7 @@
 #include "gameshaders.h"
 #include "gfx.h"
 #include "hook.h"
+#include "horizon.h"
 #include "keys.h"
 #include "log.h"
 #include "lut.h"
@@ -3675,8 +3676,69 @@ void onOverlayEnd() {
     tracer::event("## RenderOverlayZones end");
 }
 
+// The F12 capture's screen_NNN.bmp: the final frame (effects + HUD) read back now, written by the
+// capture's writer after the capture's own files.
+void writeScreenshot(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer) {
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    auto pixels = std::make_shared<capture::Pixels>();
+    bool read = false;
+    try {
+        read = capture::readSurface(device, backBuffer, *pixels);
+    } catch (const std::bad_alloc&) {
+        TMVS_LOG("capture: not enough memory for the screenshot");
+    }
+    QueryPerformanceCounter(&end);
+    // The replay editor: only the 3D view (between its panels), as the capture's own images are.
+    RECT view{};
+    if (read && pixels->pitch == pixels->width * 4 && photo::viewArea(pixels->width, pixels->height, view)) {
+        const size_t w = static_cast<size_t>(view.right - view.left) * 4;
+        std::vector<unsigned char> cut(w * (view.bottom - view.top));
+        for (LONG y = view.top; y < view.bottom; y++)
+            memcpy(&cut[w * (y - view.top)], &pixels->bytes[pixels->pitch * y + static_cast<size_t>(view.left) * 4], w);
+        pixels->bytes.swap(cut);
+        pixels->width = static_cast<UINT>(view.right - view.left);
+        pixels->height = static_cast<UINT>(view.bottom - view.top);
+        pixels->pitch = static_cast<UINT>(w);
+    }
+    if (read) {
+        wchar_t name[64];
+        swprintf(name, 64, L"screen_%03d.bmp", g_screenshotNumber);
+        const std::wstring file = name;
+        const double readMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+        capwriter::post([pixels, file, readMs] {
+            LARGE_INTEGER writeStart, writeEnd;
+            QueryPerformanceCounter(&writeStart);
+            const bool ok = capwriter::writeVia(log::dataDir() + L"\\" + file,
+                                                [&pixels](const std::wstring& path) { return capture::writeBmp(*pixels, path); });
+            QueryPerformanceCounter(&writeEnd);
+            TMVS_LOG("capture: %s %ls in %.0f ms on the writer thread (read back in %.0f ms on the game's thread)", ok ? "wrote" : "could not write",
+                     file.c_str(), static_cast<double>(writeEnd.QuadPart - writeStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart),
+                     readMs);
+        });
+    }
+}
+
+// The game's frame is finished (HUD included) and about to be presented through its viewport. What
+// reads the whole back buffer reads it here: another mod's Present hook in front of ours (Horizon
+// Host's menu and bar) has drawn nothing yet, nor has our own menu.
+bool g_frameEndThisFrame = false; // this frame's back buffer was read here (until the next Present)
+
 void onFrameEnd() {
     tracer::event("## RenderFrameEnd");
+    // The VR mod draws into its own targets: its frames stay with the Present.
+    if (!g_device || hook::handedOver() || g_device->TestCooperativeLevel() != D3D_OK) return;
+    g_frameEndThisFrame = true;
+    clips::frameEnd(g_device);
+    if (g_screenshotNumber >= 0) {
+        hook::InternalScope internal;
+        IDirect3DSurface9* backBuffer = nullptr;
+        if (SUCCEEDED(g_device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) && backBuffer) {
+            writeScreenshot(g_device, backBuffer);
+            backBuffer->Release();
+        }
+        g_screenshotNumber = -1;
+    }
 }
 
 // --- Device callbacks -------------------------------------------------------
@@ -3870,6 +3932,11 @@ void logDeviceLost(HRESULT coop) {
 void onPresent(IDirect3DDevice9* device) {
     g_device = device;
     g_frame++;
+    // This frame's back buffer was read at the frame end (else everything reads it here, after
+    // Horizon Host drew its interface on it).
+    const bool frameEndRead = g_frameEndThisFrame;
+    g_frameEndThisFrame = false;
+    horizon::tick(GetTickCount());
     // CenterSpeed's menu key is F8 too (keys::centerSpeed). The ModLoader has loaded it by the first
     // frame; once more some seconds later, should it come late.
     if (g_frame == 1 || g_frame == 600) keys::centerSpeed(GetModuleHandleW(L"CenterSpeed.dll") != nullptr);
@@ -3964,8 +4031,10 @@ void onPresent(IDirect3DDevice9* device) {
     g_gameplayLastFrame = g_gameplayThisFrame;
     g_gameplayThisFrame = false;
 
-    // Clips: the picture as the player sees it, before the menu and the mod's windows are drawn.
+    // Clips: the picture as the player sees it, before the menu and the mod's windows are drawn
+    // (taken at the frame end when there is one, clips::frameEnd).
     clips::setPaused(g_exporting || photo::tiling()); // the export's frames, a hi-res photo's tiles
+    clips::setPresentCovered(horizon::uiState() != 0);
     clips::present(device);
 
     overlay::Status status;
@@ -3997,50 +4066,13 @@ void onPresent(IDirect3DDevice9* device) {
     }
 
     if (tracer::tracing() || g_screenshotNumber >= 0) {
-        // Screenshot of the final frame (effects + HUD), for checking results in game.
+        // Screenshot of the final frame (effects + HUD), for checking results in game. Taken at the
+        // frame end when there is one (onFrameEnd); here only without it.
         hook::InternalScope internal;
         IDirect3DSurface9* backBuffer = nullptr;
         if (SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) && backBuffer) {
             if (g_screenshotNumber >= 0) {
-                // The capture's: read back here, written after the capture's files by its writer.
-                LARGE_INTEGER start, end;
-                QueryPerformanceCounter(&start);
-                auto pixels = std::make_shared<capture::Pixels>();
-                bool read = false;
-                try {
-                    read = capture::readSurface(device, backBuffer, *pixels);
-                } catch (const std::bad_alloc&) {
-                    TMVS_LOG("capture: not enough memory for the screenshot");
-                }
-                QueryPerformanceCounter(&end);
-                // The replay editor: only the 3D view (between its panels), as the capture's own images are.
-                RECT view{};
-                if (read && pixels->pitch == pixels->width * 4 && photo::viewArea(pixels->width, pixels->height, view)) {
-                    const size_t w = static_cast<size_t>(view.right - view.left) * 4;
-                    std::vector<unsigned char> cut(w * (view.bottom - view.top));
-                    for (LONG y = view.top; y < view.bottom; y++)
-                        memcpy(&cut[w * (y - view.top)], &pixels->bytes[pixels->pitch * y + static_cast<size_t>(view.left) * 4], w);
-                    pixels->bytes.swap(cut);
-                    pixels->width = static_cast<UINT>(view.right - view.left);
-                    pixels->height = static_cast<UINT>(view.bottom - view.top);
-                    pixels->pitch = static_cast<UINT>(w);
-                }
-                if (read) {
-                    wchar_t name[64];
-                    swprintf(name, 64, L"screen_%03d.bmp", g_screenshotNumber);
-                    const std::wstring file = name;
-                    const double readMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
-                    capwriter::post([pixels, file, readMs] {
-                        LARGE_INTEGER writeStart, writeEnd;
-                        QueryPerformanceCounter(&writeStart);
-                        const bool ok = capwriter::writeVia(log::dataDir() + L"\\" + file,
-                                                            [&pixels](const std::wstring& path) { return capture::writeBmp(*pixels, path); });
-                        QueryPerformanceCounter(&writeEnd);
-                        TMVS_LOG("capture: %s %ls in %.0f ms on the writer thread (read back in %.0f ms on the game's thread)", ok ? "wrote" : "could not write",
-                                 file.c_str(), static_cast<double>(writeEnd.QuadPart - writeStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart),
-                                 readMs);
-                    });
-                }
+                writeScreenshot(device, backBuffer);
             } else {
                 capture::saveSurface(device, backBuffer, log::dataDir() + L"\\present.bmp");
             }
@@ -4091,6 +4123,12 @@ void onPresent(IDirect3DDevice9* device) {
             TMVS_LOG("capture: F12 waits until the last capture is written");
         }
     }
+    // Horizon Host: a capture that will read the back buffer at the Present (no frame end here: the
+    // game without engine hooks, the VR mod) would find Horizon's interface on it. The host is asked to
+    // draw nothing from the request on, every frame until it is done. Photos and the F12 screenshot
+    // with the frame end, the clips and the video export never need it (read before Horizon draws).
+    const bool presentCapture = g_captureRequested || g_screenshotNumber >= 0 || photo::pending() || photo::tiling();
+    horizon::capture(!frameEndRead && presentCapture);
 }
 
 } // namespace
@@ -4384,6 +4422,7 @@ void boot() {
 }
 
 void shutdown() {
+    horizon::release();
     clips::shutdown();
     capwriter::shutdown();
     overlay::shutdown();
