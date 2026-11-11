@@ -1,0 +1,12 @@
+{
+  "id": "tmvs-upscaling",
+  "name": "TMVS Upscaling",
+  "version": "@TM_SHADERS_VERSION@",
+  "dll": "tmvs-upscaling.dll",
+  "games": ["tmnf", "tmuf", "eswc"],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Renders the game at a lower resolution and scales it back up with AMD FSR 1. Works without the shaders.",
+  "author": "cheatoskar",
+  "icon": "icon.png"
+}

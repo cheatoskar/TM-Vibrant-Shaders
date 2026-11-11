@@ -338,6 +338,44 @@ foreach(id ${TMVS_MODULE_IDS})
   math(EXPR TMVS_MODULE_INDEX "${TMVS_MODULE_INDEX} + 1")
 endforeach()
 add_custom_target(tmvs_modules DEPENDS tmvs_core_module ${TMVS_MODULE_TARGETS})
+foreach(id ${TMVS_MODULE_IDS})
+  configure_file(packaging/horizon/${id}/plugin.json.in "${CMAKE_CURRENT_BINARY_DIR}/horizon/${id}/plugin.json" @ONLY NEWLINE_STYLE UNIX)
+endforeach()
+
+# The Horizon modules' zip: cmake --build build --config Release --target horizon_zip (release_zip makes it too)
+#   dist/TMVS-<version>-horizon.zip
+#     tmvs/            tmvs.dll, tmvs-core.dll (the shared core), plugin.json, icon.png
+#     tmvs-capture/    tmvs-capture.dll, plugin.json, icon.png
+#     tmvs-upscaling/  ...
+#     tmvs-packs/      ...
+#     README.txt, LICENSE.txt, THIRD_PARTY_NOTICES.txt
+# The folders go into Horizon's plugins folder (packaging/horizon/README.txt), or into horizon-host's
+# extra-plugins\ to ship inside Horizon's own zips.
+set(TMVS_HORIZON_STAGE "${CMAKE_CURRENT_BINARY_DIR}/package-horizon")
+set(TMVS_HORIZON_ZIP "TMVS-${TM_SHADERS_VERSION}-horizon.zip")
+set(TMVS_HORIZON_COMMANDS
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${TMVS_HORIZON_STAGE}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/dist")
+foreach(id ${TMVS_MODULE_IDS})
+  string(REPLACE "-" "_" target "tmvs_module_${id}")
+  list(APPEND TMVS_HORIZON_COMMANDS
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${TMVS_HORIZON_STAGE}/${id}"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${target}> "${TMVS_HORIZON_STAGE}/${id}/"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_BINARY_DIR}/horizon/${id}/plugin.json" "${TMVS_HORIZON_STAGE}/${id}/plugin.json"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/horizon/${id}/icon.png" "${TMVS_HORIZON_STAGE}/${id}/icon.png")
+endforeach()
+list(APPEND TMVS_HORIZON_COMMANDS
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tmvs_core_module> "${TMVS_HORIZON_STAGE}/tmvs/"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/horizon/README.txt" "${TMVS_HORIZON_STAGE}/README.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${TMVS_HORIZON_STAGE}/LICENSE.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" "${TMVS_HORIZON_STAGE}/THIRD_PARTY_NOTICES.txt"
+  COMMAND ${CMAKE_COMMAND} -E chdir "${TMVS_HORIZON_STAGE}"
+          ${CMAKE_COMMAND} -E tar cf "${CMAKE_CURRENT_SOURCE_DIR}/dist/${TMVS_HORIZON_ZIP}" --format=zip
+          ${TMVS_MODULE_IDS} "README.txt" "LICENSE.txt" "THIRD_PARTY_NOTICES.txt")
+add_custom_target(horizon_zip ${TMVS_HORIZON_COMMANDS}
+  DEPENDS tmvs_modules
+  COMMENT "Packaging dist/${TMVS_HORIZON_ZIP}"
+  VERBATIM)
 
 # Offline previewer: runs the pipeline on recorded .tmcap frames (development tool).
 add_executable(tmvs_preview tools/preview.cpp src/audio.cpp "${CMAKE_CURRENT_SOURCE_DIR}/sounds/sounds.rc")
@@ -514,7 +552,8 @@ target_compile_options(tmvs_installer PRIVATE ${TMVS_OPTIONS})
 target_link_libraries(tmvs_installer PRIVATE shell32 ole32 comctl32 version advapi32)
 set_target_properties(tmvs_installer PROPERTIES OUTPUT_NAME "TM-Vibrant-Shaders-Setup")
 
-# Release: cmake --build build --config Release --target release_zip
+# Release: cmake --build build --config Release --target release_zip (both products of this version)
+#   dist/TMVS-<version>-horizon.zip      the four Horizon modules (horizon_zip above)
 #   dist/TM-Vibrant-Shaders.zip
 #     TM Vibrant Shaders/                 the ModLoader product folder (also the setup's source)
 #       description.yaml
@@ -541,7 +580,9 @@ add_custom_target(release_zip
           ${CMAKE_COMMAND} -E tar cf "${TMVS_DIST}/TM-Vibrant-Shaders.zip" --format=zip
           "TM Vibrant Shaders" "TM-Vibrant-Shaders-Setup.exe" "d3d11.dll" "README.txt" "LICENSE.txt" "THIRD_PARTY_NOTICES.txt"
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tm_vibrant_shaders> "${TMVS_DIST}/"
+  # The same version as Horizon modules: dist/TMVS-<version>-horizon.zip (horizon_zip's steps)
+  ${TMVS_HORIZON_COMMANDS}
   COMMAND ${CMAKE_COMMAND} -DDIR=${TMVS_DIST} -P "${CMAKE_CURRENT_SOURCE_DIR}/packaging/sha256sums.cmake"
-  DEPENDS tm_vibrant_shaders tmvs_installer
+  DEPENDS tm_vibrant_shaders tmvs_installer tmvs_modules
   COMMENT "Packaging dist/TM-Vibrant-Shaders.zip"
   VERBATIM)

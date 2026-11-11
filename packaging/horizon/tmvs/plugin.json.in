@@ -1,0 +1,12 @@
+{
+  "id": "tmvs",
+  "name": "TM Vibrant Shaders",
+  "version": "@TM_SHADERS_VERSION@",
+  "dll": "tmvs.dll",
+  "games": ["tmnf", "tmuf", "eswc"],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Light, shadows, sky, weather and colour for the 2008 engine, with presets per map type.",
+  "author": "cheatoskar",
+  "icon": "icon.png"
+}
