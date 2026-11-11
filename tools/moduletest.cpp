@@ -418,7 +418,7 @@ int scenarioModulesFirst(const std::wstring& root) {
     prepareRoot(root);
     if (!loadCore(root)) return 1;
     hostImGui();
-    fakehost::g_abiMinor3 = true; // a host with open_page (ABI 1.3, horizon-host tmvs-modules)
+    fakehost::g_abiMinor3 = true; // a host with open_page (ABI 1.3)
     check(loadModules(), "the four modules load");
     checkField("attached", "1111");
     const fakehost::Hotkey* menuKey = fakehost::hotkey(fakehost::find("tmvs"), "menu");

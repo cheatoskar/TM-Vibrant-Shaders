@@ -130,13 +130,13 @@ void hostedCapture(bool active) {
 
 enum HotkeyKind : int { kKey = 0, kKeyShifted = 1, kClip = 2, kOpenPage = 3 };
 
-// Horizon Host 0.2 with plugin ABI 1.3 (horizon-host branch tmvs-modules, docs/spec-open-page.md):
-// open_page(plugin, panel_key) opens Horizon's menu on the plugin's page (again: closes it). It sits right
-// after the 1.2 table, which is what this copy of horizon_plugin.h describes. Null on an older host.
+// Horizon Host 0.2 with plugin ABI 1.3 (docs/plugin-abi.md "ABI 1.3", docs/spec-open-page.md):
+// open_page(plugin, panel_key) opens Horizon's menu on the plugin's page (again: closes it). It is the first
+// 1.3 field, right after the 1.2 table. Null on an older host.
 typedef HorizonResult(HORIZON_CALL* OpenPageFn)(HorizonPluginHandle plugin, const char* panelKey);
 OpenPageFn openPageOf(const HorizonHostApi* host) {
-    if (!host || host->abi_minor < 3 || host->size < sizeof(HorizonHostApi) + sizeof(OpenPageFn)) return nullptr;
-    return *reinterpret_cast<const OpenPageFn*>(reinterpret_cast<const char*>(host) + sizeof(HorizonHostApi));
+    if (!host || host->abi_minor < 3 || host->size < offsetof(HorizonHostApi, open_page) + sizeof(OpenPageFn)) return nullptr;
+    return host->open_page;
 }
 
 void HORIZON_CALL onHotkey(void* user) {

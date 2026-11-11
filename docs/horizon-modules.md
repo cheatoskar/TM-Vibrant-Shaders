@@ -58,7 +58,7 @@ New setting: **Checkpoint clips** (`CheckpointClips` in `clips.ini`, off by defa
 ## Keys
 
 - **Standalone**: as in 1.5 (`F8` menu, `F5` effects, `F12` photo, `F3` clips and so on), from `settings.ini` and `clips.ini`.
-- **Horizon**: Horizon owns the keyboard. The modules register their keys in Horizon's *Hotkeys* list with the keys from your `settings.ini`/`clips.ini` as defaults; change them there. The menu key is Horizon's (`Insert`). With Horizon Host ABI 1.3 (`open_page`, branch `tmvs-modules`) your old menu key (`F8`) also opens the TMVS page in Horizon's menu; an older Horizon has no such key.
+- **Horizon**: Horizon owns the keyboard. The modules register their keys in Horizon's *Hotkeys* list with the keys from your `settings.ini`/`clips.ini` as defaults; change them there. The menu key is Horizon's (`Insert`). With Horizon Host ABI 1.3 (`open_page`) your old menu key (`F8`) also opens the TMVS page in Horizon's menu; an older Horizon has no such key.
 
 ## Online and TMX rules
 

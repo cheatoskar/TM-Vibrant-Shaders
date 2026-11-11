@@ -1,5 +1,5 @@
 #pragma once
-// A stand-in for Horizon Host's plugin side (include/horizon_plugin.h, ABI 1.2), for the module tests
+// A stand-in for Horizon Host's plugin side (include/horizon_plugin.h, ABI 1.3; g_abiMinor3 false hands out the 1.2 table), for the module tests
 // (tools/moduletest.cpp) and the Horizon menu preview (tools/hzpreview.cpp): every plugin gets its own
 // HorizonHostApi table; what the plugins register (hotkeys, panels, device callbacks, host flags, log
 // lines, settings) is kept for the test to look at. Modelled on horizon-host's tests/fake_host.cpp and
@@ -35,9 +35,7 @@ struct Panel {
 struct Plugin {
     std::string id, file;
     HMODULE module = nullptr;
-    HorizonHostApi api{};
-    // ABI minor 3 (horizon-host tmvs-modules): open_page right after the 1.2 table (g_abiMinor3).
-    HorizonResult(HORIZON_CALL* openPage)(HorizonPluginHandle, const char*) = nullptr;
+    HorizonHostApi api{}; // g_abiMinor3 false: cut to the 1.2 table (size, abi_minor 2, no 1.3 fields)
     const HorizonPluginInfo* info = nullptr;
     HorizonPlugin_InitFn init = nullptr;
     HorizonPlugin_ShutdownFn shutdown = nullptr;
@@ -231,11 +229,12 @@ void fillApi(Plugin* p) {
     a.panel_visible = apiPanelVisible;
     a.set_host_flag = apiSetHostFlag;
     a.host_flags = apiHostFlags;
-    static_assert(offsetof(Plugin, openPage) == offsetof(Plugin, api) + sizeof(HorizonHostApi), "open_page follows the 1.2 table");
+    // ABI 1.3: open_page is the first field after the 1.2 table (then notify, bridge_request, bridge_state)
     if (g_abiMinor3) {
-        a.abi_minor = 3;
-        a.size = sizeof(HorizonHostApi) + sizeof(p->openPage);
-        p->openPage = apiOpenPage;
+        a.open_page = apiOpenPage;
+    } else {
+        a.abi_minor = 2;
+        a.size = static_cast<uint32_t>(offsetof(HorizonHostApi, open_page));
     }
 }
 

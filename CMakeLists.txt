@@ -566,7 +566,7 @@ if(HORIZON_HOST_DIR AND EXISTS "${HORIZON_HOST_DIR}/src/host/ui/ui_menu.cpp")
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp)
-  # This repo's ABI 1.2 header first (the fake host's table), Horizon's sources for its UI.
+  # This repo's ABI header copy first (the fake host's table), Horizon's sources for its UI.
   target_include_directories(tmvs_hzpreview PRIVATE third_party/horizon ${imgui_SOURCE_DIR} "${HORIZON_HOST_DIR}/src")
   target_compile_definitions(tmvs_hzpreview PRIVATE ${TMVS_DEFINITIONS} UNICODE _UNICODE HZ_ASSETS="${HORIZON_HOST_DIR}/assets"
     TMVS_PACKAGING="${CMAKE_CURRENT_SOURCE_DIR}/packaging")
