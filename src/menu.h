@@ -150,7 +150,7 @@ enum : int {
 } // namespace pages
 // One page's body (Page ids as in menu.cpp: 4 Performance, 5 Settings, ...) inside a window someone else
 // made: Horizon Host's panel (src/horizonplugin.cpp). False: no such page in this game.
-bool drawPageForHost(int id, const Host& host);
+bool drawPageForHost(int id, const Host& host, ImFont* titleFont = nullptr);
 // A detached window wants to stay on screen with the menu closed: the host must keep calling draw
 // and let the mouse reach it the way it does for the compare split's bar.
 bool pinnedWindows();

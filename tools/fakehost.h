@@ -105,7 +105,8 @@ void HORIZON_CALL apiImguiAllocators(void** a, void** f, void** u) {
     *a = reinterpret_cast<void*>(af);
     *f = reinterpret_cast<void*>(ff);
 }
-const HorizonStyle* HORIZON_CALL apiStyle(void) { return nullptr; }
+HorizonStyle g_style{}; // the preview fills it with Horizon's fonts (size 0: no style)
+const HorizonStyle* HORIZON_CALL apiStyle(void) { return g_style.size ? &g_style : nullptr; }
 HorizonGameInfo g_game{sizeof(HorizonGameInfo), HORIZON_GAME_TMNF, "TrackMania Nations Forever (fake)", "2.11.26", "", 0, 0, "en", "", "", "0.2.0", 2, 0};
 const HorizonGameInfo* HORIZON_CALL apiGameInfo(void) { return &g_game; }
 void* HORIZON_CALL apiEnginePointer(uint32_t) { return nullptr; }

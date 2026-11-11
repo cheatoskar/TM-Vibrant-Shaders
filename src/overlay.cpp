@@ -728,11 +728,22 @@ void fillHost(menu::Host& host, IDirect3DDevice9* device, bool capturing) {
 
 IDirect3DDevice9* g_drawDevice = nullptr; // the device draw() last ran on
 
-bool drawPageForHorizon(int page) {
+// Before a page is drawn in Horizon's context: our font atlas (the title font the pages push) must be
+// built and on the GPU. Our own frames build it, but only once something of ours was on screen; a
+// page drawn before that pushed a font of an atlas never built (no ContainerAtlas: a crash in
+// SetCurrentFont, the Horizon menu preview found it). The backend's NewFrame builds it and makes its
+// texture; no frame is begun. Our own context must be current.
+bool readyForHorizon() {
+    if (!g_initialized || !g_drawDevice || !ImGui::GetCurrentContext()) return false;
+    ImGui_ImplDX9_NewFrame();
+    return ImGui::GetIO().Fonts->IsBuilt();
+}
+
+bool drawPageForHorizon(int page, ImFont* titleFont) {
     if (!g_initialized || !g_drawDevice) return false;
     menu::Host host;
     fillHost(host, g_drawDevice, false);
-    return menu::drawPageForHost(page, host);
+    return menu::drawPageForHost(page, host, titleFont);
 }
 
 void draw(IDirect3DDevice9* device) {

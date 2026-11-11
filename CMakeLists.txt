@@ -317,6 +317,8 @@ target_link_libraries(tmvs_core_module PRIVATE tmvs_runtime tmvs_clips tmvs_core
 target_include_directories(tmvs_core_module PRIVATE third_party/horizon)
 target_compile_options(tmvs_core_module PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
 set_target_properties(tmvs_core_module PROPERTIES OUTPUT_NAME "tmvs-core" PREFIX "")
+# A map file next to it: a crash address from Horizon's log (tmvs-core.dll+0x...) can be looked up.
+target_link_options(tmvs_core_module PRIVATE "/MAP:$<TARGET_FILE_DIR:tmvs_core_module>/tmvs-core.map")
 
 # The four plugins Horizon loads (horizon\plugins\<id>\<id>.dll): no code of their own, they load
 # tmvs-core.dll and attach. packaging/horizon/<id>/ has each one's plugin.json and icon.png.
@@ -541,6 +543,41 @@ endif()
 foreach(t ${TMVS_SANDBOXED_TESTS})
   target_sources(${t} PRIVATE tools/testenv.cpp)
 endforeach()
+
+# Horizon menu preview: Horizon Host's own menu (its UI sources from a horizon-host checkout) with the four
+# modules' pages, rendered into PNGs (tools/hzpreview.cpp; development tool). Only with a checkout:
+# HORIZON_HOST_DIR, by default the tmvs-modules worktree (ABI 1.3: opens a page on a given tab) or horizon-host.
+if(NOT DEFINED HORIZON_HOST_DIR)
+  foreach(dir "${CMAKE_CURRENT_SOURCE_DIR}/../../horizon-host-wt-tmvs" "${CMAKE_CURRENT_SOURCE_DIR}/../../horizon-host")
+    if(NOT HORIZON_HOST_DIR AND EXISTS "${dir}/src/host/ui/ui_menu.cpp")
+      get_filename_component(HORIZON_HOST_DIR "${dir}" ABSOLUTE)
+    endif()
+  endforeach()
+endif()
+if(HORIZON_HOST_DIR AND EXISTS "${HORIZON_HOST_DIR}/src/host/ui/ui_menu.cpp")
+  message(STATUS "Horizon menu preview: ${HORIZON_HOST_DIR}")
+  add_executable(tmvs_hzpreview tools/hzpreview.cpp
+    "${HORIZON_HOST_DIR}/src/host/ui/ui_style.cpp"
+    "${HORIZON_HOST_DIR}/src/host/ui/ui_menu.cpp"
+    "${HORIZON_HOST_DIR}/src/host/ui/ui_bar.cpp"
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp)
+  # This repo's ABI 1.2 header first (the fake host's table), Horizon's sources for its UI.
+  target_include_directories(tmvs_hzpreview PRIVATE third_party/horizon ${imgui_SOURCE_DIR} "${HORIZON_HOST_DIR}/src")
+  target_compile_definitions(tmvs_hzpreview PRIVATE ${TMVS_DEFINITIONS} UNICODE _UNICODE HZ_ASSETS="${HORIZON_HOST_DIR}/assets"
+    TMVS_PACKAGING="${CMAKE_CURRENT_SOURCE_DIR}/packaging")
+  file(STRINGS "${HORIZON_HOST_DIR}/src/host/ui/ui.h" TMVS_HZ_SELECT REGEX "selectPanelTab")
+  if(TMVS_HZ_SELECT)
+    target_compile_definitions(tmvs_hzpreview PRIVATE HZ_HAS_SELECT_TAB=1)
+  endif()
+  target_compile_options(tmvs_hzpreview PRIVATE /EHsc /permissive- /utf-8)
+  target_link_libraries(tmvs_hzpreview PRIVATE d3d9 windowscodecs ole32)
+  add_dependencies(tmvs_hzpreview tmvs_modules)
+endif()
 
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an

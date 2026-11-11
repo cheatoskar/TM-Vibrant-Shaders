@@ -251,13 +251,24 @@ void inHostContext(const HorizonHostApi* host, Fn draw) {
     ImGui::SetAllocatorFunctions(ownAlloc, ownFree, ownUser);
 }
 
-void drawPage(int page) {
-    if (!overlay::drawPageForHorizon(page)) ImGui::TextDisabled("Starts with the game's first frame.");
+// The host's title font for our headings (its atlas: ours can't be drawn into its lists), null before
+// its first frame or from a host without one.
+ImFont* hostTitleFont(const HorizonHostApi* host) {
+    const HorizonStyle* style = host && host->style ? host->style() : nullptr;
+    if (!style || style->size < offsetof(HorizonStyle, font_title) + sizeof(void*)) return nullptr;
+    return static_cast<ImFont*>(style->font_title);
+}
+
+// ready: overlay::readyForHorizon(), asked in our own context before the switch.
+void drawPage(int page, bool ready, const HorizonHostApi* host) {
+    if (!ready || !overlay::drawPageForHorizon(page, hostTitleFont(host))) ImGui::TextDisabled("Starts with the game's first frame.");
 }
 
 void HORIZON_CALL drawPanel(void* user) {
     const PanelPage& p = kPanels[reinterpret_cast<intptr_t>(user)];
-    inHostContext(g_slots[p.module].host, [&p] { drawPage(p.page); });
+    const bool ready = overlay::readyForHorizon();
+    const HorizonHostApi* host = g_slots[p.module].host;
+    inHostContext(host, [&p, ready, host] { drawPage(p.page, ready, host); });
 }
 
 void registerPanels(int module) {
@@ -405,7 +416,8 @@ void setEnabled(int module, bool enabled) {
 void drawMenu(int module) {
     if (!validModule(module)) return;
     const HorizonHostApi* host = g_slots[module].host;
-    inHostContext(host, [module] {
+    const bool ready = !g_refused && overlay::readyForHorizon();
+    inHostContext(host, [module, ready, host] {
         if (g_refused) {
             ImGui::TextWrapped("TM Vibrant Shaders already runs in this game as %s. That copy stays in charge (its menu is F8); "
                                "these modules stay off.",
@@ -413,7 +425,7 @@ void drawMenu(int module) {
             ImGui::TextDisabled("Remove one of the two to use the other.");
             return;
         }
-        drawPage(settingsPage(module));
+        drawPage(settingsPage(module), ready, host);
     });
 }
 

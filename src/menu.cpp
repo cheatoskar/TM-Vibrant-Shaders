@@ -2921,8 +2921,12 @@ bool drawUpscalingPage(Config&, Settings& s, const Names&) {
     return panelColumns(panels, 380.0f);
 }
 
-bool drawPageForHost(int id, const Host& host) {
+bool drawPageForHost(int id, const Host& host, ImFont* titleFont) {
     g_host = &host;
+    // The headings in the host's own title font (or its current one): a font of our atlas can't be drawn
+    // into the host's draw lists by ImDrawList::AddText (it samples the host's font texture: garbled).
+    ImFont* const ownTitle = g_fontTitle;
+    g_fontTitle = titleFont ? titleFont : ImGui::GetFont();
     Config& config = Config::get();
     bool (*hostPage)(Config&, Settings&, const Names&) = nullptr;
     if (id == pages::kCaptureSettings) hostPage = drawCaptureSettings;
@@ -2941,6 +2945,7 @@ bool drawPageForHost(int id, const Host& host) {
         }
         g_inWindow = false;
     }
+    g_fontTitle = ownTitle;
     g_host = nullptr;
     return shown;
 }
