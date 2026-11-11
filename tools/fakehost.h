@@ -8,6 +8,7 @@
 #include "horizon_plugin.h"
 #include <windows.h>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -35,6 +36,8 @@ struct Plugin {
     std::string id, file;
     HMODULE module = nullptr;
     HorizonHostApi api{};
+    // ABI minor 3 (horizon-host tmvs-modules): open_page right after the 1.2 table (g_abiMinor3).
+    HorizonResult(HORIZON_CALL* openPage)(HorizonPluginHandle, const char*) = nullptr;
     const HorizonPluginInfo* info = nullptr;
     HorizonPlugin_InitFn init = nullptr;
     HorizonPlugin_ShutdownFn shutdown = nullptr;
@@ -57,6 +60,8 @@ void* g_device = nullptr;
 int g_nextHotkey = 1;
 std::string g_dataRoot;
 int g_menuOpen = 0;
+bool g_abiMinor3 = false;      // hand out the ABI 1.3 table (with open_page)
+std::string g_openedPage;      // the plugin id open_page was last called for
 
 Plugin* of(HorizonPluginHandle h) {
     return reinterpret_cast<Plugin*>(h);
@@ -173,6 +178,12 @@ uint32_t HORIZON_CALL apiHostFlags(void) {
     return f;
 }
 
+HorizonResult HORIZON_CALL apiOpenPage(HorizonPluginHandle h, const char* key) {
+    g_openedPage = of(h)->id + (key && *key ? std::string(":") + key : std::string());
+    g_menuOpen = !g_menuOpen;
+    return HORIZON_OK;
+}
+
 void fillApi(Plugin* p) {
     HorizonHostApi& a = p->api;
     a = HorizonHostApi{};
@@ -219,6 +230,12 @@ void fillApi(Plugin* p) {
     a.panel_visible = apiPanelVisible;
     a.set_host_flag = apiSetHostFlag;
     a.host_flags = apiHostFlags;
+    static_assert(offsetof(Plugin, openPage) == offsetof(Plugin, api) + sizeof(HorizonHostApi), "open_page follows the 1.2 table");
+    if (g_abiMinor3) {
+        a.abi_minor = 3;
+        a.size = sizeof(HorizonHostApi) + sizeof(p->openPage);
+        p->openPage = apiOpenPage;
+    }
 }
 
 // Loads <dir>\<id>.dll and calls Info and Init, as the host does. Null: the DLL or its exports are missing.

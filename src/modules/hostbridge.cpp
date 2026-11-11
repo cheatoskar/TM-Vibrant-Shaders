@@ -128,7 +128,16 @@ void hostedCapture(bool active) {
 
 // --- Hotkeys --------------------------------------------------------------------------------
 
-enum HotkeyKind : int { kKey = 0, kKeyShifted = 1, kClip = 2 };
+enum HotkeyKind : int { kKey = 0, kKeyShifted = 1, kClip = 2, kOpenPage = 3 };
+
+// Horizon Host 0.2 with plugin ABI 1.3 (horizon-host branch tmvs-modules, docs/spec-open-page.md):
+// open_page(plugin, panel_key) opens Horizon's menu on the plugin's page (again: closes it). It sits right
+// after the 1.2 table, which is what this copy of horizon_plugin.h describes. Null on an older host.
+typedef HorizonResult(HORIZON_CALL* OpenPageFn)(HorizonPluginHandle plugin, const char* panelKey);
+OpenPageFn openPageOf(const HorizonHostApi* host) {
+    if (!host || host->abi_minor < 3 || host->size < sizeof(HorizonHostApi) + sizeof(OpenPageFn)) return nullptr;
+    return *reinterpret_cast<const OpenPageFn*>(reinterpret_cast<const char*>(host) + sizeof(HorizonHostApi));
+}
 
 void HORIZON_CALL onHotkey(void* user) {
     const intptr_t v = reinterpret_cast<intptr_t>(user);
@@ -136,6 +145,9 @@ void HORIZON_CALL onHotkey(void* user) {
     if (kind == kKey) keys::push(static_cast<keys::Action>(value));
     else if (kind == kKeyShifted) keys::pushShifted(static_cast<keys::Action>(value));
     else if (kind == kClip) clips::run(static_cast<clips::Action>(value));
+    else if (kind == kOpenPage && value >= 0 && value < modules::kCount && g_slots[value].host) {
+        if (OpenPageFn open = openPageOf(g_slots[value].host)) open(g_slots[value].host->plugin, nullptr);
+    }
 }
 
 void* hotkeyUser(int kind, int value) {
@@ -159,6 +171,8 @@ void registerHotkeys(int module) {
         add(action, name, keyOf(a), hotkeyUser(kKey, static_cast<int>(a)));
     };
     if (module == modules::kShaders) {
+        // The 1.5 menu key (F8, or yours) opens TMVS's page in Horizon's menu, where the host can do that.
+        if (openPageOf(host)) add("menu", "Open TMVS page", keyOf(keys::Action::Menu), hotkeyUser(kOpenPage, module));
         addKey("effects", "Effects on/off", keys::Action::Effects);
         addKey("photo-split", "Compare split", keys::Action::PhotoSplit);
         addKey("reload", "Reload shaders", keys::Action::Reload);

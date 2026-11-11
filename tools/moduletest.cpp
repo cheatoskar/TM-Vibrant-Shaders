@@ -16,6 +16,7 @@
 #include "imgui.h"
 #include "fakehost.h"
 #include <d3d9.h>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <shlobj.h>
@@ -417,8 +418,13 @@ int scenarioModulesFirst(const std::wstring& root) {
     prepareRoot(root);
     if (!loadCore(root)) return 1;
     hostImGui();
+    fakehost::g_abiMinor3 = true; // a host with open_page (ABI 1.3, horizon-host tmvs-modules)
     check(loadModules(), "the four modules load");
     checkField("attached", "1111");
+    const fakehost::Hotkey* menuKey = fakehost::hotkey(fakehost::find("tmvs"), "menu");
+    check(menuKey && menuKey->key == "F8", "ABI 1.3 host: the TMVS hotkey \"menu\" with the 1.5 menu key (F8)");
+    if (menuKey) menuKey->callback(menuKey->user);
+    check(fakehost::g_openedPage == "tmvs" && fakehost::g_menuOpen == 1, "it opens Horizon's menu on the TMVS page (open_page)");
     wchar_t name[64];
     swprintf(name, 64, L"Local\\TMVibrantShaders_Owner_%lu", GetCurrentProcessId());
     std::string ownerText;
