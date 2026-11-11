@@ -2089,10 +2089,13 @@ bool drawSettings(Config& config, Settings& s) {
                           }
                           return false;
                       }});
-    panels.push_back({"Menu", 3.0f, [&config] {
+    panels.push_back({"Menu", g_host->horizon ? 4.0f : 3.0f, [&config] {
                           switchRow("Live preview", &config.hoverPreview, "Hovering over a preset shows it in the game.");
                           switchRow("Full-screen menu", &config.menuFull, "Off: the right part of the game stays visible.");
                           switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
+                          if (g_host->horizon)
+                              switchRow("Hide when Horizon is open", &config.hideForHorizon,
+                                        "Hides this menu and its windows while the Horizon menu is open. They come back when it closes.");
                           return false;
                       }});
     panels.push_back({"Hotkeys", 11.0f, [] {

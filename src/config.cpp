@@ -1817,6 +1817,7 @@ void Config::load() {
     hoverPreview = GetPrivateProfileIntW(L"General", L"HoverPreview", 1, ini) != 0;
     menuFull = GetPrivateProfileIntW(L"General", L"MenuFull", 0, ini) != 0;
     checkUpdates = GetPrivateProfileIntW(L"General", L"CheckForUpdates", 1, ini) != 0;
+    hideForHorizon = GetPrivateProfileIntW(L"General", L"HideForHorizon", 1, ini) != 0;
     photoAuto = GetPrivateProfileIntW(L"General", L"PhotoAuto", 1, ini) != 0;
     photoHideHud = GetPrivateProfileIntW(L"General", L"PhotoHideHud", 1, ini) != 0;
     photoHideEditor = GetPrivateProfileIntW(L"General", L"PhotoHideEditor", 0, ini) != 0;
@@ -1978,6 +1979,7 @@ void Config::save() {
     ini.set(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0");
     ini.set(L"General", L"MenuFull", menuFull ? L"1" : L"0");
     ini.set(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0");
+    ini.set(L"General", L"HideForHorizon", hideForHorizon ? L"1" : L"0");
     ini.set(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0");
     ini.set(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0");
     ini.set(L"General", L"PhotoHideEditor", photoHideEditor ? L"1" : L"0");

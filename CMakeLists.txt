@@ -137,6 +137,7 @@ add_library(tmvs_core STATIC
   src/nvenc.cpp
   src/loopback.cpp
   src/gbufpatch.cpp
+  src/horizon.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
@@ -327,6 +328,21 @@ target_compile_options(tmvs_keystest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_inlinehooktest tools/inlinehooktest.cpp)
 target_link_libraries(tmvs_inlinehooktest PRIVATE tmvs_core)
 target_compile_options(tmvs_inlinehooktest PRIVATE ${TMVS_OPTIONS})
+
+# Horizon Host handshake test: finding the host late, the old host without exports, the UI state and the
+# capture calls, against a fake host.dll (and an old HorizonHost.dll) built next to it (development tool).
+# --real <host.dll>: against horizon-host's own build.
+add_library(tmvs_fakehorizonhost SHARED tools/fakehorizonhost.cpp)
+set_target_properties(tmvs_fakehorizonhost PROPERTIES OUTPUT_NAME "host" PREFIX "")
+target_compile_options(tmvs_fakehorizonhost PRIVATE ${TMVS_OPTIONS})
+add_library(tmvs_fakehorizonhost_old SHARED tools/fakehorizonhost.cpp)
+set_target_properties(tmvs_fakehorizonhost_old PROPERTIES OUTPUT_NAME "HorizonHost" PREFIX "")
+target_compile_definitions(tmvs_fakehorizonhost_old PRIVATE FAKE_HORIZON_OLD)
+target_compile_options(tmvs_fakehorizonhost_old PRIVATE ${TMVS_OPTIONS})
+add_executable(tmvs_horizontest tools/horizontest.cpp)
+target_link_libraries(tmvs_horizontest PRIVATE tmvs_core)
+target_compile_options(tmvs_horizontest PRIVATE ${TMVS_OPTIONS})
+add_dependencies(tmvs_horizontest tmvs_fakehorizonhost tmvs_fakehorizonhost_old)
 
 # settings.ini writer test: the same bytes as WritePrivateProfileString, in one write (development tool).
 add_executable(tmvs_initest tools/initest.cpp)

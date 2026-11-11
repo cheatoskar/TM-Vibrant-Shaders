@@ -38,6 +38,13 @@ bool idle();
 // Every Present, on the device's thread, before anything of the host's own is drawn over the game
 // (menus, messages): this is the picture that is recorded.
 void present(IDirect3DDevice9* device);
+// TM Vibrant Shaders: the game's frame is finished (its HUD drawn) and about to be presented. Another
+// mod's Present hook in front of ours (Horizon Host's menu and bar) has drawn nothing yet, so with the
+// HUD the picture is taken here; present() takes it only in frames without this call.
+void frameEnd(IDirect3DDevice9* device);
+// The back buffer at present() carries another mod's interface (Horizon's, in a frame without
+// frameEnd): such frames are left out unless "Without HUD" took the scene.
+void setPresentCovered(bool covered);
 // TM Vibrant Shaders: the scene is shaded, the HUD not drawn yet (with "Without HUD" the picture is
 // taken here).
 bool wantsScene();

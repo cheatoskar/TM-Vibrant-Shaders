@@ -107,6 +107,9 @@ struct Host {
     bool photoHideHud = true;
     // A photo, a capture or the video export is running: no detached windows this frame.
     bool hideDetached = false;
+    // Horizon Host (TM Horizon's in-game menu) runs: the Menu panel shows the switch that hides this
+    // menu while Horizon's is open.
+    bool horizon = false;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
     // Whether shaders can be reloaded (TMNF only). The hotkeys themselves are in keys.h.
