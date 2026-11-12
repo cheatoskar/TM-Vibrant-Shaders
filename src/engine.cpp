@@ -159,6 +159,12 @@ struct LegacyEngine {
     // AudioOpen (WAVEFORMATEX), AudioWrite (data, blocks), Close (both streams and the file; at the
     // export's end, after a failed create, from the destructor). All six or none.
     LegacyCode aviOpen, aviVideoOpen, aviVideoWrite, aviAudioOpen, aviAudioWrite, aviClose;
+    // The draw census (dev.ini LegacyCensus=1, see legacyCensusDraw): CDx9ShaderKeeper::UpdateAndRender
+    // (thiscall: shader, corpus, tree, visual keeper; ret 0x10) and ShadeVisualForCurrentPass (thiscall:
+    // the delayed visual, its shader at +0x10; ret 4); CPlugTree's Shader, CSystemFidsFolder's DirName,
+    // CConstructionChallenge's Decoration.
+    LegacyCode drawTree, shadeVisual;
+    size_t treeShader, folderName, challengeDecoration;
 };
 
 // TrackMania Nations ESWC, TmNationsESWC.exe of the unofficial 1.80 patch (2021, reports 0.1.7.9).
@@ -233,7 +239,8 @@ constexpr LegacyEngine kEswcEngine = {
     true,
     0x12c, 0x00af5570, 0x4a8, 0x4b4, 0x00c961a8,
     {0x007d22e0, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x83, 0x38}, 8}, {0x007d2340, {0x81, 0xec, 0x00, 0x01, 0x00, 0x00}, 6}, {0x007d2650, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x8b, 0x48}, 8},
-    {0x007d2540, {0x81, 0xec, 0xcc, 0x00, 0x00, 0x00}, 6}, {0x007d26a0, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x007d2770, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8}};
+    {0x007d2540, {0x81, 0xec, 0xcc, 0x00, 0x00, 0x00}, 6}, {0x007d26a0, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x007d2770, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8},
+    {0x00807d10, {0x81, 0xec, 0x00, 0x02, 0x00, 0x00}, 6}, {0x00804ed0, {0x81, 0xec, 0xf8, 0x00, 0x00, 0x00}, 6}, 0x94, 0x40, 0x130};
 // TrackMania Sunrise, TmSunrise.exe of the Windows 10 community repack (SHA-256 e59dfc7e...). Ported
 // from ESWC (2026-11-12, static): the viewport from its registration and constructor
 // (mov [ebp], 0x00a31b68) and its GetMwClassId; 122 slots against ESWC's 124, every hooked one ESWC's
@@ -264,7 +271,8 @@ constexpr LegacyEngine kSunriseEngine = {
     false,
     0x11c, 0x00a4ff00, 0x4f4, 0x500, 0x00b8b4f8,
     {0x0075b9d0, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x83, 0x38}, 8}, {0x0075ba30, {0x81, 0xec, 0x00, 0x01, 0x00, 0x00}, 6}, {0x0075bd40, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x8b, 0x48}, 8},
-    {0x0075bc30, {0x81, 0xec, 0xcc, 0x00, 0x00, 0x00}, 6}, {0x0075bd90, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x0075be60, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8}};
+    {0x0075bc30, {0x81, 0xec, 0xcc, 0x00, 0x00, 0x00}, 6}, {0x0075bd90, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x0075be60, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8},
+    {0x006eff50, {0x81, 0xec, 0xb8, 0x01, 0x00, 0x00}, 6}, {0x006ecdd0, {0x81, 0xec, 0xf8, 0x00, 0x00, 0x00}, 6}, 0x98, 0x58, 0x134};
 // TrackMania Original, TMORIGINAL.EXE of GreffMASTER's Online Patch v2 (SHA-256 75e129d7...), built on
 // Sunrise's code: the same layout as Sunrise (496 of its 514 named classes have the same members),
 // other addresses (the viewport's vtable 0x00a2db28, the app 0x00bc8084), the race's clock at +0x2b8
@@ -285,7 +293,8 @@ constexpr LegacyEngine kOriginalEngine = {
     false,
     0x11c, 0x00a4bbc0, 0x4f4, 0x500, 0x00b86758,
     {0x0075a870, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x83, 0x38}, 8}, {0x0075a8d0, {0x81, 0xc4, 0x00, 0xff, 0xff, 0xff}, 6}, {0x0075abe0, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x8b, 0x48}, 8},
-    {0x0075aad0, {0x81, 0xc4, 0x34, 0xff, 0xff, 0xff}, 6}, {0x0075ac30, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x0075ad00, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8}};
+    {0x0075aad0, {0x81, 0xc4, 0x34, 0xff, 0xff, 0xff}, 6}, {0x0075ac30, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x0075ad00, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8},
+    {0x006ef1e0, {0x81, 0xc4, 0x48, 0xfe, 0xff, 0xff}, 6}, {0x006ec060, {0x81, 0xc4, 0x08, 0xff, 0xff, 0xff}, 6}, 0x98, 0x58, 0x134};
 constexpr const LegacyEngine* kLegacyEngines[] = {&kEswcEngine, &kSunriseEngine, &kOriginalEngine};
 const LegacyEngine* g_legacy = nullptr;  // the game runs on the 2006 engine, hooked
 const legacy::Exe* g_legacyExe = nullptr; // its exe entry (also when refused)
@@ -685,6 +694,8 @@ using DrawPassFn = void(__fastcall*)(void*, void*, void*);
 DrawShaderFn g_drawShader = nullptr;
 DrawPassFn g_drawPass = nullptr;
 const void* g_currentShader = nullptr; // the material being drawn (null between draws)
+bool g_legacyCensus = false;           // dev.ini LegacyCensus: the 2006 engine's draw census (before install)
+bool g_legacyMp4 = false;              // dev.ini LegacyMp4: the 2006 engine's MP4 export (before install)
 bool g_shaderCensus = false;           // log every material once (dev: finding the lamp, glass, ... materials)
 using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
 LensFlareFn g_lensFlare = nullptr;
@@ -2725,6 +2736,8 @@ void __fastcall legacyProjectionDetour(void* self, void* edx, void* projection, 
 }
 
 void legacyPoll();
+void legacyCensusMap(const void* challenge, const char* why);
+void legacyCensusSummary();
 
 const void* g_legacyViewport = nullptr; // the viewport whose frame runs (for the video flags)
 
@@ -3097,6 +3110,7 @@ void legacyPoll() {
         }
     }
     legacyHideCars(s, g_hideCars);
+    if (g_legacyCensus && s.editor && s.editor != last.editor) legacyCensusMap(s.challenge, s.replayEditor ? "replay editor opened" : "editor opened");
     g_legacyState = s;
 }
 
@@ -3142,10 +3156,12 @@ void __fastcall legacySetChallengeDetour(void* game, void* edx, void* challenge)
         InterlockedIncrement(&g_raceResets); // a new map
         InterlockedIncrement(&g_mapLoads);
         TMVS_LOG("engine (%s): map loaded (%s)%s", g_legacy->tag, g_legacyMapUid[0] ? g_legacyMapUid : "no name", challenge == before ? ", the same map again" : "");
+        if (g_legacyCensus) legacyCensusMap(challenge, "map loaded");
     } else if (before) {
         g_legacyMapUid[0] = '\0';
         InterlockedIncrement(&g_mapCloses);
         TMVS_LOG("engine (%s): map closed", g_legacy->tag);
+        legacyCensusSummary();
     }
 }
 
@@ -3201,9 +3217,276 @@ const LegacyEngine* identifyLegacy() {
     return nullptr;
 }
 
+// --- The draw census (dev.ini [dev] LegacyCensus=1) ----------------------------------------------
+// One run's survey for the materials and light work: each distinct shader the scene draws with, once
+// per map (its class, its file, the first tree it drew and the textures of a CPlugShaderApply), the
+// classes ShadeVisualForCurrentPass hands over, and what the map object offers (its blocks, their block
+// infos and the words where the coordinates should be). Off by default: then neither hook is installed.
+// Only reads; the game's draw runs unchanged.
+using LegacyDrawFn = int(__fastcall*)(void*, void*, void*, void*, void*, void*);
+using LegacyShadeFn = int(__fastcall*)(void*, void*, void*);
+LegacyDrawFn g_legacyDraw = nullptr;
+LegacyShadeFn g_legacyShade = nullptr;
+constexpr DWORD kLegacyFidFile = 0x0b00a000, kLegacyFidsFolder = 0x0b00b000, kLegacyBlock = 0x24007000;
+constexpr DWORD kLegacyShaderApply = 0x09026000;
+constexpr size_t kLegacyNodFid = 0x08, kLegacyFidName = 0x58, kLegacyFidParent = 0x18;
+constexpr size_t kLegacyApplyTextures = 0xac, kLegacySamplerBitmap = 0x1c, kLegacyChallengeBlocks = 0x74;
+constexpr unsigned kLegacyCensusLines = 600; // shader lines per map at most
+std::unordered_set<const void*> g_censusSeen;
+std::vector<std::pair<DWORD, unsigned>> g_censusDraws, g_censusShades; // class id, draws (this map)
+unsigned g_censusLines = 0;
+
+void censusCount(std::vector<std::pair<DWORD, unsigned>>& counts, DWORD id) {
+    for (auto& c : counts) {
+        if (c.first == id) {
+            c.second++;
+            return;
+        }
+    }
+    if (counts.size() < 32) counts.emplace_back(id, 1u);
+}
+
+const char* censusClassName(DWORD id) {
+    switch (id) {
+    case 0x09002000: return "CPlugShader";
+    case 0x09004000: return "CPlugShaderGeneric";
+    case 0x09026000: return "CPlugShaderApply";
+    case 0x09046000: return "CPlugShaderOld";
+    case 0x09067000: return "CPlugShaderPass";
+    case 0x0904f000: return "CPlugTree";
+    case 0x09011000: return "CPlugBitmap";
+    case 0x24005000: return "CConstructionBlockInfo";
+    default: return nullptr;
+    }
+}
+
+// A CFastStringInt (+0 length, +4 the text). Inside __try.
+bool legacyFastString(const BYTE* at, wchar_t* out, size_t size) {
+    const DWORD n = legacyAt<DWORD>(at, 0);
+    const wchar_t* text = legacyAt<const wchar_t*>(at, 4);
+    if (!text || n == 0 || n >= size) return false;
+    memcpy(out, text, n * sizeof(wchar_t));
+    out[n] = L'\0';
+    return true;
+}
+
+// "Folder\Sub\File" of a nod loaded from a file: its CSystemFidFile (nod+8, as GetFidFile reads it), the
+// short FileName and up to three parent folders (each told by its class id). Inside __try.
+bool legacyNodPath(const void* nod, wchar_t* out, size_t size) {
+    out[0] = L'\0';
+    if (!nod) return false;
+    const BYTE* fid = legacyAt<const BYTE*>(nod, kLegacyNodFid);
+    if (!fid || legacyClassId(fid) != kLegacyFidFile) return false;
+    wchar_t parts[4][128];
+    if (!legacyFastString(fid + kLegacyFidName, parts[0], 128)) return false;
+    int count = 1;
+    const BYTE* folder = legacyAt<const BYTE*>(fid, kLegacyFidParent);
+    while (count < 4 && folder && legacyClassId(folder) == kLegacyFidsFolder && legacyFastString(folder + g_legacy->folderName, parts[count], 128)) {
+        count++;
+        folder = legacyAt<const BYTE*>(folder, kLegacyFidParent);
+    }
+    for (int i = count - 1; i >= 0; i--) {
+        wcsncat_s(out, size, parts[i], _TRUNCATE);
+        if (i > 0) wcsncat_s(out, size, L"\\", _TRUNCATE);
+    }
+    return true;
+}
+
+struct LegacyCensusEntry {
+    DWORD shaderClass = 0, treeClass = 0;
+    bool fromTree = false; // the draw had no shader: the tree's
+    wchar_t shader[260], tree[260];
+    int textures = -1;     // a CPlugShaderApply's count, -1 another class
+    wchar_t texture[6][128];
+};
+
+// The shader this draw uses (the argument, else its tree's) and its class; false when unreadable.
+bool legacyDrawShader(const void* shader, const void* tree, const void*& used, DWORD& id, bool& fromTree) {
+    __try {
+        fromTree = !shader && tree;
+        used = shader ? shader : (tree ? legacyAt<const void*>(tree, g_legacy->treeShader) : nullptr);
+        id = used ? legacyClassId(used) : 0;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool legacyCensusRead(const void* shader, const void* tree, LegacyCensusEntry& out) {
+    __try {
+        out.shader[0] = out.tree[0] = L'\0';
+        out.shaderClass = legacyClassId(shader);
+        out.treeClass = legacyClassId(tree);
+        legacyNodPath(shader, out.shader, 260);
+        legacyNodPath(tree, out.tree, 260);
+        if (out.shaderClass == kLegacyShaderApply) {
+            const DWORD count = legacyAt<DWORD>(shader, kLegacyApplyTextures);
+            const BYTE* const* list = legacyAt<const BYTE* const*>(shader, kLegacyApplyTextures + 4);
+            out.textures = count < 64 && list ? static_cast<int>(count) : 0;
+            for (int i = 0; i < out.textures && i < 6; i++) {
+                out.texture[i][0] = L'\0';
+                const BYTE* bitmap = list[i] ? legacyAt<const BYTE*>(list[i], kLegacySamplerBitmap) : nullptr;
+                if (!legacyNodPath(bitmap, out.texture[i], 128))
+                    swprintf(out.texture[i], 128, L"(no file, class %08lx)", static_cast<unsigned long>(legacyClassId(bitmap)));
+            }
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void legacyCensusDraw(const void* shader, const void* tree) {
+    const void* used = nullptr;
+    DWORD id = 0;
+    bool fromTree = false;
+    if (!legacyDrawShader(shader, tree, used, id, fromTree)) return;
+    censusCount(g_censusDraws, id);
+    if (!used || g_censusLines >= kLegacyCensusLines || !g_censusSeen.insert(used).second) return;
+    LegacyCensusEntry c;
+    if (!legacyCensusRead(used, tree, c)) return;
+    char name[16];
+    const char* known = censusClassName(c.shaderClass);
+    if (!known) {
+        snprintf(name, sizeof(name), "%08lx", static_cast<unsigned long>(c.shaderClass));
+        known = name;
+    }
+    std::wstring textures;
+    for (int i = 0; i < c.textures && i < 6; i++) textures += (i ? L", " : L"") + std::wstring(c.texture[i]);
+    if (c.textures > 6) textures += L", ...";
+    g_censusLines++;
+    if (c.textures >= 0)
+        TMVS_LOG("census: shader %p %s%s \"%ls\" tree \"%ls\" textures %d: %ls", used, known, fromTree ? " (the tree's)" : "", c.shader, c.tree, c.textures,
+                 textures.c_str());
+    else
+        TMVS_LOG("census: shader %p %s%s \"%ls\" tree \"%ls\"", used, known, fromTree ? " (the tree's)" : "", c.shader, c.tree);
+    if (g_censusLines == kLegacyCensusLines) TMVS_LOG("census: %u shaders on this map, no more are logged", kLegacyCensusLines);
+}
+
+int __fastcall legacyDrawDetour(void* self, void* edx, void* shader, void* corpus, void* tree, void* keeper) {
+    legacyCensusDraw(shader, tree);
+    return g_legacyDraw(self, edx, shader, corpus, tree, keeper);
+}
+
+DWORD legacyDelayedShaderClass(const void* delayed) {
+    __try {
+        return delayed ? legacyClassId(legacyAt<const void*>(delayed, 0x10)) : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 1; // unreadable
+    }
+}
+
+int __fastcall legacyShadeDetour(void* self, void* edx, void* delayed) {
+    censusCount(g_censusShades, legacyDelayedShaderClass(delayed));
+    return g_legacyShade(self, edx, delayed);
+}
+
+std::string censusCounts(const std::vector<std::pair<DWORD, unsigned>>& counts) {
+    std::string out;
+    for (const auto& c : counts) {
+        char item[64];
+        const char* name = censusClassName(c.first);
+        if (name) snprintf(item, sizeof(item), "%s%s %u", out.empty() ? "" : ", ", name, c.second);
+        else snprintf(item, sizeof(item), "%s%08lx %u", out.empty() ? "" : ", ", static_cast<unsigned long>(c.first), c.second);
+        out += item;
+    }
+    return out.empty() ? "none" : out;
+}
+
+// The map's end (or the census's next map): what the draws used, then everything starts over.
+void legacyCensusSummary() {
+    if (!g_legacyDraw && !g_legacyShade) return;
+    if (!g_censusDraws.empty() || !g_censusShades.empty())
+        TMVS_LOG("census: draws by shader class: %s; ShadeVisualForCurrentPass by the class at delayed+0x10: %s; %u distinct shaders",
+                 censusCounts(g_censusDraws).c_str(), censusCounts(g_censusShades).c_str(), static_cast<unsigned>(g_censusSeen.size()));
+    g_censusSeen.clear();
+    g_censusDraws.clear();
+    g_censusShades.clear();
+    g_censusLines = 0;
+}
+
+struct LegacyCensusBlock {
+    DWORD blockClass = 0, infoClass = 0;
+    DWORD words[5] = {}; // +0x38 .. +0x48: the coordinates (x, y, z) and the direction are expected here
+    wchar_t info[260];
+};
+
+bool legacyCensusMapRead(const void* challenge, DWORD& count, DWORD& valid, wchar_t* decoration, LegacyCensusBlock* blocks, int max, int& read) {
+    __try {
+        read = 0;
+        decoration[0] = L'\0';
+        legacyNodPath(legacyAt<const void*>(challenge, g_legacy->challengeDecoration), decoration, 260);
+        count = legacyAt<DWORD>(challenge, kLegacyChallengeBlocks);
+        const BYTE* const* list = legacyAt<const BYTE* const*>(challenge, kLegacyChallengeBlocks + 4);
+        valid = 0;
+        if (count > 100000 || !list) return true;
+        for (DWORD i = 0; i < count; i++) {
+            const BYTE* block = list[i];
+            if (legacyClassId(block) != kLegacyBlock) continue;
+            valid++;
+            if (read >= max) continue;
+            LegacyCensusBlock& b = blocks[read++];
+            b.blockClass = kLegacyBlock;
+            const void* info = legacyAt<const void*>(block, 0x24);
+            b.infoClass = legacyClassId(info);
+            for (int w = 0; w < 5; w++) b.words[w] = legacyAt<DWORD>(block, 0x38 + 4 * w);
+            b.info[0] = L'\0';
+            legacyNodPath(info, b.info, 260);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// What the map object offers (census run 3: the minimap's block list, the map's own data).
+void legacyCensusMap(const void* challenge, const char* why) {
+    legacyCensusSummary();
+    if (!challenge) {
+        TMVS_LOG("census: %s: no map object", why);
+        return;
+    }
+    static LegacyCensusBlock s_blocks[12];
+    DWORD count = 0, valid = 0;
+    int read = 0;
+    wchar_t decoration[260];
+    if (!legacyCensusMapRead(challenge, count, valid, decoration, s_blocks, 12, read)) {
+        TMVS_LOG("census: %s: the map object was not readable", why);
+        return;
+    }
+    TMVS_LOG("census: %s: map %p, decoration \"%ls\", Blocks (+0x74) %lu, of them CConstructionBlock %lu; no Comments member in this "
+             "engine's map class",
+             why, challenge, decoration, static_cast<unsigned long>(count), static_cast<unsigned long>(valid));
+    for (int i = 0; i < read; i++) {
+        const LegacyCensusBlock& b = s_blocks[i];
+        TMVS_LOG("census:   block %d: info %s \"%ls\", +0x38.. %lu %lu %lu, +0x44 %lu, +0x48 %08lx", i,
+                 censusClassName(b.infoClass) ? censusClassName(b.infoClass) : "(other class)", b.info, static_cast<unsigned long>(b.words[0]),
+                 static_cast<unsigned long>(b.words[1]), static_cast<unsigned long>(b.words[2]), static_cast<unsigned long>(b.words[3]),
+                 static_cast<unsigned long>(b.words[4]));
+    }
+}
+
+void installLegacyCensus(const LegacyEngine& e) {
+    if (!g_legacyCensus) return;
+    static inlinehook::Hook s_draw, s_shade;
+    const char* why = nullptr;
+    if (legacyCodeMatches(e.drawTree) && inlinehook::install(reinterpret_cast<void*>(rebase(e.drawTree.address)), reinterpret_cast<void*>(&legacyDrawDetour), s_draw, &why))
+        g_legacyDraw = reinterpret_cast<LegacyDrawFn>(s_draw.trampoline);
+    if (legacyCodeMatches(e.shadeVisual) &&
+        inlinehook::install(reinterpret_cast<void*>(rebase(e.shadeVisual.address)), reinterpret_cast<void*>(&legacyShadeDetour), s_shade, &why))
+        g_legacyShade = reinterpret_cast<LegacyShadeFn>(s_shade.trampoline);
+    TMVS_LOG("engine (%s): census on (dev.ini LegacyCensus): UpdateAndRender %s, ShadeVisualForCurrentPass %s; logged once per map", e.tag,
+             g_legacyDraw ? "hooked" : "NOT hooked", g_legacyShade ? "hooked" : "NOT hooked");
+}
+
 // The export's file writer (see LegacyEngine::aviOpen): TMNF's six AVI detours, so videofile.cpp writes the
 // MP4 as on Forever. Inline hooks with relocation (Close starts with a call). All six or none.
 void installLegacyVideoFile(const LegacyEngine& e) {
+    if (!g_legacyMp4) {
+        TMVS_LOG("engine (%s): the MP4 export is off on this game until its first start is confirmed (dev.ini LegacyMp4=1 turns it on): "
+                 "the game's AVI as always", e.tag);
+        return;
+    }
     static inlinehook::Hook s_hooks[6];
     const struct {
         const LegacyCode& code;
@@ -3282,6 +3565,7 @@ bool installLegacy() {
             jumpToDetour(reinterpret_cast<BYTE*>(rebase(e.setChallenge.address)), e.setChallenge.size, reinterpret_cast<void*>(&legacySetChallengeDetour)));
     g_legacyShadowSetters = legacyCodeMatches(e.setShadowTex) && legacyCodeMatches(e.setShadowFake);
     installLegacyVideoFile(e);
+    installLegacyCensus(e);
     TMVS_LOG("engine (%s): race and car readers on (classes told by their ids), map loads %s, car shadow setters %s%s", e.tag,
              g_legacySetChallenge ? "hooked (SetChallenge)" : "NOT hooked", g_legacyShadowSetters ? "found" : "not found",
              e.gameClipViewer ? "" : "; no clip viewer in this game (a replay is its replay editor)");
@@ -4511,6 +4795,14 @@ void hideSunFlare(bool hide) {
 
 void shaderCensus(bool on) {
     g_shaderCensus = on;
+}
+
+void legacyCensus(bool on) {
+    g_legacyCensus = on;
+}
+
+void legacyMp4(bool on) {
+    g_legacyMp4 = on;
 }
 
 const void* currentShader() {

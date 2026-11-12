@@ -643,6 +643,8 @@ void loadDevOptions() {
     g_nextCaptureAt = g_dev.captureAt;
     engine::forceShadows(GetPrivateProfileIntW(L"dev", L"ForceShadows", -1, ini));
     engine::shaderCensus(GetPrivateProfileIntW(L"dev", L"LogShaders", 0, ini) != 0);
+    engine::legacyCensus(GetPrivateProfileIntW(L"dev", L"LegacyCensus", 0, ini) != 0);
+    engine::legacyMp4(GetPrivateProfileIntW(L"dev", L"LegacyMp4", 0, ini) != 0);
 }
 
 void runDevAutomation(IDirect3DDevice9* device) {
