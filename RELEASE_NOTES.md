@@ -21,7 +21,7 @@ Only the Windows 10 repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 
 
 ### Nations ESWC, Sunrise, Original: clips and MP4 export
 
-- **Clips**: the *Clips* page, `F3`, `Ctrl+F3`, `Ctrl+Shift+F3` and *Save on finish*, as on Forever.
+- **Clips**: the *Clips* page, `F4`, `Ctrl+F4`, `Ctrl+Shift+F4` and *Save on finish*, as on Forever.
 - **Shoot video** writes an MP4 with the mod's encoder (H.264, HEVC or AV1) and the game's own sound (no more microphone in the video). *Game's AVI* on the *Video* page gives the game's file as before.
 
 ### Horizon modules 2.0.0
@@ -30,7 +30,7 @@ Only the Windows 10 repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 
 
 ### Also
 
-- **Instant replay is off for new players**: switch it on at the top of the *Clips* page for the background recording (`F3`, saved best runs). If you used clips in 1.5, nothing changes for you.
+- **Instant replay is off for new players**: switch it on at the top of the *Clips* page for the background recording (`F4`, saved best runs). If you used clips in 1.5, nothing changes for you.
 - **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector.
 
 ---

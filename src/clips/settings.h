@@ -27,10 +27,12 @@ struct Settings {
     bool noHud = false;       // TM Vibrant Shaders: the picture before the HUD
     bool toast = true;        // "Clip saved" in the game
     bool checkpointClips = false; // a clip of each sector when a checkpoint is passed (TM Vibrant Shaders: the race's checkpoint times)
-    std::string saveKey = "F3";
-    std::string lastRunKey = "Ctrl+F3";       // the last finished run, also after a restart
-    std::string runSoFarKey = "Ctrl+Shift+F3"; // the run that runs now, from its start
-    std::string menuKey = "Shift+F3"; // TM Clips' own window (the standalone)
+    // F4 since 1.6: Twinkie toggles its whole interface on F3 with any modifier (hard-coded). A clips.ini
+    // with the old defaults (F3, Ctrl+F3, Ctrl+Shift+F3, Shift+F3) is moved to these by load().
+    std::string saveKey = "F4";
+    std::string lastRunKey = "Ctrl+F4";       // the last finished run, also after a restart
+    std::string runSoFarKey = "Ctrl+Shift+F4"; // the run that runs now, from its start
+    std::string menuKey = "Shift+F4"; // TM Clips' own window (the standalone)
 
     bool sameRecording(const Settings& o) const {
         return enabled == o.enabled && bufferSeconds == o.bufferSeconds && adaptiveBuffer == o.adaptiveBuffer && height == o.height &&

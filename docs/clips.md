@@ -9,7 +9,7 @@ Clips save your runs as MP4 videos, without rendering anything again. With *Inst
 For TrackMania Nations Forever, United Forever and TrackMania Nations ESWC (1.80 patch). It comes in two forms that share the code and the settings file:
 
 - **In TM Vibrant Shaders**: the *Clips* page in the `F8` menu.
-- **As TM Clips**: a small mod of its own for the ModLoader (`TMClips.dll`), for people who don't want the shaders. Its settings are in a small window on `Shift+F3`.
+- **As TM Clips**: a small mod of its own for the ModLoader (`TMClips.dll`), for people who don't want the shaders. Its settings are in a small window on `Shift+F4`.
 
 Not in TrackMania 2 yet. In TrackMania Nations ESWC only in TM Vibrant Shaders (its `d3d9.dll`; there is no ModLoader for it): the same page, keys and files, the race read from the game's own objects (see [ESWC](#trackmania-nations-eswc)).
 
@@ -40,10 +40,10 @@ The defaults. All of them can be changed on the *Clips* page (*Change*, then pre
 
 | Key | What it saves |
 |---|---|
-| `F3` | The last 30 s (30, 60 or 90 s, *Last seconds*) |
-| `Ctrl+F3` | The last finished run (3 s before its start to 3 s after its finish), also after a restart, a respawn or when you left the finish screen, as long as the buffer still holds it |
-| `Ctrl+Shift+F3` | The run you are driving now, from its start to this moment |
-| `Shift+F3` | TM Clips' own window (only the standalone) |
+| `F4` | The last 30 s (30, 60 or 90 s, *Last seconds*) |
+| `Ctrl+F4` | The last finished run (3 s before its start to 3 s after its finish), also after a restart, a respawn or when you left the finish screen, as long as the buffer still holds it |
+| `Ctrl+Shift+F4` | The run you are driving now, from its start to this moment |
+| `Shift+F4` | TM Clips' own window (only the standalone) |
 
 If you press a key and nothing is saved, a short message in the game says why ("Not recording", "No finished run yet", "No run now", "Run no longer in the buffer"). The same messages are in the log.
 
@@ -51,7 +51,7 @@ The *Clips* page also lists the last five finished runs (time, PB, how long ago)
 
 ## Adaptive buffer
 
-On by default. The buffer's length follows the map: author time x 1.5 + 10 s, at least 60 s (and at least what `F3` saves), within the memory limit. The page shows the length for the loaded map and what it costs in memory. A new map with another author time starts recording again with its own length; the runs of the previous map are gone from the buffer then.
+On by default. The buffer's length follows the map: author time x 1.5 + 10 s, at least 60 s (and at least what `F4` saves), within the memory limit. The page shows the length for the loaded map and what it costs in memory. A new map with another author time starts recording again with its own length; the runs of the previous map are gone from the buffer then.
 
 Switch it off to set a fixed length (10 s up to what fits).
 
@@ -91,7 +91,7 @@ All on the *Clips* page of the menu (panels *Saving* and *Recording*), or in the
 | Checkpoint clips | off | A clip of each checkpoint's sector: from the previous checkpoint (or the start) to 1 s after this one, `<map>_<date>_CP<n>_<time>.mp4` (TM Vibrant Shaders 2.0, not TM Clips) |
 | Before start / After finish | 3 s / 3 s | How much a run's clip takes before the start line and after the finish (0 to 10 s) |
 | Last seconds | 30 s | What the save key takes: 30, 60 or 90 s |
-| Save last run / Save run so far / Save last seconds | `Ctrl+F3` / `Ctrl+Shift+F3` / `F3` | The keys |
+| Save last run / Save run so far / Save last seconds | `Ctrl+F4` / `Ctrl+Shift+F4` / `F4` | The keys |
 | Adaptive buffer | on | Buffer from the map's author time |
 | Buffer | 60 s | Fixed length without the adaptive buffer; the page shows the memory it takes |
 | Size | 1080p | Game size, 720p, 1080p or 1440p (at most this many rows; a smaller game window is not scaled up) |
@@ -129,7 +129,7 @@ Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), with TM Vibrant Sh
 
 Look in the log first (`clips:` lines in `tmvs.log`, or `tmclips.log`). The first lines say what records and with what (`clips: recording 1920x1080 ... NVENC`), each finish, and each saved clip.
 
-- **No clip after a finish.** *Save on finish* is *Personal best* by default: a slower run isn't saved. Set it to *Every finish*, or press `Ctrl+F3` afterwards. If the message says "Not recording", the status line at the top of the *Recording* panel says why.
+- **No clip after a finish.** *Save on finish* is *Personal best* by default: a slower run isn't saved. Set it to *Every finish*, or press `Ctrl+F4` afterwards. If the message says "Not recording", the status line at the top of the *Recording* panel says why.
 - **"Can't record" in the log.** The encoder didn't start. Try *Encoder* set to the other one, a lower size or bitrate, and update the graphics driver.
 - **Nothing happens with both mods installed.** One of them records, the other is idle on purpose. The idle one says "stays idle" in its log. The settings are in the one that records.
 - **A key does nothing.** Another mod or program may use the same key (the log warns when it is also a menu key of this mod). Change it on the page. The game window has to be in front.

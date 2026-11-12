@@ -794,11 +794,12 @@ void testAdaptiveBuffer() {
     check(adaptiveBufferSeconds(600000, 30, most) == most && videoLimit(50e6, most) + soundBytes(most) <= kMemoryLimit,
           "at 50 Mbit/s: held to the memory limit");
     Settings s;
-    check(s.adaptiveBuffer && s.soundSource == 0 && s.keySeconds == 30 && s.lastRunKey == "Ctrl+F3" && s.runSoFarKey == "Ctrl+Shift+F3",
-          "defaults: adaptive, game sound, 30 s, Ctrl+F3 / Ctrl+Shift+F3");
+    check(s.adaptiveBuffer && s.soundSource == 0 && s.keySeconds == 30 && s.saveKey == "F4" && s.lastRunKey == "Ctrl+F4" &&
+              s.runSoFarKey == "Ctrl+Shift+F4" && s.menuKey == "Shift+F4" && !s.enabled,
+          "defaults: Instant replay off, adaptive, game sound, 30 s, F4 / Ctrl+F4 / Ctrl+Shift+F4 / Shift+F4");
     check(s.saveKey != s.lastRunKey && s.saveKey != s.runSoFarKey && s.lastRunKey != s.runSoFarKey && s.menuKey != s.lastRunKey &&
               s.menuKey != s.runSoFarKey,
-          "the four keys differ (TM Clips' window: Shift+F3)");
+          "the four keys differ (TM Clips' window: Shift+F4)");
     Settings other = s;
     other.soundSource = 1;
     check(!s.sameRecording(other), "another sound source records again");

@@ -162,9 +162,9 @@ Default keys; every one can be changed in the menu (*Settings* → *Hotkeys*, [d
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
 | `Ctrl+F9` | Reload the shaders (development). Not `F9`: that opens the menu of the 100% TMX mod. Hotkeys only react while the game window is in front |
 | `F11` | Trace the next frame (development) |
-| `F3` | Save the last 30 s as a clip (TrackMania Nations/United; 30, 60 or 90 s; the keys are on the *Clips* page, not under *Hotkeys*; [details](docs/clips.md)) |
-| `Ctrl+F3` | Save the last finished run as a clip, also after a restart |
-| `Ctrl+Shift+F3` | Save the run you drive now, from its start |
+| `F4` | Save the last 30 s as a clip (TrackMania Nations/United; 30, 60 or 90 s; the keys are on the *Clips* page, not under *Hotkeys*; [details](docs/clips.md)) |
+| `Ctrl+F4` | Save the last finished run as a clip, also after a restart |
+| `Ctrl+Shift+F4` | Save the run you drive now, from its start |
 | `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms, `Shift+F6` splits the screen: the game without and with the mod |
 
 ![The F8 menu: every preset as a card with a picture](docs/images/menu.jpg)

@@ -1,5 +1,6 @@
 #include "clips/settings.h"
 #include "inifile.h"
+#include "log.h"
 #include <windows.h>
 #include <shlobj.h>
 #include <algorithm>
@@ -156,6 +157,28 @@ bool load(Settings& s) {
     s.menuKey = readText(L"MenuKey", d.menuKey.c_str());
     s.lastRunKey = readText(L"LastRunKey", d.lastRunKey.c_str());
     s.runSoFarKey = readText(L"RunSoFarKey", d.runSoFarKey.c_str());
+    // 1.5's defaults on F3 collide with Twinkie (F3 with any modifier shows or hides its interface):
+    // a key still on its old default moves to the new one (a key the player chose stays). Written with
+    // the next save; until then every load moves it the same way.
+    {
+        struct Move {
+            std::string& key;
+            const char* old;
+            const std::string& now;
+        } moves[] = {{s.saveKey, "F3", d.saveKey}, {s.lastRunKey, "Ctrl+F3", d.lastRunKey},
+                     {s.runSoFarKey, "Ctrl+Shift+F3", d.runSoFarKey}, {s.menuKey, "Shift+F3", d.menuKey}};
+        std::string moved;
+        for (Move& m : moves) {
+            if (m.key != m.old) continue;
+            moved += (moved.empty() ? "" : ", ") + m.key + " -> " + m.now;
+            m.key = m.now;
+        }
+        static bool s_logged = false;
+        if (!moved.empty() && !s_logged) {
+            s_logged = true;
+            TMVS_LOG("clips: keys moved off F3 (Twinkie uses F3): %s", moved.c_str());
+        }
+    }
     g_written = fileTime(iniPath());
     return clampBuffer(s);
 }

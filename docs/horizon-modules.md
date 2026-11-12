@@ -74,7 +74,7 @@ New setting: **Checkpoint clips** (`CheckpointClips` in `clips.ini`, off by defa
 
 ## Keys
 
-- **Standalone**: as in 1.5 (`F8` menu, `F5` effects, `F12` photo, `F3` clips and so on), from `settings.ini` and `clips.ini`.
+- **Standalone**: as in 1.5 (`F8` menu, `F5` effects, `F12` photo, `F4` clips and so on), from `settings.ini` and `clips.ini`.
 - **Horizon**: Horizon owns the keyboard. The modules register their keys in Horizon's *Hotkeys* list with the keys from your `settings.ini`/`clips.ini` as defaults; change them there. The menu key is Horizon's (`Insert`). With Horizon Host ABI 1.3 or newer (`open_page`) your old menu key (`F8`) also opens the TMVS page in Horizon's menu; an older Horizon has no such key.
 
 ## Online and TMX rules
@@ -100,7 +100,7 @@ Each point twice: once standalone (`TMVibrantShaders.dll` of 2.0 in the ModLoade
 1. **Start**: `tmvs.log` says `starting (standalone ...)` or `starting (Horizon modules ...)` and `exclusive: this copy runs`. Horizon: four modules *On* in the menu, keys in *Hotkeys*.
 2. **Look**: my preset loads as in 1.5 (same `settings.ini`), Shaders tab changes it live, effects key on/off.
 3. **Photos**: `F12`, `Shift+F12` (hi-res), photo mode `F6` with Hide HUD/Hide car. Horizon: no Horizon bar or menu in the photo.
-4. **Clips**: finish with a PB saves a clip; `F3`, `Ctrl+F3`, `Ctrl+Shift+F3`. Horizon: keys from the Hotkeys list, the clip has no Horizon interface.
+4. **Clips**: finish with a PB saves a clip; `F4`, `Ctrl+F4`, `Ctrl+Shift+F4`. Horizon: keys from the Hotkeys list, the clip has no Horizon interface.
 5. **Checkpoint clips**: switch on (Clips page), drive a run with checkpoints: one `..._CP<n>_...` clip per checkpoint, each from the previous checkpoint.
 6. **Video export**: a replay, *Shoot video* with the mod's MP4 export, sound and length as in 1.5.
 7. **FSR**: render scale 0.67, with and without the shaders (Horizon: TMVS module off, Upscaling on). Sharp picture, no shader look when TMVS is off, photos at full size.

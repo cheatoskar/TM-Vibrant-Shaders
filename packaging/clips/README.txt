@@ -8,14 +8,14 @@ INSTALL (TrackMania ModLoader)
   ModLoader and start the game.
 
 IN GAME
-  Switch on "Instant replay" first (Shift+F3, off by default): then the
+  Switch on "Instant replay" first (Shift+F4, off by default): then the
   game is recorded into memory all the time (60 s by default), and after
   a finish with a personal best the run is saved: 3 s before the start to
   3 s after the finish, with the game's sound.
-  F3             save the last 30 s (or 60 / 90 s)
-  Ctrl+F3        save the last finished run, also after a restart
-  Ctrl+Shift+F3  save the run you drive now, from its start
-  Shift+F3       settings, the last runs and the last clips
+  F4             save the last 30 s (or 60 / 90 s)
+  Ctrl+F4        save the last finished run, also after a restart
+  Ctrl+Shift+F4  save the run you drive now, from its start
+  Shift+F4       settings, the last runs and the last clips
   Clips: Documents\TrackMania\Clips
   Settings: Documents\TrackMania\TMClips\clips.ini (log: tmclips.log)
 

@@ -27,6 +27,8 @@ The older games: TrackMania Sunrise and TrackMania Original, clips and the MP4 e
 **Changed (clips, every game)**
 - **Instant replay is off for new players**: the clips' background recording (the buffer behind `F3`, *Save last run* and the saved best runs) starts only once you switch on *Instant replay* at the top of the *Clips* page; then *Save best runs* is on. Off, nothing is copied or read back from the graphics card, and the clip keys only show "Instant replay is off". A `clips.ini` that already has it on keeps it. The replay editor's *Shoot video* doesn't need it.
 
+- **The clip keys moved from F3 to F4** (`F4` last seconds, `Ctrl+F4` last run, `Ctrl+Shift+F4` run so far, `Shift+F4` TM Clips' window): Twinkie shows or hides its interface on F3 with any modifier. Keys still on the old defaults move by themselves (`clips: keys moved off F3` in the log); a key you chose stays.
+
 **New (every game with clips)**
 - **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector, from the previous checkpoint (or the start) to one second after this one, saved as `<map>_<date>_CP<n>_<time>.mp4`. Read from the game only, as the finish clips.
 
