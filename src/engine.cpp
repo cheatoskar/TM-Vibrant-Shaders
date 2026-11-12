@@ -4,6 +4,8 @@
 #include "hook.h"
 #include "inlinehook.h"
 #include "log.h"
+#include "filehash.h"
+#include "legacygames.h"
 #include <windows.h>
 #include <cstring>
 #include <cmath>
@@ -101,39 +103,172 @@ constexpr GameBuild kBuilds[] = {
 };
 const GameBuild* g_build = nullptr;
 
-// TrackMania Nations ESWC: only TmNationsESWC.exe of the unofficial 1.80 patch (2021, reports
-// 0.1.7.9; SHA-256 983bd127...2d8068), told by its link timestamp and image size, then by every
-// vtable slot below. Its engine is the 2006 one: no CGameCtn* classes, no MediaTracker, and its
-// CVisionViewportDx9 has fewer virtual functions (no RenderCameraDepTextures; ComputeDriverProjection
-// gets no camera). The vtable: the class's registration (push create, push "CVisionViewportDx9",
-// call CMwClassInfo at 0x007ee4e9), its create function 0x007eef60, the constructor 0x007d2800
+// The older games on the 2006 engine (src/legacygames.h): TrackMania Nations ESWC (unofficial 1.80
+// patch), TrackMania Sunrise (Windows 10 community repack) and TrackMania Original (Online Patch v2).
+// One community exe each, told by its SHA-256 (legacy::kExes); any other build of these games is
+// refused (the mod stays off there, plugin.cpp). Their engine has no CGameCtn* classes, no
+// MediaTracker, and its CVisionViewportDx9 has fewer virtual functions (no RenderCameraDepTextures;
+// ComputeDriverProjection gets no camera). Everything the mod hooks or reads there is in one
+// LegacyEngine per game; the code that uses it is the same for the three (legacy* below).
+struct LegacySlot {
+    int index;
+    uintptr_t function;
+};
+struct LegacyCode {
+    uintptr_t address;   // 0: not known in this game
+    unsigned char bytes[8];
+    size_t size;         // its first bytes, checked before it is hooked or called
+};
+struct LegacyEngine {
+    legacy::Game game;
+    const char* tag;     // the log's "engine (eswc)"
+    // CVisionViewportDx9's vtable and the slots hooked (each checked against its function).
+    uintptr_t viewportVTable;
+    LegacySlot frameBegin, cameraBegin, cameraEnd, overlayZones, frameEnd, viewMatrix, projection;
+    // CInputPortDx8's read of one DirectInput device: cdecl (port, buffer, size), answers the HRESULT.
+    LegacyCode readInput;
+    // The app (CTrackMania : CConstructionGame) and its members.
+    uintptr_t gamePointer;
+    size_t gameNetwork, gameChallenge, gameRace, gameEditor;
+    size_t gameClipViewer;  // a replay watched or shot as a video (0: not known)
+    size_t challengeName;   // CConstructionChallenge::ChallengeName (CFastStringInt: size, text)
+    // CConstructionRace / CTrackManiaRace / CTrackManiaRace1P.
+    size_t racePlayers, raceGame, raceLapTimes, raceClock, raceStarts, raceRespawns, raceBestGhost, raceCurrentGhost;
+    size_t ghostMobil;
+    // The local player's info: the network's infos, its PlayerType 0.
+    size_t networkInfos, infoPlayerType;
+    size_t infoStart, infoFinalTime, infoLapStart, infoLapFinalTime, infoState, infoCheckpoints, infoPassed, infoPlayer;
+    size_t playerMobil, playerInfo;
+    size_t infoRespawns;    // the info's own respawn counter (0: none; ESWC counts them on the race)
+    // The car: its item, the corpus's location and speed, the tree's visible bit, the shadow word.
+    size_t mobilItem, itemCorpora, corpusLocation, corpusDyna, dynaState, stateSpeed;
+    size_t itemMainCorpus, corpusTree, treeFlags, itemShadowWord;
+    LegacyCode setShadowTex, setShadowFake; // CHmsItem::SetCountShadowTexCasted, SetShadowFakeEnable (thiscall)
+    LegacyCode setChallenge;                // CConstructionGame::SetChallenge(challenge) (thiscall)
+    bool stadiumOnly;                       // ESWC: Stadium only; Sunrise and Original: other environments
+};
+
+// TrackMania Nations ESWC, TmNationsESWC.exe of the unofficial 1.80 patch (2021, reports 0.1.7.9).
+//
+// The viewport's vtable: the class's registration (push create, push "CVisionViewportDx9", call
+// CMwClassInfo at 0x007ee4e9), its create function 0x007eef60, the constructor 0x007d2800
 // (mov [ebp], 0x00af5cd8). The slots matched one by one against TmForever.map's names: the same
 // order, the same return sizes (ret 0/8/4/4/4/8/0/4/8), the same log strings (FrameBegin's
 // "[Dx9] Driver is reporting VideoFree=", FrameEnd's "%s\%s%04d.dds" and its EndScene/Present),
 // ComputeDriverViewMatrix byte for byte TMNF's (SHmsCameraLocation: +0x00 GmIso4, +0x60 the matrix,
 // flags +0xa0), ComputeDriverProjection TMNF's without the camera (SHmsCameraProjection: +0x00 the
 // GmMat4, +0x40 its transpose, as TMNF; flags at +0x8c instead of +0xcc).
-constexpr DWORD kEswcTimestamp = 0x5ce7272f;
-constexpr DWORD kEswcImageSize = 0x008e8000;
-constexpr uintptr_t kEswcViewportVTable = 0x00af5cd8;
-struct EswcSlot {
-    int index;
-    uintptr_t function;
-    const char* name;
-};
-constexpr EswcSlot kEswcFrameBegin = {80, 0x007de0f0, "RenderFrameBegin"};
-constexpr EswcSlot kEswcCameraBegin = {81, 0x007de650, "RenderCameraBegin"};
-constexpr EswcSlot kEswcCameraEnd = {86, 0x007e2fc0, "RenderCameraEnd"};
-constexpr EswcSlot kEswcOverlayZones = {87, 0x007e33f0, "RenderOverlayZones"};
-constexpr EswcSlot kEswcFrameEnd = {88, 0x007e3fd0, "RenderFrameEnd"};
-constexpr EswcSlot kEswcViewMatrix = {89, 0x007d77d0, "ComputeDriverViewMatrix"};
-constexpr EswcSlot kEswcProjection = {90, 0x007d7800, "ComputeDriverProjection"};
-// CInputPortDx8's read of one DirectInput device (TMNF's DeviceReadHardwareCurState, the same
-// cdecl (port, buffer, size), the same three callers: keyboard 0x100 bytes, mouse, pad). It answers
-// the HRESULT of GetDeviceState instead of a bool; the buffer is filled or zeroed either way.
-constexpr uintptr_t kEswcReadInput = 0x00465460;
-constexpr unsigned char kEswcReadInputPrologue[] = {0x53, 0x8b, 0x5c, 0x24, 0x08}; // push ebx; mov ebx, [esp+8]
-bool g_eswc = false;
+//
+// The input read: TMNF's DeviceReadHardwareCurState, the same cdecl (port, buffer, size), the same
+// three callers: keyboard 0x100 bytes, mouse, pad (push ebx; mov ebx, [esp+8]).
+//
+// The app: CConstructionGame's constructor (0x007086a0) stores it at 0x00caee50 (mov [0x00caee50],
+// esi at 0x00708873), the destructor clears it (0x0070908c). CConstructionGame (reflection): Network
+// +0x100, Challenge +0x11c (SetChallenge below), CurrentRace +0x140; CTrackMania's Editor +0x2e4
+// (CTrackMania::SetEditor 0x006f3dc0). The replay editor is made at 0x006e9fb3, handed to SetEditor
+// at 0x006e9fc6. A replay watched or shot as a video: the app's clip viewer at +0x128 (made at
+// 0x006ea968 and, for "Shoot video", at 0x006e74fc, both stored with the ref setter 0x0072fe50;
+// cleared when it ends). The map's ChallengeName (m_Name) +0x124.
+//
+// CConstructionRace / CTrackManiaRace: Players +0x20 (CFastBuffer: count, data; LocalPlayerMobil reads
+// data[0]->Mobil, 0x006d2590), Game +0x40; the race's clock +0x33c (ms: OnCheckpoint 0x006d9c80 and
+// OnFinishLine 0x006d9f50 take clock - start as the race time), +0x194 set: the times count from the
+// lap's start; the local player's starts +0x4dc (OnStartLine 0x006d9be0: inc, local player only) and
+// respawns +0x4e0 (RespawnPlayer 0x006d98f0, vtable slot 87 of every race class, also called by
+// ResetPlayer 0x006d9670: inc, local player only). CTrackManiaRace1P (reflection): BestRaceGhost
+// +0x6e8, CurrentRaceGhost +0x6ec, CConstructionGhost whose CGameGhost::ReplayMobil is at +0x64.
+//
+// The local player's info: Network +0x1a4 -> its first entry, when its PlayerType (+0xd8) is 0
+// (CTrackManiaRace::GetLocalPlayerInfo 0x0071c730 -> 0x009cf460). CTrackManiaPlayerInfo (reflection):
+// RaceStartTime +0x1f0, RaceTime +0x1f4 (the final time), LapStartTime +0x1fc, LapTime +0x200,
+// RaceState +0x25c (0 before the start, 1 running, 2 finished: 0x0071b350 from OnStartLine and
+// OnFinishLine); the race time at each checkpoint, a CFastBuffer at +0x244 ({time, score} each, -1 not
+// yet: 0x0071b790; written by 0x0071b3c0 from InternalOnCheckpoint 0x006da800), the checkpoints passed
+// in this run +0x284 (the finish included; zeroed with the info, 0x0071b860); its player +0x180
+// (CConstructionPlayer::SetPlayerInfo 0x007b2df0 links both ways, player +0x34). CGamePlayer::Mobil +0x24.
+//
+// The car (CSceneToyVehicleTrackMania): CSceneMobil::Item +0x3c (a CHmsItem), the item's corpora
+// (Corpuss: CFastBuffer at +0x24), the first one's location (CHmsZoneElem::Location +0x18, a GmIso4:
+// the 3x3 rotation, then the position at +0x24). CSceneMobil::GetInterpolatedLocation (0x0059b9a0, not
+// virtual here) returns exactly that with no sector: where the car is drawn. Its speed: the corpus's
+// dynamic body (+0x48) -> its state (+0x32c), the world speed at +0x40 (m/s, 0x00452f00; times the
+// transposed rotation, its z times 3.6 is the HUD's km/h: 0x005fc940, so forward is the model's z).
+//
+// Hide car: CSceneMobil::Hide (0x0059bdb0, what the car's own Hide calls first) clears bit 3 of the
+// mobil's tree (item +0x50 -> +0x64: CPlugTree +0x9c, 0x005f6730), Show (0x0059bda0) sets it. The car's
+// own Hide (0x005f9690) also stops its physics (+0x5cc), so only that bit is changed here. Its shadow:
+// CHmsItem +0x48 (shadow textures in the low byte, bit 23; fake shadow bit 27: the word TMNF keeps at
+// +0x18) through the item's own setters SetCountShadowTexCasted and SetShadowFakeEnable (TMNF's code,
+// +0x48 for +0x18; their cases of CHmsItem's parameter setter 0x0043fb20).
+//
+// CConstructionGame::SetChallenge(challenge) (AddRef the new one, Release the old, store it at +0x11c):
+// the map the game runs (race, replay, editor), null back to the menu. Callers 0x006e70c0, 0x006e7123,
+// 0x006eb6d6, 0x007101f9 (null), 0x00718a08 (a replay opened).
+constexpr LegacyEngine kEswcEngine = {
+    legacy::Game::Eswc, "eswc", 0x00af5cd8,
+    {80, 0x007de0f0}, {81, 0x007de650}, {86, 0x007e2fc0}, {87, 0x007e33f0}, {88, 0x007e3fd0}, {89, 0x007d77d0}, {90, 0x007d7800},
+    {0x00465460, {0x53, 0x8b, 0x5c, 0x24, 0x08}, 5},
+    0x00caee50, 0x100, 0x11c, 0x140, 0x2e4, 0x128, 0x124,
+    0x20, 0x40, 0x194, 0x33c, 0x4dc, 0x4e0, 0x6e8, 0x6ec, 0x64,
+    0x1a4, 0xd8,
+    0x1f0, 0x1f4, 0x1fc, 0x200, 0x25c, 0x244, 0x284, 0x180,
+    0x24, 0x34, 0,
+    0x3c, 0x24, 0x18, 0x48, 0x32c, 0x40,
+    0x50, 0x64, 0x9c, 0x48,
+    {0x00441de0, {0x8b, 0x41, 0x48, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x00441eb0, {0x8b, 0x41, 0x48, 0x33, 0xd2, 0x56}, 6},
+    {0x00710290, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
+    true};
+// TrackMania Sunrise, TmSunrise.exe of the Windows 10 community repack (SHA-256 e59dfc7e...). Ported
+// from ESWC (2026-11-12, static): the viewport from its registration and constructor
+// (mov [ebp], 0x00a31b68) and its GetMwClassId; 122 slots against ESWC's 124, every hooked one ESWC's
+// index - 2, the same functions (ret sizes, log strings; ComputeDriverViewMatrix and
+// ComputeDriverProjection instruction for instruction ESWC's, still no camera argument). The input
+// read, SetChallenge (stores +0x10c) and the shadow setters (the word at +0x4c) are ESWC's code with
+// other offsets. Members from the reflection tables and the code using them: CTrackManiaRace is
+// smaller (Game +0x3c, lap flag +0x184, the clock +0x2d0 that OnCheckpoint subtracts the info's start
+// from), CTrackManiaPlayerInfo too (ESWC - 0x34: start +0x1bc, RaceState +0x228 set by 0x00838e00
+// with 0/1/2 as in ESWC, checkpoint times +0x210, passed +0x248, its player +0x14c), the network's
+// infos +0x188 with PlayerType +0xa4 (GetLocalPlayerInfo 0x0082aeb0). CHmsItem from +0x48 on is 4
+// bytes longer: main corpus +0x54, its tree +0x68, the tree's flags +0xa0 (Show 0x0059c0b0 sets bit
+// 3). No starts or respawns counter on the race: RespawnPlayer 0x007ec270 counts the info's +0x1d4
+// (at most 999). No CCtnMediaClipViewer: a replay watched or shot is the replay editor.
+constexpr LegacyEngine kSunriseEngine = {
+    legacy::Game::Sunrise, "sunrise", 0x00a31b68,
+    {78, 0x006c9230}, {79, 0x006c97d0}, {84, 0x006cdd40}, {85, 0x006ce170}, {86, 0x006ced50}, {87, 0x005e88e0}, {88, 0x005e8910},
+    {0x004cf530, {0x53, 0x8b, 0x5c, 0x24, 0x08}, 5},
+    0x00bcce50, 0x100, 0x10c, 0x12c, 0x29c, 0, 0x128,
+    0x20, 0x3c, 0x184, 0x2d0, 0, 0, 0x46c, 0x470, 0x64,
+    0x188, 0xa4,
+    0x1bc, 0x1c0, 0x1c8, 0x1cc, 0x228, 0x210, 0x248, 0x14c,
+    0x24, 0x34, 0x1d4,
+    0x3c, 0x24, 0x18, 0x48, 0x32c, 0x40,
+    0x54, 0x68, 0xa0, 0x4c,
+    {0x004bd6e0, {0x8b, 0x41, 0x4c, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x004bd7b0, {0x8b, 0x41, 0x4c, 0x33, 0xd2, 0x56}, 6},
+    {0x0081c820, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
+    false};
+// TrackMania Original, TMORIGINAL.EXE of GreffMASTER's Online Patch v2 (SHA-256 75e129d7...), built on
+// Sunrise's code: the same layout as Sunrise (496 of its 514 named classes have the same members),
+// other addresses (the viewport's vtable 0x00a2db28, the app 0x00bc8084), the race's clock at +0x2b8
+// and CTrackManiaRace1P's ghosts at +0x418 / +0x41c (its race classes are shifted).
+constexpr LegacyEngine kOriginalEngine = {
+    legacy::Game::Original, "original", 0x00a2db28,
+    {78, 0x006c8580}, {79, 0x006c8b20}, {84, 0x006cd090}, {85, 0x006cd4c0}, {86, 0x006ce0a0}, {87, 0x005e8440}, {88, 0x005e8470},
+    {0x004cf5e0, {0x53, 0x8b, 0x5c, 0x24, 0x08}, 5},
+    0x00bc8084, 0x100, 0x10c, 0x12c, 0x29c, 0, 0x128,
+    0x20, 0x3c, 0x184, 0x2b8, 0, 0, 0x418, 0x41c, 0x64,
+    0x188, 0xa4,
+    0x1bc, 0x1c0, 0x1c8, 0x1cc, 0x228, 0x210, 0x248, 0x14c,
+    0x24, 0x34, 0x1d4,
+    0x3c, 0x24, 0x18, 0x48, 0x32c, 0x40,
+    0x54, 0x68, 0xa0, 0x4c,
+    {0x004bd630, {0x8b, 0x41, 0x4c, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x004bd700, {0x8b, 0x41, 0x4c, 0x33, 0xd2, 0x56}, 6},
+    {0x0081aca0, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
+    false};
+constexpr const LegacyEngine* kLegacyEngines[] = {&kEswcEngine, &kSunriseEngine, &kOriginalEngine};
+const LegacyEngine* g_legacy = nullptr;  // the game runs on the 2006 engine, hooked
+const legacy::Exe* g_legacyExe = nullptr; // its exe entry (also when refused)
+bool g_legacyRefused = false;           // one of those games, but not the supported exe: the mod stays off
+char g_legacyRefusal[320] = "";
 
 struct Slot {
     int index;
@@ -514,9 +649,9 @@ bool g_beginMatrices = false;
 constexpr int kCameraDepth = 8;
 const void* g_cameraStack[kCameraDepth] = {};
 int g_cameraDepth = 0;
-// ESWC: see eswcProjectionDetour.
-const void* g_eswcOutsideProjection = nullptr; // computed outside every camera, since the last begin
-const void* g_eswcMainProjection = nullptr;    // the struct the main camera's projection goes into
+// The 2006 engine: see legacyProjectionDetour.
+const void* g_legacyOutsideProjection = nullptr; // computed outside every camera, since the last begin
+const void* g_legacyMainProjection = nullptr;    // the struct the main camera's projection goes into
 bool g_hideOverlay = false;      // skip the game's HUD and menus (photo mode)
 using FreeCamFn = void(__fastcall*)(void*, void*, int);
 FreeCamFn g_freeCamSet = nullptr;
@@ -2356,7 +2491,7 @@ void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* cle
     g_cameraDepth++;
     g_lastViewSet = g_lastProjectionSet = false;
     if (g_callbacks.cameraBegin) g_callbacks.cameraBegin(camera);
-    g_eswcOutsideProjection = nullptr; // ESWC: one computed before this begin belongs to this camera, not the next
+    g_legacyOutsideProjection = nullptr; // ESWC: one computed before this begin belongs to this camera, not the next
     g_cameraBegin(self, edx, camera, clearDesc);
 }
 
@@ -2536,47 +2671,48 @@ void __fastcall projectionDetour(void* self, void* edx, void* projection, const 
     adjustProjection(static_cast<float*>(projection), camera && camera == g_mainCamera, camera);
 }
 
-// ESWC: (projection, frustum), no camera: the camera rendering now is its camera (g_cameraStack).
-// One computed outside every camera (a texture render's, before its begin) is never the main one.
-using EswcProjectionFn = void(__fastcall*)(void*, void*, void*, const void*);
-EswcProjectionFn g_eswcProjection = nullptr;
+// The 2006 engine: (projection, frustum), no camera: the camera rendering now is its camera
+// (g_cameraStack). One computed outside every camera (a texture render's, before its begin) is never
+// the main one.
+using LegacyProjectionFn = void(__fastcall*)(void*, void*, void*, const void*);
+LegacyProjectionFn g_legacyProjection = nullptr;
 
 // The photo zoom never reached the main camera in ESWC (my test, 2026-11-09: no "photo zoom"
 // line in the log), so its projection may be computed before its begin, outside every camera.
 // The projection struct computed last outside a camera is taken as the main camera's when that
 // camera begins (setMainCamera); from then on the same struct counts as the main one.
-int g_eswcProjectionLogs = 0;
+int g_legacyProjectionLogs = 0;
 
-void __fastcall eswcProjectionDetour(void* self, void* edx, void* projection, const void* frustum) {
-    g_eswcProjection(self, edx, projection, frustum);
+void __fastcall legacyProjectionDetour(void* self, void* edx, void* projection, const void* frustum) {
+    g_legacyProjection(self, edx, projection, frustum);
     const void* camera = renderingCamera();
-    if (!camera) g_eswcOutsideProjection = projection;
-    const bool main = (camera && camera == g_mainCamera) || (projection && projection == g_eswcMainProjection);
+    if (!camera) g_legacyOutsideProjection = projection;
+    const bool main = (camera && camera == g_mainCamera) || (projection && projection == g_legacyMainProjection);
     const float* m = static_cast<const float*>(projection);
     // Diagnosis: the first calls while zoomed, with what decided "main".
-    if (g_zoom > 1.0f && g_eswcProjectionLogs < 24) {
-        g_eswcProjectionLogs++;
-        TMVS_LOG("engine (eswc): projection %p frustum %p, camera %p (depth %d), main camera %p, main struct %p -> %s; m14 %.3f m27 %.3f", projection,
-                 frustum, camera, g_cameraDepth, g_mainCamera, g_eswcMainProjection, main ? "main" : "other", m[14], m[16 + 11]);
+    if (g_zoom > 1.0f && g_legacyProjectionLogs < 24) {
+        g_legacyProjectionLogs++;
+        TMVS_LOG("engine (%s): projection %p frustum %p, camera %p (depth %d), main camera %p, main struct %p -> %s; m14 %.3f m27 %.3f", g_legacy->tag,
+                 projection, frustum, camera, g_cameraDepth, g_mainCamera, g_legacyMainProjection, main ? "main" : "other", m[14], m[16 + 11]);
     }
     adjustProjection(static_cast<float*>(projection), main, nullptr);
 }
 
-void eswcPoll();
+void legacyPoll();
 
-int __fastcall eswcFrameBeginDetour(void* self, void* edx) {
+int __fastcall legacyFrameBeginDetour(void* self, void* edx) {
     g_cameraDepth = 0; // nothing renders between frames
     g_engineFrames++;
-    eswcPoll(); // the race, its car and the map, before the plugin's frame begins
+    legacyPoll(); // the race, its car and the map, before the plugin's frame begins
     if (g_callbacks.frameBegin) g_callbacks.frameBegin();
     return g_frameBegin(self, edx);
 }
 
 using ReadInputResultFn = int(__cdecl*)(void*, void*, unsigned long);
-ReadInputResultFn g_eswcReadInput = nullptr;
+ReadInputResultFn g_legacyReadInput = nullptr;
 
-int __cdecl eswcReadInputDetour(void* port, void* state, unsigned long size) {
-    const int result = g_eswcReadInput(port, state, size);
+int __cdecl legacyReadInputDetour(void* port, void* state, unsigned long size) {
+    const int result = g_legacyReadInput(port, state, size);
     if (g_swallowEscape) {
         if (GetAsyncKeyState(VK_ESCAPE) < 0) {
             if (state && size == 256) static_cast<BYTE*>(state)[0x01] = 0; // DIK_ESCAPE (filled or zeroed, either way)
@@ -2587,235 +2723,195 @@ int __cdecl eswcReadInputDetour(void* port, void* state, unsigned long size) {
     return result;
 }
 
-// --- TM Nations ESWC: the race, its local player and car, the map -----------------------------------
+// --- The 2006 engine: the race, its local player and car, the map --------------------------------
 // The game's own objects, read once a frame at RenderFrameBegin (the game's thread, between its
-// updates): nothing is called and nothing written, Hide car excepted (eswcHideCars). The offsets come
-// from the classes' reflection tables (SMwMemberInfo: name, offset, class) and the code that uses them.
-// Every object is told by its vtable before it is read: each class has exactly one, whose slot 2
-// (GetMwClassId) is `mov eax, <class id>; ret` (checked at install, eswcCheckClasses).
-struct EswcClass {
-    uintptr_t vtable;
+// updates): nothing is called and nothing written, Hide car excepted (legacyHideCars). The offsets are
+// the game's LegacyEngine (from the classes' reflection tables and the code that uses them). Every
+// object is told by its class before it is read: each class has exactly one vtable, whose slot 2
+// (GetMwClassId) is `mov eax, <class id>; ret`; the ids are the same in the three games.
+struct LegacyClass {
     DWORD id;
     const char* name;
 };
-// The app (CTrackMania : CConstructionGame): CConstructionGame's constructor (0x007086a0) stores it at
-// 0x00caee50 (mov [0x00caee50], esi at 0x00708873), the destructor clears it (0x0070908c).
-constexpr uintptr_t kEswcGamePointer = 0x00caee50;
-constexpr EswcClass kEswcGame = {0x00af2420, 0x24001000, "CTrackMania"};
-// CConstructionGame (reflection): Network +0x100, Challenge +0x11c (SetChallenge 0x00710290 below),
-// CurrentRace +0x140; CTrackMania's Editor +0x2e4 (CTrackMania::SetEditor 0x006f3dc0).
-constexpr size_t kEswcGameNetwork = 0x100, kEswcGameChallenge = 0x11c, kEswcGameRace = 0x140, kEswcGameEditor = 0x2e4;
-constexpr EswcClass kEswcChallenge = {0x00af25b0, 0x24003000, "CConstructionChallenge"};
-constexpr size_t kEswcChallengeName = 0x124; // ChallengeName (m_Name, a CFastStringInt: size, text)
-// The replay editor (made at 0x006e9fb3, handed to SetEditor at 0x006e9fc6).
-constexpr EswcClass kEswcReplayEditor = {0x00af3580, 0x2405d000, "CConstructionEditorReplay"};
-// A replay watched or shot as a video: the app's clip viewer at +0x128 (made at 0x006ea968 and, for
-// "Shoot video", at 0x006e74fc, both stored with the ref setter 0x0072fe50; cleared when it ends).
-constexpr size_t kEswcGameClipViewer = 0x128;
-constexpr EswcClass kEswcClipViewer = {0x00af4e30, 0x2408a000, "CCtnMediaClipViewer"};
-// The race classes (every class deriving from CTrackManiaRace; solo: from CTrackManiaRace1P).
-struct EswcRaceClass {
-    EswcClass c;
+constexpr LegacyClass kLegacyGame = {0x24001000, "CTrackMania"};
+constexpr LegacyClass kLegacyChallenge = {0x24003000, "CConstructionChallenge"};
+constexpr LegacyClass kLegacyReplayEditor = {0x2405d000, "CConstructionEditorReplay"};
+constexpr LegacyClass kLegacyClipViewer = {0x2408a000, "CCtnMediaClipViewer"}; // ESWC only
+constexpr LegacyClass kLegacyGhost = {0x2401b000, "CConstructionGhost"};
+constexpr LegacyClass kLegacyInfo = {0x24036000, "CTrackManiaPlayerInfo"};
+constexpr LegacyClass kLegacyPlayer = {0x24031000, "CTrackManiaPlayer"};
+// The car, one class for every environment (the other CSceneToyVehicle* classes are its data).
+constexpr LegacyClass kLegacyCar = {0x0a103000, "CSceneToyVehicleTrackMania"};
+// The race classes (every class deriving from CTrackManiaRace; solo: from CTrackManiaRace1P, and the
+// hot seat).
+struct LegacyRaceClass {
+    LegacyClass c;
     bool solo;
 };
-constexpr EswcRaceClass kEswcRaces[] = {
-    {{0x00af1b70, 0x24014000, "CTrackManiaRace"}, false},          {{0x00af1390, 0x24018000, "CTrackManiaRace1P"}, true},
-    {{0x00aed830, 0x24079000, "CTrackManiaRace1PCrazy"}, true},   {{0x00aed668, 0x24078000, "CTrackManiaRace1PGhosts"}, true},
-    {{0x00aeec30, 0x24055000, "CTrackManiaRace1PSpecial"}, true}, {{0x00aef450, 0x24042000, "CTrackManiaRace2PTurnBased"}, true},
-    {{0x00af3f78, 0x24044000, "CTrackManiaRaceNet"}, false},       {{0x00aeee08, 0x24056000, "CTrackManiaRaceNetLaps"}, false},
-    {{0x00aeff88, 0x24037000, "CTrackManiaRaceNetRounds"}, false}, {{0x00aef630, 0x24045000, "CTrackManiaRaceNetTimeAttack"}, false}};
-// CConstructionRace / CTrackManiaRace: Players +0x20 (CFastBuffer: count, data; LocalPlayerMobil reads
-// data[0]->Mobil, 0x006d2590), Game +0x40; the race's clock +0x33c (ms: OnCheckpoint 0x006d9c80 and
-// OnFinishLine 0x006d9f50 take clock - start as the race time), +0x194 set: the times count from the
-// lap's start; the local player's starts +0x4dc (OnStartLine 0x006d9be0: inc, local player only) and
-// respawns +0x4e0 (RespawnPlayer 0x006d98f0, vtable slot 87 of every race class, also called by
-// ResetPlayer 0x006d9670: inc, local player only).
-constexpr size_t kEswcRacePlayers = 0x20, kEswcRaceGame = 0x40, kEswcRaceLapTimes = 0x194, kEswcRaceClock = 0x33c;
-constexpr size_t kEswcRaceStarts = 0x4dc, kEswcRaceRespawns = 0x4e0;
-// CTrackManiaRace1P (reflection): BestRaceGhost +0x6e8, CurrentRaceGhost +0x6ec, CConstructionGhost
-// whose CGameGhost::ReplayMobil is at +0x64.
-constexpr size_t kEswcRaceBestGhost = 0x6e8, kEswcRaceCurrentGhost = 0x6ec, kEswcGhostMobil = 0x64;
-constexpr EswcClass kEswcGhost = {0x00af1018, 0x2401b000, "CConstructionGhost"};
-// The local player's info: Network +0x1a4 -> its first entry, when its PlayerType (+0xd8) is 0
-// (CTrackManiaRace::GetLocalPlayerInfo 0x0071c730 -> 0x009cf460).
-constexpr size_t kEswcNetworkInfos = 0x1a4, kEswcInfoPlayerType = 0xd8;
-constexpr EswcClass kEswcInfo = {0x00af2df0, 0x24036000, "CTrackManiaPlayerInfo"};
-// CTrackManiaPlayerInfo (reflection): RaceStartTime +0x1f0, RaceTime +0x1f4 (the final time),
-// LapStartTime +0x1fc, LapTime +0x200, RaceState +0x25c (0 before the start, 1 running, 2 finished:
-// 0x0071b350 from OnStartLine and OnFinishLine); the race time at each checkpoint, a CFastBuffer at
-// +0x244 ({time, score} each, -1 not yet: 0x0071b790; written by 0x0071b3c0 from InternalOnCheckpoint
-// 0x006da800), the checkpoints passed in this run +0x284 (the finish included; zeroed with the info,
-// 0x0071b860); its player +0x180 (CConstructionPlayer::SetPlayerInfo 0x007b2df0 links both ways,
-// player +0x34).
-constexpr size_t kEswcInfoStart = 0x1f0, kEswcInfoFinalTime = 0x1f4, kEswcInfoLapStart = 0x1fc, kEswcInfoLapFinalTime = 0x200;
-constexpr size_t kEswcInfoState = 0x25c, kEswcInfoCheckpoints = 0x244, kEswcInfoPassed = 0x284, kEswcInfoPlayer = 0x180;
-constexpr EswcClass kEswcPlayer = {0x00af51d8, 0x24031000, "CTrackManiaPlayer"};
-constexpr size_t kEswcPlayerMobil = 0x24, kEswcPlayerInfo = 0x34; // CGamePlayer::Mobil (reflection)
-// The car (CSceneToyVehicleTrackMania): CSceneMobil::Item +0x3c (a CHmsItem), the item's corpora
-// (Corpuss: CFastBuffer at +0x24), the first one's location (CHmsZoneElem::Location +0x18, a GmIso4:
-// the 3x3 rotation, then the position at +0x24). CSceneMobil::GetInterpolatedLocation (0x0059b9a0, not
-// virtual here) returns exactly that with no sector: where the car is drawn. Its speed: the corpus's
-// dynamic body (+0x48) -> its state (+0x32c), the world speed at +0x40 (m/s, 0x00452f00; times the
-// transposed rotation, its z times 3.6 is the HUD's km/h: 0x005fc940, so forward is the model's z).
-constexpr EswcClass kEswcCar = {0x00ae68e8, 0x0a103000, "CSceneToyVehicleTrackMania"};
-constexpr size_t kEswcMobilItem = 0x3c, kEswcItemCorpora = 0x24, kEswcCorpusLocation = 0x18;
-constexpr size_t kEswcCorpusDyna = 0x48, kEswcDynaState = 0x32c, kEswcStateSpeed = 0x40;
-// Hide car: CSceneMobil::Hide (0x0059bdb0, what the car's own Hide calls first) clears bit 3 of the
-// mobil's tree (item +0x50 -> +0x64: CPlugTree +0x9c, 0x005f6730), Show (0x0059bda0) sets it. The car's
-// own Hide (0x005f9690) also stops its physics (+0x5cc), so only that bit is changed here. Its shadow:
-// CHmsItem +0x48 (shadow textures in the low byte, bit 23; fake shadow bit 27: the word TMNF keeps at
-// +0x18) through the item's own setters SetCountShadowTexCasted and SetShadowFakeEnable (TMNF's code,
-// +0x48 for +0x18; their cases of CHmsItem's parameter setter 0x0043fb20).
-constexpr size_t kEswcItemMainCorpus = 0x50, kEswcCorpusTree = 0x64, kEswcTreeFlags = 0x9c;
-constexpr DWORD kEswcTreeVisible = 8;
-constexpr size_t kEswcItemShadowWord = 0x48;
-constexpr uintptr_t kEswcItemSetShadowTex = 0x00441de0, kEswcItemSetShadowFake = 0x00441eb0;
-constexpr unsigned char kEswcSetShadowTexPrologue[] = {0x8b, 0x41, 0x48, 0x8a, 0x54, 0x24, 0x04};
-constexpr unsigned char kEswcSetShadowFakePrologue[] = {0x8b, 0x41, 0x48, 0x33, 0xd2, 0x56};
-// CConstructionGame::SetChallenge(challenge) (AddRef the new one, Release the old, store it at +0x11c):
-// the map the game runs (race, replay, editor), null back to the menu. Callers 0x006e70c0, 0x006e7123,
-// 0x006eb6d6, 0x007101f9 (null), 0x00718a08 (a replay opened).
-constexpr uintptr_t kEswcSetChallenge = 0x00710290;
-constexpr unsigned char kEswcSetChallengePrologue[] = {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}; // push esi; push edi; mov edi, [esp+0xc]
+constexpr LegacyRaceClass kLegacyRaces[] = {
+    {{0x24014000, "CTrackManiaRace"}, false},          {{0x24018000, "CTrackManiaRace1P"}, true},
+    {{0x24079000, "CTrackManiaRace1PCrazy"}, true},   {{0x24078000, "CTrackManiaRace1PGhosts"}, true},
+    {{0x24055000, "CTrackManiaRace1PSpecial"}, true}, {{0x24042000, "CTrackManiaRace2PTurnBased"}, true},
+    {{0x24044000, "CTrackManiaRaceNet"}, false},       {{0x24056000, "CTrackManiaRaceNetLaps"}, false},
+    {{0x24037000, "CTrackManiaRaceNetRounds"}, false}, {{0x24045000, "CTrackManiaRaceNetTimeAttack"}, false}};
+constexpr DWORD kLegacyTreeVisible = 8;
+constexpr DWORD kLegacyStateRunning = 1, kLegacyStateFinished = 2; // the info's RaceState (0 before the start)
 
-bool g_eswcClassesOk = false; // every vtable above is where expected: the readers are on
-bool g_eswcShadowSetters = false;
+bool g_legacyShadowSetters = false;
 
 // What the game runs, as read this frame (plain data: read inside __try).
-struct EswcState {
+struct LegacyState {
     void* game = nullptr;
     void* challenge = nullptr;
     void* race = nullptr;
-    int raceKind = -1;               // index in kEswcRaces
-    uintptr_t otherRace = 0;         // a race object of no known class (its vtable, for the log)
-    uintptr_t editor = 0;            // the app's editor's vtable (0 none)
+    int raceKind = -1;               // index in kLegacyRaces
+    DWORD otherRace = 0;             // a race object of no known class (its class id, for the log)
+    DWORD editor = 0;                // the app's editor's class id (0 none)
     bool replayEditor = false;
-    bool clipViewer = false;         // a replay plays (watched or shot)
+    bool clipViewer = false;         // a replay plays (watched or shot; ESWC's app clip viewer)
     DWORD clock = 0, starts = 0, respawns = 0;
     void* info = nullptr;            // the local player's
+    DWORD infoStart = 0, infoState = 0, infoRespawns = 0;
     void* player = nullptr;
     void* car = nullptr;
 };
-EswcState g_eswcState;
-DWORD g_eswcClockTick = 0; // when the race's clock last moved (0: not since the race appeared)
-char g_eswcMapUid[24] = {}; // "eswc-" and a hash of the map's name ("" none)
+LegacyState g_legacyState;
+DWORD g_legacyClockTick = 0; // when the race's clock last moved (0: not since the race appeared)
+char g_legacyMapUid[32] = {}; // the game's tag ("eswc") and a hash of the map's name ("" none)
 
-bool eswcIs(const void* nod, const EswcClass& c) {
-    return nod && *static_cast<const uintptr_t*>(nod) == rebase(c.vtable);
+// The class id of a 2006 engine object, 0 none (inside __try).
+DWORD legacyClassId(const void* nod) {
+    if (!nod) return 0;
+    const uintptr_t* table = *static_cast<const uintptr_t* const*>(nod);
+    const BYTE* getId = reinterpret_cast<const BYTE*>(table[2]);
+    return getId[0] == 0xb8 && getId[5] == 0xc3 ? *reinterpret_cast<const DWORD*>(getId + 1) : 0;
 }
 
-// The GmIso4 the car is drawn with (see kEswcCar), or null. Inside __try.
-const float* eswcLocation(const void* car) {
-    const BYTE* item = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(car) + kEswcMobilItem);
-    if (!item || *reinterpret_cast<const DWORD*>(item + kEswcItemCorpora) == 0) return nullptr;
-    const BYTE* const* corpora = *reinterpret_cast<const BYTE* const* const*>(item + kEswcItemCorpora + 4);
+bool legacyIs(const void* nod, const LegacyClass& c) {
+    return nod && legacyClassId(nod) == c.id;
+}
+
+template <typename T> T legacyAt(const void* p, size_t offset) {
+    return *reinterpret_cast<const T*>(static_cast<const BYTE*>(p) + offset);
+}
+
+// The GmIso4 the car is drawn with (see LegacyEngine), or null. Inside __try.
+const float* legacyLocation(const void* car) {
+    const LegacyEngine& e = *g_legacy;
+    const BYTE* item = legacyAt<const BYTE*>(car, e.mobilItem);
+    if (!item || legacyAt<DWORD>(item, e.itemCorpora) == 0) return nullptr;
+    const BYTE* const* corpora = legacyAt<const BYTE* const*>(item, e.itemCorpora + 4);
     if (!corpora || !corpora[0]) return nullptr;
-    const float* iso = reinterpret_cast<const float*>(corpora[0] + kEswcCorpusLocation);
+    const float* iso = reinterpret_cast<const float*>(corpora[0] + e.corpusLocation);
     for (int i = 0; i < 12; i++) {
         if (!(fabsf(iso[i]) < 1e5f)) return nullptr;
     }
     return iso;
 }
 
-bool eswcRead(EswcState& s) {
-    s = EswcState();
+bool legacyRead(LegacyState& s) {
+    s = LegacyState();
+    const LegacyEngine& e = *g_legacy;
     __try {
-        void* game = *reinterpret_cast<void* const*>(rebase(kEswcGamePointer));
-        if (!eswcIs(game, kEswcGame)) return true;
+        void* game = *reinterpret_cast<void* const*>(rebase(e.gamePointer));
+        if (!legacyIs(game, kLegacyGame)) return true;
         s.game = game;
-        const BYTE* g = static_cast<const BYTE*>(game);
-        void* challenge = *reinterpret_cast<void* const*>(g + kEswcGameChallenge);
-        if (eswcIs(challenge, kEswcChallenge)) s.challenge = challenge;
-        void* editor = *reinterpret_cast<void* const*>(g + kEswcGameEditor);
-        s.editor = editor ? *static_cast<const uintptr_t*>(editor) : 0;
-        s.replayEditor = eswcIs(editor, kEswcReplayEditor);
-        s.clipViewer = eswcIs(*reinterpret_cast<void* const*>(g + kEswcGameClipViewer), kEswcClipViewer);
-        void* race = *reinterpret_cast<void* const*>(g + kEswcGameRace);
+        void* challenge = legacyAt<void*>(game, e.gameChallenge);
+        if (legacyIs(challenge, kLegacyChallenge)) s.challenge = challenge;
+        void* editor = legacyAt<void*>(game, e.gameEditor);
+        s.editor = legacyClassId(editor);
+        s.replayEditor = s.editor == kLegacyReplayEditor.id;
+        s.clipViewer = e.gameClipViewer && legacyIs(legacyAt<void*>(game, e.gameClipViewer), kLegacyClipViewer);
+        void* race = legacyAt<void*>(game, e.gameRace);
         if (!race) return true;
-        for (int k = 0; k < static_cast<int>(sizeof(kEswcRaces) / sizeof(kEswcRaces[0])); k++) {
-            if (eswcIs(race, kEswcRaces[k].c)) s.raceKind = k;
+        const DWORD raceId = legacyClassId(race);
+        for (int k = 0; k < static_cast<int>(sizeof(kLegacyRaces) / sizeof(kLegacyRaces[0])); k++) {
+            if (raceId == kLegacyRaces[k].c.id) s.raceKind = k;
         }
-        const BYTE* r = static_cast<const BYTE*>(race);
-        if (s.raceKind < 0 || *reinterpret_cast<void* const*>(r + kEswcRaceGame) != game) {
+        if (s.raceKind < 0 || legacyAt<void*>(race, e.raceGame) != game) {
             s.raceKind = -1;
-            s.otherRace = *static_cast<const uintptr_t*>(race);
+            s.otherRace = raceId ? raceId : 1;
             return true;
         }
         s.race = race;
-        s.clock = *reinterpret_cast<const DWORD*>(r + kEswcRaceClock);
-        s.starts = *reinterpret_cast<const DWORD*>(r + kEswcRaceStarts);
-        s.respawns = *reinterpret_cast<const DWORD*>(r + kEswcRaceRespawns);
-        const BYTE* network = *reinterpret_cast<const BYTE* const*>(g + kEswcGameNetwork);
+        s.clock = legacyAt<DWORD>(race, e.raceClock);
+        if (e.raceStarts) s.starts = legacyAt<DWORD>(race, e.raceStarts);
+        if (e.raceRespawns) s.respawns = legacyAt<DWORD>(race, e.raceRespawns);
+        const void* network = legacyAt<const void*>(game, e.gameNetwork);
         if (!network) return true;
-        void* const* infos = *reinterpret_cast<void* const* const*>(network + kEswcNetworkInfos);
+        void* const* infos = legacyAt<void* const*>(network, e.networkInfos);
         void* info = infos ? infos[0] : nullptr;
-        if (!eswcIs(info, kEswcInfo) || *reinterpret_cast<const int*>(static_cast<const BYTE*>(info) + kEswcInfoPlayerType) != 0) return true;
+        if (!legacyIs(info, kLegacyInfo) || legacyAt<int>(info, e.infoPlayerType) != 0) return true;
         s.info = info;
-        void* player = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(info) + kEswcInfoPlayer);
-        if (!eswcIs(player, kEswcPlayer) || *reinterpret_cast<void* const*>(static_cast<const BYTE*>(player) + kEswcPlayerInfo) != info) return true;
+        s.infoStart = legacyAt<DWORD>(info, e.infoStart);
+        s.infoState = legacyAt<DWORD>(info, e.infoState);
+        if (e.infoRespawns) s.infoRespawns = legacyAt<DWORD>(info, e.infoRespawns);
+        void* player = legacyAt<void*>(info, e.infoPlayer);
+        if (!legacyIs(player, kLegacyPlayer) || legacyAt<void*>(player, e.playerInfo) != info) return true;
         s.player = player;
-        void* car = *reinterpret_cast<void* const*>(static_cast<const BYTE*>(player) + kEswcPlayerMobil);
-        if (eswcIs(car, kEswcCar) && eswcLocation(car)) s.car = car;
+        void* car = legacyAt<void*>(player, e.playerMobil);
+        if (legacyIs(car, kLegacyCar) && legacyLocation(car)) s.car = car;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        s = EswcState();
+        s = LegacyState();
         return false;
     }
 }
 
 // The race's local car while the race runs (its clock moved within 300 ms: not in the menu, not
 // paused), else null.
-const void* eswcRunningCar() {
-    if (!g_eswcState.car || !g_eswcClockTick || GetTickCount() - g_eswcClockTick > 300) return nullptr;
-    return g_eswcState.car;
+const void* legacyRunningCar() {
+    if (!g_legacyState.car || !g_legacyClockTick || GetTickCount() - g_legacyClockTick > 300) return nullptr;
+    return g_legacyState.car;
 }
 
 // The cars of the race now: its players' and, in solo, the best and the current run's ghost.
 // Inside __try.
-int eswcCars(const EswcState& s, void** out, int max) {
+int legacyCars(const LegacyState& s, void** out, int max) {
+    const LegacyEngine& e = *g_legacy;
     int n = 0;
     auto add = [&](void* car) {
-        if (!eswcIs(car, kEswcCar)) return;
+        if (!legacyIs(car, kLegacyCar)) return;
         for (int i = 0; i < n; i++) {
             if (out[i] == car) return;
         }
         if (n < max) out[n++] = car;
     };
     if (!s.race) return 0;
-    const BYTE* r = static_cast<const BYTE*>(s.race);
-    const DWORD count = *reinterpret_cast<const DWORD*>(r + kEswcRacePlayers);
-    void* const* players = *reinterpret_cast<void* const* const*>(r + kEswcRacePlayers + 4);
+    const DWORD count = legacyAt<DWORD>(s.race, e.racePlayers);
+    void* const* players = legacyAt<void* const*>(s.race, e.racePlayers + 4);
     for (DWORD i = 0; players && i < count && i < 64; i++) {
-        if (eswcIs(players[i], kEswcPlayer)) add(*reinterpret_cast<void* const*>(static_cast<const BYTE*>(players[i]) + kEswcPlayerMobil));
+        if (legacyIs(players[i], kLegacyPlayer)) add(legacyAt<void*>(players[i], e.playerMobil));
     }
-    if (kEswcRaces[s.raceKind].solo) {
-        const size_t ghosts[2] = {kEswcRaceBestGhost, kEswcRaceCurrentGhost};
+    if (kLegacyRaces[s.raceKind].solo) {
+        const size_t ghosts[2] = {e.raceBestGhost, e.raceCurrentGhost};
         for (size_t offset : ghosts) {
-            void* ghost = *reinterpret_cast<void* const*>(r + offset);
-            if (eswcIs(ghost, kEswcGhost)) add(*reinterpret_cast<void* const*>(static_cast<const BYTE*>(ghost) + kEswcGhostMobil));
+            void* ghost = legacyAt<void*>(s.race, offset);
+            if (legacyIs(ghost, kLegacyGhost)) add(legacyAt<void*>(ghost, e.ghostMobil));
         }
     }
     return n;
 }
 
-int eswcCarsSafe(const EswcState& s, void** out, int max) {
+int legacyCarsSafe(const LegacyState& s, void** out, int max) {
     __try {
-        return eswcCars(s, out, max);
+        return legacyCars(s, out, max);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 0;
     }
 }
 
-// A car's tree flags and its item (see kEswcTreeFlags), null when unreadable.
-DWORD* eswcTreeFlags(void* car, BYTE** item) {
+// A car's tree flags and its item (see LegacyEngine::treeFlags), null when unreadable.
+DWORD* legacyTreeFlags(void* car, BYTE** item) {
+    const LegacyEngine& e = *g_legacy;
     __try {
-        BYTE* it = *reinterpret_cast<BYTE**>(static_cast<BYTE*>(car) + kEswcMobilItem);
+        BYTE* it = *reinterpret_cast<BYTE**>(static_cast<BYTE*>(car) + e.mobilItem);
         if (!it) return nullptr;
-        BYTE* corpus = *reinterpret_cast<BYTE**>(it + kEswcItemMainCorpus);
-        BYTE* tree = corpus ? *reinterpret_cast<BYTE**>(corpus + kEswcCorpusTree) : nullptr;
+        BYTE* corpus = *reinterpret_cast<BYTE**>(it + e.itemMainCorpus);
+        BYTE* tree = corpus ? *reinterpret_cast<BYTE**>(corpus + e.corpusTree) : nullptr;
         if (!tree) return nullptr;
         *item = it;
-        DWORD* flags = reinterpret_cast<DWORD*>(tree + kEswcTreeFlags);
+        DWORD* flags = reinterpret_cast<DWORD*>(tree + e.treeFlags);
         volatile DWORD probe = *flags;
         (void)probe;
         return flags;
@@ -2824,16 +2920,16 @@ DWORD* eswcTreeFlags(void* car, BYTE** item) {
     }
 }
 
-bool eswcSetBit(DWORD* flags, bool on) {
+bool legacySetBit(DWORD* flags, bool on) {
     __try {
-        *flags = on ? (*flags | kEswcTreeVisible) : (*flags & ~kEswcTreeVisible);
+        *flags = on ? (*flags | kLegacyTreeVisible) : (*flags & ~kLegacyTreeVisible);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
-bool eswcReadDword(const void* p, DWORD& value) {
+bool legacyReadDword(const void* p, DWORD& value) {
     __try {
         value = *static_cast<const DWORD*>(p);
         return true;
@@ -2842,13 +2938,13 @@ bool eswcReadDword(const void* p, DWORD& value) {
     }
 }
 
-void eswcSetShadow(BYTE* item, DWORD word) {
-    if (!g_eswcShadowSetters) return;
+void legacySetShadow(BYTE* item, DWORD word) {
+    if (!g_legacyShadowSetters) return;
     using ShadowTexFn = void(__fastcall*)(void*, void*, unsigned char, int);
     using ShadowFakeFn = void(__fastcall*)(void*, void*, int);
     __try {
-        reinterpret_cast<ShadowTexFn>(rebase(kEswcItemSetShadowTex))(item, nullptr, static_cast<unsigned char>(word & 0xff), (word >> 23) & 1);
-        reinterpret_cast<ShadowFakeFn>(rebase(kEswcItemSetShadowFake))(item, nullptr, (word >> 27) & 1);
+        reinterpret_cast<ShadowTexFn>(rebase(g_legacy->setShadowTex.address))(item, nullptr, static_cast<unsigned char>(word & 0xff), (word >> 23) & 1);
+        reinterpret_cast<ShadowFakeFn>(rebase(g_legacy->setShadowFake.address))(item, nullptr, (word >> 27) & 1);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -2856,104 +2952,134 @@ void eswcSetShadow(BYTE* item, DWORD word) {
 // Hide car (photo mode): the cars' trees hidden by us and the items whose shadow we took (with the
 // game's word). Applied every frame while hiding (the game shows a car again on its own, e.g. at a
 // respawn); given back only to the cars still in the race (a car that left was freed with its player),
-// forgotten with the map.
-std::unordered_set<uintptr_t> g_eswcHiddenTrees;
-std::unordered_map<uintptr_t, DWORD> g_eswcShadowWords;
+// forgotten with the map. It writes into the game's memory, so only in a solo race or a replay, never
+// in a network race (1.6; ESWC 1.5 did it there too).
+std::unordered_set<uintptr_t> g_legacyHiddenTrees;
+std::unordered_map<uintptr_t, DWORD> g_legacyShadowWords;
 
-void eswcHideCars(const EswcState& s, bool hide) {
-    if (!hide && g_eswcHiddenTrees.empty() && g_eswcShadowWords.empty()) return;
+void legacyHideCars(const LegacyState& s, bool hide) {
+    if (!hide && g_legacyHiddenTrees.empty() && g_legacyShadowWords.empty()) return;
+    static int s_lines = 0;
+    if (hide && s.race && !kLegacyRaces[s.raceKind].solo) {
+        static const void* s_refused = nullptr;
+        if (s_refused != s.race && s_lines < 20) {
+            s_refused = s.race;
+            s_lines++;
+            TMVS_LOG("engine (%s): hide car: not in a network race (%s): the cars stay", g_legacy->tag, kLegacyRaces[s.raceKind].c.name);
+        }
+        hide = false; // what was hidden before (a solo race) is given back
+        if (g_legacyHiddenTrees.empty() && g_legacyShadowWords.empty()) return;
+    }
+    const LegacyEngine& e = *g_legacy;
     void* cars[72];
-    const int n = eswcCarsSafe(s, cars, 72);
+    const int n = legacyCarsSafe(s, cars, 72);
     int hidden = 0, back = 0;
     for (int i = 0; i < n; i++) {
         BYTE* item = nullptr;
-        DWORD* flags = eswcTreeFlags(cars[i], &item);
+        DWORD* flags = legacyTreeFlags(cars[i], &item);
         if (!flags) continue;
         const uintptr_t tree = reinterpret_cast<uintptr_t>(flags);
         if (hide) {
             DWORD f = 0;
-            if (!eswcReadDword(flags, f)) continue;
-            if ((f & kEswcTreeVisible) && eswcSetBit(flags, false)) {
-                if (g_eswcHiddenTrees.insert(tree).second) hidden++;
+            if (!legacyReadDword(flags, f)) continue;
+            if ((f & kLegacyTreeVisible) && legacySetBit(flags, false)) {
+                if (g_legacyHiddenTrees.insert(tree).second) hidden++;
             }
             DWORD word = 0;
-            if (eswcReadDword(item + kEswcItemShadowWord, word) && ((word & 0xff) || ((word >> 23) & 1) || ((word >> 27) & 1))) {
-                g_eswcShadowWords.emplace(reinterpret_cast<uintptr_t>(item), word); // the first word seen is the game's
-                eswcSetShadow(item, word & ~0x88000ffu);
+            if (legacyReadDword(item + e.itemShadowWord, word) && ((word & 0xff) || ((word >> 23) & 1) || ((word >> 27) & 1))) {
+                g_legacyShadowWords.emplace(reinterpret_cast<uintptr_t>(item), word); // the first word seen is the game's
+                legacySetShadow(item, word & ~0x88000ffu);
             }
         } else {
-            if (g_eswcHiddenTrees.count(tree) && eswcSetBit(flags, true)) back++;
-            auto kept = g_eswcShadowWords.find(reinterpret_cast<uintptr_t>(item));
-            if (kept != g_eswcShadowWords.end()) eswcSetShadow(item, kept->second);
+            if (g_legacyHiddenTrees.count(tree) && legacySetBit(flags, true)) back++;
+            auto kept = g_legacyShadowWords.find(reinterpret_cast<uintptr_t>(item));
+            if (kept != g_legacyShadowWords.end()) legacySetShadow(item, kept->second);
         }
     }
-    static int s_lines = 0;
     if (hide && hidden > 0 && s_lines < 20) {
         s_lines++;
-        TMVS_LOG("engine (eswc): hide car: %d car(s) hidden (their tree's visible bit; %u shadow(s) off)", hidden,
-                 static_cast<unsigned>(g_eswcShadowWords.size()));
+        TMVS_LOG("engine (%s): hide car: %d car(s) hidden (their tree's visible bit; %u shadow(s) off)", e.tag, hidden,
+                 static_cast<unsigned>(g_legacyShadowWords.size()));
     }
     if (!hide) {
         if (s_lines < 20) {
             s_lines++;
-            TMVS_LOG("engine (eswc): hide car: %d of %u car(s) shown again", back, static_cast<unsigned>(g_eswcHiddenTrees.size()));
+            TMVS_LOG("engine (%s): hide car: %d of %u car(s) shown again", e.tag, back, static_cast<unsigned>(g_legacyHiddenTrees.size()));
         }
-        g_eswcHiddenTrees.clear();
-        g_eswcShadowWords.clear();
+        g_legacyHiddenTrees.clear();
+        g_legacyShadowWords.clear();
     }
 }
 
-// Once a frame (eswcFrameBeginDetour): what the game runs now, the race's events, Hide car.
-void eswcPoll() {
-    if (!g_eswcClassesOk) return;
-    EswcState s;
-    if (!eswcRead(s)) {
-        static int s_failed = 0;
-        if (s_failed++ < 3) TMVS_LOG("engine (eswc): the game's objects were not readable this frame (left alone)");
+const char* legacyClassName(DWORD id) {
+    for (const LegacyRaceClass& r : kLegacyRaces) {
+        if (r.c.id == id) return r.c.name;
     }
-    const EswcState& last = g_eswcState;
+    return id == kLegacyReplayEditor.id ? kLegacyReplayEditor.name : "another class";
+}
+
+// Once a frame (legacyFrameBeginDetour): what the game runs now, the race's events, Hide car.
+void legacyPoll() {
+    const LegacyEngine& e = *g_legacy;
+    LegacyState s;
+    if (!legacyRead(s)) {
+        static int s_failed = 0;
+        if (s_failed++ < 3) TMVS_LOG("engine (%s): the game's objects were not readable this frame (left alone)", e.tag);
+    }
+    const LegacyState& last = g_legacyState;
     if (s.race && s.race == last.race) {
-        if (s.clock != last.clock) g_eswcClockTick = GetTickCount() | 1;
-        if (s.starts != last.starts) InterlockedIncrement(&g_raceResets);
-        if (s.respawns != last.respawns) InterlockedIncrement(&g_respawns);
+        if (s.clock != last.clock) g_legacyClockTick = GetTickCount() | 1;
+        // ESWC counts the local player's starts and respawns on the race; Sunrise and Original don't:
+        // there a start is the local info's run starting (its state to running, or a new start time
+        // while running), a respawn its own respawn counter moving.
+        bool started = e.raceStarts && s.starts != last.starts;
+        if (!e.raceStarts && s.info && s.info == last.info && s.infoState == kLegacyStateRunning &&
+            (last.infoState != kLegacyStateRunning || s.infoStart != last.infoStart))
+            started = true;
+        if (started) InterlockedIncrement(&g_raceResets);
+        bool respawned = e.raceRespawns && s.respawns != last.respawns;
+        if (!e.raceRespawns && e.infoRespawns && s.info && s.info == last.info && s.infoRespawns != last.infoRespawns && s.infoRespawns != 0)
+            respawned = true;
+        if (respawned) InterlockedIncrement(&g_respawns);
     } else if (s.race != last.race) {
-        g_eswcClockTick = 0; // another race: its clock has to move first
+        g_legacyClockTick = 0; // another race: its clock has to move first
     }
     // The log: each change of what runs (up to 60 lines).
     static int s_lines = 0;
     if (s_lines < 60) {
         if (s.raceKind != last.raceKind || s.otherRace != last.otherRace) {
             s_lines++;
-            if (s.raceKind >= 0) TMVS_LOG("engine (eswc): race %s (%p)", kEswcRaces[s.raceKind].c.name, s.race);
-            else if (s.otherRace) TMVS_LOG("engine (eswc): a race object of unknown class (vtable %p): no car, no race times", reinterpret_cast<void*>(s.otherRace));
-            else TMVS_LOG("engine (eswc): no race");
+            if (s.raceKind >= 0) TMVS_LOG("engine (%s): race %s (%p)", e.tag, kLegacyRaces[s.raceKind].c.name, s.race);
+            else if (s.otherRace) TMVS_LOG("engine (%s): a race object of unknown class (id %08lx): no car, no race times", e.tag, s.otherRace);
+            else TMVS_LOG("engine (%s): no race", e.tag);
         }
         if ((s.car != nullptr) != (last.car != nullptr) || (s.info != nullptr) != (last.info != nullptr)) {
             s_lines++;
-            TMVS_LOG("engine (eswc): local player %s, car %s", s.info ? "found" : "not found", s.car ? "found (position, axes and speed from the engine)" : "not found");
+            TMVS_LOG("engine (%s): local player %s, car %s", e.tag, s.info ? "found" : "not found",
+                     s.car ? "found (position, axes and speed from the engine)" : "not found");
         }
         if (s.editor != last.editor) {
             s_lines++;
-            TMVS_LOG("engine (eswc): editor %s", !s.editor ? "closed" : (s.replayEditor ? "CConstructionEditorReplay (replay: cinematic)" : "of another kind (not cinematic)"));
+            TMVS_LOG("engine (%s): editor %s", e.tag, !s.editor ? "closed" : (s.replayEditor ? "CConstructionEditorReplay (replay: cinematic)" : "of another kind (not cinematic)"));
         }
         if (s.clipViewer != last.clipViewer) {
             s_lines++;
-            TMVS_LOG("engine (eswc): %s", s.clipViewer ? "a replay plays (the app's clip viewer: cinematic)" : "the replay's clip viewer is gone");
+            TMVS_LOG("engine (%s): %s", e.tag, s.clipViewer ? "a replay plays (the app's clip viewer: cinematic)" : "the replay's clip viewer is gone");
         }
     }
-    eswcHideCars(s, g_hideCars);
-    g_eswcState = s;
+    legacyHideCars(s, g_hideCars);
+    g_legacyState = s;
 }
 
-// The map's identifier for the split times: "eswc-" and a hash of its name (ESWC maps carry no UID
-// the misc tools could use; the name is what its file and menus show).
-void eswcMapUid(const void* challenge) {
-    g_eswcMapUid[0] = '\0';
+// The map's identifier for the split times: the game's tag and a hash of its name (these maps carry
+// no UID the misc tools could use; the name is what its file and menus show).
+void legacyMapUid(const void* challenge) {
+    g_legacyMapUid[0] = '\0';
     if (!challenge) return;
     uint32_t hash = 2166136261u;
     uint32_t size = 0;
     __try {
-        const FastStringInt* name = reinterpret_cast<const FastStringInt*>(static_cast<const BYTE*>(challenge) + kEswcChallengeName);
+        const FastStringInt* name = reinterpret_cast<const FastStringInt*>(static_cast<const BYTE*>(challenge) + g_legacy->challengeName);
         size = name->size;
         if (!name->text || size == 0 || size > 256) return;
         for (uint32_t i = 0; i < size; i++) {
@@ -2962,97 +3088,131 @@ void eswcMapUid(const void* challenge) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;
     }
-    snprintf(g_eswcMapUid, sizeof(g_eswcMapUid), "eswc-%08x", hash);
+    snprintf(g_legacyMapUid, sizeof(g_legacyMapUid), "%s-%08x", g_legacy->tag, hash);
 }
 
-using EswcSetChallengeFn = void(__fastcall*)(void*, void*, void*);
-EswcSetChallengeFn g_eswcSetChallenge = nullptr;
+using LegacySetChallengeFn = void(__fastcall*)(void*, void*, void*);
+LegacySetChallengeFn g_legacySetChallenge = nullptr;
 
-void* eswcCurrentChallenge(void* game) {
+void* legacyCurrentChallenge(void* game) {
     __try {
-        return *reinterpret_cast<void* const*>(static_cast<const BYTE*>(game) + kEswcGameChallenge);
+        return legacyAt<void*>(game, g_legacy->gameChallenge);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;
     }
 }
 
 // Every map the game runs passes here: a load (the scene is made right after), or the menu (null).
-void __fastcall eswcSetChallengeDetour(void* game, void* edx, void* challenge) {
-    void* before = eswcCurrentChallenge(game);
-    g_eswcSetChallenge(game, edx, challenge);
-    g_eswcHiddenTrees.clear(); // the cars go with the map: nothing given back to them
-    g_eswcShadowWords.clear();
+void __fastcall legacySetChallengeDetour(void* game, void* edx, void* challenge) {
+    void* before = legacyCurrentChallenge(game);
+    g_legacySetChallenge(game, edx, challenge);
+    g_legacyHiddenTrees.clear(); // the cars go with the map: nothing given back to them
+    g_legacyShadowWords.clear();
     if (challenge) {
-        eswcMapUid(challenge);
+        legacyMapUid(challenge);
         InterlockedIncrement(&g_raceResets); // a new map
         InterlockedIncrement(&g_mapLoads);
-        TMVS_LOG("engine (eswc): map loaded (%s)%s", g_eswcMapUid[0] ? g_eswcMapUid : "no name", challenge == before ? ", the same map again" : "");
+        TMVS_LOG("engine (%s): map loaded (%s)%s", g_legacy->tag, g_legacyMapUid[0] ? g_legacyMapUid : "no name", challenge == before ? ", the same map again" : "");
     } else if (before) {
-        g_eswcMapUid[0] = '\0';
+        g_legacyMapUid[0] = '\0';
         InterlockedIncrement(&g_mapCloses);
-        TMVS_LOG("engine (eswc): map closed");
+        TMVS_LOG("engine (%s): map closed", g_legacy->tag);
     }
 }
 
-// The classes' vtables (GetMwClassId in slot 2) and the functions hooked or called: the readers and
-// hooks only go on when all are where expected.
-bool eswcCheckClasses() {
-    std::vector<const EswcClass*> classes = {&kEswcGame, &kEswcChallenge, &kEswcReplayEditor, &kEswcClipViewer, &kEswcGhost, &kEswcInfo, &kEswcPlayer, &kEswcCar};
-    for (const EswcRaceClass& r : kEswcRaces) classes.push_back(&r.c);
-    for (const EswcClass* c : classes) {
-        const uintptr_t* table = reinterpret_cast<const uintptr_t*>(rebase(c->vtable));
-        const BYTE* getId = readable(table + 2, sizeof(uintptr_t)) ? reinterpret_cast<const BYTE*>(table[2]) : nullptr;
-        if (!getId || !readable(getId, 6) || getId[0] != 0xb8 || *reinterpret_cast<const DWORD*>(getId + 1) != c->id || getId[5] != 0xc3) {
-            TMVS_LOG("engine (eswc): %s's vtable not where expected: no car, race times or map loads", c->name);
-            return false;
-        }
-    }
-    return true;
+bool legacyCodeMatches(const LegacyCode& code) {
+    if (!code.address || !code.size) return false;
+    const BYTE* p = reinterpret_cast<const BYTE*>(rebase(code.address));
+    return readable(p, code.size) && memcmp(p, code.bytes, code.size) == 0;
 }
 
-// TrackMania Nations ESWC (see kEswcTimestamp): the viewport's frame and camera hooks, the view and
-// projection, and the keyboard read. False when the executable isn't that one.
-bool installEswc() {
-    HMODULE module = GetModuleHandleW(nullptr);
-    const BYTE* image = reinterpret_cast<const BYTE*>(module);
-    const IMAGE_DOS_HEADER* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
-    if (!readable(dos, sizeof(*dos)) || dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
-    const IMAGE_NT_HEADERS32* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(image + dos->e_lfanew);
-    if (!readable(nt, sizeof(*nt)) || nt->Signature != IMAGE_NT_SIGNATURE) return false;
-    if (nt->FileHeader.TimeDateStamp != kEswcTimestamp || nt->OptionalHeader.SizeOfImage != kEswcImageSize) return false;
-    void** table = reinterpret_cast<void**>(rebase(kEswcViewportVTable));
-    const EswcSlot slots[] = {kEswcFrameBegin, kEswcCameraBegin, kEswcCameraEnd, kEswcOverlayZones, kEswcFrameEnd, kEswcViewMatrix, kEswcProjection};
-    for (const EswcSlot& slot : slots) {
-        if (!readable(&table[slot.index], sizeof(void*)) || reinterpret_cast<uintptr_t>(table[slot.index]) != rebase(slot.function)) {
-            TMVS_LOG("engine: TmNationsESWC.exe (unofficial 1.80 patch) but CVisionViewportDx9::%s is not where expected: engine hooks disabled", slot.name);
+// Which exe runs: one of the older games (by its file name, else its link timestamp and size), then
+// its SHA-256. Null with g_legacyRefused when it is one of them but not the supported build.
+const LegacyEngine* identifyLegacy() {
+    wchar_t path[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, path, MAX_PATH)) return nullptr;
+    const legacy::Exe* exe = legacy::byFileName(path);
+    if (!exe) {
+        const BYTE* image = reinterpret_cast<const BYTE*>(GetModuleHandleW(nullptr));
+        const IMAGE_DOS_HEADER* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+        if (!readable(dos, sizeof(*dos)) || dos->e_magic != IMAGE_DOS_SIGNATURE) return nullptr;
+        const IMAGE_NT_HEADERS32* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(image + dos->e_lfanew);
+        if (!readable(nt, sizeof(*nt)) || nt->Signature != IMAGE_NT_SIGNATURE) return nullptr;
+        for (const legacy::Exe& e : legacy::kExes) {
+            if (nt->FileHeader.TimeDateStamp == e.timestamp && nt->OptionalHeader.SizeOfImage == e.imageSize) exe = &e;
+        }
+        if (!exe) return nullptr;
+    }
+    g_legacyExe = exe;
+    filehash::Sha256 hash;
+    char hex[65] = "unreadable";
+    const bool read = filehash::ofFile(path, hash);
+    if (read) filehash::toHex(hash, hex);
+    const bool timestampMatches = [&] {
+        const BYTE* image = reinterpret_cast<const BYTE*>(GetModuleHandleW(nullptr));
+        const IMAGE_NT_HEADERS32* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+        return nt->FileHeader.TimeDateStamp == exe->timestamp && nt->OptionalHeader.SizeOfImage == exe->imageSize;
+    }();
+    if ((!read || hash != filehash::fromHex(exe->sha256)) && !exe->hashRequired && timestampMatches) {
+        // ESWC as in 1.5: its timestamp and size, then every viewport slot (installLegacy) decide; a
+        // file patched elsewhere (an online fix) still runs when its engine is where expected.
+        TMVS_LOG("engine: %s with another SHA-256 (%s) than the 1.80 exe, but its link timestamp and size: accepted if its engine is where expected",
+                 exe->name, hex);
+    } else if (!read || hash != filehash::fromHex(exe->sha256)) {
+        g_legacyRefused = true;
+        snprintf(g_legacyRefusal, sizeof(g_legacyRefusal), "%s, but not the supported exe (SHA-256 %s, supported %.8s...): TM Vibrant Shaders stays off in this game",
+                 exe->name, hex, exe->sha256);
+        return nullptr;
+    }
+    for (const LegacyEngine* e : kLegacyEngines) {
+        if (e->game == exe->game) return e;
+    }
+    g_legacyRefused = true;
+    snprintf(g_legacyRefusal, sizeof(g_legacyRefusal), "%s: no engine table in this build of the mod: TM Vibrant Shaders stays off in this game", exe->name);
+    return nullptr;
+}
+
+// One of the older games (identifyLegacy): the viewport's frame and camera hooks, the view and
+// projection, the keyboard read, the map loads and the race readers. False when the executable isn't
+// one of them, or its viewport isn't where expected (then nothing is hooked).
+bool installLegacy() {
+    const LegacyEngine* found = identifyLegacy();
+    if (!found) return false;
+    const LegacyEngine& e = *found;
+    void** table = reinterpret_cast<void**>(rebase(e.viewportVTable));
+    const struct {
+        const LegacySlot& slot;
+        const char* name;
+    } slots[] = {{e.frameBegin, "RenderFrameBegin"}, {e.cameraBegin, "RenderCameraBegin"}, {e.cameraEnd, "RenderCameraEnd"},
+                 {e.overlayZones, "RenderOverlayZones"}, {e.frameEnd, "RenderFrameEnd"}, {e.viewMatrix, "ComputeDriverViewMatrix"},
+                 {e.projection, "ComputeDriverProjection"}};
+    for (const auto& s : slots) {
+        if (!readable(&table[s.slot.index], sizeof(void*)) || reinterpret_cast<uintptr_t>(table[s.slot.index]) != rebase(s.slot.function)) {
+            g_legacyRefused = true;
+            snprintf(g_legacyRefusal, sizeof(g_legacyRefusal), "%s (the supported exe) but CVisionViewportDx9::%s is not where expected: TM Vibrant Shaders stays off",
+                     g_legacyExe->name, s.name);
             return false;
         }
     }
-    patchEntry(&table[kEswcFrameBegin.index], reinterpret_cast<void*>(&eswcFrameBeginDetour), g_frameBegin);
-    patchEntry(&table[kEswcCameraBegin.index], reinterpret_cast<void*>(&cameraBeginDetour), g_cameraBegin);
-    patchEntry(&table[kEswcCameraEnd.index], reinterpret_cast<void*>(&cameraEndDetour), g_cameraEnd);
-    patchEntry(&table[kEswcOverlayZones.index], reinterpret_cast<void*>(&overlayZonesDetour), g_overlayZones);
-    patchEntry(&table[kEswcFrameEnd.index], reinterpret_cast<void*>(&frameEndDetour), g_frameEnd);
-    patchEntry(&table[kEswcViewMatrix.index], reinterpret_cast<void*>(&viewMatrixDetour), g_viewMatrix);
-    patchEntry(&table[kEswcProjection.index], reinterpret_cast<void*>(&eswcProjectionDetour), g_eswcProjection);
-    BYTE* read = reinterpret_cast<BYTE*>(rebase(kEswcReadInput));
-    if (readable(read, sizeof(kEswcReadInputPrologue)) && memcmp(read, kEswcReadInputPrologue, sizeof(kEswcReadInputPrologue)) == 0)
-        g_eswcReadInput = reinterpret_cast<ReadInputResultFn>(jumpToDetour(read, sizeof(kEswcReadInputPrologue), reinterpret_cast<void*>(&eswcReadInputDetour)));
-    if (!g_eswcReadInput) TMVS_LOG("engine: ESWC's keyboard read not where expected: Esc in the menu also reaches the game");
-    // The race, its car and the map (eswcPoll): only with every class where expected.
-    g_eswcClassesOk = eswcCheckClasses();
-    BYTE* setChallenge = reinterpret_cast<BYTE*>(rebase(kEswcSetChallenge));
-    if (g_eswcClassesOk && readable(setChallenge, sizeof(kEswcSetChallengePrologue)) &&
-        memcmp(setChallenge, kEswcSetChallengePrologue, sizeof(kEswcSetChallengePrologue)) == 0)
-        g_eswcSetChallenge = reinterpret_cast<EswcSetChallengeFn>(jumpToDetour(setChallenge, sizeof(kEswcSetChallengePrologue), reinterpret_cast<void*>(&eswcSetChallengeDetour)));
-    const BYTE* shadowTex = reinterpret_cast<const BYTE*>(rebase(kEswcItemSetShadowTex));
-    const BYTE* shadowFake = reinterpret_cast<const BYTE*>(rebase(kEswcItemSetShadowFake));
-    g_eswcShadowSetters = readable(shadowTex, sizeof(kEswcSetShadowTexPrologue)) && readable(shadowFake, sizeof(kEswcSetShadowFakePrologue)) &&
-                          memcmp(shadowTex, kEswcSetShadowTexPrologue, sizeof(kEswcSetShadowTexPrologue)) == 0 &&
-                          memcmp(shadowFake, kEswcSetShadowFakePrologue, sizeof(kEswcSetShadowFakePrologue)) == 0;
-    TMVS_LOG("engine (eswc): race and car readers %s, map loads %s, car shadow setters %s", g_eswcClassesOk ? "on" : "OFF",
-             g_eswcSetChallenge ? "hooked (CConstructionGame::SetChallenge 0x00710290)" : "NOT hooked", g_eswcShadowSetters ? "found" : "not found");
-    g_eswc = true;
+    g_legacy = &e;
+    patchEntry(&table[e.frameBegin.index], reinterpret_cast<void*>(&legacyFrameBeginDetour), g_frameBegin);
+    patchEntry(&table[e.cameraBegin.index], reinterpret_cast<void*>(&cameraBeginDetour), g_cameraBegin);
+    patchEntry(&table[e.cameraEnd.index], reinterpret_cast<void*>(&cameraEndDetour), g_cameraEnd);
+    patchEntry(&table[e.overlayZones.index], reinterpret_cast<void*>(&overlayZonesDetour), g_overlayZones);
+    patchEntry(&table[e.frameEnd.index], reinterpret_cast<void*>(&frameEndDetour), g_frameEnd);
+    patchEntry(&table[e.viewMatrix.index], reinterpret_cast<void*>(&viewMatrixDetour), g_viewMatrix);
+    patchEntry(&table[e.projection.index], reinterpret_cast<void*>(&legacyProjectionDetour), g_legacyProjection);
+    if (legacyCodeMatches(e.readInput))
+        g_legacyReadInput = reinterpret_cast<ReadInputResultFn>(
+            jumpToDetour(reinterpret_cast<BYTE*>(rebase(e.readInput.address)), e.readInput.size, reinterpret_cast<void*>(&legacyReadInputDetour)));
+    if (!g_legacyReadInput) TMVS_LOG("engine (%s): the keyboard read not where expected: Esc in the menu also reaches the game", e.tag);
+    if (legacyCodeMatches(e.setChallenge))
+        g_legacySetChallenge = reinterpret_cast<LegacySetChallengeFn>(
+            jumpToDetour(reinterpret_cast<BYTE*>(rebase(e.setChallenge.address)), e.setChallenge.size, reinterpret_cast<void*>(&legacySetChallengeDetour)));
+    g_legacyShadowSetters = legacyCodeMatches(e.setShadowTex) && legacyCodeMatches(e.setShadowFake);
+    TMVS_LOG("engine (%s): race and car readers on (classes told by their ids), map loads %s, car shadow setters %s%s", e.tag,
+             g_legacySetChallenge ? "hooked (SetChallenge)" : "NOT hooked", g_legacyShadowSetters ? "found" : "not found",
+             e.gameClipViewer ? "" : "; no clip viewer in this game (a replay is its replay editor)");
     return true;
 }
 
@@ -3071,11 +3231,19 @@ bool install(const Callbacks& callbacks) {
     if (g_active) return true;
 
     g_callbacks = callbacks;
-    if (installEswc()) {
+    if (installLegacy()) {
         g_active = true;
-        TMVS_LOG("engine: TrackMania Nations ESWC (TmNationsESWC.exe 0.1.7.9, unofficial 1.80 patch), CVisionViewportDx9 hooks installed (module base %p)%s",
-                 GetModuleHandleW(nullptr), g_eswcReadInput ? ", keyboard read hooked" : "");
+        if (g_legacy->game == legacy::Game::Eswc)
+            TMVS_LOG("engine: TrackMania Nations ESWC (TmNationsESWC.exe 0.1.7.9, unofficial 1.80 patch), CVisionViewportDx9 hooks installed (module base %p)%s",
+                     GetModuleHandleW(nullptr), g_legacyReadInput ? ", keyboard read hooked" : "");
+        else
+            TMVS_LOG("engine: %s (%ls, SHA-256 %.8s... as supported), CVisionViewportDx9 hooks installed (module base %p)%s", g_legacyExe->name,
+                     g_legacyExe->file, g_legacyExe->sha256, GetModuleHandleW(nullptr), g_legacyReadInput ? ", keyboard read hooked" : "");
         return true;
+    }
+    if (g_legacyRefused) {
+        TMVS_LOG("engine: %s", g_legacyRefusal);
+        return false;
     }
 
     const Slot slots[] = {kRenderFrameBegin, kRenderCameraBegin, kRenderCameraEnd, kRenderOverlayZones,
@@ -3421,7 +3589,7 @@ bool meshReadAddresses(MeshReadAddresses& out) {
 }
 
 bool stadium() {
-    if (g_eswc) return true; // TrackMania Nations ESWC has only Stadium
+    if (g_legacy) return g_legacy->stadiumOnly; // TrackMania Nations ESWC has only Stadium; Sunrise and Original have no Stadium
     if (g_environment[0]) return strcmp(g_environment, "Stadium") == 0;
     return g_build == &kBuilds[0]; // Nations Forever has nothing else
 }
@@ -3512,12 +3680,12 @@ bool locationFromIso(const float* iso, float position[3], float up[3]) {
     return true;
 }
 
-// TM Nations ESWC: the race's local car while the race runs (eswcPoll).
-bool eswcCarLocation(float position[3], float up[3]) {
-    const void* car = eswcRunningCar();
+// The 2006 engine: the race's local car while the race runs (legacyPoll).
+bool legacyCarLocation(float position[3], float up[3]) {
+    const void* car = legacyRunningCar();
     if (!car) return false;
     __try {
-        const float* iso = eswcLocation(car);
+        const float* iso = legacyLocation(car);
         return iso && locationFromIso(iso, position, up);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -3526,7 +3694,7 @@ bool eswcCarLocation(float position[3], float up[3]) {
 } // namespace
 
 bool carLocation(float position[3], float up[3]) {
-    if (g_eswc) return eswcCarLocation(position, up);
+    if (g_legacy) return legacyCarLocation(position, up);
     // Only the player of a race that runs now (the hook calls come every frame); the build's
     // own GetInterpolatedLocation in the slot, or nothing is called.
     if (!g_build || !g_build->interpolatedLocation || !g_racePlayer || GetTickCount() - g_racePlayerTick > 300) return false;
@@ -3655,10 +3823,10 @@ constexpr float kContactHeight = -0.35f; // the road under the tyres (wheel radi
 
 bool carPose(CarPose& pose) {
     pose = CarPose();
-    // TM Nations ESWC: the race's local car (eswcPoll); no clip player there.
-    const void* eswcCar = g_eswc ? eswcRunningCar() : nullptr;
-    if (g_eswc ? !eswcCar : (!g_build || !g_build->interpolatedLocation)) return false;
-    const bool race = g_eswc || (g_racePlayer && GetTickCount() - g_racePlayerTick <= 300);
+    // The 2006 engine: the race's local car (legacyPoll); no clip player there.
+    const void* legacyCar = g_legacy ? legacyRunningCar() : nullptr;
+    if (g_legacy ? !legacyCar : (!g_build || !g_build->interpolatedLocation)) return false;
+    const bool race = g_legacy || (g_racePlayer && GetTickCount() - g_racePlayerTick <= 300);
     // Counted in frames (one frame of a 4K export with supersampling takes seconds).
     const bool clip = !race && g_clipPlayer && g_engineFrames - g_clipPlayerFrame <= 3;
     if (!race && !clip) return false;
@@ -3666,8 +3834,8 @@ bool carPose(CarPose& pose) {
     void* vehicle = nullptr;
     int which = -1;
     __try {
-        if (g_eswc) {
-            iso = eswcLocation(eswcCar);
+        if (g_legacy) {
+            iso = legacyLocation(legacyCar);
         } else {
             const BYTE* mobil = race ? *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(g_racePlayer) + kPlayerMobil)
                                      : clipCar(static_cast<const BYTE*>(g_clipPlayer), which);
@@ -3835,8 +4003,8 @@ int mapCloses() {
 }
 
 const void* currentMap() {
-    // TM Nations ESWC: its CConstructionChallenge (the misc tools only compare it, mapview stays off there).
-    if (g_eswc) return g_eswcState.challenge;
+    // The 2006 engine: its CConstructionChallenge (the misc tools only compare it, mapview stays off there).
+    if (g_legacy) return g_legacyState.challenge;
     return currentChallenge();
 }
 
@@ -3863,7 +4031,7 @@ std::string idText(const void* id) {
 bool raceGhostTimes(std::vector<int>& checkpoints, int& raceTime) {
     checkpoints.clear();
     raceTime = -1;
-    if (g_eswc) return false; // TM Nations ESWC: its ghosts' checkpoint times are not read
+    if (g_legacy) return false; // the 2006 engine: its ghosts' checkpoint times are not read
     if (!g_build || !g_race || GetTickCount() - g_racePlayerTick > 5000) return false;
     int times[RaceTimes::kMax];
     int count = 0, best = -1;
@@ -3914,18 +4082,18 @@ bool vehicleSpeed(const BYTE* player, float& speed) {
 
 bool carSpeed(float& metresPerSecond) {
     metresPerSecond = 0.0f;
-    if (g_eswc) {
-        // The car's world speed (kEswcCorpusDyna): its body's state, m/s.
-        const void* car = eswcRunningCar();
+    if (g_legacy) {
+        // The car's world speed (g_legacy->corpusDyna): its body's state, m/s.
+        const void* car = legacyRunningCar();
         if (!car) return false;
         __try {
-            const BYTE* item = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(car) + kEswcMobilItem);
-            if (!item || *reinterpret_cast<const DWORD*>(item + kEswcItemCorpora) == 0) return false;
-            const BYTE* corpus = **reinterpret_cast<const BYTE* const* const*>(item + kEswcItemCorpora + 4);
-            const BYTE* dyna = corpus ? *reinterpret_cast<const BYTE* const*>(corpus + kEswcCorpusDyna) : nullptr;
-            const BYTE* state = dyna ? *reinterpret_cast<const BYTE* const*>(dyna + kEswcDynaState) : nullptr;
+            const BYTE* item = *reinterpret_cast<const BYTE* const*>(static_cast<const BYTE*>(car) + g_legacy->mobilItem);
+            if (!item || *reinterpret_cast<const DWORD*>(item + g_legacy->itemCorpora) == 0) return false;
+            const BYTE* corpus = **reinterpret_cast<const BYTE* const* const*>(item + g_legacy->itemCorpora + 4);
+            const BYTE* dyna = corpus ? *reinterpret_cast<const BYTE* const*>(corpus + g_legacy->corpusDyna) : nullptr;
+            const BYTE* state = dyna ? *reinterpret_cast<const BYTE* const*>(dyna + g_legacy->dynaState) : nullptr;
             if (!state) return false;
-            const float* v = reinterpret_cast<const float*>(state + kEswcStateSpeed);
+            const float* v = reinterpret_cast<const float*>(state + g_legacy->stateSpeed);
             metresPerSecond = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
             return metresPerSecond < 1000.0f;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -3937,30 +4105,30 @@ bool carSpeed(float& metresPerSecond) {
 }
 
 std::string currentMapUid() {
-    if (g_eswc) return g_eswcState.challenge ? std::string(g_eswcMapUid) : std::string();
+    if (g_legacy) return g_legacyState.challenge ? std::string(g_legacyMapUid) : std::string();
     const BYTE* challenge = static_cast<const BYTE*>(currentChallenge());
     return challenge ? idText(challenge + kChallengeUid) : std::string();
 }
 
 namespace {
-// TM Nations ESWC: the local player's CTrackManiaPlayerInfo (see kEswcInfoStart), while its race is
+// The 2006 engine: the local player's CTrackManiaPlayerInfo (see LegacyEngine::infoStart), while its race is
 // the one running (its clock moved within the last 5 s: the finish is read in that time).
-bool eswcRaceTimes(RaceTimes& out) {
-    const EswcState& s = g_eswcState;
-    if (!s.race || !s.info || !g_eswcClockTick || GetTickCount() - g_eswcClockTick > 5000) return false;
+bool legacyRaceTimes(RaceTimes& out) {
+    const LegacyState& s = g_legacyState;
+    if (!s.race || !s.info || !g_legacyClockTick || GetTickCount() - g_legacyClockTick > 5000) return false;
     __try {
         const BYTE* race = static_cast<const BYTE*>(s.race);
         const BYTE* info = static_cast<const BYTE*>(s.info);
-        const bool lap = *reinterpret_cast<const DWORD*>(race + kEswcRaceLapTimes) != 0;
-        const DWORD state = *reinterpret_cast<const DWORD*>(info + kEswcInfoState);
-        const DWORD start = *reinterpret_cast<const DWORD*>(info + (lap ? kEswcInfoLapStart : kEswcInfoStart));
+        const bool lap = *reinterpret_cast<const DWORD*>(race + g_legacy->raceLapTimes) != 0;
+        const DWORD state = *reinterpret_cast<const DWORD*>(info + g_legacy->infoState);
+        const DWORD start = *reinterpret_cast<const DWORD*>(info + (lap ? g_legacy->infoLapStart : g_legacy->infoStart));
         out.finished = state == 2;
         out.started = state == 1 || state == 2;
-        if (out.finished) out.time = *reinterpret_cast<const int*>(info + (lap ? kEswcInfoLapFinalTime : kEswcInfoFinalTime));
-        else if (state == 1) out.time = static_cast<int>(*reinterpret_cast<const DWORD*>(race + kEswcRaceClock) - start);
-        out.passed = *reinterpret_cast<const int*>(info + kEswcInfoPassed);
-        const DWORD count = *reinterpret_cast<const DWORD*>(info + kEswcInfoCheckpoints);
-        const DWORD* entries = *reinterpret_cast<const DWORD* const*>(info + kEswcInfoCheckpoints + 4);
+        if (out.finished) out.time = *reinterpret_cast<const int*>(info + (lap ? g_legacy->infoLapFinalTime : g_legacy->infoFinalTime));
+        else if (state == 1) out.time = static_cast<int>(*reinterpret_cast<const DWORD*>(race + g_legacy->raceClock) - start);
+        out.passed = *reinterpret_cast<const int*>(info + g_legacy->infoPassed);
+        const DWORD count = *reinterpret_cast<const DWORD*>(info + g_legacy->infoCheckpoints);
+        const DWORD* entries = *reinterpret_cast<const DWORD* const*>(info + g_legacy->infoCheckpoints + 4);
         if (count > static_cast<DWORD>(RaceTimes::kMax) || (count && !entries)) return false;
         out.count = static_cast<int>(count);
         for (DWORD i = 0; i < count; i++) out.times[i] = static_cast<int>(entries[i * 2]);
@@ -3976,14 +4144,14 @@ bool eswcRaceTimes(RaceTimes& out) {
 
 bool raceTimes(RaceTimes& out) {
     out = RaceTimes();
-    if (g_eswc) {
-        const bool ok = eswcRaceTimes(out);
+    if (g_legacy) {
+        const bool ok = legacyRaceTimes(out);
         if (!ok) out = RaceTimes();
         // The first time the race's times are read on a map, for the log.
         static LONG s_logged = -1;
         if (ok && s_logged != g_mapLoads) {
             s_logged = g_mapLoads;
-            TMVS_LOG("engine (eswc): race times read: %d checkpoint entries, %d passed, time %d ms", out.count, out.passed, out.time);
+            TMVS_LOG("engine (%s): race times read: %d checkpoint entries, %d passed, time %d ms", g_legacy->tag, out.count, out.passed, out.time);
         }
         return ok;
     }
@@ -4024,7 +4192,7 @@ bool raceTimes(RaceTimes& out) {
 }
 
 bool mapOpen() {
-    if (g_eswc) return g_eswcState.challenge != nullptr;
+    if (g_legacy) return g_legacyState.challenge != nullptr;
     return currentChallenge() != nullptr;
 }
 
@@ -4074,21 +4242,34 @@ void setProjectionTile(float scaleX, float scaleY, float offsetX, float offsetY)
 
 void setMainCamera(const void* camera) {
     g_mainCamera = camera;
-    if (g_eswc && g_eswcOutsideProjection && g_eswcOutsideProjection != g_eswcMainProjection) {
-        g_eswcMainProjection = g_eswcOutsideProjection;
+    if (g_legacy && g_legacyOutsideProjection && g_legacyOutsideProjection != g_legacyMainProjection) {
+        g_legacyMainProjection = g_legacyOutsideProjection;
         static int s_logged = 0;
-        if (s_logged++ < 4) TMVS_LOG("engine (eswc): the main camera's projection is computed before its begin (struct %p)", g_eswcMainProjection);
+        if (s_logged++ < 4) TMVS_LOG("engine (%s): the main camera's projection is computed before its begin (struct %p)", g_legacy->tag, g_legacyMainProjection);
     }
 }
 
-bool eswc() {
-    return g_eswc;
+bool legacy() {
+    return g_legacy != nullptr;
 }
 
-bool eswcCarPosition(float position[3]) {
-    if (!g_eswc || !g_eswcState.car) return false;
+bool eswc() {
+    return g_legacy && g_legacy->game == legacy::Game::Eswc;
+}
+
+const char* legacyName() {
+    return g_legacy && g_legacyExe ? g_legacyExe->name : "";
+}
+
+bool exeRefused(const char** why) {
+    if (why) *why = g_legacyRefusal;
+    return g_legacyRefused;
+}
+
+bool legacyCarPosition(float position[3]) {
+    if (!g_legacy || !g_legacyState.car) return false;
     __try {
-        const float* iso = eswcLocation(g_eswcState.car);
+        const float* iso = legacyLocation(g_legacyState.car);
         if (!iso) return false;
         memcpy(position, iso + 9, 3 * sizeof(float));
         return true;
@@ -4097,11 +4278,11 @@ bool eswcCarPosition(float position[3]) {
     }
 }
 
-bool eswcExecutable() {
+const wchar_t* legacyLogName() {
     wchar_t path[MAX_PATH] = {};
-    if (!GetModuleFileNameW(nullptr, path, MAX_PATH)) return false;
-    const wchar_t* name = wcsrchr(path, L'\\');
-    return _wcsicmp(name ? name + 1 : path, L"TmNationsESWC.exe") == 0;
+    if (!GetModuleFileNameW(nullptr, path, MAX_PATH)) return nullptr;
+    const legacy::Exe* exe = legacy::byFileName(path);
+    return exe ? exe->logName : nullptr;
 }
 
 void setLensOffset(float x, float y, float focusDistance) {
@@ -4148,8 +4329,8 @@ void setProjectionZoom(float zoom) {
 }
 
 bool hidingCars() {
-    // TM Nations ESWC hides its cars in the game itself (eswcHideCars): no draw is skipped at the device.
-    return g_hideCars && !g_eswc;
+    // The 2006 engine hides its cars in the game itself (legacyHideCars): no draw is skipped at the device.
+    return g_hideCars && !g_legacy;
 }
 
 bool carDrawNow() {
@@ -4213,7 +4394,7 @@ void carShadows(bool hide) {
 void hideCars(bool hide) {
     if (hide != g_hideCars) TMVS_LOG("engine: the cars' draws %s", hide ? "skipped (photo mode)" : "back");
     g_hideCars = hide;
-    if (g_eswc) return; // applied once a frame by eswcPoll (the game's thread)
+    if (g_legacy) return; // applied once a frame by legacyPoll (the game's thread)
     carShadows(hide);
 }
 
@@ -4315,7 +4496,7 @@ bool freeCamActive() {
 bool cinematicActive() {
     // TM Nations ESWC: watching is a replay played by the app's clip viewer (watched or shot) or the
     // replay editor; without its readers, as without hooks below.
-    if (g_eswc && g_eswcClassesOk) return g_eswcState.clipViewer || g_eswcState.replayEditor;
+    if (g_legacy) return g_legacyState.clipViewer || g_legacyState.replayEditor;
     // Without the hooks there is no way to tell: treat everything as cinematic, so the
     // settings behave as before.
     if (!g_tracksUpdate && !g_updateCams && !g_doShoot) return true;
@@ -4328,7 +4509,7 @@ bool clipInRace() {
     // there, "sources 1" for the clips on the track). The race checks its player's trigger zones
     // every frame it runs, also while such a clip plays.
     const DWORD now = GetTickCount();
-    if (g_eswc) return false; // no clips of the map in TM Nations ESWC's races
+    if (g_legacy) return false; // no clips of the map in the 2006 engine's races
     if (!cinematicActive() || !g_tracksUpdate || (g_lastNotClip != 0 && now - g_lastNotClip < 500)) return false;
     return g_racePlayer && now - g_racePlayerTick <= 300;
 }

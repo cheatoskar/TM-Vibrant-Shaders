@@ -43,17 +43,26 @@ bool active();
 // runs now (TrackMania Nations/United Forever; null elsewhere or before the first frame). For a
 // device whose creation our CreateDevice hook never saw.
 void* viewportDevice();
-// The game is TrackMania Nations ESWC (TmNationsESWC.exe of the unofficial 1.80 patch, 2006
-// engine): the viewport's frame and camera hooks, the view, the projection and the keyboard read;
-// map loads (SetChallenge), the race's local car (position, axes, speed), its starts, respawns and
-// checkpoint times, the replay editor and Hide car read from the game's objects once a frame.
-// Nothing of the materials, the clip player or the video export.
+// The game runs on the 2006 engine (src/legacygames.h: TrackMania Nations ESWC of the unofficial 1.80
+// patch, TrackMania Sunrise of the Windows 10 repack, TrackMania Original of the Online Patch v2, each
+// told by its exe's SHA-256): the viewport's frame and camera hooks, the view, the projection and the
+// keyboard read; map loads (SetChallenge), the race's local car (position, axes, speed), its starts,
+// respawns and checkpoint times, the replay editor and Hide car read from the game's objects once a
+// frame (engine.cpp's LegacyEngine per game). Nothing of the materials or the clip player.
+bool legacy();
+// Of those, TrackMania Nations ESWC (Stadium only, its maps' identifiers "eswc-...").
 bool eswc();
-// The game's executable is TmNationsESWC.exe (by its file name, before any hook is checked).
-bool eswcExecutable();
-// TM Nations ESWC: where the race's local car is drawn, also while the race is paused or before its
+// "TrackMania Sunrise" ("" not one of them), for the log and the menu.
+const char* legacyName();
+// The exe is one of those games but not the supported build (or its engine isn't where expected):
+// the mod stays off (plugin.cpp), `why` says so for the log.
+bool exeRefused(const char** why = nullptr);
+// The log's file name for one of those games by the exe's name (before any hook is checked):
+// "tmvs-eswc.log", "tmvs-sunrise.log", "tmvs-original.log"; null for every other game.
+const wchar_t* legacyLogName();
+// The 2006 engine: where the race's local car is drawn, also while the race is paused or before its
 // clock runs (carLocation answers only while it runs). False: no race or no car.
-bool eswcCarPosition(float position[3]);
+bool legacyCarPosition(float position[3]);
 
 // Camera info of the camera currently between RenderCameraBegin/End (or the last one).
 const CameraInfo& currentCamera();

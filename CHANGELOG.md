@@ -2,7 +2,15 @@
 
 ## 1.6.0 (in development)
 
-The older games: clips on TrackMania Nations ESWC.
+The older games: clips on TrackMania Nations ESWC, and TrackMania Sunrise and TrackMania Original.
+
+**New (TrackMania Sunrise, TrackMania Original)**
+- **TrackMania Sunrise and TrackMania Original** (experimental): the same DLL as `d3d9.dll`, for the Windows 10 community repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 of Original (`TMORIGINAL.EXE`), each told by its SHA-256. Everything TrackMania Nations ESWC has: the look, photo mode, F12 captures, the car and the race (neon trail, headlights, spray, long mesh shadows, Hide car, split times, the Session panel, finish effects) and clips. The engine is ESWC's generation; its hooks and reads were ported from ESWC (other addresses, a smaller race and player info, no race counters: a start and a respawn are read from your player's info). Not yet: the video export, water, the game's materials and light, the minimap. Details in [docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original).
+- **The game's own `d3d9.dll` stays in use** (dgVoodoo in Original, the repack's proxy in Sunrise): the setup renames it to `d3d9.chain.dll` and the mod passes Direct3D on to it; without one, Windows' own. The uninstall puts it back. `tmvs-*.log` says which one runs (`d3d9: ...`).
+- **Other builds are refused cleanly**: an unknown `TmSunrise.exe` or `TMORIGINAL.EXE` gets no hook at all, the mod only passes Direct3D on and the log says why (`passive: ...`).
+
+**Changed (TrackMania Nations ESWC)**
+- *Hide car* in photo mode now leaves the cars alone in network races (it writes the game's visible bit, so only in solo races and replays). The engine code for ESWC is now the shared one of the three older games; the log lines are the same.
 
 **New (TrackMania Nations ESWC)**
 - **Clips.** The *Clips* page, `F3`, `Ctrl+F3` and `Ctrl+Shift+F3` and *Save on finish* now work on TrackMania Nations ESWC (1.80 patch). The race (start, finish, race time), the map's name and its author time are read from the game's own objects, the same reads as the split times; nothing is hooked or written for it. ESWC maps have no UID: the personal best of a clip is kept by the map's name. Details in [docs/clips.md](docs/clips.md#trackmania-nations-eswc).

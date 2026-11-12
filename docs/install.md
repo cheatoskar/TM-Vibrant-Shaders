@@ -100,6 +100,21 @@ Only the unofficial patch *TrackMania Nations ESWC 1.80* (2021, `TmNationsESWC.e
 - **Files:** settings and presets are shared with Nations Forever in `Documents\TrackMania\TMVS\`. The log is `tmvs-eswc.log` there. Its first lines say whether the game was recognised (`engine: TrackMania Nations ESWC ...`).
 - **Uninstall:** delete `d3d9.dll` from the game folder, or run the setup and choose *Uninstall*.
 
+## TrackMania Sunrise and TrackMania Original
+
+From 1.6, experimental, and only these two community builds (other builds of the same games are refused: the mod then stays off and only passes Direct3D on, the log says why):
+
+- **TrackMania Sunrise**: the Windows 10 community repack, `TmSunrise.exe` (SHA-256 `e59dfc7e...df4fe`). It ships its own `d3d9.dll` (a small Direct3D proxy).
+- **TrackMania Original**: the *Online Patch v2* by GreffMASTER, `TMORIGINAL.EXE` (SHA-256 `75e129d7...175e`). It ships dgVoodoo 2.8.2 as `d3d9.dll` (with `DDraw.dll` and `dgVoodoo.conf`), which modern Windows needs to run the game.
+
+- **Install:** close the game and run the setup, button **Install into another game folder**, and pick the folder with `TmSunrise.exe` or `TMORIGINAL.EXE`. The game's own `d3d9.dll` stays in use: the setup renames it to **`d3d9.chain.dll`** and TM Vibrant Shaders passes every Direct3D call on to it (so dgVoodoo keeps working). By hand: rename the game's `d3d9.dll` to `d3d9.chain.dll`, then copy `TMVibrantShaders.dll` next to the exe as `d3d9.dll`. Without a `d3d9.chain.dll` the mod uses Windows' own Direct3D 9.
+- **Keys:** as in Nations Forever: `F8` menu, `F7` effects on or off, `F6` photo mode, `F12` capture, `F3` clips.
+- **What works:** the same as in TrackMania Nations ESWC (above): the look, photo mode, F12 captures, presets; from the race and your car the neon trail, headlights (*Horror*), spray, long mesh shadows, *Hide car* (solo races and replays), split times, the Session panel, the finish effects and the clips. The games have several environments (Sunrise: Island, Bay, Coast; Original: Alpine, Rally, Speed); the car is read the same way in all of them.
+- **What doesn't:** the same gaps as ESWC (no video export settings yet, no water effects, no resource packs, no minimap, nothing that needs the game's materials or light), and no clip viewer: a replay you watch is the replay editor there, which counts as a replay for *Cinematic in replays only*.
+- **Horizon:** with TM Horizon installed in the same folder (its `dinput8.dll`), TM Vibrant Shaders' menu steps aside while Horizon's menu is open, as in the other games.
+- **Files:** settings and presets are shared in `Documents\TrackMania\TMVS\`. The logs are `tmvs-sunrise.log` and `tmvs-original.log` there. The first lines say what was found: `engine: TrackMania Sunrise (TmSunrise.exe, SHA-256 ... as supported)` and `d3d9: the mod creates its Direct3D 9 with d3d9.chain.dll in the game folder (...)`.
+- **Uninstall:** run the setup and choose *Uninstall*: it deletes `d3d9.dll` and renames `d3d9.chain.dll` back to `d3d9.dll`. By hand: the same two steps.
+
 ## Updating
 
 With the ModLoader's update server: nothing to do, the ModLoader installs new versions itself (*Auto Update* in its settings).
