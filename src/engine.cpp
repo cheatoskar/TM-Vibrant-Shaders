@@ -2782,6 +2782,10 @@ struct LegacyClass {
 constexpr LegacyClass kLegacyGame = {0x24001000, "CTrackMania"};
 constexpr LegacyClass kLegacyChallenge = {0x24003000, "CConstructionChallenge"};
 constexpr LegacyClass kLegacyReplayEditor = {0x2405d000, "CConstructionEditorReplay"};
+// CTrackManiaEditorPuzzle (not in the reflection; `mov eax, 0x24017000; ret` in all three exes): the game keeps
+// one in the app's Editor slot through every campaign solo race (census 2026-11-12, all three games). With a
+// race of its own running it is that race, not the map editor (as Horizon host 65e17ad).
+constexpr DWORD kLegacyEditorPuzzle = 0x24017000;
 constexpr LegacyClass kLegacyClipViewer = {0x2408a000, "CCtnMediaClipViewer"}; // ESWC only
 constexpr LegacyClass kLegacyGhost = {0x2401b000, "CConstructionGhost"};
 constexpr LegacyClass kLegacyInfo = {0x24036000, "CTrackManiaPlayerInfo"};
@@ -2814,6 +2818,7 @@ struct LegacyState {
     DWORD otherRace = 0;             // a race object of no known class (its class id, for the log)
     DWORD editor = 0;                // the app's editor's class id (0 none)
     bool replayEditor = false;
+    bool puzzleRace = false;         // the editor is the puzzle editor a race runs under: the race, not an editor
     bool clipViewer = false;         // a replay plays (watched or shot; ESWC's app clip viewer)
     DWORD clock = 0, starts = 0, respawns = 0;
     void* info = nullptr;            // the local player's
@@ -3072,6 +3077,7 @@ void legacyPoll() {
         static int s_failed = 0;
         if (s_failed++ < 3) TMVS_LOG("engine (%s): the game's objects were not readable this frame (left alone)", e.tag);
     }
+    s.puzzleRace = s.editor == kLegacyEditorPuzzle && s.race;
     const LegacyState& last = g_legacyState;
     if (s.race && s.race == last.race) {
         if (s.clock != last.clock) g_legacyClockTick = GetTickCount() | 1;
@@ -3104,9 +3110,12 @@ void legacyPoll() {
             TMVS_LOG("engine (%s): local player %s, car %s", e.tag, s.info ? "found" : "not found",
                      s.car ? "found (position, axes and speed from the engine)" : "not found");
         }
-        if (s.editor != last.editor) {
+        if (s.editor != last.editor || s.puzzleRace != last.puzzleRace) {
             s_lines++;
-            TMVS_LOG("engine (%s): editor %s", e.tag, !s.editor ? "closed" : (s.replayEditor ? "CConstructionEditorReplay (replay: cinematic)" : "of another kind (not cinematic)"));
+            if (!s.editor) TMVS_LOG("engine (%s): editor closed", e.tag);
+            else if (s.replayEditor) TMVS_LOG("engine (%s): editor CConstructionEditorReplay (replay: cinematic)", e.tag);
+            else if (s.puzzleRace) TMVS_LOG("engine (%s): CTrackManiaEditorPuzzle under a race: counted as the race", e.tag);
+            else TMVS_LOG("engine (%s): map editor (class %08lx, not cinematic)", e.tag, static_cast<unsigned long>(s.editor));
         }
         if (s.clipViewer != last.clipViewer) {
             s_lines++;
@@ -3114,7 +3123,26 @@ void legacyPoll() {
         }
     }
     legacyHideCars(s, g_hideCars);
-    if (g_legacyCensus && s.editor && s.editor != last.editor) legacyCensusMap(s.challenge, s.replayEditor ? "replay editor opened" : "editor opened");
+    // The census's map read in an editor: once it has been the map or replay editor for 1.5 s (a race may
+    // appear a moment after the puzzle editor that comes with it).
+    if (g_legacyCensus) {
+        static DWORD s_editorSince = 0;
+        static bool s_editorLogged = false;
+        if (s.editor && !s.puzzleRace) {
+            const DWORD now = GetTickCount();
+            if (!s_editorSince || s.editor != last.editor) {
+                s_editorSince = now | 1;
+                s_editorLogged = false;
+            }
+            if (!s_editorLogged && now - s_editorSince >= 1500) {
+                s_editorLogged = true;
+                legacyCensusMap(s.challenge, s.replayEditor ? "replay editor opened" : "map editor opened");
+            }
+        } else {
+            s_editorSince = 0;
+            s_editorLogged = false;
+        }
+    }
     g_legacyState = s;
 }
 
@@ -3234,7 +3262,11 @@ LegacyShadeFn g_legacyShade = nullptr;
 constexpr DWORD kLegacyFidFile = 0x0b00a000, kLegacyFidsFolder = 0x0b00b000, kLegacyBlock = 0x24007000;
 constexpr DWORD kLegacyShaderApply = 0x09026000;
 constexpr size_t kLegacyNodFid = 0x08, kLegacyFidName = 0x58, kLegacyFidParent = 0x18;
-constexpr size_t kLegacyApplyTextures = 0xac, kLegacySamplerBitmap = 0x1c, kLegacyChallengeBlocks = 0x74;
+// CPlugShaderApply::BitmapApply (reflection +0xac) is a nod buffer object: +0xac its own first word, +0xb0
+// the count, +0xb4 the CPlugBitmapApply* list (the class's archive handler reads the count into +0xb0 and
+// allocates count*4 bytes into +0xb4: ESWC 0x004fa60a, Sunrise 0x004c292a, Original 0x004c290a).
+constexpr size_t kLegacyApplyTextureCount = 0xb0, kLegacyApplyTextureList = 0xb4;
+constexpr size_t kLegacySamplerBitmap = 0x1c, kLegacyChallengeBlocks = 0x74;
 constexpr unsigned kLegacyCensusLines = 600; // shader lines per map at most
 std::unordered_set<const void*> g_censusSeen;
 std::vector<std::pair<DWORD, unsigned>> g_censusDraws, g_censusShades; // class id, draws (this map)
@@ -3300,7 +3332,9 @@ struct LegacyCensusEntry {
     DWORD shaderClass = 0, treeClass = 0;
     bool fromTree = false; // the draw had no shader: the tree's
     wchar_t shader[260], tree[260];
-    int textures = -1;     // a CPlugShaderApply's count, -1 another class
+    int textures = -1;     // a CPlugShaderApply's count, -1 another class, -2 its list unreadable
+    DWORD badCount = 0;    // textures == -2: what was read
+    const void* badList = nullptr;
     wchar_t texture[6][128];
 };
 
@@ -3321,12 +3355,21 @@ bool legacyCensusRead(const void* shader, const void* tree, LegacyCensusEntry& o
         out.shader[0] = out.tree[0] = L'\0';
         out.shaderClass = legacyClassId(shader);
         out.treeClass = legacyClassId(tree);
-        legacyNodPath(shader, out.shader, 260);
+        // No name: the nod has no file (made in memory, e.g. a material's own copy of a shader), or its
+        // file has no name readable here.
+        if (!legacyNodPath(shader, out.shader, 260))
+            wcscpy_s(out.shader, 260, legacyAt<const void*>(shader, kLegacyNodFid) ? L"(file without a name)" : L"(no file)");
         legacyNodPath(tree, out.tree, 260);
         if (out.shaderClass == kLegacyShaderApply) {
-            const DWORD count = legacyAt<DWORD>(shader, kLegacyApplyTextures);
-            const BYTE* const* list = legacyAt<const BYTE* const*>(shader, kLegacyApplyTextures + 4);
-            out.textures = count < 64 && list ? static_cast<int>(count) : 0;
+            const DWORD count = legacyAt<DWORD>(shader, kLegacyApplyTextureCount);
+            const BYTE* const* list = legacyAt<const BYTE* const*>(shader, kLegacyApplyTextureList);
+            if (count > 32 || (count > 0 && !readable(list, count * sizeof(void*)))) {
+                out.textures = -2;
+                out.badCount = count;
+                out.badList = list;
+                return true;
+            }
+            out.textures = static_cast<int>(count);
             for (int i = 0; i < out.textures && i < 6; i++) {
                 out.texture[i][0] = L'\0';
                 const BYTE* bitmap = list[i] ? legacyAt<const BYTE*>(list[i], kLegacySamplerBitmap) : nullptr;
@@ -3359,6 +3402,14 @@ void legacyCensusDraw(const void* shader, const void* tree) {
     for (int i = 0; i < c.textures && i < 6; i++) textures += (i ? L", " : L"") + std::wstring(c.texture[i]);
     if (c.textures > 6) textures += L", ...";
     g_censusLines++;
+    if (c.textures == -2) {
+        static bool s_logged = false;
+        if (!s_logged)
+            TMVS_LOG("census: texture list unreadable (shader %p: count %lu, list %p); further shaders log without textures", used,
+                     static_cast<unsigned long>(c.badCount), c.badList);
+        s_logged = true;
+        c.textures = -1;
+    }
     if (c.textures >= 0)
         TMVS_LOG("census: shader %p %s%s \"%ls\" tree \"%ls\" textures %d: %ls", used, known, fromTree ? " (the tree's)" : "", c.shader, c.tree, c.textures,
                  textures.c_str());
