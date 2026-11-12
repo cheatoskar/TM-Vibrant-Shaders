@@ -59,6 +59,18 @@ Dieselbe ZIP enthält eine `d3d11.dll` für ManiaPlanets Direct3D-11-Renderer (n
 - **Deinstallieren:** Setup erneut starten und *Uninstall* wählen, oder die `d3d11.dll` aus dem Spielordner löschen. Einstellungen liegen in `Dokumente\ManiaPlanet\TMVS\`.
 - **Online:** Der Mod ändert nur das Bild. Er liest Kamera, Sonne, Position des Autos und die Kommentare der Map und schreibt nichts in den Speicher des Spiels, außer im Map-Editor die Map-Kommentare, wenn du *Set as Author's Shader* drückst. Ob Server oder Wettbewerbe eine `d3d11.dll`-Mod erlauben, ist nicht bestätigt: Regeln dort prüfen. Mehr (englisch): [maniaplanet/README.md](../maniaplanet/README.md#online-openplanet).
 
+## TrackMania Nations ESWC, Sunrise und Original (experimentell)
+
+Dieselbe DLL läuft auch in drei älteren Spielen, jeweils nur in einer Version: *TrackMania Nations ESWC* mit dem inoffiziellen Patch 1.80 (`TmNationsESWC.exe`), *TrackMania Sunrise* als Windows-10-Repack (`TmSunrise.exe`) und *TrackMania Original* mit dem Online Patch v2 (`TMORIGINAL.EXE`).
+
+- **Installieren:** Spiel schließen, Setup starten, **Install into another game folder** und den Ordner mit der Exe wählen. Bei Sunrise und Original benennt das Setup die `d3d9.dll` des Spiels (dgVoodoo bzw. der Proxy des Repacks) in `d3d9.chain.dll` um; sie bleibt in Betrieb. *Uninstall* stellt sie wieder her.
+- **Was geht:** der Look, Fotomodus, F12-Captures, Neon-Spur, Scheinwerfer, Gischt, lange Schatten, *Hide car*, Splitzeiten, Clips und der MP4-Videoexport mit dem Ton des Spiels. Noch nicht: Wasser, Lampen und Licht des Spiels, Resource Packs, Minimap. Details: [install.md](install.md#trackmania-sunrise-and-trackmania-original).
+- **Logs:** `Dokumente\TrackMania\TMVS\tmvs-eswc.log`, `tmvs-sunrise.log`, `tmvs-original.log`.
+
+## Horizon Client (Module 2.0)
+
+Wer Horizon Client (das In-Game-Menü von TM Horizon) nutzt, nimmt statt des Setups `TMVS-2.0.0-horizon.zip`: vier Module (Shader, Capture, Upscaling, Packs) für Horizons `plugins`-Ordner, für Nations/United Forever, ESWC, Sunrise und Original. Nicht beides zugleich installieren: dann läuft nur eines. TrackMania 2 hat kein Horizon. Details (englisch): [horizon-modules.md](horizon-modules.md).
+
 ## Aktualisieren und deinstallieren
 
 - **Aktualisieren:** Mit dem Update-Server im ModLoader nichts zu tun. Sonst das Setup der neuen Version starten und denselben Button wie beim ersten Mal wählen. Einstellungen und eigene Presets bleiben.

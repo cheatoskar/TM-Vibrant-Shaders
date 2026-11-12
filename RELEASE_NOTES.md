@@ -1,39 +1,36 @@
-## TM Vibrant Shaders 1.5.0 (pre-release)
+## TM Vibrant Shaders 1.6.0 and Horizon modules 2.0.0
 
-New: **instant replay clips** for TrackMania Nations & United Forever, the car and the race in **TrackMania Nations ESWC**, and photo zoom, hi-res photos, Hide car and the Misc page in **TrackMania 2**.
+New: **TrackMania Sunrise** and **TrackMania Original** (experimental), **clips and the MP4 video export** on the three older games, and the whole mod as four **Horizon Client modules** (2.0.0).
 
-Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`, in TrackMania 2 `tmvs-mp.log`, in ESWC `tmvs-eswc.log`).
+Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`; ESWC `tmvs-eswc.log`, Sunrise `tmvs-sunrise.log`, Original `tmvs-original.log`; TrackMania 2 `Documents\ManiaPlanet\TMVS\tmvs-mp.log`).
 
 ---
 
-### Clips (Nations & United Forever, new)
+### Which file
 
-The game is recorded into memory all the time, and after a finish the run is saved as an MP4 with the game's sound: 3 s before the start to 3 s after the finish, within about a second, without a replay and without rendering anything. By default only after a personal best.
+| You play | Download |
+|---|---|
+| Nations/United Forever, Nations ESWC, Sunrise, Original, TrackMania 2, without Horizon Client | `TM-Vibrant-Shaders.zip` (setup), or `TMVibrantShaders.dll` alone |
+| Nations/United Forever, Nations ESWC, Sunrise, Original, with Horizon Client | `TMVS-2.0.0-horizon.zip` (four modules for Horizon's plugins folder) |
 
-- `F3` saves the last 30 s (or 60, 90). `Ctrl+F3` saves the last finished run, also after a restart. `Ctrl+Shift+F3` saves the run you drive now, from its start.
-- The buffer follows the map (author time x 1.5 + 10 s, at least 60 s), within the memory limit of the 32-bit game.
-- Sound: the game's own, the game and your microphone, everything the PC plays, or none.
-- Clips go to `Documents\TrackMania\Clips`. Settings are on the new *Clips* page of the menu.
-- NVIDIA's encoder (NVENC) driven directly, else the graphics card's H.264 encoder through Windows (AMD, Intel).
-- It reads the race from the game's memory and writes nothing, so it is fine online.
-- **TM Clips** is the same as a mod of its own for the ModLoader (`TM-Clips.zip`), with a small window on `Shift+F3`. With both installed, TM Vibrant Shaders records and TM Clips stays idle.
+Not both in the same game: with the standalone mod and the modules installed, only one runs.
 
-All of it in [docs/clips.md](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/clips.md).
+### TrackMania Sunrise and TrackMania Original (experimental)
 
-### TrackMania Nations ESWC (experimental)
+Only the Windows 10 repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 of Original (`TMORIGINAL.EXE`); other builds are refused cleanly. The game's own `d3d9.dll` (the repack's proxy, dgVoodoo) stays in use as `d3d9.chain.dll`; the setup does that for you. The look, photo mode, the car and the race (neon trail, headlights, spray, long mesh shadows, Hide car, split times), clips and the MP4 export. Not yet: water, the game's materials and light, resource packs, the minimap.
 
-The car and the race: *Neon trail*, *Car headlights* (also *Horror*), *Spray*, *Long mesh shadows*, *Hide car*, motion blur and *Cinematic in replays only*, and on the *Misc* page the split times, the Session panel and the finish effects. Still not there: the video export, water, the game's materials and light, the minimap. Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9).
+### Nations ESWC, Sunrise, Original: clips and MP4 export
 
-### TrackMania 2
+- **Clips**: the *Clips* page, `F3`, `Ctrl+F3`, `Ctrl+Shift+F3` and *Save on finish*, as on Forever.
+- **Shoot video** writes an MP4 with the mod's encoder (H.264, HEVC or AV1) and the game's own sound (no more microphone in the video). *Game's AVI* on the *Video* page gives the game's file as before.
 
-- **Game camera** (*Settings*, off by default): photo zoom (`Shift`+wheel), hi-res photos (`Shift+F12`) and *TAA jitter*. This writes into the game's memory and is not tested against ManiaPlanet's anti-cheat, so it stays off unless you switch it on.
-- **Only in replays** knows replays: depth of field and motion blur run in the replay editor and in photo mode, not while driving.
-- **Hide car** in photo mode.
-- **Misc page**: split times against your best run, the Session panel and finish effects. Read from the game only, so fine online.
+### Horizon modules 2.0.0
 
-### Fixed
+*TM Vibrant Shaders*, *TMVS Capture*, *TMVS Upscaling* and *TMVS Packs*: the same features as the standalone 1.6.0, each with its own page, switch and keys in Horizon's menu. For Horizon Client 0.3.1 (the pages follow Horizon's menu size and content scale); they also load in older Horizon versions. TrackMania 2 has no Horizon and keeps the standalone mod. [docs/horizon-modules.md](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/horizon-modules.md)
 
-- **With CenterSpeed loaded the menu and the effects never started** ("no game device 30 s after the start" in `tmvs.log`). The mod now puts its hook in front of the game's device again if something overwrote it, and takes the device from the game's viewport if it still went past.
+### Also
+
+- **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector.
 
 ---
 
@@ -45,10 +42,10 @@ The car and the race: *Neon trail*, *Car headlights* (also *Horror*), *Spray*, *
   - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'
 ```
 
-Then tick *TM Vibrant Shaders* in your profile. New versions arrive on their own from then on. This is a pre-release: that server keeps the last stable version. To get the pre-releases through the ModLoader, use `https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/` instead.
+Then tick *TM Vibrant Shaders* in your profile. New versions arrive on their own from then on.
 
-**With the setup:** download `TM-Vibrant-Shaders.zip`, extract it and run `TM-Vibrant-Shaders-Setup.exe`.
+**With the setup:** download `TM-Vibrant-Shaders.zip`, extract it and run `TM-Vibrant-Shaders-Setup.exe`. It also installs into TrackMania 2, Nations ESWC, Sunrise and Original (*Install into another game folder*).
 
-In the game `F8` opens the menu and `F7` turns the effects on and off. Step by step: [installation guide](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/docs/install.md) ([Deutsch](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/docs/INSTALL_DE.md)). TrackMania 2 players: the same zip, see 1.4.1's notes.
+In the game `F8` opens the menu and `F7` turns the effects on and off. Step by step: [installation guide](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/install.md) ([Deutsch](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/INSTALL_DE.md)).
 
 All changes: [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/CHANGELOG.md).

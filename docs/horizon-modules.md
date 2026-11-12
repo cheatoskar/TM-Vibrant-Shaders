@@ -1,11 +1,11 @@
 # TM Vibrant Shaders as Horizon modules (2.0)
 
-From 2.0 on TM Vibrant Shaders comes in two forms, built from the same code:
+TM Vibrant Shaders comes in two forms, built from the same code and released together:
 
-- **Standalone**, as before: `TMVibrantShaders.dll` as a ModLoader product, or `d3d9.dll` in the game folder. Its own menu (`F8`), its own keys. Nothing changes here compared with 1.5.
-- **Horizon modules**: four plugins for Horizon Host (TM Horizon's in-game menu, 0.2.0 or newer, plugin ABI 1.2). Each module has its own page in the Horizon menu, its own switch and its keys in Horizon's *Hotkeys* list. `TMVS-<version>-horizon.zip` holds them.
+- **Standalone 1.6**: `TMVibrantShaders.dll` as a ModLoader product, or `d3d9.dll` in the game folder (TrackMania 2: `d3d11.dll`). Its own menu (`F8`), its own keys.
+- **Horizon modules 2.0**: four plugins for Horizon Client's in-game menu (Horizon Host 0.3.1, plugin ABI 1.4; they also load in 0.2.0 and newer, ABI 1.2). Each module has its own page in the Horizon menu, its own switch and its keys in Horizon's *Hotkeys* list. `TMVS-<version>-horizon.zip` holds them. They carry the core of the standalone release they come with (2.0.0 = the 1.6.0 core): the same settings and features.
 
-Games: TrackMania Nations Forever, TrackMania United Forever and TrackMania Nations ESWC (the 32-bit Direct3D 9 games). TrackMania 2 (ManiaPlanet) stays standalone only; Horizon Host doesn't run there.
+Games: TrackMania Nations Forever, United Forever, Nations ESWC, Sunrise and Original (the 32-bit Direct3D 9 games; Sunrise and Original only in the builds the standalone supports, [install.md](install.md#trackmania-sunrise-and-trackmania-original)). TrackMania 2 (ManiaPlanet) stays standalone only: Horizon Host is a 32-bit Direct3D 9 host and doesn't run there.
 
 ## The four modules
 
@@ -31,9 +31,26 @@ Switching a module off in Horizon's list takes effect at once (live toggle); not
 Copy the four folders from the zip into Horizon's plugins folder:
 
 - TrackMania Nations/United Forever (TMLoader): `%LOCALAPPDATA%\TMLoader\database\TmForever\products\Horizon Host\<version>\plugins`
-- TrackMania Nations ESWC (Horizon's own loader): `<game folder>\horizon\plugins`
+- TrackMania Nations ESWC, Sunrise, Original (Horizon's own loader): `<game folder>\horizon\plugins`
 
 Keep `tmvs\tmvs-core.dll`, even if you switch the TM Vibrant Shaders module itself off: the other three need it.
+
+In Sunrise and Original the game's own `d3d9.dll` (the repack's proxy, dgVoodoo) stays as it is: Horizon runs through it and hands the modules its device. A `d3d9.dll` of the standalone TM Vibrant Shaders must not be there at the same time (it would run and the modules would stay off): its setup's *Uninstall* removes it and gives `d3d9.chain.dll` its old name back.
+
+## Sizes in Horizon's menu (ABI 1.4)
+
+With Horizon Host 0.3 the pages follow Horizon's menu size and content scale (80-125 %, `Ctrl`+wheel in the menu) and lay out their panels in as many columns as the room has: a tab popped out into its own window, or a module's own window (left click on its icon in the top bar), gets one column when narrow. Each module's `plugin.json` gives Horizon the smallest and the preferred size of that window:
+
+| Module | Smallest | Preferred |
+|---|---|---|
+| `tmvs` | 520 x 380 | 960 x 660 |
+| `tmvs-capture` | 480 x 340 | 820 x 600 |
+| `tmvs-upscaling` | 420 x 260 | 560 x 380 |
+| `tmvs-packs` | 480 x 340 | 820 x 600 |
+
+Logical pixels at 1080p and 100 %; Horizon scales them. An older Horizon (ABI 1.2, 1.3) draws the pages at its own 1080p scale and ignores the sizes.
+
+If a TMVS page fails inside Horizon's menu, Horizon 0.3 switches that module off until the next start (its crash guard) and logs it; TMVS gives its own drawing state back, so the game keeps running.
 
 ## Standalone and Horizon together: only one runs
 
@@ -48,21 +65,21 @@ Remove one of the two. Nothing is drawn twice and no key fires twice in the mean
 
 Both forms use the same files, so switching keeps your look, your keys and your clips settings:
 
-- `Documents\TrackMania\TMVS\settings.ini` and the presets next to it (the log of TrackMania Nations ESWC is `tmvs-eswc.log`, as before)
+- `Documents\TrackMania\TMVS\settings.ini` and the presets next to it (the logs of the older games are `tmvs-eswc.log`, `tmvs-sunrise.log`, `tmvs-original.log`, as standalone)
 - `Documents\TrackMania\TMClips\clips.ini` (clips, shared with the TM Clips mod as in 1.5)
 
-2.0 writes `SettingsVersion=2` into `[General]`. A 1.5 file (no such key) is read as it is; nothing in it is renamed. 1.5 ignores the new key, so going back to 1.5 works.
+The modules write `SettingsVersion=2` into `[General]`. A 1.5 file (no such key) is read as it is; nothing in it is renamed. 1.5 ignores the new key, so going back to 1.5 works.
 
 New setting: **Checkpoint clips** (`CheckpointClips` in `clips.ini`, off by default, *Clips* page): saves a clip of each checkpoint's sector, from the previous checkpoint (or the run's start) to one second after this one, named `<map>_<date>_CP<n>_<time>.mp4`. It reads the race from the game like the finish clips and writes nothing.
 
 ## Keys
 
 - **Standalone**: as in 1.5 (`F8` menu, `F5` effects, `F12` photo, `F3` clips and so on), from `settings.ini` and `clips.ini`.
-- **Horizon**: Horizon owns the keyboard. The modules register their keys in Horizon's *Hotkeys* list with the keys from your `settings.ini`/`clips.ini` as defaults; change them there. The menu key is Horizon's (`Insert`). With Horizon Host ABI 1.3 (`open_page`) your old menu key (`F8`) also opens the TMVS page in Horizon's menu; an older Horizon has no such key.
+- **Horizon**: Horizon owns the keyboard. The modules register their keys in Horizon's *Hotkeys* list with the keys from your `settings.ini`/`clips.ini` as defaults; change them there. The menu key is Horizon's (`Insert`). With Horizon Host ABI 1.3 or newer (`open_page`) your old menu key (`F8`) also opens the TMVS page in Horizon's menu; an older Horizon has no such key.
 
 ## Online and TMX rules
 
-Nothing changes against 1.5: no input is sent to the game, the race is only read (also for checkpoint clips), no checkpoint or trigger display, no ideal or brake line, no camera or MediaTracker change. All four modules are marked online-safe for Horizon. Photos, clips and the video export never show Horizon's interface (the modules set Horizon's capture flag while they take a picture).
+The same as standalone: no input is sent to the game, the race is only read (also for checkpoint clips), no checkpoint or trigger display, no ideal or brake line, no camera or MediaTracker change, the minimap only in the replay editor and the video export. All four modules are marked online-safe for Horizon. Photos, clips and the video export never show Horizon's interface (the modules set Horizon's capture flag while they take a picture).
 
 ## How it is built
 
@@ -71,9 +88,10 @@ One code base, one `cmake --build build --config Release` builds both:
 - `tmvs_runtime` (all of TMVS) is linked into `TMVibrantShaders.dll` (standalone, d3d9 exports) and into `tmvs-core.dll` (exports `TMVS_Core_*` for the modules).
 - Four small plugin DLLs (`tmvs.dll`, `tmvs-capture.dll`, `tmvs-upscaling.dll`, `tmvs-packs.dll`, `src/modules/module.cpp`) find `tmvs-core.dll` (their own folder, then `..\tmvs\`) and attach to it. Their interface: attach/detach/enable, draw the page, query state (`src/modules/hostbridge.cpp`).
 - In Horizon, TMVS doesn't hook `Present` and `Reset` itself: Horizon's device callbacks drive it (`hook::installHosted`). The other device hooks (draws, render targets, the depth texture) stay TMVS's own, as Horizon offers no callbacks for them.
-- `release_zip` makes `TM-Vibrant-Shaders.zip`, `TMVibrantShaders.dll` and `TMVS-<version>-horizon.zip`; `horizon_zip` makes the Horizon zip alone.
+- `release_zip` makes `TM-Vibrant-Shaders.zip`, `TMVibrantShaders.dll` and `TMVS-<modules version>-horizon.zip`; `horizon_zip` makes the Horizon zip alone. The modules' version is `TMVS_MODULES_VERSION` (2.0.0 plus the tag's suffix), the standalone's and the core's `TM_SHADERS_VERSION`.
+- The plugin ABI header is `third_party/horizon/horizon_plugin.h`, copied from Horizon Host 0.3.1 (ABI 1.4).
 
-Tests without the game: `tmvs_moduletest` (fake Horizon host: loading, unloading, exclusivity in both orders, settings of a 1.5 file, Capture without the shaders writes an MP4), `tmvs_modulelogictest` (module states, settings version, checkpoint tracking). `tmvs_hzpreview <folder>` draws Horizon's real menu with the four modules into PNGs (needs a horizon-host checkout next to this repo).
+Tests without the game: `tmvs_moduletest` (fake Horizon host: loading, unloading, exclusivity in both orders, settings of a 1.5 file, Capture without the shaders writes an MP4, the ABI 1.4 scale and container width), `tmvs_modulelogictest` (module states, settings version, checkpoint tracking). `tmvs_hzpreview <folder>` draws Horizon's real menu with the four modules into PNGs (needs a horizon-host checkout next to this repo).
 
 ## My test plan (2.0 against 1.5)
 

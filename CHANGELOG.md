@@ -1,39 +1,50 @@
 # Changelog
 
-## 2.0.0 (unreleased)
+## 1.6.0 and modules 2.0.0 (release candidate)
 
-TM Vibrant Shaders also as four modules for Horizon Host, TM Horizon's in-game menu ([docs/horizon-modules.md](docs/horizon-modules.md)). The standalone mod stays as it is.
+One release, two forms from the same code: the standalone mod **1.6.0** for six games (TrackMania Nations Forever, United Forever, Nations ESWC, Sunrise, Original and TrackMania 2), and the same features as four **Horizon Client modules 2.0.0** for the five Direct3D 9 games. TrackMania 2 stays standalone: Horizon runs only in the 32-bit Direct3D 9 games. Which game has what: the compatibility table in the [README](README.md#compatibility).
 
-**New**
-- **Horizon modules** (TrackMania Nations/United Forever, TrackMania Nations ESWC): *TM Vibrant Shaders* (the shaders), *TMVS Capture* (photos, clips, video export), *TMVS Upscaling* (FSR render scale) and *TMVS Packs* (resource packs), each with its own page, switch and keys in the Horizon menu. Capture and Upscaling also work with the shaders off. They come as `TMVS-<version>-horizon.zip`; all four use `tmvs-core.dll` in the `tmvs` folder.
-- **Only one copy runs**: with the standalone mod and the modules both installed, the one the game loads first runs and the other stays passive; `tmvs.log`, Horizon's log and the module pages say which.
-- **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector, from the previous checkpoint (or the start) to one second after this one, saved as `<map>_<date>_CP<n>_<time>.mp4`. Read from the game only, as the finish clips.
-- In Horizon, photos, clips and the video export never show Horizon's interface (Horizon's capture flag).
+### 1.6.0 (standalone)
 
-**Changed**
-- Same settings in both forms (`Documents\TrackMania\TMVS`, `Documents\TrackMania\TMClips\clips.ini`); 2.0 adds `SettingsVersion=2` to `settings.ini`, 1.5 reads the file as before.
-- In Horizon the keys are Horizon's: the modules put theirs into Horizon's *Hotkeys* list (defaults from your settings files); the menu is Horizon's (`Insert`).
-- `tmvs.log` says which form starts (`starting (standalone (d3d9.dll))`, `(standalone (ModLoader))` or `(Horizon modules (tmvs-core.dll))`).
-
-## 1.6.0 (in development)
-
-The older games: clips on TrackMania Nations ESWC, and TrackMania Sunrise and TrackMania Original.
+The older games: TrackMania Sunrise and TrackMania Original, clips and the MP4 export on all three 2006-engine games.
 
 **New (TrackMania Sunrise, TrackMania Original)**
-- **TrackMania Sunrise and TrackMania Original** (experimental): the same DLL as `d3d9.dll`, for the Windows 10 community repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 of Original (`TMORIGINAL.EXE`), each told by its SHA-256. Everything TrackMania Nations ESWC has: the look, photo mode, F12 captures, the car and the race (neon trail, headlights, spray, long mesh shadows, Hide car, split times, the Session panel, finish effects) and clips. The engine is ESWC's generation; its hooks and reads were ported from ESWC (other addresses, a smaller race and player info, no race counters: a start and a respawn are read from your player's info). Not yet: the video export, water, the game's materials and light, the minimap. Details in [docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original).
+- **TrackMania Sunrise and TrackMania Original** (experimental): the same DLL as `d3d9.dll`, for the Windows 10 community repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 of Original (`TMORIGINAL.EXE`), each told by its SHA-256. Everything TrackMania Nations ESWC has: the look, photo mode, F12 captures, the car and the race (neon trail, headlights, spray, long mesh shadows, Hide car, split times, the Session panel, finish effects), clips and the MP4 export. The engine is ESWC's generation; its hooks and reads were ported from ESWC (other addresses, a smaller race and player info, no race counters: a start and a respawn are read from your player's info). Not yet: water, the game's materials and light, the minimap (1.7, after a census run in each game). Details in [docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original).
 - **The game's own `d3d9.dll` stays in use** (dgVoodoo in Original, the repack's proxy in Sunrise): the setup renames it to `d3d9.chain.dll` and the mod passes Direct3D on to it; without one, Windows' own. The uninstall puts it back. `tmvs-*.log` says which one runs (`d3d9: ...`).
 - **Other builds are refused cleanly**: an unknown `TmSunrise.exe` or `TMORIGINAL.EXE` gets no hook at all, the mod only passes Direct3D on and the log says why (`passive: ...`).
 
 **New (all three older games)**
-- **The game's video export is known:** the replay's *Shoot video* is read from the game (its settings, the frames being written, the game's fixed clock), nothing hooked. *Best export quality* now works there: full quality, no auto quality, TAA off when the game supersamples, rain, clouds and the other effects on the video's clock; the clips pause meanwhile. The video is the game's AVI (with the mod's picture) unless the MP4 export below is switched on.
-- **The MP4 export** (experimental, off until the games' first start is confirmed: `LegacyMp4=1` in `Documents\TrackMania\TMVS\dev.ini`): the game's AVI writer is hooked as on Forever, so *Shoot video* writes an MP4 with the mod's encoder (H.264/HEVC/AV1 as set for Forever), without the codec dialog. Its sound is the game's own, taken with WASAPI process loopback while the game's sound pass runs (the game itself records the default recording device, often a microphone); the game's frames go in (the mod's own float frames need the supersampling's per-sample camera, not read there). Off: the game's AVI as before ([docs/engine-video-export.md](docs/engine-video-export.md#the-2006-engine-trackmania-nations-eswc-sunrise-original-16)).
-- **Census mode** for the materials and light work (development, off by default: `LegacyCensus=1` in `dev.ini`): logs once per map each shader the game draws with (class, file, textures), the classes of its per-pass shading, and what the map object offers (blocks, their infos, the coordinates), also when an editor opens. Without the key neither draw hook is installed.
+- **The game's video export is known:** the replay's *Shoot video* is read from the game (its settings, the frames being written, the game's fixed clock). *Best export quality* works there: full quality, no auto quality, TAA off when the game supersamples, rain, clouds and the other effects on the video's clock; the clips pause meanwhile.
+- **MP4 export**: the game's AVI writer is hooked as on Forever, so *Shoot video* writes an MP4 with the mod's encoder (*Video format* on the *Video* page: H.264, HEVC or AV1, or the game's AVI), without the codec dialog. Its sound is the game's own, taken with WASAPI process loopback while the game's sound pass runs (the game itself records the default recording device, often a microphone). The game's frames go in, so the settings that need the mod's own frames (HDR blend, HDR10, shutter, lens depth of field, grain) are not shown there ([docs/engine-video-export.md](docs/engine-video-export.md#the-2006-engine-trackmania-nations-eswc-sunrise-original-16)).
+- **Census mode** for the materials and light work in 1.7 (development, off by default: `LegacyCensus=1` under `[dev]` in `Documents\TrackMania\TMVS\dev.ini`): logs once per map each shader the game draws with (class, file, textures), the classes of its per-pass shading, and what the map object offers (blocks, their infos, the coordinates), also when an editor opens. Without the key neither draw hook is installed; in Nations/United Forever the key is ignored.
+
+**New (TrackMania Nations ESWC)**
+- **Clips.** The *Clips* page, `F3`, `Ctrl+F3` and `Ctrl+Shift+F3` and *Save on finish* now work on TrackMania Nations ESWC (1.80 patch), and on Sunrise and Original. The race (start, finish, race time), the map's name and its author time are read from the game's own objects, the same reads as the split times; nothing is hooked or written for it. These maps have no UID: the personal best of a clip is kept by the map's name. Details in [docs/clips.md](docs/clips.md#trackmania-nations-eswc).
 
 **Changed (TrackMania Nations ESWC)**
 - *Hide car* in photo mode now leaves the cars alone in network races (it writes the game's visible bit, so only in solo races and replays). The engine code for ESWC is now the shared one of the three older games; the log lines are the same.
 
-**New (TrackMania Nations ESWC)**
-- **Clips.** The *Clips* page, `F3`, `Ctrl+F3` and `Ctrl+Shift+F3` and *Save on finish* now work on TrackMania Nations ESWC (1.80 patch). The race (start, finish, race time), the map's name and its author time are read from the game's own objects, the same reads as the split times; nothing is hooked or written for it. ESWC maps have no UID: the personal best of a clip is kept by the map's name. Details in [docs/clips.md](docs/clips.md#trackmania-nations-eswc).
+**New (every game with clips)**
+- **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector, from the previous checkpoint (or the start) to one second after this one, saved as `<map>_<date>_CP<n>_<time>.mp4`. Read from the game only, as the finish clips.
+
+**Rules check (TMX moderators)**
+- Checked against the moderators' rules for this release: no checkpoint or trigger display, no ideal or brake line, no camera or MediaTracker change (the old *Skip map clips* has been gone since 1.4.0), the minimap only in the replay editor and the video export, split times allowed online. Nothing new is active online beyond what 1.5 had.
+
+### Horizon modules 2.0.0
+
+TM Vibrant Shaders also as four modules for Horizon Client (TM Horizon's in-game menu, Horizon Host 0.3.1 / plugin ABI 1.4) ([docs/horizon-modules.md](docs/horizon-modules.md)). They carry the 1.6.0 core: the same settings, the same features.
+
+**New**
+- **Horizon modules** (TrackMania Nations/United Forever, Nations ESWC, Sunrise, Original): *TM Vibrant Shaders* (the shaders), *TMVS Capture* (photos, clips, video export), *TMVS Upscaling* (FSR render scale) and *TMVS Packs* (resource packs), each with its own page, switch and keys in the Horizon menu. Capture and Upscaling also work with the shaders off. They come as `TMVS-<version>-horizon.zip`; all four use `tmvs-core.dll` in the `tmvs` folder.
+- **Only one copy runs**: with the standalone mod and the modules both installed, the one the game loads first runs and the other stays passive; `tmvs.log`, Horizon's log and the module pages say which.
+- **Horizon's sizes** (plugin ABI 1.4): the pages follow Horizon's menu size and content scale (80-125 %, `Ctrl`+wheel in the menu), and put their panels in fewer columns in a narrow window (a popped-out tab, the module's own window from the top bar). Each module tells Horizon the smallest and the preferred size of its window (`plugin.json`). An older Horizon (ABI 1.2, 1.3) still loads them, at Horizon's 1080p scale.
+- **Crash guard**: if a TMVS page fails inside Horizon's menu, Horizon switches the module off (Horizon 0.3); TMVS then gives its own menu and windows their drawing state back, so the game keeps running.
+- In Horizon, photos, clips and the video export never show Horizon's interface (Horizon's capture flag).
+
+**Changed**
+- Same settings in both forms (`Documents\TrackMania\TMVS`, `Documents\TrackMania\TMClips\clips.ini`); the modules add `SettingsVersion=2` to `settings.ini`, 1.5 reads the file as before.
+- In Horizon the keys are Horizon's: the modules put theirs into Horizon's *Hotkeys* list (defaults from your settings files); the menu is Horizon's (`Insert`); with ABI 1.3 or newer your old menu key (`F8`) opens the TMVS page there.
+- `tmvs.log` says which form starts (`starting (standalone (d3d9.dll))`, `(standalone (ModLoader))` or `(Horizon modules (tmvs-core.dll))`); Horizon's log names the modules' and the core's version.
 
 ## 1.5.0 (in testing)
 

@@ -50,6 +50,10 @@ INSTALL - by hand, no .exe
   TrackMania 2 / ManiaPlanet:
     Copy d3d11.dll from this zip next to ManiaPlanet.exe and start
     ManiaPlanet 64-bit (the mod is 64-bit only).
+  Horizon Client (TM Horizon's in-game menu):
+    Use TMVS-<version>-horizon.zip from the same release instead (four
+    modules for Horizon's plugins folder, see its README.txt). Not both:
+    with the standalone mod and the modules installed, only one runs.
 
 IN GAME
   F8   shader menu (presets, every setting, your own presets)
