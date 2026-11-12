@@ -1,5 +1,4 @@
 {
-  "$schema": "https://raw.githubusercontent.com/cheatoskar/tm-horizon/main/packages/shared/showcase.schema.json",
   "version": 1,
   "theme": { "accent": "orange" },
   "blocks": [
