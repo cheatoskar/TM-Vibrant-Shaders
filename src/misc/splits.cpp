@@ -282,7 +282,7 @@ Reference fromReplay(const Replay& replay, const char* label) {
 // The comparison in use: TM Nations ESWC has only your best (its maps are not on TMX, its ghosts'
 // checkpoint times are not read, and the replay files found are Nations Forever's).
 int compareMode() {
-    return engine::eswc() ? static_cast<int>(kCompareBest) : settings().splitCompare;
+    return engine::legacy() ? static_cast<int>(kCompareBest) : settings().splitCompare;
 }
 
 // What the run is compared with now.
@@ -486,7 +486,7 @@ void update() {
     }
     // Your replays of this map: their sectors count for your best sectors (once per map). Not in TM
     // Nations ESWC (the replays read are Nations Forever's).
-    if (settings().splits && !g.uid.empty() && !engine::eswc()) {
+    if (settings().splits && !g.uid.empty() && !engine::legacy()) {
         if (!g_scanned) startScan();
         startSectorsJob();
         SectorsJob job;
@@ -962,7 +962,7 @@ void drawPage() {
     Settings& s = settings();
     bool changed = false;
     static const char* const kCompare[] = {"Record (TMX, auto)", "Ghost in the race", "My best", "Replay file"};
-    if (engine::eswc()) {
+    if (engine::legacy()) {
         ImGui::TextDisabled("Compare with: my best");
     } else {
         changed |= ImGui::Combo("Compare with", &s.splitCompare, kCompare, 4);

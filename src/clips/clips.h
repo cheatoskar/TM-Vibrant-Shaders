@@ -21,9 +21,8 @@
 // and waits for the counter; it records again only when the counter stood still for 300 of its
 // frames (TM Vibrant Shaders' clips don't run). Each says in its log who records.
 //
-// Not yet: TrackMania Nations ESWC (its race isn't read, clips.cpp's reads find no known build there:
-// only the save key works; its race and map need the old engine's offsets, see race.h) and
-// TrackMania 2 (maniaplanet/: a D3D11 grabber, the race from ManiaPlanet's app, the menu's host).
+// TrackMania Nations ESWC: in TM Vibrant Shaders (its d3d9.dll), the race read as race.h says.
+// Not yet: TrackMania 2 (maniaplanet/: a D3D11 grabber, the race from ManiaPlanet's app, the menu's host).
 namespace tmshaders {
 namespace clips {
 

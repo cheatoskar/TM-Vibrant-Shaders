@@ -253,8 +253,8 @@ void drawPhotoPanel() {
     if (ImGui::Button("Clear focus")) photo::clearFocus();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to automatic focus. Middle click in the picture sets it.");
     if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
-    // TM Nations ESWC: no hooks for the editor or the interface (photos never include the HUD anyway).
-    if (!engine::eswc()) {
+    // The 2006 engine: no hooks for the editor or the interface (photos never include the HUD anyway).
+    if (!engine::legacy()) {
         if (ImGui::Checkbox("Hide editor", &config.photoHideEditor)) config.markDirty();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The replay editor's panels (the game's Tab key); the 3D view fills the screen.");
         if (ImGui::Checkbox("Hide HUD", &config.photoHideHud)) config.markDirty();
@@ -629,13 +629,15 @@ void drawStatusLine(IDirect3DDevice9* device) {
     ImGui::PopStyleVar(4);
 }
 
-// TrackMania Nations ESWC (engine::eswc): the 2006 engine, hooked for its frame and cameras, its
-// map loads, and its race and local car read once a frame. What needs the video export, the game's
-// materials or its light is not shown (nothing there would happen); the rest works as in Nations Forever.
-static bool eswcSupports(const Field& f) {
+// The 2006 engine (engine::legacy: TrackMania Nations ESWC, Sunrise, Original), hooked for its frame
+// and cameras, its map loads, and its race and local car read once a frame. What needs the video
+// export, the game's materials or its light is not shown (nothing there would happen); the rest works
+// as in Nations Forever.
+static bool legacySupports(const Field& f) {
     static const char* const kHidden[] = {
-        // the video export: the game has one (the replay's "Shoot video", AVI), not hooked yet
-        "VideoCodec", "VideoQuality", "Video10Bit", "VideoBitrate", "VideoEncoder", "VideoFfmpegPreset", "VideoExportBest", "VideoOwnFrames",
+        // the video export: the game writes its own AVI (the replay's "Shoot video"); the mod knows when it
+        // runs (VideoExportBest: full quality, the effects on the video's clock), but writes no MP4 of its own yet
+        "VideoCodec", "VideoQuality", "Video10Bit", "VideoBitrate", "VideoEncoder", "VideoFfmpegPreset", "VideoOwnFrames",
         "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
         // the map's light and weather, the game's FX, its materials and shaders, the block order
         "GameNight", "EngineMoon", "GameSkyClouds", "DisableGameFX", "GameMaterials", "GameGBuffer", "GameLight", "OverlapFix", "ToneCurve",
@@ -649,15 +651,15 @@ static bool eswcSupports(const Field& f) {
     return true;
 }
 
-static void eswcHost(menu::Host& host) {
+static void legacyHost(menu::Host& host) {
     host.resourcePacks = nullptr; // no mod packs hook
     host.vrState = nullptr;
-    host.photoHideCar = true;     // the game's own visible bit of each car (engine.cpp, eswcHideCars)
+    host.photoHideCar = true;     // the game's own visible bit of each car (engine.cpp, legacyHideCars)
     host.photoHideEditor = false; // no hook on the replay editor's panels
     host.photoAutoMode = false;   // no hook on its free camera
     host.photoHideHud = false;    // nor on its interface (photos never include the HUD anyway)
     host.miscMinimap = false;     // split times and finish effects only (misc.cpp)
-    host.supports = eswcSupports;
+    host.supports = legacySupports;
 }
 
 static ExternalTarget* g_ext = nullptr;
@@ -797,7 +799,7 @@ void draw(IDirect3DDevice9* device) {
         host.clipsPanel = [] { clips::drawRecording(); };
         host.clipsSaving = [] { clips::drawSaving(); };
         host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
-        if (engine::eswc()) eswcHost(host);
+        if (engine::legacy()) legacyHost(host);
         host.hideDetached = capturing;
         host.horizon = horizon::found();
         menu::draw(host);

@@ -1,6 +1,27 @@
 # Changelog
 
+## 1.6.0 (in development)
+
+The older games: clips on TrackMania Nations ESWC, and TrackMania Sunrise and TrackMania Original.
+
+**New (TrackMania Sunrise, TrackMania Original)**
+- **TrackMania Sunrise and TrackMania Original** (experimental): the same DLL as `d3d9.dll`, for the Windows 10 community repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 of Original (`TMORIGINAL.EXE`), each told by its SHA-256. Everything TrackMania Nations ESWC has: the look, photo mode, F12 captures, the car and the race (neon trail, headlights, spray, long mesh shadows, Hide car, split times, the Session panel, finish effects) and clips. The engine is ESWC's generation; its hooks and reads were ported from ESWC (other addresses, a smaller race and player info, no race counters: a start and a respawn are read from your player's info). Not yet: the video export, water, the game's materials and light, the minimap. Details in [docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original).
+- **The game's own `d3d9.dll` stays in use** (dgVoodoo in Original, the repack's proxy in Sunrise): the setup renames it to `d3d9.chain.dll` and the mod passes Direct3D on to it; without one, Windows' own. The uninstall puts it back. `tmvs-*.log` says which one runs (`d3d9: ...`).
+- **Other builds are refused cleanly**: an unknown `TmSunrise.exe` or `TMORIGINAL.EXE` gets no hook at all, the mod only passes Direct3D on and the log says why (`passive: ...`).
+
+**New (all three older games)**
+- **The game's video export is known:** the replay's *Shoot video* is read from the game (its settings, the frames being written, the game's fixed clock), nothing hooked. *Best export quality* now works there: full quality, no auto quality, TAA off when the game supersamples, rain, clouds and the other effects on the video's clock; the clips pause meanwhile. The video is the game's AVI (with the mod's picture) unless the MP4 export below is switched on.
+- **The MP4 export** (experimental, off until the games' first start is confirmed: `LegacyMp4=1` in `Documents\TrackMania\TMVS\dev.ini`): the game's AVI writer is hooked as on Forever, so *Shoot video* writes an MP4 with the mod's encoder (H.264/HEVC/AV1 as set for Forever), without the codec dialog. Its sound is the game's own, taken with WASAPI process loopback while the game's sound pass runs (the game itself records the default recording device, often a microphone); the game's frames go in (the mod's own float frames need the supersampling's per-sample camera, not read there). Off: the game's AVI as before ([docs/engine-video-export.md](docs/engine-video-export.md#the-2006-engine-trackmania-nations-eswc-sunrise-original-16)).
+- **Census mode** for the materials and light work (development, off by default: `LegacyCensus=1` in `dev.ini`): logs once per map each shader the game draws with (class, file, textures), the classes of its per-pass shading, and what the map object offers (blocks, their infos, the coordinates), also when an editor opens. Without the key neither draw hook is installed.
+
+**Changed (TrackMania Nations ESWC)**
+- *Hide car* in photo mode now leaves the cars alone in network races (it writes the game's visible bit, so only in solo races and replays). The engine code for ESWC is now the shared one of the three older games; the log lines are the same.
+
+**New (TrackMania Nations ESWC)**
+- **Clips.** The *Clips* page, `F3`, `Ctrl+F3` and `Ctrl+Shift+F3` and *Save on finish* now work on TrackMania Nations ESWC (1.80 patch). The race (start, finish, race time), the map's name and its author time are read from the game's own objects, the same reads as the split times; nothing is hooked or written for it. ESWC maps have no UID: the personal best of a clip is kept by the map's name. Details in [docs/clips.md](docs/clips.md#trackmania-nations-eswc).
+
 ## 1.5.0 (in testing)
+
 
 TrackMania Nations ESWC gets the car and the race, and TrackMania 2 catches up with TrackMania Nations/United: photo zoom, hi-res photos, TAA jitter, "only in replays", Hide car and the Misc page.
 

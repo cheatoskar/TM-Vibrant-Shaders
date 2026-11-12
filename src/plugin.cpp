@@ -24,6 +24,7 @@
 #include "blockorder.h"
 #include "photo.h"
 #include "planeread.h"
+#include "proxy.h"
 #include "thumbnails.h"
 #include "tracer.h"
 #include "videofile.h"
@@ -642,6 +643,8 @@ void loadDevOptions() {
     g_nextCaptureAt = g_dev.captureAt;
     engine::forceShadows(GetPrivateProfileIntW(L"dev", L"ForceShadows", -1, ini));
     engine::shaderCensus(GetPrivateProfileIntW(L"dev", L"LogShaders", 0, ini) != 0);
+    engine::legacyCensus(GetPrivateProfileIntW(L"dev", L"LegacyCensus", 0, ini) != 0);
+    engine::legacyMp4(GetPrivateProfileIntW(L"dev", L"LegacyMp4", 0, ini) != 0);
 }
 
 void runDevAutomation(IDirect3DDevice9* device) {
@@ -2918,9 +2921,10 @@ void processSceneOne(IDirect3DDevice9* device) {
         smoothLook(effective, effectTime());
         // Photo mode and the video export: full quality, whatever the frame rate.
         if (!inputs.photo && !inputs.video) g_autoQuality.apply(effective);
-        // TM Nations ESWC: its Stadium has no water, and with no material known the water was
-        // guessed from the colour: grey road turned into mirroring water (my test, 2026-11-09).
-        if (engine::eswc()) {
+        // The 2006 engine (ESWC, Sunrise, Original): no material known, so the water was guessed from
+        // the colour: grey road turned into mirroring water (my ESWC test, 2026-11-09; its Stadium has
+        // no water at all, Sunrise's and Original's water isn't known either).
+        if (engine::legacy()) {
             effective.waterSurfaces = 0.0f;
             effective.waterClarity = 0.0f;
         }
@@ -3306,8 +3310,8 @@ bool g_gameStencil = false;
 
 bool materialsWanted() {
     const Settings& s = Config::get().settings;
-    // TM Nations ESWC: no draw hooks, no material is ever known (the pixels are guessed from, as without the setting).
-    return s.enabled && s.gameMaterials && !g_gameStencil && !engine::eswc();
+    // The 2006 engine: no draw hooks, no material is ever known (the pixels are guessed from, as without the setting).
+    return s.enabled && s.gameMaterials && !g_gameStencil && !engine::legacy();
 }
 
 // The stencil states the tagging changes, as the game had them (given back when it stops).
@@ -3599,11 +3603,11 @@ void castersTick() {
     // Not with the effects (F7): switched off to compare, the meshes stay (the recording pauses
     // below, nothing uses the maps) and the shadows are back at once, not rebuilt over seconds.
     const bool on = s.casterShadows && engine::active();
-    // TM Nations ESWC: no draw's material is known, so the car is told by its place (a car standing
+    // The 2006 engine: no draw's material is known, so the car is told by its place (a car standing
     // at the start or in a pause would be kept as a static mesh).
-    if (engine::eswc()) {
+    if (engine::legacy()) {
         float car[3];
-        if (engine::eswcCarPosition(car)) casters::excludeAround(car, 4.0f);
+        if (engine::legacyCarPosition(car)) casters::excludeAround(car, 4.0f);
         else casters::excludeAround(nullptr, 0.0f);
     }
     static int s_loads = -1, s_closes = -1, s_removed = -1;
@@ -4306,9 +4310,9 @@ void relightOnSwitch(const Settings& s) {
 void bootOnce() {
     QueryPerformanceFrequency(&g_frequency);
     QueryPerformanceCounter(&g_startTime);
-    // TrackMania Nations ESWC: its own log, so a TMNF start doesn't move it to *.prev.log (the
-    // settings and presets in the same folder are shared).
-    if (engine::eswcExecutable()) log::setFileName(L"tmvs-eswc.log");
+    // The older games (TrackMania Nations ESWC, Sunrise, Original): each its own log, so a TMNF start
+    // doesn't move it to *.prev.log (the settings and presets in the same folder are shared).
+    if (const wchar_t* name = engine::legacyLogName()) log::setFileName(name);
     TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
     loadDevOptions();
     Config::get().load();
@@ -4324,6 +4328,14 @@ void bootOnce() {
     engineCallbacks.overlayEnd = onOverlayEnd;
     engineCallbacks.frameEnd = onFrameEnd;
     engine::install(engineCallbacks);
+    // One of the older games, but not its supported exe: nothing is hooked, Direct3D is only passed
+    // on (src/proxy.cpp), the game runs as without the mod.
+    const char* refusal = nullptr;
+    if (engine::exeRefused(&refusal)) {
+        proxy::systemD3D9(); // decides what is passed on to
+        TMVS_LOG("passive: %s; Direct3D is passed on to %s", refusal, proxy::d3d9Source()[0] ? proxy::d3d9Source() : "the system's d3d9.dll");
+        return;
+    }
     engine::setNightAtLoad(nightAtLoad);
     videofile::install();
     videofile::FrameSource frames;
@@ -4366,6 +4378,7 @@ void bootOnce() {
         if (thread) CloseHandle(thread);
     }
     if (HANDLE watch = CreateThread(nullptr, 0, watchForDevice, nullptr, 0, nullptr)) CloseHandle(watch);
+    TMVS_LOG("d3d9: the mod creates its Direct3D 9 with %s", proxy::d3d9Source()[0] ? proxy::d3d9Source() : "nothing yet");
     // Clips after the device hook: its settings file and the folder scan took 20-30 ms that the
     // device hook waited for (1.4.3 had none of it before the hook).
     clips::boot(clips::Host::Tmvs);

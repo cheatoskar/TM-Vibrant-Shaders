@@ -190,7 +190,8 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 | TrackMania Nations Forever | Yes |
 | TrackMania United Forever | Yes (the mod detects the game build and the map's environment) |
 | TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) |
-| TrackMania Nations ESWC | Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)). The look, photos and F12 captures, neon trail, headlights, spray, long mesh shadows, Hide car, split times; no video export, water or minimap |
+| TrackMania Nations ESWC | Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)). The look, photos and F12 captures, clips, neon trail, headlights, spray, long mesh shadows, Hide car, split times; no video export, water or minimap |
+| TrackMania Sunrise, TrackMania Original | From 1.6, experimental: only the Windows 10 repack of Sunrise and the Online Patch v2 of Original, as `d3d9.dll` with the game's own `d3d9.dll` (dgVoodoo) chained as `d3d9.chain.dll` ([docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original)). The same as ESWC |
 | Trackmania (2020) | No |
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
 | CenterSpeed (speedometer) | Yes. With both loaded, this mod's menu opens with `F5` (CenterSpeed uses `F8`) |

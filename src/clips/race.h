@@ -15,6 +15,11 @@
 // info is at +0x1c: both are checked. The rest as in engine.cpp (raceTimes): the race's clock +0x274,
 // the info's run start +0x2ac, finished +0x33c, final time +0x2b0. The map: app +0x198, its name
 // (ChallengeName) +0x108, its UID's CMwId +0xdc (read with CMwId::GetString, a read-only call).
+//
+// TrackMania Nations ESWC (the 2006 engine, TmNationsESWC.exe of the unofficial 1.80 patch): the
+// same reads engine.cpp makes for its split times, every object told by its class id (race.cpp,
+// kLegacyBuilds); the map's identifier is "eswc-" and a hash of its name. Only memory reads there
+// too, not even a read-only call.
 namespace tmshaders {
 namespace clips {
 
@@ -27,8 +32,8 @@ struct RaceSample {
     int time = 0;             // ms: the run's time now, the final time once finished
 };
 
-// Which build was found ("Nations Forever", "United Forever"), null: another game (TM Nations ESWC,
-// an unknown exe): no race, only the save key works.
+// Which build was found ("Nations Forever", "United Forever", "Nations ESWC"), null: another game (an
+// unknown exe): no race, only the save key works.
 const char* raceBuild();
 bool readRace(RaceSample& out);
 // The open map's name without its colour codes ("" none) and UID ("" none).

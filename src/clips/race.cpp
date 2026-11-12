@@ -41,8 +41,152 @@ constexpr size_t kChallengeParameters = 0xb4; // CGameCtnChallengeParameters*
 constexpr size_t kParametersAuthorTime = 0x20;
 constexpr size_t kParametersGoldTime = 0x1c;
 
+// The 2006 engine's games (TrackMania Nations ESWC; TM Sunrise and TM Original are the same
+// generation): no CGameCtn* classes, the app is a CTrackMania : CConstructionGame. One community
+// exe each, told by its link timestamp and image size; every object is told by its class id before
+// it is read (each class's vtable slot 2, GetMwClassId, is `mov eax, <id>; ret`). The offsets come
+// from the classes' reflection tables and the code that uses them (engine.cpp has the derivation for
+// ESWC: kEswcGamePointer and on). Nothing is called, nothing written.
+struct LegacyBuild {
+    const char* name;
+    const char* uidPrefix;      // the map's identifier: prefix and a hash of its name (no UID there)
+    DWORD timestamp, imageSize; // the exe's link timestamp and size of image
+    uintptr_t game;             // the app's global (CConstructionGame's constructor stores it)
+    size_t gameNetwork, gameChallenge, gameRace;
+    size_t networkInfos;        // the network's player infos (a buffer's data; [0] the local player's)
+    size_t infoPlayerType, infoPlayer, playerInfo;
+    size_t raceGame, raceLapTimes, raceClock;
+    size_t infoState, infoStart, infoFinalTime, infoLapStart, infoLapFinalTime;
+    size_t challengeName, challengeParameters; // CFastStringInt (size, text); CConstructionChallengeParameters*
+};
+constexpr LegacyBuild kLegacyBuilds[] = {
+    // TmNationsESWC.exe 0.1.7.9 (unofficial 1.80 patch): engine.cpp's ESWC reads, the same values;
+    // ChallengeParameters +0xd4 from CConstructionChallenge's reflection table.
+    {"Nations ESWC", "eswc", 0x5ce7272f, 0x008e8000, 0x00caee50, 0x100, 0x11c, 0x140, 0x1a4, 0xd8, 0x180, 0x34, 0x40, 0x194, 0x33c, 0x25c, 0x1f0,
+     0x1f4, 0x1fc, 0x200, 0x124, 0xd4},
+    // TmSunrise.exe (Windows 10 repack) and TMORIGINAL.EXE (Online Patch v2): engine.cpp's
+    // kSunriseEngine and kOriginalEngine (the same layout, the race's clock at another place);
+    // ChallengeParameters +0xe4 from their reflection tables.
+    {"Sunrise", "sunrise", 0x5cc8f0cf, 0x007de000, 0x00bcce50, 0x100, 0x10c, 0x12c, 0x188, 0xa4, 0x14c, 0x34, 0x3c, 0x184, 0x2d0, 0x228, 0x1bc,
+     0x1c0, 0x1c8, 0x1cc, 0x128, 0xe4},
+    {"Original", "original", 0x5d337477, 0x007d9000, 0x00bc8084, 0x100, 0x10c, 0x12c, 0x188, 0xa4, 0x14c, 0x34, 0x3c, 0x184, 0x2b8, 0x228, 0x1bc,
+     0x1c0, 0x1c8, 0x1cc, 0x128, 0xe4},
+};
+constexpr DWORD kLegacyGameId = 0x24001000;       // CTrackMania
+constexpr DWORD kLegacyChallengeId = 0x24003000;  // CConstructionChallenge
+constexpr DWORD kLegacyParametersId = 0x2400c000; // CConstructionChallengeParameters
+constexpr DWORD kLegacyInfoId = 0x24036000;       // CTrackManiaPlayerInfo
+constexpr DWORD kLegacyPlayerId = 0x24031000;     // CTrackManiaPlayer
+// Every class deriving from CTrackManiaRace (solo, turn based and network).
+constexpr DWORD kLegacyRaceIds[] = {0x24014000, 0x24018000, 0x24079000, 0x24078000, 0x24055000,
+                                    0x24042000, 0x24044000, 0x24056000, 0x24037000, 0x24045000};
+constexpr DWORD kLegacyStateRunning = 1, kLegacyStateFinished = 2; // the info's RaceState (0 before the start)
+
 uintptr_t rebase(uintptr_t link) {
     return link - kPreferredBase + reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+}
+
+const LegacyBuild* findLegacyBuild() {
+    static const LegacyBuild* s_build = [] {
+        const BYTE* base = reinterpret_cast<const BYTE*>(GetModuleHandleW(nullptr));
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
+        for (const LegacyBuild& b : kLegacyBuilds) {
+            if (nt->FileHeader.TimeDateStamp == b.timestamp && nt->OptionalHeader.SizeOfImage == b.imageSize) return &b;
+        }
+        return static_cast<const LegacyBuild*>(nullptr);
+    }();
+    return s_build;
+}
+
+// The class id of a 2006 engine object (its vtable's GetMwClassId: B8 <id> C3), 0 none. Inside __try.
+DWORD legacyClassId(const void* nod) {
+    if (!nod) return 0;
+    const uintptr_t* vtable = *static_cast<const uintptr_t* const*>(nod);
+    const BYTE* code = reinterpret_cast<const BYTE*>(vtable[2]);
+    if (code[0] != 0xb8 || code[5] != 0xc3) return 0;
+    return *reinterpret_cast<const DWORD*>(code + 1);
+}
+
+template <typename T> T at(const void* p, size_t offset) {
+    return *reinterpret_cast<const T*>(static_cast<const BYTE*>(p) + offset);
+}
+
+// The app, when it is one (inside __try).
+const void* legacyGame(const LegacyBuild& b) {
+    const void* game = *reinterpret_cast<const void* const*>(rebase(b.game));
+    return legacyClassId(game) == kLegacyGameId ? game : nullptr;
+}
+
+const void* legacyChallenge(const LegacyBuild& b) {
+    const void* game = legacyGame(b);
+    const void* challenge = game ? at<const void*>(game, b.gameChallenge) : nullptr;
+    return legacyClassId(challenge) == kLegacyChallengeId ? challenge : nullptr;
+}
+
+// The race the local player drives: the app's current race, the network's first player info (a
+// local one), its player pointing back at it. The times as engine.cpp's eswcRaceTimes reads them.
+bool readLegacyRace(const LegacyBuild& b, RaceSample& out) {
+    __try {
+        const void* game = legacyGame(b);
+        if (!game) return false;
+        const void* race = at<const void*>(game, b.gameRace);
+        const DWORD raceId = legacyClassId(race);
+        bool isRace = false;
+        for (DWORD id : kLegacyRaceIds) isRace = isRace || raceId == id;
+        if (!isRace || at<const void*>(race, b.raceGame) != game) return false;
+        const void* network = at<const void*>(game, b.gameNetwork);
+        if (!network) return false;
+        const void* const* infos = at<const void* const*>(network, b.networkInfos);
+        const void* info = infos ? infos[0] : nullptr;
+        if (legacyClassId(info) != kLegacyInfoId || at<int>(info, b.infoPlayerType) != 0) return false;
+        const void* player = at<const void*>(info, b.infoPlayer);
+        if (legacyClassId(player) != kLegacyPlayerId || at<const void*>(player, b.playerInfo) != info) return false;
+        const bool lap = at<DWORD>(race, b.raceLapTimes) != 0;
+        const DWORD state = at<DWORD>(info, b.infoState);
+        const DWORD start = at<DWORD>(info, lap ? b.infoLapStart : b.infoStart);
+        out.race = race;
+        out.finished = state == kLegacyStateFinished;
+        out.started = state == kLegacyStateRunning || out.finished;
+        out.startClock = out.started ? start : 0;
+        if (out.finished) out.time = at<int>(info, lap ? b.infoLapFinalTime : b.infoFinalTime);
+        else if (out.started) out.time = static_cast<int>(at<DWORD>(race, b.raceClock) - start);
+        else out.time = 0;
+        if (out.time < 0 || out.time > 24 * 3600 * 1000) return false;
+        out.valid = true;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool readLegacyMapName(const LegacyBuild& b, wchar_t* out, size_t size) {
+    __try {
+        const void* challenge = legacyChallenge(b);
+        if (!challenge) return false;
+        const uint32_t length = at<uint32_t>(challenge, b.challengeName);
+        const wchar_t* text = at<const wchar_t*>(challenge, b.challengeName + 4);
+        if (!text || length == 0 || length >= size) return false;
+        memcpy(out, text, length * sizeof(wchar_t));
+        out[length] = L'\0';
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool readLegacyAuthorTime(const LegacyBuild& b, int& out) {
+    __try {
+        const void* challenge = legacyChallenge(b);
+        const void* parameters = challenge ? at<const void*>(challenge, b.challengeParameters) : nullptr;
+        if (legacyClassId(parameters) != kLegacyParametersId) return false;
+        const DWORD author = at<DWORD>(parameters, 0x20), gold = at<DWORD>(parameters, 0x1c); // AuthorTime, GoldTime
+        if (author == 0 || author > 24u * 3600 * 1000 || (gold != 0xffffffffu && gold < author)) return false;
+        out = static_cast<int>(author);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 bool codeMatches(uintptr_t link, const unsigned char* bytes, size_t size) {
@@ -152,16 +296,29 @@ bool readMapUid(char* out, size_t size) {
     }
 }
 
+// The 2006 engine's maps carry no UID the clips could use: the prefix and a hash of the name (as
+// engine.cpp's eswcMapUid, the same identifier the split times keep).
+bool readLegacyMapUid(const LegacyBuild& b, char* out, size_t size) {
+    wchar_t name[257] = {};
+    if (!readLegacyMapName(b, name, 257)) return false;
+    uint32_t hash = 2166136261u;
+    for (const wchar_t* c = name; *c; c++) hash = (hash ^ static_cast<uint16_t>(*c)) * 16777619u;
+    snprintf(out, size, "%s-%08x", b.uidPrefix, hash);
+    return true;
+}
+
 } // namespace
 
 const char* raceBuild() {
-    const Build* b = findBuild();
-    return b ? b->name : nullptr;
+    if (const Build* b = findBuild()) return b->name;
+    if (const LegacyBuild* l = findLegacyBuild()) return l->name;
+    return nullptr;
 }
 
 bool readRace(RaceSample& out) {
     out = RaceSample();
-    if (!readRaceRaw(out)) {
+    const LegacyBuild* legacy = findBuild() ? nullptr : findLegacyBuild();
+    if (legacy ? !readLegacyRace(*legacy, out) : !readRaceRaw(out)) {
         out = RaceSample();
         return false;
     }
@@ -170,7 +327,8 @@ bool readRace(RaceSample& out) {
 
 std::string mapName() {
     wchar_t text[256] = {};
-    if (!readMapName(text, 256)) return std::string();
+    const LegacyBuild* legacy = findBuild() ? nullptr : findLegacyBuild();
+    if (legacy ? !readLegacyMapName(*legacy, text, 256) : !readMapName(text, 256)) return std::string();
     char narrow[768] = {};
     WideCharToMultiByte(CP_UTF8, 0, text, -1, narrow, sizeof(narrow), nullptr, nullptr);
     return stripCodes(narrow);
@@ -178,7 +336,8 @@ std::string mapName() {
 
 int mapAuthorTime() {
     int ms = -1;
-    return readAuthorTime(ms) ? ms : -1;
+    const LegacyBuild* legacy = findBuild() ? nullptr : findLegacyBuild();
+    return (legacy ? readLegacyAuthorTime(*legacy, ms) : readAuthorTime(ms)) ? ms : -1;
 }
 
 int RunLog::add(RunMarker run) {
@@ -206,7 +365,8 @@ InBuffer spanInBuffer(double from, double to, double oldest) {
 
 std::string mapUid() {
     char text[64] = {};
-    if (!readMapUid(text, sizeof(text))) return std::string();
+    const LegacyBuild* legacy = findBuild() ? nullptr : findLegacyBuild();
+    if (legacy ? !readLegacyMapUid(*legacy, text, sizeof(text)) : !readMapUid(text, sizeof(text))) return std::string();
     for (const char* c = text; *c; c++) {
         if (!isalnum(static_cast<unsigned char>(*c)) && *c != '_' && *c != '-') return std::string(); // not a UID
     }

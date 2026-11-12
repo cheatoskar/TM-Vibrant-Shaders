@@ -391,7 +391,7 @@ void checkCarCell(const engine::CarPose& pose) {
 bool wanted() {
     // Not in TM Nations ESWC: no replay editor hook nor video export there (TMX: no minimap while
     // driving), and its maps' blocks have another layout.
-    return settings().minimap && !engine::eswc() && engine::currentMap() != nullptr && engine::stadium();
+    return settings().minimap && !engine::legacy() && engine::currentMap() != nullptr && engine::stadium();
 }
 
 double g_drawMs = 0.0; // the last on-screen or video drawing's CPU time, for the cost lines

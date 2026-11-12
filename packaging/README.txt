@@ -23,6 +23,10 @@ INSTALL - the easy way
        - TrackMania Nations ESWC (experimental): only the unofficial 1.80
          patch (TmNationsESWC.exe 0.1.7.9). Choose "Install into another
          game folder" and pick the folder with TmNationsESWC.exe.
+       - TrackMania Sunrise (Windows 10 repack) and TrackMania Original
+         (Online Patch v2), experimental: the same way. The game's own
+         d3d9.dll (dgVoodoo in Original) is renamed to d3d9.chain.dll and
+         stays in use; the uninstall puts it back.
 
 INSTALL - by hand, no .exe
   With the ModLoader:
@@ -38,6 +42,11 @@ INSTALL - by hand, no .exe
     Copy the same TMVibrantShaders.dll next to TmNationsESWC.exe and
     rename it to d3d9.dll. Leave other mods' DLLs (dinput8.dll) as they
     are.
+  TrackMania Sunrise (Windows 10 repack), TrackMania Original (Online
+  Patch v2):
+    First rename the game's own d3d9.dll to d3d9.chain.dll, then copy
+    TMVibrantShaders.dll next to TmSunrise.exe / TMORIGINAL.EXE as
+    d3d9.dll.
   TrackMania 2 / ManiaPlanet:
     Copy d3d11.dll from this zip next to ManiaPlanet.exe and start
     ManiaPlanet 64-bit (the mod is 64-bit only).

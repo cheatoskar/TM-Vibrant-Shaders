@@ -245,7 +245,7 @@ void drawPage() {
     Settings& s = g_settings;
     bool changed = false;
     // TM Nations ESWC: no minimap (TMX allows it only in the replay editor and the video export).
-    const bool minimap = !engine::eswc();
+    const bool minimap = !engine::legacy();
     ImGui::TextWrapped("%s: no checkpoint positions, no ghost paths. Drag and resize the windows while this menu is open.",
                        minimap ? "Only the track's shape and your times" : "Only your times");
     ImGui::Spacing();
@@ -322,7 +322,7 @@ void releaseDevice() {
 
 bool wantsOverlay(const Frame& frame) {
     // Not tied to an open map: Shoot video closes and loads the map again, the picture stays.
-    topview::setWanted(g_settings.minimap && g_settings.mapTextured && !engine::eswc());
+    topview::setWanted(g_settings.minimap && g_settings.mapTextured && !engine::legacy());
     g_collect = mapview::wanted();
     if (g_collect) mapview::prepare(frame.device);
     g_mapOnScreen = g_collect && !frame.hide && engine::replayEditorOpen();

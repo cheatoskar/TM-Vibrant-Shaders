@@ -185,6 +185,26 @@ add_library(tm_vibrant_shaders SHARED
 )
 target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm shell32 winhttp)
 
+# The 2006-engine dev.ini keys (LegacyCensus, LegacyMp4) never act on another game: the dev.ini is
+# shared with Forever's TMVS. tools/check_legacy_dev_keys.py runs with every build and fails it on a
+# use of those flags outside the 2006-engine-only code.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  set(TMVS_DEVKEYS_STAMP "${CMAKE_CURRENT_BINARY_DIR}/check_legacy_dev_keys.stamp")
+  file(GLOB_RECURSE TMVS_DEVKEYS_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
+  add_custom_command(
+    OUTPUT "${TMVS_DEVKEYS_STAMP}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_legacy_dev_keys.py"
+    COMMAND "${CMAKE_COMMAND}" -E touch "${TMVS_DEVKEYS_STAMP}"
+    DEPENDS ${TMVS_DEVKEYS_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_legacy_dev_keys.py"
+    COMMENT "check_legacy_dev_keys"
+    VERBATIM)
+  add_custom_target(check_legacy_dev_keys ALL DEPENDS "${TMVS_DEVKEYS_STAMP}")
+  add_dependencies(tm_vibrant_shaders check_legacy_dev_keys)
+else()
+  message(WARNING "Python 3 not found: tools/check_legacy_dev_keys.py does not run with the build")
+endif()
+
 # Instant replay clips (src/clips, see clips.h): built into TM Vibrant Shaders and into the standalone
 # TM Clips (TMClips.dll, below). Its two NV12 passes are compiled at build time like the pipeline's.
 set(TMCLIPS_VERSION "0.1.0")
@@ -422,7 +442,7 @@ target_compile_options(tmvs_capwritertest PRIVATE ${TMVS_OPTIONS})
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an
 # embedded DLL looks like a dropper to virus scanners.
 add_executable(tmvs_installer WIN32 tools/installer.cpp tools/installer.manifest)
-target_include_directories(tmvs_installer PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(tmvs_installer PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(tmvs_installer PRIVATE ${TMVS_DEFINITIONS} UNICODE _UNICODE)
 target_compile_options(tmvs_installer PRIVATE ${TMVS_OPTIONS})
 target_link_libraries(tmvs_installer PRIVATE shell32 ole32 comctl32 version advapi32)
