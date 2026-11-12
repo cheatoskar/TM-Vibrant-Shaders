@@ -694,8 +694,14 @@ using DrawPassFn = void(__fastcall*)(void*, void*, void*);
 DrawShaderFn g_drawShader = nullptr;
 DrawPassFn g_drawPass = nullptr;
 const void* g_currentShader = nullptr; // the material being drawn (null between draws)
-bool g_legacyCensus = false;           // dev.ini LegacyCensus: the 2006 engine's draw census (before install)
-bool g_legacyMp4 = false;              // dev.ini LegacyMp4: the 2006 engine's MP4 export (before install)
+// dev.ini LegacyCensus / LegacyMp4 as read (engine::legacyCensus/legacyMp4, before install). The dev.ini is
+// shared with Forever's TMVS: the keys take effect only through installLegacy, which copies them into the
+// two flags below once a 2006-engine game is recognised; every other game logs them as ignored.
+// tools/check_legacy_dev_keys.py (run with every build) fails on any other use.
+bool g_legacyCensusWanted = false;
+bool g_legacyMp4Wanted = false;
+bool g_legacyCensus = false;           // in effect: the 2006 engine's draw census
+bool g_legacyMp4 = false;              // in effect: the 2006 engine's MP4 export
 bool g_shaderCensus = false;           // log every material once (dev: finding the lamp, glass, ... materials)
 using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
 LensFlareFn g_lensFlare = nullptr;
@@ -3529,6 +3535,14 @@ void installLegacyVideoFile(const LegacyEngine& e) {
 // One of the older games (identifyLegacy): the viewport's frame and camera hooks, the view and
 // projection, the keyboard read, the map loads and the race readers. False when the executable isn't
 // one of them, or its viewport isn't where expected (then nothing is hooked).
+// Not a 2006-engine game (Forever, United, a refused exe): the legacy dev.ini keys stay off.
+void legacyDevKeysIgnored() {
+    if (g_legacyCensusWanted) TMVS_LOG("dev: LegacyCensus ignored (not a 2006-engine game)");
+    if (g_legacyMp4Wanted) TMVS_LOG("dev: LegacyMp4 ignored (not a 2006-engine game)");
+    g_legacyCensus = false;
+    g_legacyMp4 = false;
+}
+
 bool installLegacy() {
     const LegacyEngine* found = identifyLegacy();
     if (!found) return false;
@@ -3564,6 +3578,9 @@ bool installLegacy() {
         g_legacySetChallenge = reinterpret_cast<LegacySetChallengeFn>(
             jumpToDetour(reinterpret_cast<BYTE*>(rebase(e.setChallenge.address)), e.setChallenge.size, reinterpret_cast<void*>(&legacySetChallengeDetour)));
     g_legacyShadowSetters = legacyCodeMatches(e.setShadowTex) && legacyCodeMatches(e.setShadowFake);
+    // The dev.ini keys meant for these games (see g_legacyCensusWanted): only now, the game recognised.
+    g_legacyCensus = g_legacyCensusWanted;
+    g_legacyMp4 = g_legacyMp4Wanted;
     installLegacyVideoFile(e);
     installLegacyCensus(e);
     TMVS_LOG("engine (%s): race and car readers on (classes told by their ids), map loads %s, car shadow setters %s%s", e.tag,
@@ -3597,6 +3614,7 @@ bool install(const Callbacks& callbacks) {
                      g_legacyExe->file, g_legacyExe->sha256, GetModuleHandleW(nullptr), g_legacyReadInput ? ", keyboard read hooked" : "");
         return true;
     }
+    legacyDevKeysIgnored();
     if (g_legacyRefused) {
         TMVS_LOG("engine: %s", g_legacyRefusal);
         return false;
@@ -4798,11 +4816,11 @@ void shaderCensus(bool on) {
 }
 
 void legacyCensus(bool on) {
-    g_legacyCensus = on;
+    g_legacyCensusWanted = on;
 }
 
 void legacyMp4(bool on) {
-    g_legacyMp4 = on;
+    g_legacyMp4Wanted = on;
 }
 
 const void* currentShader() {

@@ -216,7 +216,8 @@ bool neonMaterialsKnown();
 void shaderCensus(bool on);
 // The 2006 engine (ESWC, Sunrise, Original), set before install from dev.ini: LegacyCensus logs each
 // shader, its textures and the map object once per map (tmvs-<game>.log "census: ..."); LegacyMp4 turns
-// on the MP4 export (the AVI writer's hooks) until the games' first start is confirmed.
+// on the MP4 export (the AVI writer's hooks) until the games' first start is confirmed. Both only take
+// effect when install recognises one of these games (the dev.ini is shared with Forever's TMVS).
 void legacyCensus(bool on);
 void legacyMp4(bool on);
 
