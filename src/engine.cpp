@@ -694,14 +694,12 @@ using DrawPassFn = void(__fastcall*)(void*, void*, void*);
 DrawShaderFn g_drawShader = nullptr;
 DrawPassFn g_drawPass = nullptr;
 const void* g_currentShader = nullptr; // the material being drawn (null between draws)
-// dev.ini LegacyCensus / LegacyMp4 as read (engine::legacyCensus/legacyMp4, before install). The dev.ini is
-// shared with Forever's TMVS: the keys take effect only through installLegacy, which copies them into the
-// two flags below once a 2006-engine game is recognised; every other game logs them as ignored.
+// dev.ini LegacyCensus as read (engine::legacyCensus, before install). The dev.ini is shared with
+// Forever's TMVS: the key takes effect only through installLegacy, which copies it into the flag below
+// once a 2006-engine game is recognised; every other game logs it as ignored.
 // tools/check_legacy_dev_keys.py (run with every build) fails on any other use.
 bool g_legacyCensusWanted = false;
-bool g_legacyMp4Wanted = false;
 bool g_legacyCensus = false;           // in effect: the 2006 engine's draw census
-bool g_legacyMp4 = false;              // in effect: the 2006 engine's MP4 export
 bool g_shaderCensus = false;           // log every material once (dev: finding the lamp, glass, ... materials)
 using LensFlareFn = void(__fastcall*)(void*, void*, void*, const void*, float, int, float);
 LensFlareFn g_lensFlare = nullptr;
@@ -3488,11 +3486,6 @@ void installLegacyCensus(const LegacyEngine& e) {
 // The export's file writer (see LegacyEngine::aviOpen): TMNF's six AVI detours, so videofile.cpp writes the
 // MP4 as on Forever. Inline hooks with relocation (Close starts with a call). All six or none.
 void installLegacyVideoFile(const LegacyEngine& e) {
-    if (!g_legacyMp4) {
-        TMVS_LOG("engine (%s): the MP4 export is off on this game until its first start is confirmed (dev.ini LegacyMp4=1 turns it on): "
-                 "the game's AVI as always", e.tag);
-        return;
-    }
     static inlinehook::Hook s_hooks[6];
     const struct {
         const LegacyCode& code;
@@ -3538,9 +3531,7 @@ void installLegacyVideoFile(const LegacyEngine& e) {
 // Not a 2006-engine game (Forever, United, a refused exe): the legacy dev.ini keys stay off.
 void legacyDevKeysIgnored() {
     if (g_legacyCensusWanted) TMVS_LOG("dev: LegacyCensus ignored (not a 2006-engine game)");
-    if (g_legacyMp4Wanted) TMVS_LOG("dev: LegacyMp4 ignored (not a 2006-engine game)");
     g_legacyCensus = false;
-    g_legacyMp4 = false;
 }
 
 bool installLegacy() {
@@ -3578,9 +3569,8 @@ bool installLegacy() {
         g_legacySetChallenge = reinterpret_cast<LegacySetChallengeFn>(
             jumpToDetour(reinterpret_cast<BYTE*>(rebase(e.setChallenge.address)), e.setChallenge.size, reinterpret_cast<void*>(&legacySetChallengeDetour)));
     g_legacyShadowSetters = legacyCodeMatches(e.setShadowTex) && legacyCodeMatches(e.setShadowFake);
-    // The dev.ini keys meant for these games (see g_legacyCensusWanted): only now, the game recognised.
+    // The dev.ini key meant for these games (see g_legacyCensusWanted): only now, the game recognised.
     g_legacyCensus = g_legacyCensusWanted;
-    g_legacyMp4 = g_legacyMp4Wanted;
     installLegacyVideoFile(e);
     installLegacyCensus(e);
     TMVS_LOG("engine (%s): race and car readers on (classes told by their ids), map loads %s, car shadow setters %s%s", e.tag,
@@ -4817,10 +4807,6 @@ void shaderCensus(bool on) {
 
 void legacyCensus(bool on) {
     g_legacyCensusWanted = on;
-}
-
-void legacyMp4(bool on) {
-    g_legacyMp4Wanted = on;
 }
 
 const void* currentShader() {

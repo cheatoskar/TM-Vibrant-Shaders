@@ -636,10 +636,10 @@ void drawStatusLine(IDirect3DDevice9* device) {
 // as in Nations Forever.
 static bool legacySupports(const Field& f) {
     static const char* const kHidden[] = {
-        // the video export: the game writes its own AVI (the replay's "Shoot video"); the mod knows when it
-        // runs (VideoExportBest: full quality, the effects on the video's clock), but writes no MP4 of its own yet
-        "VideoCodec", "VideoQuality", "Video10Bit", "VideoBitrate", "VideoEncoder", "VideoFfmpegPreset", "VideoOwnFrames",
-        "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
+        // the video export: the MP4 gets the game's frames (with the mod's picture), not the mod's own float
+        // frames (those need the supersampling's per-sample camera, not read there): no HDR blend, HDR10,
+        // shutter, lens depth of field or grain
+        "VideoOwnFrames", "VideoShutter", "VideoLensDof", "VideoGrain", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
         // the map's light and weather, the game's FX, its materials and shaders, the block order
         "GameNight", "EngineMoon", "GameSkyClouds", "DisableGameFX", "GameMaterials", "GameGBuffer", "GameLight", "OverlapFix", "ToneCurve",
         // no water in its Stadium (no water blocks, only the grass zone); without the game's materials
@@ -741,11 +741,17 @@ bool readyForHorizon() {
     return ImGui::GetIO().Fonts->IsBuilt();
 }
 
-bool drawPageForHorizon(int page, ImFont* titleFont) {
+bool drawPageForHorizon(int page, ImFont* titleFont, float uiScale, float room) {
     if (!g_initialized || !g_drawDevice) return false;
     menu::Host host;
     fillHost(host, g_drawDevice, false);
+    host.uiScale = uiScale;
+    host.uiRoom = room;
     return menu::drawPageForHost(page, host, titleFont);
+}
+
+void abortPageForHorizon() {
+    menu::abortHostDraw();
 }
 
 void draw(IDirect3DDevice9* device) {

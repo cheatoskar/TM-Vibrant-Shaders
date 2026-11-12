@@ -29,10 +29,11 @@ extern "C" {
 #endif
 
 #define HORIZON_ABI 1
-#define HORIZON_ABI_MINOR 3 /* 1: create_texture_rgba, release_texture, save_replay
+#define HORIZON_ABI_MINOR 4 /* 1: create_texture_rgba, release_texture, save_replay
                                2: panels (register_panel ...), host flags (capture)
                                3: open_page, toasts (notify), the TM Horizon bridge (bridge_request,
-                                  bridge_state), HorizonDeviceCallbacks.post_present */
+                                  bridge_state), HorizonDeviceCallbacks.post_present
+                               4: ui_metrics (menu size, content scale, room for a plugin page) */
 
 /* Dear ImGui version the host is built with (IMGUI_VERSION_NUM). Plugins that draw must be built
  * with exactly this version (default imconfig.h) and attach to the host's context, see
@@ -52,7 +53,7 @@ extern "C" {
 /* ------------------------------------------------------------------ games (bit mask) ---------- */
 #define HORIZON_GAME_ESWC     0x01u /* TrackMania Nations ESWC (unofficial 1.80 build) */
 #define HORIZON_GAME_SUNRISE  0x02u /* TrackMania Sunrise (Win10 community repack) */
-#define HORIZON_GAME_ORIGINAL 0x04u /* TrackMania Original (not supported yet) */
+#define HORIZON_GAME_ORIGINAL 0x04u /* TrackMania Original (Online Patch v2 exe) */
 #define HORIZON_GAME_TMNF     0x08u /* TrackMania Nations Forever (also TMLoader's combined exe) */
 #define HORIZON_GAME_TMUF     0x10u /* TrackMania United Forever */
 #define HORIZON_GAME_LEGACY   (HORIZON_GAME_ESWC | HORIZON_GAME_SUNRISE | HORIZON_GAME_ORIGINAL)
@@ -126,6 +127,8 @@ typedef enum HorizonEventType {
 #define HORIZON_PANEL_MENU_PAGE 0x01u /* a tab on the plugin's page in the menu */
 #define HORIZON_PANEL_HUD       0x02u /* starts in its own window that stays on screen with the menu closed
                                          (e.g. a timer); the player can still bring it into the menu */
+#define HORIZON_PANEL_START_HIDDEN 0x04u /* with HUD: a widget that is off until the player shows it (layout mode
+                                            bar, or "Show" on its tab). Host 0.3.0; older hosts show it at once */
 
 typedef void (HORIZON_CALL* HorizonPanelDrawFn)(void* user);
 
@@ -262,6 +265,20 @@ typedef struct HorizonStyle {
     void* font_mono;             /* ImFont* */
 } HorizonStyle;
 
+/* ------------------------------------------------------------------ UI metrics (ABI minor 4) --- */
+/* The player sets the menu size (share of the screen) and a content scale (80-125 %) in General ->
+ * Display, or with Ctrl + mouse wheel in the menu. The host then rebuilds its fonts inside the same
+ * ImFont objects (HorizonStyle's font pointers stay valid) and HorizonStyle.scale changes. Values change
+ * between frames: read them while drawing, don't keep copies. */
+typedef struct HorizonUiMetrics {
+    uint32_t size;               /* sizeof(HorizonUiMetrics) */
+    float scale;                 /* = HorizonStyle.scale: screen height / 1080 (1..2) x content scale */
+    float content_scale;         /* the player's content scale, 0.8 .. 1.25 */
+    float display_w, display_h;  /* the game's back buffer, pixels */
+    float menu_w, menu_h;        /* the Horizon menu window, pixels */
+    float page_w, page_h;        /* room for a plugin page inside the menu card, pixels (0 before a page was drawn) */
+} HorizonUiMetrics;
+
 /* ------------------------------------------------------------------ device access --------------- */
 /* For HORIZON_CAP_DEVICE plugins. All pointers are IDirect3DDevice9* / D3DPRESENT_PARAMETERS* passed
  * as void* so this header needs no d3d9.h. Order per frame: device plugins' pre_present -> host
@@ -376,7 +393,8 @@ typedef struct HorizonHostApi {
     void (HORIZON_CALL* release_texture)(HorizonPluginHandle plugin, uint64_t texture);
     /* Saves the replay of the current/last run like the game's "Save replay", without dialogs.
      * name_utf8: file name without extension ("" = the game's default name). HORIZON_ERR_NOT_SUPPORTED
-     * where the host does not do it yet (host 0.1.0: everywhere; the ESWC Autosave plugin saves on ESWC). */
+     * where the host does not do it (host 0.2.0 and later: ESWC only; Sunrise, Original and Forever return it.
+     * The Autosave plugin saves on ESWC, Sunrise and Original with its own copy of the game's calls). */
     HorizonResult (HORIZON_CALL* save_replay)(HorizonPluginHandle plugin, const char* name_utf8);
 
     /* ---- ABI minor 2 (check host->abi_minor >= 2 before use) ------------------------------------ */
@@ -412,6 +430,11 @@ typedef struct HorizonHostApi {
                                                  const void* body, uint32_t body_len, HorizonBridgeCallback callback,
                                                  void* user);
     int32_t (HORIZON_CALL* bridge_state)(void); /* HORIZON_BRIDGE_* */
+
+    /* ---- ABI minor 4 (check host->abi_minor >= 4 before use) ------------------------------------ */
+    /* Menu size, content scale and the room a plugin page has, so a wide page can pick fewer columns
+     * instead of clipping. The pointer stays valid for the whole start. Game thread. */
+    const HorizonUiMetrics* (HORIZON_CALL* ui_metrics)(void);
 } HorizonHostApi;
 
 /* ------------------------------------------------------------------ plugin exports --------------- */

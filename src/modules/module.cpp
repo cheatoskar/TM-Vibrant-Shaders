@@ -25,7 +25,7 @@ constexpr uint32_t kInterface = 1; // hostbridge::kInterface
 const char* const kIds[] = {"tmvs", "tmvs-capture", "tmvs-upscaling", "tmvs-packs"};
 const char* const kNames[] = {"TM Vibrant Shaders", "TMVS Capture", "TMVS Upscaling", "TMVS Packs"};
 const char* const kDescriptions[] = {
-    "Light, shadows, sky, weather and colour for the 2008 engine, with presets per map type.",
+    "Light, shadows, sky, weather and colour, with presets per map type.",
     "Photos, instant clips of your runs and checkpoints, and the video export. Works without the shaders.",
     "Renders the game at a lower resolution and scales it back up with AMD FSR 1. Works without the shaders.",
     "Texture mods (resource packs) on every map, chosen per environment.",
@@ -34,8 +34,8 @@ const char* const kDescriptions[] = {
 const HorizonPluginInfo kInfo = {HORIZON_ABI,
                                  kIds[kModule],
                                  kNames[kModule],
-                                 TM_SHADERS_VERSION_A,
-                                 HORIZON_GAME_TMNF | HORIZON_GAME_TMUF | HORIZON_GAME_ESWC,
+                                 TMVS_MODULES_VERSION_A,
+                                 HORIZON_GAME_FOREVER | HORIZON_GAME_LEGACY,
                                  HORIZON_CAP_MENU | HORIZON_CAP_DEVICE,
                                  HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
                                  "cheatoskar",
@@ -113,7 +113,8 @@ HORIZON_EXPORT int32_t HORIZON_CALL HorizonPlugin_Init(const HorizonHostApi* hos
     static const char* const kWhy[] = {"attached", "attached already", "this Horizon is too old (plugin ABI 1.2 needed)",
                                        "Dear ImGui differs from Horizon's", "the standalone TM Vibrant Shaders runs in this game",
                                        "unknown module"};
-    host->log(host->plugin, result == 0 ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "TM Vibrant Shaders %s: %s", TM_SHADERS_VERSION_A,
+    host->log(host->plugin, result == 0 ? HORIZON_LOG_INFO : HORIZON_LOG_WARN, "TMVS modules %s (core %s): %s", TMVS_MODULES_VERSION_A,
+              TM_SHADERS_VERSION_A,
               result >= 0 && result <= 5 ? kWhy[result] : "unknown answer");
     g_attached = result == 0;
     if (result == 2) return 4;

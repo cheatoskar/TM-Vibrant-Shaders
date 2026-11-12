@@ -1,12 +1,23 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(tm_vibrant_shaders VERSION 2.0.0 LANGUAGES CXX RC)
+project(tm_vibrant_shaders VERSION 1.6.0 LANGUAGES CXX RC)
 
-# 2.0.0-dev until the release tag sets it (CI: -DTM_SHADERS_VERSION=<tag>).
+# 1.6.0-dev until the release tag sets it (CI: -DTM_SHADERS_VERSION=<tag>).
 if(NOT DEFINED TM_SHADERS_VERSION)
   set(TM_SHADERS_VERSION "${PROJECT_VERSION}-dev")
 endif()
-message(STATUS "TM Vibrant Shaders version: ${TM_SHADERS_VERSION}")
+# The Horizon Host modules count on their own (2.0 = the first module release); they carry the same
+# core as the standalone of TM_SHADERS_VERSION. A tag's suffix (-rc.1, -dev) goes to both.
+set(TMVS_MODULES_BASE_VERSION "2.0.0")
+if(NOT DEFINED TMVS_MODULES_VERSION)
+  set(TMVS_MODULES_VERSION "${TMVS_MODULES_BASE_VERSION}")
+  string(FIND "${TM_SHADERS_VERSION}" "-" TMVS_SUFFIX_AT)
+  if(TMVS_SUFFIX_AT GREATER -1)
+    string(SUBSTRING "${TM_SHADERS_VERSION}" ${TMVS_SUFFIX_AT} -1 TMVS_SUFFIX)
+    string(APPEND TMVS_MODULES_VERSION "${TMVS_SUFFIX}")
+  endif()
+endif()
+message(STATUS "TM Vibrant Shaders version: ${TM_SHADERS_VERSION} (Horizon modules ${TMVS_MODULES_VERSION})")
 
 # TrackMania Forever is 32-bit (DirectX 9)
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -199,7 +210,7 @@ add_library(tm_vibrant_shaders SHARED
   thumbnails/thumbnails.rc)
 target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_runtime tmvs_core winmm shell32 winhttp)
 
-# The 2006-engine dev.ini keys (LegacyCensus, LegacyMp4) never act on another game: the dev.ini is
+# The 2006-engine dev.ini key (LegacyCensus) never acts on another game: the dev.ini is
 # shared with Forever's TMVS. tools/check_legacy_dev_keys.py runs with every build and fails it on a
 # use of those flags outside the 2006-engine-only code.
 find_package(Python3 COMPONENTS Interpreter)
@@ -350,7 +361,19 @@ foreach(id ${TMVS_MODULE_IDS})
   set(TMVS_FILE_DESCRIPTION "TM Vibrant Shaders module ${id} for Horizon Host")
   set(TMVS_INTERNAL_NAME "${id}")
   set(TMVS_ORIGINAL_FILENAME "${id}.dll")
+  # The module DLLs carry the modules' version (the core keeps the standalone's).
+  set(TMVS_SAVED_VERSION "${TM_SHADERS_VERSION}")
+  set(TMVS_SAVED_PARTS ${TMVS_V0} ${TMVS_V1} ${TMVS_V2})
+  set(TM_SHADERS_VERSION "${TMVS_MODULES_VERSION}")
+  string(REGEX MATCHALL "[0-9]+" TMVS_MODULE_PARTS "${TMVS_MODULES_VERSION}")
+  list(GET TMVS_MODULE_PARTS 0 TMVS_V0)
+  list(GET TMVS_MODULE_PARTS 1 TMVS_V1)
+  list(GET TMVS_MODULE_PARTS 2 TMVS_V2)
   configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/${id}_version.rc" @ONLY)
+  set(TM_SHADERS_VERSION "${TMVS_SAVED_VERSION}")
+  list(GET TMVS_SAVED_PARTS 0 TMVS_V0)
+  list(GET TMVS_SAVED_PARTS 1 TMVS_V1)
+  list(GET TMVS_SAVED_PARTS 2 TMVS_V2)
   add_library(${target} SHARED src/modules/module.cpp "${CMAKE_CURRENT_BINARY_DIR}/${id}_version.rc")
   target_include_directories(${target} PRIVATE third_party/horizon ${CMAKE_CURRENT_BINARY_DIR})
   target_compile_definitions(${target} PRIVATE TMVS_MODULE_INDEX=${TMVS_MODULE_INDEX} ${TMVS_DEFINITIONS})
@@ -374,7 +397,7 @@ endforeach()
 # The folders go into Horizon's plugins folder (packaging/horizon/README.txt), or into horizon-host's
 # extra-plugins\ to ship inside Horizon's own zips.
 set(TMVS_HORIZON_STAGE "${CMAKE_CURRENT_BINARY_DIR}/package-horizon")
-set(TMVS_HORIZON_ZIP "TMVS-${TM_SHADERS_VERSION}-horizon.zip")
+set(TMVS_HORIZON_ZIP "TMVS-${TMVS_MODULES_VERSION}-horizon.zip")
 set(TMVS_HORIZON_COMMANDS
   COMMAND ${CMAKE_COMMAND} -E rm -rf "${TMVS_HORIZON_STAGE}"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/dist")
@@ -610,7 +633,7 @@ target_link_libraries(tmvs_installer PRIVATE shell32 ole32 comctl32 version adva
 set_target_properties(tmvs_installer PROPERTIES OUTPUT_NAME "TM-Vibrant-Shaders-Setup")
 
 # Release: cmake --build build --config Release --target release_zip (both products of this version)
-#   dist/TMVS-<version>-horizon.zip      the four Horizon modules (horizon_zip above)
+#   dist/TMVS-<modules version>-horizon.zip  the four Horizon modules (horizon_zip above)
 #   dist/TM-Vibrant-Shaders.zip
 #     TM Vibrant Shaders/                 the ModLoader product folder (also the setup's source)
 #       description.yaml
@@ -637,7 +660,7 @@ add_custom_target(release_zip
           ${CMAKE_COMMAND} -E tar cf "${TMVS_DIST}/TM-Vibrant-Shaders.zip" --format=zip
           "TM Vibrant Shaders" "TM-Vibrant-Shaders-Setup.exe" "d3d11.dll" "README.txt" "LICENSE.txt" "THIRD_PARTY_NOTICES.txt"
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tm_vibrant_shaders> "${TMVS_DIST}/"
-  # The same version as Horizon modules: dist/TMVS-<version>-horizon.zip (horizon_zip's steps)
+  # The same core as Horizon modules: dist/TMVS-<modules version>-horizon.zip (horizon_zip's steps)
   ${TMVS_HORIZON_COMMANDS}
   COMMAND ${CMAKE_COMMAND} -DDIR=${TMVS_DIST} -P "${CMAKE_CURRENT_SOURCE_DIR}/packaging/sha256sums.cmake"
   DEPENDS tm_vibrant_shaders tmvs_installer tmvs_modules

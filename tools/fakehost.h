@@ -1,5 +1,6 @@
 #pragma once
-// A stand-in for Horizon Host's plugin side (include/horizon_plugin.h, ABI 1.3; g_abiMinor3 false hands out the 1.2 table), for the module tests
+// A stand-in for Horizon Host's plugin side (include/horizon_plugin.h, ABI 1.4; g_abiMinor3 false hands out the 1.2 table,
+// g_abiMinor4 false the 1.3 one), for the module tests
 // (tools/moduletest.cpp) and the Horizon menu preview (tools/hzpreview.cpp): every plugin gets its own
 // HorizonHostApi table; what the plugins register (hotkeys, panels, device callbacks, host flags, log
 // lines, settings) is kept for the test to look at. Modelled on horizon-host's tests/fake_host.cpp and
@@ -59,6 +60,8 @@ int g_nextHotkey = 1;
 std::string g_dataRoot;
 int g_menuOpen = 0;
 bool g_abiMinor3 = false;      // hand out the ABI 1.3 table (with open_page)
+bool g_abiMinor4 = false;      // ... and the 1.4 one (with ui_metrics: g_ui)
+HorizonUiMetrics g_ui{};       // what ui_metrics answers (the menu, the container being drawn)
 std::string g_openedPage;      // the plugin id open_page was last called for
 
 Plugin* of(HorizonPluginHandle h) {
@@ -177,6 +180,11 @@ uint32_t HORIZON_CALL apiHostFlags(void) {
     return f;
 }
 
+const HorizonUiMetrics* HORIZON_CALL apiUiMetrics(void) {
+    g_ui.size = sizeof(HorizonUiMetrics);
+    return &g_ui;
+}
+
 HorizonResult HORIZON_CALL apiOpenPage(HorizonPluginHandle h, const char* key) {
     g_openedPage = of(h)->id + (key && *key ? std::string(":") + key : std::string());
     g_menuOpen = !g_menuOpen;
@@ -232,6 +240,13 @@ void fillApi(Plugin* p) {
     // ABI 1.3: open_page is the first field after the 1.2 table (then notify, bridge_request, bridge_state)
     if (g_abiMinor3) {
         a.open_page = apiOpenPage;
+        // ABI 1.4: ui_metrics right after bridge_state
+        if (g_abiMinor4) {
+            a.ui_metrics = apiUiMetrics;
+        } else {
+            a.abi_minor = 3;
+            a.size = static_cast<uint32_t>(offsetof(HorizonHostApi, ui_metrics));
+        }
     } else {
         a.abi_minor = 2;
         a.size = static_cast<uint32_t>(offsetof(HorizonHostApi, open_page));

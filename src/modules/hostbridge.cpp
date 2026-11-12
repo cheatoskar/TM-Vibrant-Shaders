@@ -44,6 +44,8 @@ ImGuiMemAllocFunc g_hostAlloc = nullptr;
 ImGuiMemFreeFunc g_hostFree = nullptr;
 void* g_hostAllocUser = nullptr;
 bool g_captureWanted = false; // horizon::capture's last answer (the flag follows the pre_present module)
+float g_lastUiScale = 0.0f;   // what the last page drawn for the host got (ABI 1.4 ui_metrics; the tests read it)
+float g_lastUiRoom = 0.0f;
 
 bool validModule(int module) {
     return module >= 0 && module < modules::kCount;
@@ -233,22 +235,43 @@ int settingsPage(int module) {
     }
 }
 
+// Our own ImGui context and allocator while one of the host's draws borrows the globals.
+struct OwnContext {
+    ImGuiContext* context;
+    ImGuiMemAllocFunc alloc;
+    ImGuiMemFreeFunc free;
+    void* user;
+};
+
+void restoreOwn(const OwnContext* own) {
+    ImGui::SetCurrentContext(own->context);
+    ImGui::SetAllocatorFunctions(own->alloc, own->free, own->user);
+}
+
+// The draw, with our context given back however it ends. Horizon Host 0.3 catches an exception in a
+// plugin's DrawMenu or panel (C++ or an access violation), switches the plugin off and draws on: without
+// the __finally our DLL's ImGui would keep pointing at the host's context, and our own menu, toasts and
+// photo hints would draw into it. No C++ objects in this function (__try).
+void drawGuarded(const OwnContext* own, void (*draw)(void*), void* arg) {
+    __try {
+        draw(arg);
+    } __finally {
+        if (AbnormalTermination()) overlay::abortPageForHorizon();
+        restoreOwn(own);
+    }
+}
+
 // The host calls this inside its own ImGui frame: its context lives in the host's copy of Dear ImGui.
 // Ours (this DLL's) is pointed at it, with the host's allocator, for the draw only (memory either side
 // allocates in that context is freed by the host), and given back its own afterwards.
 template <typename Fn>
 void inHostContext(const HorizonHostApi* host, Fn draw) {
     if (!host || !g_hostAlloc) return;
-    ImGuiContext* own = ImGui::GetCurrentContext();
-    ImGuiMemAllocFunc ownAlloc = nullptr;
-    ImGuiMemFreeFunc ownFree = nullptr;
-    void* ownUser = nullptr;
-    ImGui::GetAllocatorFunctions(&ownAlloc, &ownFree, &ownUser);
+    OwnContext own{ImGui::GetCurrentContext(), nullptr, nullptr, nullptr};
+    ImGui::GetAllocatorFunctions(&own.alloc, &own.free, &own.user);
     ImGui::SetAllocatorFunctions(g_hostAlloc, g_hostFree, g_hostAllocUser);
     ImGui::SetCurrentContext(static_cast<ImGuiContext*>(host->imgui_context()));
-    draw();
-    ImGui::SetCurrentContext(own);
-    ImGui::SetAllocatorFunctions(ownAlloc, ownFree, ownUser);
+    drawGuarded(&own, [](void* fn) { (*static_cast<Fn*>(fn))(); }, &draw);
 }
 
 // The host's title font for our headings (its atlas: ours can't be drawn into its lists), null before
@@ -259,9 +282,31 @@ ImFont* hostTitleFont(const HorizonHostApi* host) {
     return static_cast<ImFont*>(style->font_title);
 }
 
+// Horizon Host 0.3 with plugin ABI 1.4 (docs/plugin-abi.md "ABI 1.4"): the menu size, the player's
+// content scale and the room of the container calling us right now (the menu page, a popped-out panel,
+// a free plugin window; the host sets page_w/page_h before each call). Null on an older host.
+const HorizonUiMetrics* uiMetricsOf(const HorizonHostApi* host) {
+    if (!host || host->abi_minor < 4 || host->size < offsetof(HorizonHostApi, ui_metrics) + sizeof(void*) || !host->ui_metrics) return nullptr;
+    const HorizonUiMetrics* m = host->ui_metrics();
+    return m && m->size >= sizeof(HorizonUiMetrics) ? m : nullptr;
+}
+
+// The host's UI scale: ui_metrics (1.4), else its style's scale (screen height / 1080), else 0 (ours).
+float hostScale(const HorizonHostApi* host) {
+    if (const HorizonUiMetrics* m = uiMetricsOf(host)) return m->scale;
+    const HorizonStyle* style = host && host->style ? host->style() : nullptr;
+    if (style && style->size >= offsetof(HorizonStyle, scale) + sizeof(float)) return style->scale;
+    return 0.0f;
+}
+
 // ready: overlay::readyForHorizon(), asked in our own context before the switch.
 void drawPage(int page, bool ready, const HorizonHostApi* host) {
-    if (!ready || !overlay::drawPageForHorizon(page, hostTitleFont(host))) ImGui::TextDisabled("Starts with the game's first frame.");
+    const HorizonUiMetrics* m = uiMetricsOf(host);
+    const float room = m && m->page_w > 0.0f ? m->page_w : 0.0f;
+    g_lastUiScale = hostScale(host);
+    g_lastUiRoom = room;
+    if (!ready || !overlay::drawPageForHorizon(page, hostTitleFont(host), g_lastUiScale, room))
+        ImGui::TextDisabled("Starts with the game's first frame.");
 }
 
 void HORIZON_CALL drawPanel(void* user) {
@@ -440,13 +485,14 @@ std::string query() {
     const Config& config = Config::get();
     snprintf(text, sizeof(text),
              "hosted=%d;refused=%d;owner=%s;attached=%d%d%d%d;enabled=%d%d%d%d;deviceOwner=%d;presentOwner=%d;shadersBlocked=%d;"
-             "effects=%d;clipsAllowed=%d;upscaling=%d;packs=%d;hostKeys=%d;settingsVersion=%d;preset=%s;device=%d;capture=%d",
+             "effects=%d;clipsAllowed=%d;upscaling=%d;packs=%d;hostKeys=%d;settingsVersion=%d;preset=%s;device=%d;capture=%d;"
+             "uiScale=%.2f;uiRoom=%.0f",
              modules::hosted() ? 1 : 0, g_refused ? 1 : 0, g_refused ? g_owner.c_str() : (g_claimed ? "modules" : ""),
              g_slots[0].attached, g_slots[1].attached, g_slots[2].attached, g_slots[3].attached, g_slots[0].enabled, g_slots[1].enabled,
              g_slots[2].enabled, g_slots[3].enabled, deviceOwner(), presentOwner(), config.shadersBlocked() ? 1 : 0,
              config.settings.enabled ? 1 : 0, clips::allowed() ? 1 : 0, modules::on(modules::kUpscaling) ? 1 : 0,
              modules::on(modules::kPacks) ? 1 : 0, keys::hostOwned() ? 1 : 0, config.settingsVersionRead(), config.preset.c_str(),
-             hook::hasGameDevice() ? 1 : 0, g_captureWanted ? 1 : 0);
+             hook::hasGameDevice() ? 1 : 0, g_captureWanted ? 1 : 0, g_lastUiScale, g_lastUiRoom);
     return text;
 }
 

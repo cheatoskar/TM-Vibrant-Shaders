@@ -31,6 +31,14 @@ const Host* g_host = nullptr;
 bool g_reloadRequested = false;
 ImFont* g_fontTitle = nullptr; // headings, preset names
 float g_scale = 1.0f;          // 1 at 1080p, more on larger screens
+float g_room = 0.0f;           // Horizon (ABI 1.4): the width of the container a page is drawn in, 0 unknown
+
+// The width there is for columns: the content region, or less when the host says its container is
+// narrower (a popped-out panel, a free plugin window; its page_w is never wider than the region).
+float roomWidth() {
+    const float avail = ImGui::GetContentRegionAvail().x;
+    return g_room > 0.0f && g_room < avail ? g_room : avail;
+}
 
 const char* kSkyModes[] = {"Game sky", "Clear sky + clouds", "Starry night", "Black hole", "Aurora", "Ring world"};
 const char* kPlanetChoices[] = {"None", "Saturn", "Jupiter", "Ice giant", "Exotic"};
@@ -1099,7 +1107,7 @@ void addCard(float width) {
 template <typename Draw>
 void cardGrid(int count, Draw drawCard) {
     const float spacing = 12.0f * g_scale;
-    const float avail = ImGui::GetContentRegionAvail().x;
+    const float avail = roomWidth();
     const int columns = std::max(1, static_cast<int>((avail + spacing) / (215.0f * g_scale + spacing)));
     const float width = std::floor((avail - spacing * (columns - 1)) / columns);
     for (int i = 0; i < count; i++) {
@@ -1302,7 +1310,7 @@ bool panel(const PanelDef& def) {
 bool panelColumns(const std::vector<PanelDef>& panels, float minWidth) {
     if (panels.empty()) return false;
     const float spacing = 12.0f * g_scale;
-    const float avail = ImGui::GetContentRegionAvail().x;
+    const float avail = roomWidth();
     const int columns = std::clamp(static_cast<int>((avail + spacing) / (minWidth * g_scale + spacing)), 1, static_cast<int>(panels.size()));
     std::vector<std::vector<int>> stacks(columns);
     std::vector<float> heights(columns, 0.0f);
@@ -1626,7 +1634,7 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
     ImGui::BeginDisabled(!config.autoMood);
     static const char* const kLabels[] = {"Day maps", "Sunset maps", "Night maps"};
     const float spacing = 12.0f * g_scale;
-    const int columns = ImGui::GetContentRegionAvail().x >= 3.0f * 230.0f * g_scale ? 3 : 1;
+    const int columns = roomWidth() >= 3.0f * 230.0f * g_scale ? 3 : 1;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(spacing * 0.5f, spacing * 0.5f));
     if (ImGui::BeginTable("moods", columns, ImGuiTableFlags_SizingStretchSame)) {
         for (int m = 0; m < static_cast<int>(Mood::Count); m++) {
@@ -1957,6 +1965,7 @@ struct VideoPreset {
     const char* tip;
     void (*apply)(Settings& s);
     bool (*matches)(const Settings& s);
+    const char* needs = nullptr; // a setting this preset is about; not shown where the game has none (the 2006 engine: no HDR10)
 };
 
 const VideoPreset kVideoPresets[] = {
@@ -2026,7 +2035,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoHdr = true;
          s.videoEncoder = 0;
      },
-     [](const Settings& s) { return s.videoCodec >= 2 && s.video10Bit && s.videoHdr && s.videoOwnFrames; }},
+     [](const Settings& s) { return s.videoCodec >= 2 && s.video10Bit && s.videoHdr && s.videoOwnFrames; }, "VideoHdr"},
 };
 
 const VideoPreset kVideoLooks[] = {
@@ -2048,8 +2057,12 @@ const VideoPreset kVideoLooks[] = {
 
 // A row of preset buttons; the one the settings match is lit.
 void videoPresetRow(Config& config, Settings& s, const VideoPreset* presets, size_t count) {
+    bool first = true;
     for (size_t i = 0; i < count; i++) {
-        if (i) ImGui::SameLine();
+        const Field* needs = presets[i].needs ? findField(presets[i].needs) : nullptr;
+        if (needs && !supported(*needs)) continue;
+        if (!first) ImGui::SameLine();
+        first = false;
         if (chip(presets[i].name, presets[i].matches(s))) {
             presets[i].apply(s);
             config.markDirty();
@@ -2063,9 +2076,13 @@ bool drawVideoPage(Config& config, Settings& s) {
     std::vector<PanelDef> panels;
     panels.push_back({"For", 4.0f, [&config, &s] {
                           videoPresetRow(config, s, kVideoPresets, sizeof(kVideoPresets) / sizeof(kVideoPresets[0]));
-                          ImGui::Spacing();
-                          ImGui::TextDisabled("Look");
-                          videoPresetRow(config, s, kVideoLooks, sizeof(kVideoLooks) / sizeof(kVideoLooks[0]));
+                          // The looks are the mod's own frames (shutter, lens depth of field): not on the 2006 engine.
+                          const Field* shutter = findField("VideoShutter");
+                          if (!shutter || supported(*shutter)) {
+                              ImGui::Spacing();
+                              ImGui::TextDisabled("Look");
+                              videoPresetRow(config, s, kVideoLooks, sizeof(kVideoLooks) / sizeof(kVideoLooks[0]));
+                          }
                           return false;
                       }});
     panels.push_back({"Recommended dialog settings", 3.0f, [] {
@@ -2921,12 +2938,37 @@ bool drawUpscalingPage(Config&, Settings& s, const Names&) {
     return panelColumns(panels, 380.0f);
 }
 
+// What drawPageForHost changes for its draw, kept so abortHostDraw can put it back.
+struct HostDraw {
+    bool active = false;
+    ImFont* title = nullptr;
+    float scale = 1.0f;
+} g_hostDraw;
+
+void abortHostDraw() {
+    if (!g_hostDraw.active) return;
+    g_fontTitle = g_hostDraw.title;
+    g_scale = g_hostDraw.scale;
+    g_room = 0.0f;
+    g_inWindow = false;
+    g_host = nullptr;
+    g_hostDraw.active = false;
+}
+
 bool drawPageForHost(int id, const Host& host, ImFont* titleFont) {
     g_host = &host;
     // The headings in the host's own title font (or its current one): a font of our atlas can't be drawn
     // into the host's draw lists by ImDrawList::AddText (it samples the host's font texture: garbled).
     ImFont* const ownTitle = g_fontTitle;
+    const float ownScale = g_scale;
+    g_hostDraw.active = true;
+    g_hostDraw.title = ownTitle;
+    g_hostDraw.scale = ownScale;
     g_fontTitle = titleFont ? titleFont : ImGui::GetFont();
+    // Horizon's sizes (ABI 1.4): its scale includes the player's content scale (80-125 %), its fonts
+    // are built for it; our sizes follow so the page matches the menu around it.
+    if (host.uiScale > 0.0f) g_scale = std::clamp(host.uiScale, 0.5f, 3.0f);
+    g_room = host.uiRoom > 0.0f ? host.uiRoom : 0.0f;
     Config& config = Config::get();
     bool (*hostPage)(Config&, Settings&, const Names&) = nullptr;
     if (id == pages::kCaptureSettings) hostPage = drawCaptureSettings;
@@ -2946,7 +2988,10 @@ bool drawPageForHost(int id, const Host& host, ImFont* titleFont) {
         g_inWindow = false;
     }
     g_fontTitle = ownTitle;
+    g_scale = ownScale;
+    g_room = 0.0f;
     g_host = nullptr;
+    g_hostDraw.active = false;
     return shown;
 }
 

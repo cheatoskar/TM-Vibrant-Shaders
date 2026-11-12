@@ -1,10 +1,11 @@
-"""Checks that the 2006-engine dev.ini keys (LegacyCensus, LegacyMp4) can never act on another game.
+"""Checks that the 2006-engine dev.ini key (LegacyCensus) can never act on another game.
 
 Documents\\TrackMania\\TMVS\\dev.ini is shared by every TrackMania the mod runs in (Forever, United,
-ESWC, Sunrise, Original). The keys are read into g_legacyCensusWanted / g_legacyMp4Wanted; only
-installLegacy, after it recognised a 2006-engine game, copies them into the flags that act
-(g_legacyCensus / g_legacyMp4), and install() clears those flags for every other game. This script
-fails when code anywhere under src/ uses the four names outside the functions allowed below, or when
+ESWC, Sunrise, Original). The key is read into g_legacyCensusWanted; only installLegacy, after it
+recognised a 2006-engine game, copies it into the flag that acts (g_legacyCensus), and install()
+clears that flag for every other game. (LegacyMp4 is gone: the MP4 export is a normal feature since
+1.6.0.) This script fails when code anywhere under src/ uses the two names outside the functions
+allowed below, or when
 installLegacy copies them before the game is recognised.
 
 Run:  python tools/check_legacy_dev_keys.py      (exit code 1 on a violation; runs with every build)
@@ -18,20 +19,16 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # name -> {function: what it may do}; "decl" is the global definition (outside any function).
 ALLOWED = {
     "g_legacyCensusWanted": {"legacyCensus": "write", "installLegacy": "read", "legacyDevKeysIgnored": "read"},
-    "g_legacyMp4Wanted": {"legacyMp4": "write", "installLegacy": "read", "legacyDevKeysIgnored": "read"},
     # The acting flags: set only where the game is known (installLegacy) or cleared (legacyDevKeysIgnored),
     # read only in code that runs on a recognised 2006-engine game.
     "g_legacyCensus": {"installLegacy": "write", "legacyDevKeysIgnored": "clear", "installLegacyCensus": "read",
                        "legacyPoll": "read", "legacySetChallengeDetour": "read"},
-    "g_legacyMp4": {"installLegacy": "write", "legacyDevKeysIgnored": "clear", "installLegacyVideoFile": "read"},
 }
 # Uses that must exist, so a rename can't make the check pass by finding nothing.
-REQUIRED = [("g_legacyCensus", "installLegacyCensus"), ("g_legacyMp4", "installLegacyVideoFile"),
-            ("g_legacyCensus", "installLegacy"), ("g_legacyMp4", "installLegacy"),
-            ("g_legacyCensusWanted", "legacyCensus"), ("g_legacyMp4Wanted", "legacyMp4"),
-            ("g_legacyCensus", "legacyDevKeysIgnored"), ("g_legacyMp4", "legacyDevKeysIgnored")]
+REQUIRED = [("g_legacyCensus", "installLegacyCensus"), ("g_legacyCensus", "installLegacy"),
+            ("g_legacyCensusWanted", "legacyCensus"), ("g_legacyCensus", "legacyDevKeysIgnored")]
 
-NAME = re.compile(r"\b(g_legacyCensusWanted|g_legacyMp4Wanted|g_legacyCensus|g_legacyMp4)\b")
+NAME = re.compile(r"\b(g_legacyCensusWanted|g_legacyCensus)\b")
 HEADER = re.compile(r"^[A-Za-z_][\w:<>,\s\*&]*?\b(\w+)\s*\(")
 
 
@@ -101,7 +98,7 @@ def main():
     else:
         b = body.group(1)
         recognised = b.find("if (!found) return false;")
-        for name in ("g_legacyCensus = g_legacyCensusWanted;", "g_legacyMp4 = g_legacyMp4Wanted;"):
+        for name in ("g_legacyCensus = g_legacyCensusWanted;",):
             at = b.find(name)
             if recognised < 0 or at < 0 or at < recognised:
                 errors.append("src/engine.cpp: installLegacy() must copy `%s` after `if (!found) return false;`" % name)

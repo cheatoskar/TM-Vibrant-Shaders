@@ -1,12 +1,13 @@
 {
   "id": "tmvs-packs",
   "name": "TMVS Packs",
-  "version": "@TM_SHADERS_VERSION@",
+  "version": "@TMVS_MODULES_VERSION@",
   "dll": "tmvs-packs.dll",
-  "games": ["tmnf", "tmuf", "eswc"],
+  "games": ["tmnf", "tmuf", "eswc", "sunrise", "original"],
   "online": "online-ok",
   "abi": 1,
   "description": "Texture mods (resource packs) on every map, chosen per environment.",
   "author": "cheatoskar",
-  "icon": "icon.png"
+  "icon": "icon.png",
+  "ui": { "min_w": 480, "min_h": 340, "pref_w": 820, "pref_h": 600 }
 }

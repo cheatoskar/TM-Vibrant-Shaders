@@ -125,6 +125,11 @@ struct Host {
     // The game's own options, a panel first on the Settings page (null: none).
     const char* gamePanelTitle = nullptr;
     std::function<void()> gamePanel;
+    // Horizon Host (plugin ABI 1.4, ui_metrics): its UI scale (screen height / 1080 times the player's
+    // content scale) and the width of the container the page is drawn in right now (the menu page, a
+    // popped-out panel or a free plugin window). 0: not given (our own menu, an older host).
+    float uiScale = 0.0f;
+    float uiRoom = 0.0f;
 };
 
 // Colours, sizes and fonts (after ImGui::CreateContext, before the renderer backend).
@@ -151,6 +156,9 @@ enum : int {
 // One page's body (Page ids as in menu.cpp: 4 Performance, 5 Settings, ...) inside a window someone else
 // made: Horizon Host's panel (src/horizonplugin.cpp). False: no such page in this game.
 bool drawPageForHost(int id, const Host& host, ImFont* titleFont = nullptr);
+// A page drawn for the host stopped in the middle (the host's crash guard caught an exception in it):
+// what drawPageForHost changed for the draw is put back. Nothing when no such draw runs.
+void abortHostDraw();
 // A detached window wants to stay on screen with the menu closed: the host must keep calling draw
 // and let the mouse reach it the way it does for the compare split's bar.
 bool pinnedWindows();

@@ -305,6 +305,27 @@ int scenarioLoad(const std::wstring& root) {
     char line[160];
     snprintf(line, sizeof(line), "every page drawn in the host's ImGui context (%d panels, 4 Settings tabs, %d vertices)", panels, vertices);
     check(panels == 9 && vertices > 1000, line);
+    checkField("uiScale", "0.00"); // the 1.2 table, no style: our own scale
+    checkField("uiRoom", "0");
+
+    // ABI 1.4 (Horizon Host 0.3): the pages take the host's UI scale (with the player's content scale)
+    // and the width of the container calling them (a popped-out panel here, narrower than the region).
+    fakehost::g_ui = HorizonUiMetrics{sizeof(HorizonUiMetrics), 1.25f, 1.25f, 1920.0f, 1080.0f, 1500.0f, 900.0f, 480.0f, 600.0f};
+    for (auto& p : fakehost::g_plugins) {
+        p->api.abi_minor = HORIZON_ABI_MINOR;
+        p->api.size = sizeof(HorizonHostApi);
+        p->api.ui_metrics = fakehost::apiUiMetrics;
+    }
+    const int narrow = drawEverything(&panels);
+    snprintf(line, sizeof(line), "ABI 1.4: every page drawn at scale 1.25 in a 480 px container (%d panels, %d vertices)", panels, narrow);
+    check(panels == 9 && narrow > 1000, line);
+    checkField("uiScale", "1.25");
+    checkField("uiRoom", "480");
+    for (auto& p : fakehost::g_plugins) {
+        p->api.abi_minor = 2;
+        p->api.size = static_cast<uint32_t>(offsetof(HorizonHostApi, open_page));
+        p->api.ui_metrics = nullptr;
+    }
 
     fakehost::setEnabled(tmvs, false);
     checkField("shadersBlocked", "1");
@@ -418,7 +439,8 @@ int scenarioModulesFirst(const std::wstring& root) {
     prepareRoot(root);
     if (!loadCore(root)) return 1;
     hostImGui();
-    fakehost::g_abiMinor3 = true; // a host with open_page (ABI 1.3)
+    fakehost::g_abiMinor3 = true; // a host with open_page (ABI 1.3) and ui_metrics (ABI 1.4)
+    fakehost::g_abiMinor4 = true;
     check(loadModules(), "the four modules load");
     checkField("attached", "1111");
     const fakehost::Hotkey* menuKey = fakehost::hotkey(fakehost::find("tmvs"), "menu");

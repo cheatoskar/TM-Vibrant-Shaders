@@ -46,8 +46,12 @@ void pollHotkeys();                       // the hotkeys alone, for a frame the 
 // Called with our own ImGui context current, before the host's is made current for drawPageForHorizon:
 // false while the pages can't be drawn (no device yet, our fonts not built).
 bool readyForHorizon();
-// titleFont: the host's title font (HorizonStyle::font_title), null: its current font.
-bool drawPageForHorizon(int page, ImFont* titleFont = nullptr);
+// titleFont: the host's title font (HorizonStyle::font_title), null: its current font. uiScale, room:
+// Horizon's UI scale and the width of the container the page is drawn in (plugin ABI 1.4 ui_metrics;
+// 0: not given, our own scale and the content region).
+bool drawPageForHorizon(int page, ImFont* titleFont = nullptr, float uiScale = 0.0f, float room = 0.0f);
+// The host's crash guard stopped a page in the middle: the menu's state for that draw is put back.
+void abortPageForHorizon();
 // Set when the user asks for a shader reload from the menu; cleared by the caller.
 bool consumeReloadRequest();
 
