@@ -1074,7 +1074,21 @@ bool patchImport(const char* dll, const char* function, void* replacement, void*
 
         auto names = reinterpret_cast<IMAGE_THUNK_DATA*>(reinterpret_cast<BYTE*>(base) + import->OriginalFirstThunk);
         auto addresses = reinterpret_cast<IMAGE_THUNK_DATA*>(reinterpret_cast<BYTE*>(base) + import->FirstThunk);
-        if (!import->OriginalFirstThunk) names = addresses;
+        if (!import->OriginalFirstThunk) {
+            // No name table (the 2006 engine's exes: ESWC, Sunrise, Original link without one): once loaded,
+            // the address table holds the functions' addresses, not their names' RVAs. Reading them as
+            // names ran off into whatever lies at exe base + address (an access violation once this DLL
+            // loaded high). The entry is found by the function's address instead.
+            HMODULE module = GetModuleHandleA(dll);
+            void* target = module ? reinterpret_cast<void*>(GetProcAddress(module, function)) : nullptr;
+            if (!target) continue;
+            for (; addresses->u1.Function; addresses++) {
+                if (reinterpret_cast<void*>(addresses->u1.Function) != target) continue;
+                *originalOut = target;
+                return writePointer(reinterpret_cast<void**>(&addresses->u1.Function), replacement);
+            }
+            continue;
+        }
 
         for (; names->u1.AddressOfData; names++, addresses++) {
             if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
