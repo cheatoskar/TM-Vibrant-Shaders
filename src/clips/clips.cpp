@@ -33,6 +33,9 @@ int g_authorMs = -1;        // the loaded map's author time (the last map's whil
 double g_authorRead = -10.0;
 bool g_paused = false;
 bool g_idle = false;
+bool g_allowed = true;      // TMVS 2.0 modules: the Capture module is on (setAllowed)
+bool g_hostKeys = false;    // TMVS 2.0 modules: Horizon's hotkey table has the keys (setHostKeys)
+CheckpointTracker g_checkpoints;
 HANDLE g_hostMutex = nullptr;
 IDirect3DDevice9* g_lastDevice = nullptr; // the device present() saw last
 std::set<std::wstring> g_reserved;        // clip names handed out whose saves haven't reported yet
@@ -650,7 +653,7 @@ void frameEnd(IDirect3DDevice9* device) {
 }
 
 void present(IDirect3DDevice9* device) {
-    if (!g_ready || !device) return;
+    if (!g_ready || !device || !g_allowed) return;
     g_frames++;
     const double now = seconds();
     const bool frameEndSeen = g_frameEndSeen, frameEndCopy = g_frameEndCopy;
@@ -696,9 +699,11 @@ void present(IDirect3DDevice9* device) {
         TMVS_LOG("clips: TM Clips (the standalone mod) is loaded too: it stays idle, TM Vibrant Shaders records");
     syncSettings(now);
     takeResults();
-    if (g_settings.enabled && g_saveKey.pressed(g_settings.saveKey)) saveLast();
-    if (g_settings.enabled && g_lastRunKey.pressed(g_settings.lastRunKey)) saveLastRun();
-    if (g_settings.enabled && g_runSoFarKey.pressed(g_settings.runSoFarKey)) saveRunSoFar();
+    if (!g_hostKeys) {
+        if (g_settings.enabled && g_saveKey.pressed(g_settings.saveKey)) saveLast();
+        if (g_settings.enabled && g_lastRunKey.pressed(g_settings.lastRunKey)) saveLastRun();
+        if (g_settings.enabled && g_runSoFarKey.pressed(g_settings.runSoFarKey)) saveRunSoFar();
+    }
     readAuthorTime(now);
     // The race, for the runs' clips (read even before the recorder is ready: a run's start counts).
     {
@@ -957,11 +962,20 @@ void drawSaving() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Saves the run from %.0f s before the start to %.0f s after the finish.", s.before, s.after);
     if (ImGui::SliderFloat("Before start", &s.before, 0.0f, 10.0f, "%.1f s")) edited();
     if (ImGui::SliderFloat("After finish", &s.after, 0.0f, 10.0f, "%.1f s")) edited();
+    if (g_host == Host::Tmvs) { // the race's checkpoint times come from TM Vibrant Shaders' engine reads
+        if (ImGui::Checkbox("Checkpoint clips", &s.checkpointClips)) edited();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Saves each sector as its own clip when you pass a checkpoint (from the checkpoint before, to 1 s after).");
+    }
     ImGui::Spacing();
-    keyRow("Save last run", s.lastRunKey, 2);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Also after a restart, while the run is in the buffer.");
-    keyRow("Save run so far", s.runSoFarKey, 3);
-    keyRow("Save last seconds", s.saveKey, 1);
+    if (g_hostKeys) {
+        ImGui::TextDisabled("Keys: set in the Horizon menu (Hotkeys).");
+    } else {
+        keyRow("Save last run", s.lastRunKey, 2);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Also after a restart, while the run is in the buffer.");
+        keyRow("Save run so far", s.runSoFarKey, 3);
+        keyRow("Save last seconds", s.saveKey, 1);
+    }
     int length = s.keySeconds <= 30 ? 0 : s.keySeconds <= 60 ? 1 : 2;
     const char* lengthItems[] = {"30 s", "60 s", "90 s"};
     if (ImGui::Combo("Last seconds", &length, lengthItems, 3)) {
@@ -1088,6 +1102,63 @@ void drawToast() {
     else ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), "%s", g_toast.text.c_str());
     ImGui::End();
     ImGui::PopStyleVar();
+}
+
+// --- TMVS 2.0 as Horizon modules --------------------------------------------------------------
+
+void setAllowed(bool allowed) {
+    if (allowed == g_allowed) return;
+    g_allowed = allowed;
+    if (!allowed) {
+        stopRecording("the Capture module is off");
+        g_status = "Off (Capture module)";
+    }
+    if (g_booted) TMVS_LOG("clips: %s", allowed ? "the Capture module is on: recording as set" : "the Capture module is off: not recording");
+}
+
+bool allowed() {
+    return g_allowed;
+}
+
+void setHostKeys(bool hostKeys) {
+    g_hostKeys = hostKeys;
+}
+
+void run(Action action) {
+    if (!g_ready || !g_allowed || !g_settings.enabled) return;
+    switch (action) {
+    case Action::SaveLast: saveLast(); break;
+    case Action::SaveLastRun: saveLastRun(); break;
+    case Action::SaveRunSoFar: saveRunSoFar(); break;
+    }
+}
+
+bool wantsCheckpoints() {
+    return g_ready && g_allowed && g_host == Host::Tmvs && g_settings.enabled && g_settings.checkpointClips;
+}
+
+void raceProgress(const void* race, int passed, bool finished, int lastTime) {
+    SectorClip sector;
+    if (!g_checkpoints.update(race, passed, finished, lastTime, sector)) return;
+    if (!recording() || !g_tracker.running()) {
+        TMVS_LOG("clips: checkpoint %d at %s: not saved (%s)", sector.index, formatTime(sector.toMs).c_str(),
+                 recording() ? "no run tracked" : "not recording");
+        return;
+    }
+    const double start = g_tracker.runStart();
+    const double from = sector.fromMs < 0 ? start - g_settings.before : start + sector.fromMs / 1000.0;
+    const double to = start + sector.toMs / 1000.0 + 1.0;
+    SaveJob job;
+    job.from = static_cast<int64_t>(from * 1e7);
+    job.to = static_cast<int64_t>(to * 1e7);
+    char what[48];
+    snprintf(what, sizeof(what), "CP%d %s", sector.index, formatTime(sector.toMs).c_str());
+    job.what = what;
+    char name[48];
+    snprintf(name, sizeof(name), "CP%d_%s", sector.index, formatTime(sector.toMs).c_str());
+    job.path = clipPath(mapName(), name);
+    TMVS_LOG("clips: checkpoint %d at %s: saving its sector (%.1f s)", sector.index, formatTime(sector.toMs).c_str(), to - from);
+    queueSave(to, job);
 }
 
 } // namespace clips

@@ -7,6 +7,7 @@
 #include "keys.h"
 #include "log.h"
 #include "lut.h"
+#include "modules/modules.h"
 #include "update.h"
 #include "imgui_internal.h"
 #include "tm_shaders_version.h"
@@ -664,6 +665,10 @@ bool containsNoCase(const char* text, const char* query) {
 // New pages last: the page's number is saved (MenuPage); the bar shows Video and Resource packs
 // before Settings.
 enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPacks, kMisc, kClips, kPageCount };
+static_assert(kShaders == pages::kShaders && kCustomize == pages::kCustomize && kStudio == pages::kStudio && kMaps == pages::kMaps &&
+                  kPerformance == pages::kPerformance && kSettings == pages::kSettings && kAbout == pages::kAbout && kVideo == pages::kVideo &&
+                  kPacks == pages::kPacks && kMisc == pages::kMisc && kClips == pages::kClips && pages::kCaptureSettings >= kPageCount,
+              "menu.h pages:: must match Page");
 
 const ImVec4 kAccent(1.00f, 0.62f, 0.22f, 1.0f);
 
@@ -711,6 +716,10 @@ bool g_keysShown = false;
 // The Hotkeys panel: one row per action, Change waits for the next key press (Esc cancels).
 void drawHotkeys() {
     g_keysShown = true;
+    if (keys::hostOwned()) {
+        ImGui::TextDisabled("Set in the Horizon menu (Hotkeys).");
+        return;
+    }
     ImGui::TextDisabled("Press the new key (Esc cancels). Letters need Ctrl or Alt.");
     if (ImGui::BeginTable("hotkeys", 3, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("a", ImGuiTableColumnFlags_WidthStretch, 3.0f);
@@ -1712,8 +1721,10 @@ bool drawPerformancePage(Settings& s) {
                           bool l = drawKey(s, "AutoQuality");
                           l |= drawKey(s, "TargetFPS");
                           l |= drawKey(s, "Quality");
-                          l |= drawKey(s, "RenderScale");
-                          l |= drawKey(s, "FsrSharpness");
+                          if (!modules::hosted()) { // TMVS 2.0 as Horizon modules: on the Upscaling module's page
+                              l |= drawKey(s, "RenderScale");
+                              l |= drawKey(s, "FsrSharpness");
+                          }
                           if (s.autoQuality && g_host->autoQualityReduced) {
                               if (const char* reduced = g_host->autoQualityReduced()) {
                                   ImGui::TextWrapped("Turned off by auto quality: %s", reduced);
@@ -2088,58 +2099,9 @@ bool drawClipsPage() {
     return panelColumns(panels, 380.0f);
 }
 
-// How the mod behaves: switches that aren't part of a look.
-bool drawSettings(Config& config, Settings& s) {
-    pageTitle("Settings", "General options. They are not part of presets.");
-    std::vector<PanelDef> panels;
-    if (g_host->gamePanel) {
-        panels.push_back({g_host->gamePanelTitle ? g_host->gamePanelTitle : "Game", 6.0f, [] {
-                              g_host->gamePanel();
-                              return false;
-                          }});
-    }
-    panels.push_back({"Presets and maps", 4.0f, [&config] {
-                          if (switchRow("Preset per map type", &config.autoMood,
-                                        "Day, sunset and night maps each use their own preset (see Maps). Off: one preset everywhere.\n"
-                                        "A preset you pick applies to all maps until you pick one for a map type.") &&
-                              config.autoMood)
-                              config.resumeMoodPresets();
-                          ImGui::BeginDisabled(!config.autoMood);
-                          switchRow("Remember preset picks", &config.rememberMoodPick,
-                                    "On: a preset picked on a night map becomes the night preset (same for day and sunset).\nOff: only the Maps page sets them.");
-                          ImGui::EndDisabled();
-                          bool mapLooks = config.useMapLooks;
-                          if (switchRow("Author's Shaders", &mapLooks, "Use the preset a map's author stored in the map.")) {
-                              config.setUseMapLooks(mapLooks);
-                          }
-                          return false;
-                      }});
-    panels.push_back({"Menu", g_host->horizon ? 4.0f : 3.0f, [&config] {
-                          switchRow("Live preview", &config.hoverPreview, "Hovering over a preset shows it in the game.");
-                          switchRow("Full-screen menu", &config.menuFull, "Off: the right part of the game stays visible.");
-                          switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
-                          if (g_host->horizon)
-                              switchRow("Hide when Horizon is open", &config.hideForHorizon,
-                                        "Hides this menu and its windows while the Horizon menu is open. They come back when it closes.");
-                          return false;
-                      }});
-    panels.push_back({"Hotkeys", 11.0f, [] {
-                          drawHotkeys();
-                          return false;
-                      }});
-    // The video export has its own page; TrackMania 2 (no page) keeps its one switch here.
-    if (!videoPageShown()) {
-        panels.push_back(settingsPanel("Video export", s, {{"VideoExportBest", nullptr}}));
-        if (panels.back().rows <= 0.0f) panels.pop_back();
-    }
-    panels.push_back(settingsPanel("Effects", s, {{"CinematicOnlyInReplays", nullptr}, {"WeatherSound", nullptr}, {"TAA", nullptr}, {"TAAJitter", nullptr}}));
-    // How the mod works with the game itself, as in Studio's group of the same name (same order).
-    Entries game;
-    for (const Field& f : fields()) {
-        if (!strcmp(f.category, "Game integration") && strncmp(f.key, "Vr", 2) != 0) game.push_back({f.key, nullptr}); // VR: on Misc & VR
-    }
-    panels.push_back(settingsPanel("Game integration", s, game));
-    panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) +
+// The Photo mode panel: on the Settings page, and (TMVS 2.0 as Horizon modules) on the Capture module's page.
+PanelDef photoModePanel(Config& config) {
+    return PanelDef{"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) +
                                         (g_host->photoHideCar ? (g_host->photoHideEditor ? 2.0f : 1.0f) : 0.0f) - (g_host->photoAutoMode ? 0.0f : 1.0f) -
                                         (g_host->photoHideHud ? 0.0f : 1.0f),
                       [&config] {
@@ -2205,7 +2167,62 @@ bool drawSettings(Config& config, Settings& s) {
                           ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  %s: on/off", photoKey.c_str());
                           if (g_host->splitOn) ImGui::TextDisabled("%s: compare split  |  Ctrl+Shift+wheel: move its line", splitKey.c_str());
                           return false;
+                      }};
+}
+
+// How the mod behaves: switches that aren't part of a look.
+bool drawSettings(Config& config, Settings& s) {
+    pageTitle("Settings", "General options. They are not part of presets.");
+    std::vector<PanelDef> panels;
+    if (g_host->gamePanel) {
+        panels.push_back({g_host->gamePanelTitle ? g_host->gamePanelTitle : "Game", 6.0f, [] {
+                              g_host->gamePanel();
+                              return false;
+                          }});
+    }
+    panels.push_back({"Presets and maps", 4.0f, [&config] {
+                          if (switchRow("Preset per map type", &config.autoMood,
+                                        "Day, sunset and night maps each use their own preset (see Maps). Off: one preset everywhere.\n"
+                                        "A preset you pick applies to all maps until you pick one for a map type.") &&
+                              config.autoMood)
+                              config.resumeMoodPresets();
+                          ImGui::BeginDisabled(!config.autoMood);
+                          switchRow("Remember preset picks", &config.rememberMoodPick,
+                                    "On: a preset picked on a night map becomes the night preset (same for day and sunset).\nOff: only the Maps page sets them.");
+                          ImGui::EndDisabled();
+                          bool mapLooks = config.useMapLooks;
+                          if (switchRow("Author's Shaders", &mapLooks, "Use the preset a map's author stored in the map.")) {
+                              config.setUseMapLooks(mapLooks);
+                          }
+                          return false;
                       }});
+    const bool hosted = modules::hosted(); // TMVS 2.0 as Horizon modules: no F8 menu of ours
+    panels.push_back({"Menu", hosted ? 2.0f : (g_host->horizon ? 4.0f : 3.0f), [&config, hosted] {
+                          switchRow("Live preview", &config.hoverPreview, "Hovering over a preset shows it in the game.");
+                          if (!hosted) switchRow("Full-screen menu", &config.menuFull, "Off: the right part of the game stays visible.");
+                          switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
+                          if (g_host->horizon && !hosted)
+                              switchRow("Hide when Horizon is open", &config.hideForHorizon,
+                                        "Hides this menu and its windows while the Horizon menu is open. They come back when it closes.");
+                          return false;
+                      }});
+    panels.push_back({"Hotkeys", 11.0f, [] {
+                          drawHotkeys();
+                          return false;
+                      }});
+    // The video export has its own page; TrackMania 2 (no page) keeps its one switch here.
+    if (!videoPageShown()) {
+        panels.push_back(settingsPanel("Video export", s, {{"VideoExportBest", nullptr}}));
+        if (panels.back().rows <= 0.0f) panels.pop_back();
+    }
+    panels.push_back(settingsPanel("Effects", s, {{"CinematicOnlyInReplays", nullptr}, {"WeatherSound", nullptr}, {"TAA", nullptr}, {"TAAJitter", nullptr}}));
+    // How the mod works with the game itself, as in Studio's group of the same name (same order).
+    Entries game;
+    for (const Field& f : fields()) {
+        if (!strcmp(f.category, "Game integration") && strncmp(f.key, "Vr", 2) != 0) game.push_back({f.key, nullptr}); // VR: on Misc & VR
+    }
+    panels.push_back(settingsPanel("Game integration", s, game));
+    if (!hosted) panels.push_back(photoModePanel(config)); // hosted: on the Capture module's page
     panels.push_back({"Files", 3.0f, [&config] {
                           if (ImGui::Button("Open TMVS folder")) ShellExecuteW(nullptr, L"open", log::dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("settings.ini, tmvs.log, the F12 captures and the photos.");
@@ -2870,6 +2887,67 @@ void draw(const Host& host) {
     if (!host.hideDetached) drawDetachedWindows(config, menuOpen);
     if (keys::capturing() && !g_keysShown) keys::cancelCapture();
     g_host = nullptr;
+}
+
+// TMVS 2.0 as Horizon modules: the Capture module's own settings (photo mode, the folders).
+bool drawCaptureSettings(Config& config, Settings&, const Names&) {
+    pageTitle("Capture", "Photos, clips and the video export. Photos and clips never show Horizon's interface.");
+    std::vector<PanelDef> panels;
+    panels.push_back(photoModePanel(config));
+    panels.push_back({"Files", 3.0f, [] {
+                          if (ImGui::Button("Open TMVS folder")) ShellExecuteW(nullptr, L"open", log::dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("The photos and the F12 captures.");
+                          ImGui::TextDisabled("Clips: the Clips tab. Videos: next to the game's.");
+                          return false;
+                      }});
+    panels.erase(std::remove_if(panels.begin(), panels.end(), [](const PanelDef& p) { return p.rows <= 0.0f; }), panels.end());
+    return panelColumns(panels, 380.0f);
+}
+
+// TMVS 2.0 as Horizon modules: the Upscaling module's page (Render scale and FSR, also without the shaders).
+bool drawUpscalingPage(Config&, Settings& s, const Names&) {
+    pageTitle("Upscaling", "The game drawn at a lower resolution and brought back up with AMD FSR 1.");
+    std::vector<PanelDef> panels;
+    panels.push_back({"Upscaling", 5.0f, [&s] {
+                          bool l = drawKey(s, "RenderScale");
+                          l |= drawKey(s, "FsrSharpness");
+                          if (s.renderScale >= 0.99f) ImGui::TextDisabled("Off at 1.00: the full resolution.");
+                          else if (!s.gameHdr) ImGui::TextWrapped("Needs Game HDR (TM Vibrant Shaders, Settings, Game integration).");
+                          else if (!modules::on(modules::kShaders)) ImGui::TextDisabled("Without the shaders: the game's own image, scaled with FSR.");
+                          else ImGui::TextDisabled("The shaders run at the lower resolution too.");
+                          ImGui::TextDisabled("Photos, F12 and the video export use the full resolution.");
+                          return l;
+                      }});
+    return panelColumns(panels, 380.0f);
+}
+
+bool drawPageForHost(int id, const Host& host, ImFont* titleFont) {
+    g_host = &host;
+    // The headings in the host's own title font (or its current one): a font of our atlas can't be drawn
+    // into the host's draw lists by ImDrawList::AddText (it samples the host's font texture: garbled).
+    ImFont* const ownTitle = g_fontTitle;
+    g_fontTitle = titleFont ? titleFont : ImGui::GetFont();
+    Config& config = Config::get();
+    bool (*hostPage)(Config&, Settings&, const Names&) = nullptr;
+    if (id == pages::kCaptureSettings) hostPage = drawCaptureSettings;
+    else if (id == pages::kUpscaling) hostPage = drawUpscalingPage;
+    const PageDef* page = hostPage ? nullptr : findPage(id);
+    const bool shown = hostPage || (page && pageShown(*page));
+    if (shown) {
+        g_inWindow = true; // the host's tab names it: no heading of ours
+        if (hostPage) {
+            ImGui::PushItemWidth(std::min(ImGui::GetContentRegionAvail().x * 0.55f, 360.0f * g_scale));
+            const bool look = hostPage(config, config.settings, config.presetNames());
+            ImGui::PopItemWidth();
+            if (look) lookEdited(config, config.settings);
+        } else {
+            drawPageBody(*page, config, config.settings, config.presetNames());
+        }
+        g_inWindow = false;
+    }
+    g_fontTitle = ownTitle;
+    g_host = nullptr;
+    return shown;
 }
 
 bool pinnedWindows() {

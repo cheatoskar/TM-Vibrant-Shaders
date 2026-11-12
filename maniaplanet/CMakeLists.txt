@@ -131,6 +131,8 @@ add_library(tmvs_mp_core STATIC
   ${TMVS_ROOT}/src/keys.cpp
   ${TMVS_ROOT}/src/inifile.cpp
   ${TMVS_ROOT}/src/menu.cpp
+  # TMVS 2.0: the Horizon module state the shared menu and settings ask (never hosted on ManiaPlanet).
+  ${TMVS_ROOT}/src/modules/modules.cpp
   ${TMVS_ROOT}/src/image.cpp
   ${TMVS_ROOT}/src/update.cpp
   ${TMVS_ROOT}/src/weather.cpp

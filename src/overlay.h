@@ -1,6 +1,8 @@
 #pragma once
 #include <d3d9.h>
 
+struct ImFont;
+
 namespace tmshaders {
 class Pipeline;
 class AutoQuality;
@@ -39,6 +41,13 @@ void setExternal(ExternalTarget* target); // nullptr: the menu draws itself into
 bool externalActive();                    // an outside caller has been drawing the menu
 bool takeExternalFrame();                 // it drew the menu since the last call (once a frame, at Present)
 void pollHotkeys();                       // the hotkeys alone, for a frame the outside caller left out
+// One page of the menu drawn into the current ImGui window (Horizon Host's panel, src/horizonplugin.cpp;
+// the caller made the host's ImGui context current). False: not ready yet or no such page.
+// Called with our own ImGui context current, before the host's is made current for drawPageForHorizon:
+// false while the pages can't be drawn (no device yet, our fonts not built).
+bool readyForHorizon();
+// titleFont: the host's title font (HorizonStyle::font_title), null: its current font.
+bool drawPageForHorizon(int page, ImFont* titleFont = nullptr);
 // Set when the user asks for a shader reload from the menu; cleared by the caller.
 bool consumeReloadRequest();
 

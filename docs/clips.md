@@ -86,6 +86,7 @@ All on the *Clips* page of the menu (panels *Saving* and *Recording*), or in the
 |---|---|---|
 | Record clips | on | Records into the buffer. Off: nothing is recorded and no key saves |
 | Save on finish | Personal best | Off, Personal best or Every finish |
+| Checkpoint clips | off | A clip of each checkpoint's sector: from the previous checkpoint (or the start) to 1 s after this one, `<map>_<date>_CP<n>_<time>.mp4` (TM Vibrant Shaders 2.0, not TM Clips) |
 | Before start / After finish | 3 s / 3 s | How much a run's clip takes before the start line and after the finish (0 to 10 s) |
 | Last seconds | 30 s | What the save key takes: 30, 60 or 90 s |
 | Save last run / Save run so far / Save last seconds | `Ctrl+F3` / `Ctrl+Shift+F3` / `F3` | The keys |

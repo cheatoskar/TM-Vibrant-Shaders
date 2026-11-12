@@ -37,6 +37,11 @@ bool capturing();
 // Shutdown: a capture still on ends.
 void release();
 
+// TMVS 2.0 as Horizon modules (src/modules/hostbridge.cpp): the plugin API instead of the exports above.
+// uiState: what of Horizon is on screen (kMenuOpen ...); capture: the plugin capture flag
+// (HORIZON_HOST_FLAG_CAPTURE: hides only its bar and the windows set to hide in photos and videos).
+void useHosted(uint32_t (*uiState)(), void (*capture)(bool active), uint32_t version);
+
 // Tests: how often the host was searched for, and the clock between searches.
 int searches();
 constexpr uint32_t kSearchEveryMs = 3000;

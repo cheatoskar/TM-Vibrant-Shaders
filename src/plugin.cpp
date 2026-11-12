@@ -18,6 +18,7 @@
 #include "lut.h"
 #include "misc/misc.h"
 #include "modpack.h"
+#include "modules/modules.h"
 #include "overlay.h"
 #include "pipeline.h"
 #include "autoquality.h"
@@ -52,6 +53,13 @@ namespace {
 
 HMODULE g_module = nullptr;
 std::wstring g_moduleDir;
+bool g_moduleIsD3d9 = false; // loaded as the game folder's d3d9.dll
+
+// Which product this copy is, for the log and the other copy's (claimInstance).
+const char* ownKind() {
+    if (modules::hosted()) return "Horizon modules (tmvs-core.dll)";
+    return g_moduleIsD3d9 ? "standalone (d3d9.dll)" : "standalone (ModLoader)";
+}
 IDirect3DDevice9* g_device = nullptr;
 unsigned g_frame = 0;
 int g_cameraIndex = 0;
@@ -971,6 +979,7 @@ struct RenderScaleState {
 float renderScaleNow(const Settings& s, const char** why) {
     *why = nullptr;
     if (s.renderScale >= 0.99f) return 1.0f;
+    if (!modules::on(modules::kUpscaling)) return 1.0f; // TMVS 2.0 modules: Upscaling off or not loaded
     if (photo::active()) *why = "photo mode";
     else if (g_exporting) *why = "the video export";
     else if (g_captureRequested) *why = "a capture (F12)";
@@ -1609,7 +1618,7 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_gbufLightActive = false;
     g_rs.active = false;
     const Settings& s = Config::get().settings;
-    if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
+    if ((!s.enabled && !modules::upscaleOnly(s.renderScale)) || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
     // VR: the VR mod draws the eyes into its own targets. The float target took the camera's image
     // away from them and the headset showed black (jiink's test with Game HDR on); Render scale goes
     // the same way. Both stay off while the VR mod gives eyes.
@@ -2478,7 +2487,9 @@ void processSceneOne(IDirect3DDevice9* device) {
         setUnshadedWhy(why);
         return;
     }
-    if (!settings.enabled && !photo::active() && !g_captureRequested) {
+    // TMVS 2.0 modules: Upscaling without Shaders shades nothing but brings the scaled image up (FSR).
+    const bool upscaleOnly = modules::upscaleOnly(settings.renderScale);
+    if (!settings.enabled && !photo::active() && !g_captureRequested && !upscaleOnly) {
         if (g_pipelineB.ready()) releaseSideB(); // photo mode ended with the shaders off
         return;
     }
@@ -2913,7 +2924,7 @@ void processSceneOne(IDirect3DDevice9* device) {
     const bool capture = g_captureRequested && (idFrame || !inputs.materials || part) && !scaledPath;
     if (capture) g_captureRequested = false;
     if (capture && !settings.enabled && !inputs.photo) writeCapture(device, inputs, false);
-    if (settings.enabled || inputs.photo) {
+    if (settings.enabled || inputs.photo || (upscaleOnly && scaledPath)) {
         // Auto quality renders a reduced copy; your settings stay untouched.
         Settings effective = settings;
         // The menu points at a preset: show it (it glides in like a chosen one).
@@ -4038,7 +4049,18 @@ void onPresent(IDirect3DDevice9* device) {
     // Clips: the picture as the player sees it, before the menu and the mod's windows are drawn
     // (taken at the frame end when there is one, clips::frameEnd).
     clips::setPaused(g_exporting || photo::tiling()); // the export's frames, a hi-res photo's tiles
-    clips::setPresentCovered(horizon::uiState() != 0);
+    // Hosted by Horizon (TMVS 2.0 modules) this runs before Horizon draws: its interface is never on it.
+    clips::setPresentCovered(!modules::hosted() && horizon::uiState() != 0);
+    if (clips::wantsCheckpoints()) {
+        // Checkpoint clips: the race's checkpoint times, read as the Misc page's split times read them.
+        engine::RaceTimes race;
+        if (engine::raceTimes(race)) {
+            clips::raceProgress(race.race, race.passed, race.finished,
+                                race.passed > 0 && race.passed <= race.count ? race.times[race.passed - 1] : -1);
+        } else {
+            clips::raceProgress(nullptr, 0, false, -1);
+        }
+    }
     clips::present(device);
 
     overlay::Status status;
@@ -4109,7 +4131,7 @@ void onPresent(IDirect3DDevice9* device) {
     }
     Config::get().tick();
     if (keys::take(keys::Action::Trace)) tracer::arm();
-    if (keys::take(keys::Action::Capture)) {
+    if (keys::take(keys::Action::Capture) && modules::on(modules::kCapture)) {
         // Photo mode: a photo without the HUD (Shift: hi-res) instead of a .tmcap capture.
         if (photo::active()) photo::request(keys::shiftHeld());
         else g_capturePending = true;
@@ -4132,7 +4154,11 @@ void onPresent(IDirect3DDevice9* device) {
     // draw nothing from the request on, every frame until it is done. Photos and the F12 screenshot
     // with the frame end, the clips and the video export never need it (read before Horizon draws).
     const bool presentCapture = g_captureRequested || g_screenshotNumber >= 0 || photo::pending() || photo::tiling();
-    horizon::capture(!frameEndRead && presentCapture);
+    // Hosted by Horizon (TMVS 2.0 modules): every capture reads before Horizon draws, so its interface is
+    // never in one. Its capture flag still goes on for photo mode and the video export: its bar and the
+    // windows set to "Hide in photos and videos" leave the screen while a photo or video is made.
+    if (modules::hosted()) horizon::capture(presentCapture || photo::active() || g_exporting);
+    else horizon::capture(!frameEndRead && presentCapture);
 }
 
 } // namespace
@@ -4143,7 +4169,10 @@ void setModule(HMODULE module) {
     GetModuleFileNameW(module, path, MAX_PATH);
     g_moduleDir = path;
     size_t slash = g_moduleDir.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) g_moduleDir.resize(slash);
+    if (slash != std::wstring::npos) {
+        g_moduleIsD3d9 = _wcsicmp(g_moduleDir.c_str() + slash + 1, L"d3d9.dll") == 0;
+        g_moduleDir.resize(slash);
+    }
 }
 
 const std::wstring& moduleDir() {
@@ -4226,6 +4255,7 @@ bool nightAtLoad(float dayTime) {
 // game's own texture swap.
 engine::ModPackAnswer modPackAnswer(const engine::ModPackAsk& ask) {
     engine::ModPackAnswer answer;
+    if (!modules::on(modules::kPacks)) return answer; // TMVS 2.0 modules: Packs off or not loaded, the maps' own mods
     const Config& config = Config::get();
     const std::string choice = modpack::choiceFor(config, ask.environment, ask.decoration, answer.note);
     if (choice.empty()) return answer;
@@ -4313,7 +4343,9 @@ void bootOnce() {
     // The older games (TrackMania Nations ESWC, Sunrise, Original): each its own log, so a TMNF start
     // doesn't move it to *.prev.log (the settings and presets in the same folder are shared).
     if (const wchar_t* name = engine::legacyLogName()) log::setFileName(name);
-    TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
+    TMVS_LOG("TM Vibrant Shaders %s starting (%s)", TM_SHADERS_VERSION_A, ownKind());
+    TMVS_LOG("exclusive: this copy runs (%s); another copy of TM Vibrant Shaders in this game (the Horizon modules or the "
+             "standalone DLL) stays passive", ownKind());
     loadDevOptions();
     Config::get().load();
     misc::boot();
@@ -4372,6 +4404,13 @@ void bootOnce() {
     deviceCallbacks.stretchRects = onStretchRects;
     deviceCallbacks.otherModRenderTarget = onOtherModRenderTarget;
     g_deviceCallbacks = deviceCallbacks;
+    if (modules::hosted()) {
+        // TMVS 2.0 as Horizon modules: Horizon Host's Direct3D hook hands over the device, its Present and
+        // Reset (src/modules/hostbridge.cpp). The clips start with the Capture module (startClips).
+        hook::installHosted(deviceCallbacks);
+        if (HANDLE watch = CreateThread(nullptr, 0, watchForDevice, nullptr, 0, nullptr)) CloseHandle(watch);
+        return;
+    }
     // Never block the caller (possibly the game's main thread) on retries.
     if (!hook::install(deviceCallbacks)) {
         HANDLE thread = CreateThread(nullptr, 0, retryHooks, nullptr, 0, nullptr);
@@ -4395,15 +4434,56 @@ bool claimInstance() {
         CloseHandle(mutex);
         g_passive = true;
     }
+    // Which copy won, for the other one's log (TMVS 2.0: the Horizon modules' tmvs-core.dll and the
+    // standalone DLL are both TM Vibrant Shaders; only one may run): a small named mapping with its kind.
+    if (!g_passive) {
+        swprintf(name, 64, L"Local\\TMVibrantShaders_Owner_%lu", GetCurrentProcessId());
+        if (HANDLE owner = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, 64, name)) { // kept open
+            if (char* text = static_cast<char*>(MapViewOfFile(owner, FILE_MAP_WRITE, 0, 0, 64))) {
+                strncpy_s(text, 64, ownKind(), _TRUNCATE);
+                UnmapViewOfFile(text);
+            }
+        }
+    }
     return !g_passive;
+}
+
+std::string activeOwner() {
+    wchar_t name[64];
+    swprintf(name, 64, L"Local\\TMVibrantShaders_Owner_%lu", GetCurrentProcessId());
+    std::string kind;
+    if (HANDLE owner = OpenFileMappingW(FILE_MAP_READ, FALSE, name)) {
+        if (const char* text = static_cast<const char*>(MapViewOfFile(owner, FILE_MAP_READ, 0, 0, 64))) {
+            kind.assign(text, strnlen(text, 63));
+            UnmapViewOfFile(text);
+        }
+        CloseHandle(owner);
+    }
+    return kind.empty() ? std::string("another copy of TM Vibrant Shaders (1.5 or older)") : kind;
+}
+
+void startClips() {
+    static bool s_started = false;
+    if (s_started || g_passive) return;
+    s_started = true;
+    clips::boot(clips::Host::Tmvs);
+    clips::setInternalCalls(hook::beginInternal, hook::endInternal);
 }
 
 bool active() {
     return !g_passive;
 }
 
+namespace {
+volatile LONG g_bootState = 0; // 0 not started, 1 booting, 2 done
+} // namespace
+
+bool booted() {
+    return g_bootState == 2;
+}
+
 void ensureBooted() {
-    static volatile LONG state = 0; // 0 not started, 1 booting, 2 done
+    volatile LONG& state = g_bootState;
     static DWORD bootThread = 0;
     if (g_passive || state == 2) return;
     if (InterlockedCompareExchange(&state, 1, 0) == 0) {

@@ -3067,6 +3067,21 @@ bool Pipeline::render(IDirect3DDevice9* device, const Inputs& in, const Settings
         if (!m_scaled.create(device, in.width, in.height, D3DFMT_A8R8G8B8)) return false;
         output = m_scaled.surface;
     }
+    if (!s.enabled && !in.photo && upscale) {
+        // Upscaling alone (TMVS 2.0's Upscaling module without the Shaders module; the previewer's
+        // --set Enabled=0 with a RenderScale): the game's own image, drawn smaller, brought up to the
+        // screen with FSR 1 and nothing else. (The standalone never shades with the effects off
+        // outside photo mode: processScene doesn't call render then.)
+        const BOOL softwareVP = setPassStates(device);
+        bind(device, 0, in.color, false);
+        bind(device, 1, nullptr, false);
+        passConstants(device, 1.0f / in.width, 1.0f / in.height);
+        runPass(device, kCopy, output, in.width, in.height);
+        upscaleOutput(device, in, s, screen);
+        for (int i = 0; i < 10; i++) device->SetTexture(i, nullptr);
+        if (softwareVP) device->SetSoftwareVertexProcessing(TRUE);
+        return true;
+    }
     if (in.stepWorld != 0) m_frame++;
 
     const BOOL softwareVP = setPassStates(device);
