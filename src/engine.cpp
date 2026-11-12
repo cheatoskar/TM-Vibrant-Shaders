@@ -146,6 +146,13 @@ struct LegacyEngine {
     LegacyCode setShadowTex, setShadowFake; // CHmsItem::SetCountShadowTexCasted, SetShadowFakeEnable (thiscall)
     LegacyCode setChallenge;                // CConstructionGame::SetChallenge(challenge) (thiscall)
     bool stadiumOnly;                       // ESWC: Stadium only; Sunrise and Original: other environments
+    // The replay's "Shoot video" (read only, legacyVideoExport): the app's shooter while an export runs
+    // (its vtable), the viewport's video flags (output requested, stream open), the core whose fixed
+    // tick steps the game's clock during the frames.
+    size_t gameShooter;
+    uintptr_t shooterVTable;
+    size_t viewportVideoRequested, viewportVideoOpen;
+    uintptr_t corePointer;
 };
 
 // TrackMania Nations ESWC, TmNationsESWC.exe of the unofficial 1.80 patch (2021, reports 0.1.7.9).
@@ -217,7 +224,8 @@ constexpr LegacyEngine kEswcEngine = {
     0x50, 0x64, 0x9c, 0x48,
     {0x00441de0, {0x8b, 0x41, 0x48, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x00441eb0, {0x8b, 0x41, 0x48, 0x33, 0xd2, 0x56}, 6},
     {0x00710290, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
-    true};
+    true,
+    0x12c, 0x00af5570, 0x4a8, 0x4b4, 0x00c961a8};
 // TrackMania Sunrise, TmSunrise.exe of the Windows 10 community repack (SHA-256 e59dfc7e...). Ported
 // from ESWC (2026-11-12, static): the viewport from its registration and constructor
 // (mov [ebp], 0x00a31b68) and its GetMwClassId; 122 slots against ESWC's 124, every hooked one ESWC's
@@ -245,7 +253,8 @@ constexpr LegacyEngine kSunriseEngine = {
     0x54, 0x68, 0xa0, 0x4c,
     {0x004bd6e0, {0x8b, 0x41, 0x4c, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x004bd7b0, {0x8b, 0x41, 0x4c, 0x33, 0xd2, 0x56}, 6},
     {0x0081c820, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
-    false};
+    false,
+    0x11c, 0x00a4ff00, 0x4f4, 0x500, 0x00b8b4f8};
 // TrackMania Original, TMORIGINAL.EXE of GreffMASTER's Online Patch v2 (SHA-256 75e129d7...), built on
 // Sunrise's code: the same layout as Sunrise (496 of its 514 named classes have the same members),
 // other addresses (the viewport's vtable 0x00a2db28, the app 0x00bc8084), the race's clock at +0x2b8
@@ -263,7 +272,8 @@ constexpr LegacyEngine kOriginalEngine = {
     0x54, 0x68, 0xa0, 0x4c,
     {0x004bd630, {0x8b, 0x41, 0x4c, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x004bd700, {0x8b, 0x41, 0x4c, 0x33, 0xd2, 0x56}, 6},
     {0x0081aca0, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
-    false};
+    false,
+    0x11c, 0x00a4bbc0, 0x4f4, 0x500, 0x00b86758};
 constexpr const LegacyEngine* kLegacyEngines[] = {&kEswcEngine, &kSunriseEngine, &kOriginalEngine};
 const LegacyEngine* g_legacy = nullptr;  // the game runs on the 2006 engine, hooked
 const legacy::Exe* g_legacyExe = nullptr; // its exe entry (also when refused)
@@ -2700,7 +2710,10 @@ void __fastcall legacyProjectionDetour(void* self, void* edx, void* projection, 
 
 void legacyPoll();
 
+const void* g_legacyViewport = nullptr; // the viewport whose frame runs (for the video flags)
+
 int __fastcall legacyFrameBeginDetour(void* self, void* edx) {
+    g_legacyViewport = self;
     g_cameraDepth = 0; // nothing renders between frames
     g_engineFrames++;
     legacyPoll(); // the race, its car and the map, before the plugin's frame begins
@@ -4528,8 +4541,64 @@ bool videoFileHooked() {
     return g_aviOpen && g_aviVideoOpen && g_aviVideoWrite && g_aviAudioOpen && g_aviAudioWrite && g_aviDestroy;
 }
 
+namespace {
+// The 2006 engine's "Shoot video" (static analysis 2026-11-12, the same code in the three games): the
+// app keeps its shooter (one per export, from the dialog's OK to its final message) at gameShooter;
+// SetParams copied the dialog's values into it as ints: sound +0x20, clip start / now / end +0x24 /
+// +0x28 / +0x2c (ms), fps +0x40, width +0x44, height +0x48 (both rounded up to 16), HQ +0x4c, its AA
+// level +0x50 (n = AA + 1 samples a side, at most 5), motion blur +0x54 (sub-frames with n n >= 9).
+// While the frames are made the viewport's video output is requested and its stream open (the two
+// flags), and the core's fixed tick steps the game: +0x40 ms and +0x44 / 2^31 per update, 0 when off
+// (the sound pass then plays the clip in real time), its tick +0x80. Read only: nothing is hooked.
+bool legacyVideoExport(VideoExport& out) {
+    const LegacyEngine& e = *g_legacy;
+    if (!e.gameShooter || !g_legacyViewport) return false;
+    __try {
+        const BYTE* game = *reinterpret_cast<const BYTE* const*>(rebase(e.gamePointer));
+        if (!game || legacyClassId(game) != kLegacyGame.id) return false;
+        const BYTE* shooter = *reinterpret_cast<const BYTE* const*>(game + e.gameShooter);
+        if (!shooter || *reinterpret_cast<const uintptr_t*>(shooter) != rebase(e.shooterVTable)) return false;
+        const auto at = [shooter](size_t offset) { return *reinterpret_cast<const int*>(shooter + offset); };
+        out.fps = static_cast<float>(at(0x40));
+        out.width = at(0x44);
+        out.height = at(0x48);
+        out.hq = at(0x4c) != 0;
+        const int aa = at(0x50);
+        out.hqSamples = out.hq && aa > 0 ? (aa + 1 > 5 ? 5 : aa + 1) : 1;
+        out.hqMotionBlur = at(0x54) != 0;
+        out.sound = at(0x20) != 0;
+        out.clipStart = static_cast<DWORD>(at(0x24)) / 1000.0;
+        out.clipStop = static_cast<DWORD>(at(0x2c)) / 1000.0;
+        if (out.fps < 1.0f || out.fps > 1000.0f || out.width < 16 || out.height < 16 || out.width > 16384 || out.height > 16384) {
+            out = VideoExport();
+            return false;
+        }
+        const int samples = out.hqSamples * out.hqSamples;
+        out.subFrames = samples >= 9 && out.hqMotionBlur;
+        out.samplesPerFrame = samples > 1 && !out.subFrames ? samples : 1;
+        out.samplesPerVideoFrame = out.subFrames ? samples : 1;
+        const BYTE* viewport = static_cast<const BYTE*>(g_legacyViewport);
+        const bool frames = *reinterpret_cast<const DWORD*>(viewport + e.viewportVideoRequested) != 0 &&
+                            *reinterpret_cast<const DWORD*>(viewport + e.viewportVideoOpen) != 0;
+        const BYTE* core = *reinterpret_cast<const BYTE* const*>(rebase(e.corePointer));
+        if (frames && core) {
+            const DWORD ms = *reinterpret_cast<const DWORD*>(core + 0x40);
+            const DWORD fraction = *reinterpret_cast<const DWORD*>(core + 0x44);
+            out.step = (static_cast<double>(ms) + static_cast<double>(fraction) / 2147483648.0) / 1000.0;
+            if (out.step > 1.0) out.step = 0.0; // not a frame step: the real clock
+            out.gameClock = static_cast<double>(*reinterpret_cast<const DWORD*>(core + 0x80)) / 1000.0;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        out = VideoExport();
+        return false;
+    }
+    return true;
+}
+} // namespace
+
 bool videoExport(VideoExport& out) {
     out = VideoExport();
+    if (g_legacy) return legacyVideoExport(out);
     // Counted in frames, not ms: one frame of a 4K export with supersampling takes seconds.
     if (!g_doShoot || !g_shooter || g_engineFrames - g_shootFrame > 3) return false;
     const BYTE* shooter = static_cast<const BYTE*>(g_shooter);

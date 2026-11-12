@@ -118,7 +118,7 @@ Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), with TM Vibrant Sh
 - **The race** is read from the game's own objects (the current race, your player's info: its state, start time, final time; the map's name and author time), nothing is hooked or written for it, so it is fine online. Solo and network races count (the game's first local player).
 - **Personal best** is compared with your best clip time on that map in `bests.ini`. ESWC maps have no UID, so the map is told by its name (`eswc-` and a hash of it): two maps of the same name share one best.
 - **Lap races** take the lap's time, as the game's own HUD and the split times do.
-- **No video export pause**: the game's own *Shoot video* isn't hooked, so the clips keep recording while it runs (its frames come slowly then, the buffer holds what was on screen).
+- **The video export**: while the game's *Shoot video* runs, nothing is recorded, as in Nations Forever (TrackMania Sunrise and Original the same).
 - **Files**: the same folders as in Nations Forever (`Documents\TrackMania\Clips`, `Documents\TrackMania\TMClips\clips.ini`); the log is `tmvs-eswc.log` with its `clips:` lines. Its first `clips:` line says `race read from TrackMania Nations ESWC`.
 
 ## Troubleshooting

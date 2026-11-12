@@ -110,6 +110,26 @@ the surface's, which must equal what `VideoStreamOpen` returns (rounded to 8), s
 always has the video's size. A size that isn't a multiple of 8 on the first frame would fail the
 open (inferred from the compare).
 
+## The 2006 engine: TrackMania Nations ESWC, Sunrise, Original (1.6)
+
+Static analysis of the three community exes (2026-11-12); the same code in all three, other offsets. What
+TMVS 1.6 uses is read only, once a frame (`engine.cpp`, `legacyVideoExport`): no hook on the export, the
+game writes its own AVI.
+
+| | ESWC | Sunrise | Original |
+|---|---|---|---|
+| the shooter (one per export, from the dialog's OK to its final message) | app +0x12c, vtable 0x00af5570 | app +0x11c, vtable 0x00a4ff00 | app +0x11c, vtable 0x00a4bbc0 |
+| its fiber (resumed once per game update) | 0x007bd060 | 0x008b7860 | 0x008b4330 |
+| viewport: video output requested / stream open / write this frame / close | +0x4a8 / +0x4b4 / +0x4ac / +0x4b0 | +0x4f4 / +0x500 / +0x4f8 / +0x4fc | as Sunrise |
+| the core (its fixed tick) | 0x00c961a8 | 0x00b8b4f8 | 0x00b86758 |
+
+- **Settings** (ints the shooter copied from the dialog): sound +0x20, clip start / now / end +0x24 / +0x28 / +0x2c (ms), fps +0x40, width +0x44, height +0x48 (rounded up to 16), high quality +0x4c, its AA level +0x50, motion blur +0x54. Supersampling: n = AA + 1 samples a side, at most 5 (TMNF 11); motion blur makes them sub-frames when n n >= 9, otherwise the n n samples are rendered inside one frame.
+- **The clock**: during the frames the core's fixed tick steps the game, +0x40 ms and +0x44 / 2^31 ms per update (TMNF +0x38 / +0x3c), its tick at +0x80; 0 when off. The clip's time is the shooter's +0x28, advanced by the update's delta.
+- **The write**: `RenderFrameEnd` (the mod's frame end callback runs first) reads the viewport's colour surface back when the write flag is set, converts it to bottom-up 24-bit BGR and hands it to the AVI stream object (viewport +0x134; VideoOpen / VideoWrite: ESWC 0x007d2340 / 0x007d2650, Sunrise 0x0075ba30 / 0x0075bd40, Original 0x0075a8d0 / 0x0075abe0). So the AVI holds the mod's picture. Present only for written frames, as in TMNF.
+- **The sound**: no OpenAL in these games: the sound pass records the default recording device with DirectSound capture (the audio port's SetIsCapturing, ESWC 0x009551d0), in real time after the frames; skipped when the dialog's sound is off.
+
+What 1.6 does with it: *Best export quality* works there (full quality, no auto quality, TAA off with the game's samples, the effects on the video's clock), the clips pause during the export. Not done: the mod's own MP4 (hooking VideoOpen / VideoWrite as `aviVideoOpenDetour` / `aviVideoWriteDetour` do on TMNF, keeping the 16-rounded size handshake), the sound through WASAPI loopback (the DirectSound capture would need its own redirection), and the per-sample lens / camera reads of the supersampling (the CSceneFxSuperSample fields were not mapped).
+
 ## The sound pass
 
 After the stepped frames (state 0x162) DoShoot disables the high quality, restores the size and, when

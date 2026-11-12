@@ -48,7 +48,9 @@ void* viewportDevice();
 // told by its exe's SHA-256): the viewport's frame and camera hooks, the view, the projection and the
 // keyboard read; map loads (SetChallenge), the race's local car (position, axes, speed), its starts,
 // respawns and checkpoint times, the replay editor and Hide car read from the game's objects once a
-// frame (engine.cpp's LegacyEngine per game). Nothing of the materials or the clip player.
+// frame (engine.cpp's LegacyEngine per game); the replay's "Shoot video" read from its shooter and the
+// viewport's flags (videoExport, no file hooks: the game writes its own AVI). Nothing of the materials or
+// the clip player.
 bool legacy();
 // Of those, TrackMania Nations ESWC (Stadium only, its maps' identifiers "eswc-...").
 bool eswc();

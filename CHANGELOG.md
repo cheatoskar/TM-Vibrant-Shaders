@@ -9,6 +9,9 @@ The older games: clips on TrackMania Nations ESWC, and TrackMania Sunrise and Tr
 - **The game's own `d3d9.dll` stays in use** (dgVoodoo in Original, the repack's proxy in Sunrise): the setup renames it to `d3d9.chain.dll` and the mod passes Direct3D on to it; without one, Windows' own. The uninstall puts it back. `tmvs-*.log` says which one runs (`d3d9: ...`).
 - **Other builds are refused cleanly**: an unknown `TmSunrise.exe` or `TMORIGINAL.EXE` gets no hook at all, the mod only passes Direct3D on and the log says why (`passive: ...`).
 
+**New (all three older games)**
+- **The game's video export is known:** the replay's *Shoot video* is read from the game (its settings, the frames being written, the game's fixed clock), nothing hooked. *Best export quality* now works there: full quality, no auto quality, TAA off when the game supersamples, rain, clouds and the other effects on the video's clock; the clips pause meanwhile. The video is still the game's AVI (with the mod's picture); the mod's own MP4 comes later ([docs/engine-video-export.md](docs/engine-video-export.md#the-2006-engine-trackmania-nations-eswc-sunrise-original-16)).
+
 **Changed (TrackMania Nations ESWC)**
 - *Hide car* in photo mode now leaves the cars alone in network races (it writes the game's visible bit, so only in solo races and replays). The engine code for ESWC is now the shared one of the three older games; the log lines are the same.
 

@@ -635,8 +635,9 @@ void drawStatusLine(IDirect3DDevice9* device) {
 // as in Nations Forever.
 static bool legacySupports(const Field& f) {
     static const char* const kHidden[] = {
-        // the video export: the game has one (the replay's "Shoot video", AVI), not hooked yet
-        "VideoCodec", "VideoQuality", "Video10Bit", "VideoBitrate", "VideoEncoder", "VideoFfmpegPreset", "VideoExportBest", "VideoOwnFrames",
+        // the video export: the game writes its own AVI (the replay's "Shoot video"); the mod knows when it
+        // runs (VideoExportBest: full quality, the effects on the video's clock), but writes no MP4 of its own yet
+        "VideoCodec", "VideoQuality", "Video10Bit", "VideoBitrate", "VideoEncoder", "VideoFfmpegPreset", "VideoOwnFrames",
         "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
         // the map's light and weather, the game's FX, its materials and shaders, the block order
         "GameNight", "EngineMoon", "GameSkyClouds", "DisableGameFX", "GameMaterials", "GameGBuffer", "GameLight", "OverlapFix", "ToneCurve",
