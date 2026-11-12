@@ -19,10 +19,13 @@ The older games: TrackMania Sunrise and TrackMania Original, clips and the MP4 e
 - **Census mode** for the materials and light work in 1.7 (development, off by default: `LegacyCensus=1` under `[dev]` in `Documents\TrackMania\TMVS\dev.ini`): logs once per map each shader the game draws with (class, file, textures), the classes of its per-pass shading, and what the map object offers (blocks, their infos, the coordinates), also when an editor opens. Without the key neither draw hook is installed; in Nations/United Forever the key is ignored.
 
 **New (TrackMania Nations ESWC)**
-- **Clips.** The *Clips* page, `F3`, `Ctrl+F3` and `Ctrl+Shift+F3` and *Save on finish* now work on TrackMania Nations ESWC (1.80 patch), and on Sunrise and Original. The race (start, finish, race time), the map's name and its author time are read from the game's own objects, the same reads as the split times; nothing is hooked or written for it. These maps have no UID: the personal best of a clip is kept by the map's name. Details in [docs/clips.md](docs/clips.md#trackmania-nations-eswc).
+- **Clips.** The *Clips* page, `F4`, `Ctrl+F4` and `Ctrl+Shift+F4` and *Save on finish* now work on TrackMania Nations ESWC (1.80 patch), and on Sunrise and Original. The race (start, finish, race time), the map's name and its author time are read from the game's own objects, the same reads as the split times; nothing is hooked or written for it. These maps have no UID: the personal best of a clip is kept by the map's name. Details in [docs/clips.md](docs/clips.md#trackmania-nations-eswc).
 
 **Changed (TrackMania Nations ESWC)**
 - *Hide car* in photo mode now leaves the cars alone in network races (it writes the game's visible bit, so only in solo races and replays). The engine code for ESWC is now the shared one of the three older games; the log lines are the same.
+
+**Fixed (all three older games)**
+- **Crash at start** when the mod's DLL was loaded at another address than usual: the older games' exes have no import name table, and the mod read the addresses of the imported functions as names. It now finds `Direct3DCreate9` by its address.
 
 **Changed (clips, every game)**
 - **Instant replay is off for new players**: the clips' background recording (the buffer behind `F3`, *Save last run* and the saved best runs) starts only once you switch on *Instant replay* at the top of the *Clips* page; then *Save best runs* is on. Off, nothing is copied or read back from the graphics card, and the clip keys only show "Instant replay is off". A `clips.ini` that already has it on keeps it. The replay editor's *Shoot video* doesn't need it.
