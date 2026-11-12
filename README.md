@@ -1,10 +1,10 @@
 # TM Vibrant Shaders
 
-**Real-time lighting, weather and skies for TrackMania Nations Forever, United Forever and TrackMania 2 (ManiaPlanet).**
+**Real-time lighting, weather and skies for TrackMania Nations Forever, United Forever, TrackMania Nations ESWC and TrackMania 2 (ManiaPlanet).**
 
 [![Latest release](https://img.shields.io/github/v/release/cheatoskar/TM-Vibrant-Shaders?label=download)](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)
 [![Build](https://github.com/cheatoskar/TM-Vibrant-Shaders/actions/workflows/build.yml/badge.svg)](https://github.com/cheatoskar/TM-Vibrant-Shaders/actions/workflows/build.yml)
-![Game](https://img.shields.io/badge/game-TMNF%20%7C%20TMUF%20%7C%20TM2-orange)
+![Game](https://img.shields.io/badge/game-TMNF%20%7C%20TMUF%20%7C%20ESWC%20%7C%20TM2-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -14,7 +14,7 @@
 
 ![Realistic: the start line in the late sun, with haze and soft shadows](docs/images/realistic-start.jpg)
 
-A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
+A mod for Direct3D 9 (TrackMania Nations / United Forever, and TrackMania Nations ESWC with the unofficial 1.80 patch, look and photos only) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Share a look](#your-own-presets-and-sharing-them) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
 
