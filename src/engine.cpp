@@ -153,6 +153,12 @@ struct LegacyEngine {
     uintptr_t shooterVTable;
     size_t viewportVideoRequested, viewportVideoOpen;
     uintptr_t corePointer;
+    // The export's AVI writer (the viewport's stream object at +0x134, thiscall; the same class and
+    // the same 0x64-byte state as TMNF's CVisionVideoAvi, so TMNF's detours take it as it is): create
+    // the file (CFastStringInt path), VideoOpen (&w, &h, fps, alpha), VideoWrite (bottom-up BGR),
+    // AudioOpen (WAVEFORMATEX), AudioWrite (data, blocks), Close (both streams and the file; at the
+    // export's end, after a failed create, from the destructor). All six or none.
+    LegacyCode aviOpen, aviVideoOpen, aviVideoWrite, aviAudioOpen, aviAudioWrite, aviClose;
 };
 
 // TrackMania Nations ESWC, TmNationsESWC.exe of the unofficial 1.80 patch (2021, reports 0.1.7.9).
@@ -225,7 +231,9 @@ constexpr LegacyEngine kEswcEngine = {
     {0x00441de0, {0x8b, 0x41, 0x48, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x00441eb0, {0x8b, 0x41, 0x48, 0x33, 0xd2, 0x56}, 6},
     {0x00710290, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
     true,
-    0x12c, 0x00af5570, 0x4a8, 0x4b4, 0x00c961a8};
+    0x12c, 0x00af5570, 0x4a8, 0x4b4, 0x00c961a8,
+    {0x007d22e0, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x83, 0x38}, 8}, {0x007d2340, {0x81, 0xec, 0x00, 0x01, 0x00, 0x00}, 6}, {0x007d2650, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x8b, 0x48}, 8},
+    {0x007d2540, {0x81, 0xec, 0xcc, 0x00, 0x00, 0x00}, 6}, {0x007d26a0, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x007d2770, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8}};
 // TrackMania Sunrise, TmSunrise.exe of the Windows 10 community repack (SHA-256 e59dfc7e...). Ported
 // from ESWC (2026-11-12, static): the viewport from its registration and constructor
 // (mov [ebp], 0x00a31b68) and its GetMwClassId; 122 slots against ESWC's 124, every hooked one ESWC's
@@ -254,7 +262,9 @@ constexpr LegacyEngine kSunriseEngine = {
     {0x004bd6e0, {0x8b, 0x41, 0x4c, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x004bd7b0, {0x8b, 0x41, 0x4c, 0x33, 0xd2, 0x56}, 6},
     {0x0081c820, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
     false,
-    0x11c, 0x00a4ff00, 0x4f4, 0x500, 0x00b8b4f8};
+    0x11c, 0x00a4ff00, 0x4f4, 0x500, 0x00b8b4f8,
+    {0x0075b9d0, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x83, 0x38}, 8}, {0x0075ba30, {0x81, 0xec, 0x00, 0x01, 0x00, 0x00}, 6}, {0x0075bd40, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x8b, 0x48}, 8},
+    {0x0075bc30, {0x81, 0xec, 0xcc, 0x00, 0x00, 0x00}, 6}, {0x0075bd90, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x0075be60, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8}};
 // TrackMania Original, TMORIGINAL.EXE of GreffMASTER's Online Patch v2 (SHA-256 75e129d7...), built on
 // Sunrise's code: the same layout as Sunrise (496 of its 514 named classes have the same members),
 // other addresses (the viewport's vtable 0x00a2db28, the app 0x00bc8084), the race's clock at +0x2b8
@@ -273,7 +283,9 @@ constexpr LegacyEngine kOriginalEngine = {
     {0x004bd630, {0x8b, 0x41, 0x4c, 0x8a, 0x54, 0x24, 0x04}, 7}, {0x004bd700, {0x8b, 0x41, 0x4c, 0x33, 0xd2, 0x56}, 6},
     {0x0081aca0, {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c}, 6},
     false,
-    0x11c, 0x00a4bbc0, 0x4f4, 0x500, 0x00b86758};
+    0x11c, 0x00a4bbc0, 0x4f4, 0x500, 0x00b86758,
+    {0x0075a870, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x83, 0x38}, 8}, {0x0075a8d0, {0x81, 0xc4, 0x00, 0xff, 0xff, 0xff}, 6}, {0x0075abe0, {0x56, 0x8b, 0xf1, 0x8b, 0x46, 0x04, 0x8b, 0x48}, 8},
+    {0x0075aad0, {0x81, 0xc4, 0x34, 0xff, 0xff, 0xff}, 6}, {0x0075ac30, {0x57, 0x8b, 0xf9, 0x8b, 0x47, 0x04, 0x8b, 0x48}, 8}, {0x0075ad00, {0x56, 0x8b, 0xf1, 0xe8, 0x78, 0xff, 0xff, 0xff}, 8}};
 constexpr const LegacyEngine* kLegacyEngines[] = {&kEswcEngine, &kSunriseEngine, &kOriginalEngine};
 const LegacyEngine* g_legacy = nullptr;  // the game runs on the 2006 engine, hooked
 const legacy::Exe* g_legacyExe = nullptr; // its exe entry (also when refused)
@@ -1121,6 +1133,10 @@ void __fastcall doShootDetour(void* self, void* edx, void* fiber) {
 
 // --- The video export's file ------------------------------------------------
 
+// The game rounds the frame size up to this (TMNF 8; the 2006 engine's VideoOpen 16): the size
+// handed back must be the one the game's own open would have made.
+DWORD g_aviAlign = 8;
+
 BYTE* aviData(void* self) {
     BYTE* const* data = reinterpret_cast<BYTE* const*>(static_cast<BYTE*>(self) + 4);
     return readable(data, sizeof(void*)) && *data && readable(*data, 0x64) ? *data : nullptr;
@@ -1139,7 +1155,7 @@ int __fastcall aviOpenDetour(void* self, void* edx, const void* name) {
 int __fastcall aviVideoOpenDetour(void* self, void* edx, DWORD* width, DWORD* height, float fps, int alpha) {
     BYTE* data = aviData(self);
     if (g_videoFile.videoOpen && data && width && height) {
-        const DWORD w = (*width + 7) / 8 * 8, h = (*height + 7) / 8 * 8, bpp = alpha ? 4 : 3;
+        const DWORD a = g_aviAlign, w = (*width + a - 1) / a * a, h = (*height + a - 1) / a * a, bpp = alpha ? 4 : 3;
         if (g_videoFile.videoOpen(self, static_cast<int>(w), static_cast<int>(h), fps, static_cast<int>(bpp))) {
             *width = w;
             *height = h;
@@ -3185,6 +3201,48 @@ const LegacyEngine* identifyLegacy() {
     return nullptr;
 }
 
+// The export's file writer (see LegacyEngine::aviOpen): TMNF's six AVI detours, so videofile.cpp writes the
+// MP4 as on Forever. Inline hooks with relocation (Close starts with a call). All six or none.
+void installLegacyVideoFile(const LegacyEngine& e) {
+    static inlinehook::Hook s_hooks[6];
+    const struct {
+        const LegacyCode& code;
+        void* detour;
+        void** original;
+    } avi[] = {{e.aviOpen, reinterpret_cast<void*>(&aviOpenDetour), reinterpret_cast<void**>(&g_aviOpen)},
+               {e.aviVideoOpen, reinterpret_cast<void*>(&aviVideoOpenDetour), reinterpret_cast<void**>(&g_aviVideoOpen)},
+               {e.aviVideoWrite, reinterpret_cast<void*>(&aviVideoWriteDetour), reinterpret_cast<void**>(&g_aviVideoWrite)},
+               {e.aviAudioOpen, reinterpret_cast<void*>(&aviAudioOpenDetour), reinterpret_cast<void**>(&g_aviAudioOpen)},
+               {e.aviAudioWrite, reinterpret_cast<void*>(&aviAudioWriteDetour), reinterpret_cast<void**>(&g_aviAudioWrite)},
+               {e.aviClose, reinterpret_cast<void*>(&aviDestroyDetour), reinterpret_cast<void**>(&g_aviDestroy)}};
+    for (const auto& a : avi) {
+        if (!legacyCodeMatches(a.code)) {
+            TMVS_LOG("engine (%s): the video export's file writer does not match this executable: the game's AVI as always, no MP4", e.tag);
+            return;
+        }
+    }
+    int done = 0;
+    for (size_t i = 0; i < sizeof(avi) / sizeof(avi[0]); i++) {
+        const char* why = nullptr;
+        if (!inlinehook::install(reinterpret_cast<void*>(rebase(avi[i].code.address)), avi[i].detour, s_hooks[i], &why)) {
+            TMVS_LOG("engine (%s): the video export's file writer: hook %u failed (%s)", e.tag, static_cast<unsigned>(i), why ? why : "?");
+            break;
+        }
+        *avi[i].original = s_hooks[i].trampoline;
+        done++;
+    }
+    if (done != 6) {
+        // Not all of them: back to the game's writer everywhere (a frame without the open would go nowhere).
+        for (int i = 0; i < done; i++) {
+            inlinehook::remove(s_hooks[i]);
+            *avi[i].original = nullptr;
+        }
+        return;
+    }
+    g_aviAlign = 16;
+    TMVS_LOG("engine (%s): the video export's file writer hooked (the MP4 export as on Forever)", e.tag);
+}
+
 // One of the older games (identifyLegacy): the viewport's frame and camera hooks, the view and
 // projection, the keyboard read, the map loads and the race readers. False when the executable isn't
 // one of them, or its viewport isn't where expected (then nothing is hooked).
@@ -3223,6 +3281,7 @@ bool installLegacy() {
         g_legacySetChallenge = reinterpret_cast<LegacySetChallengeFn>(
             jumpToDetour(reinterpret_cast<BYTE*>(rebase(e.setChallenge.address)), e.setChallenge.size, reinterpret_cast<void*>(&legacySetChallengeDetour)));
     g_legacyShadowSetters = legacyCodeMatches(e.setShadowTex) && legacyCodeMatches(e.setShadowFake);
+    installLegacyVideoFile(e);
     TMVS_LOG("engine (%s): race and car readers on (classes told by their ids), map loads %s, car shadow setters %s%s", e.tag,
              g_legacySetChallenge ? "hooked (SetChallenge)" : "NOT hooked", g_legacyShadowSetters ? "found" : "not found",
              e.gameClipViewer ? "" : "; no clip viewer in this game (a replay is its replay editor)");
