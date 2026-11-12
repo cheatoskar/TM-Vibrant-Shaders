@@ -4,12 +4,12 @@
 
 Clips save your runs as MP4 videos, without rendering anything again. The game is recorded into memory all the time, and when a run is finished (or when you press a key) the part you want is written to a file. I use it to keep every personal best without thinking about it.
 
-For TrackMania Nations Forever and United Forever. It comes in two forms that share the code and the settings file:
+For TrackMania Nations Forever, United Forever and TrackMania Nations ESWC (1.80 patch). It comes in two forms that share the code and the settings file:
 
 - **In TM Vibrant Shaders**: the *Clips* page in the `F8` menu.
 - **As TM Clips**: a small mod of its own for the ModLoader (`TMClips.dll`), for people who don't want the shaders. Its settings are in a small window on `Shift+F3`.
 
-Not in TrackMania 2 and not in TrackMania Nations ESWC yet (there only the recording of the screen would work, the race isn't read).
+Not in TrackMania 2 yet. In TrackMania Nations ESWC only in TM Vibrant Shaders (its `d3d9.dll`; there is no ModLoader for it): the same page, keys and files, the race read from the game's own objects (see [ESWC](#trackmania-nations-eswc)).
 
 ## What it does
 
@@ -108,10 +108,21 @@ In `clips.ini`, section `[Clips]`, the same values are keys such as `SaveOnFinis
 - **Cost.** The picture is converted on the GPU and read back one frame late; the log prints every minute what a frame cost on the game thread and in the encoder (`clips: last 60 s: ...`). On a slow GPU use 30 fps or 720p.
 - **Video export.** While the replay editor's video export runs, nothing is recorded.
 - **Hardware.** An NVIDIA card (NVENC), or an AMD or Intel card whose driver offers a hardware H.264 encoder to Windows.
-- **Games.** Nations and United Forever. Not TrackMania 2, not TrackMania Nations ESWC (there only `F3` could work, the race isn't read).
+- **Games.** Nations and United Forever, TrackMania Nations ESWC (1.80 patch, TM Vibrant Shaders only). Not TrackMania 2.
 - **Rules.** The mod only records; it adds no hook to the game's code for this and writes nothing into its memory.
 
+## TrackMania Nations ESWC
+
+Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), with TM Vibrant Shaders as `d3d9.dll` in the game folder ([install](install.md#trackmania-nations-eswc)). Everything above works the same way, with these differences:
+
+- **The race** is read from the game's own objects (the current race, your player's info: its state, start time, final time; the map's name and author time), nothing is hooked or written for it, so it is fine online. Solo and network races count (the game's first local player).
+- **Personal best** is compared with your best clip time on that map in `bests.ini`. ESWC maps have no UID, so the map is told by its name (`eswc-` and a hash of it): two maps of the same name share one best.
+- **Lap races** take the lap's time, as the game's own HUD and the split times do.
+- **No video export pause**: the game's own *Shoot video* isn't hooked, so the clips keep recording while it runs (its frames come slowly then, the buffer holds what was on screen).
+- **Files**: the same folders as in Nations Forever (`Documents\TrackMania\Clips`, `Documents\TrackMania\TMClips\clips.ini`); the log is `tmvs-eswc.log` with its `clips:` lines. Its first `clips:` line says `race read from TrackMania Nations ESWC`.
+
 ## Troubleshooting
+
 
 Look in the log first (`clips:` lines in `tmvs.log`, or `tmclips.log`). The first lines say what records and with what (`clips: recording 1920x1080 ... NVENC`), each finish, and each saved clip.
 

@@ -1,6 +1,14 @@
 # Changelog
 
+## 1.6.0 (in development)
+
+The older games: clips on TrackMania Nations ESWC.
+
+**New (TrackMania Nations ESWC)**
+- **Clips.** The *Clips* page, `F3`, `Ctrl+F3` and `Ctrl+Shift+F3` and *Save on finish* now work on TrackMania Nations ESWC (1.80 patch). The race (start, finish, race time), the map's name and its author time are read from the game's own objects, the same reads as the split times; nothing is hooked or written for it. ESWC maps have no UID: the personal best of a clip is kept by the map's name. Details in [docs/clips.md](docs/clips.md#trackmania-nations-eswc).
+
 ## 1.5.0 (in testing)
+
 
 TrackMania Nations ESWC gets the car and the race, and TrackMania 2 catches up with TrackMania Nations/United: photo zoom, hi-res photos, TAA jitter, "only in replays", Hide car and the Misc page.
 
