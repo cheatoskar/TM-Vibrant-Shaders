@@ -192,9 +192,9 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 | TrackMania Nations Forever | Yes, ModLoader product or `d3d9.dll` | Yes (Horizon Host through TMLoader) |
 | TrackMania United Forever | Yes (the mod detects the game build and the map's environment) | Yes (Horizon Host through TMLoader) |
 | TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) | No: Horizon runs only in the 32-bit Direct3D 9 games |
-| TrackMania Nations ESWC | Experimental, only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)) | Yes (Horizon's own loader) |
-| TrackMania Sunrise | Experimental, only the Windows 10 repack (`TmSunrise.exe`), as `d3d9.dll` with the repack's `d3d9.dll` chained as `d3d9.chain.dll` ([docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original)) | Yes (Horizon's own loader), not tested in the game yet |
-| TrackMania Original | Experimental, only the Online Patch v2 (`TMORIGINAL.EXE`), as `d3d9.dll` with dgVoodoo chained as `d3d9.chain.dll` | Yes (Horizon's own loader), not tested in the game yet |
+| TrackMania Nations ESWC | Experimental, only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)) | Yes (Horizon's own loader), without TMVS Packs |
+| TrackMania Sunrise | Experimental, only the Windows 10 repack (`TmSunrise.exe`), as `d3d9.dll` with the repack's `d3d9.dll` chained as `d3d9.chain.dll` ([docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original)) | Yes (Horizon's own loader), without TMVS Packs, not tested in the game yet |
+| TrackMania Original | Experimental, only the Online Patch v2 (`TMORIGINAL.EXE`), as `d3d9.dll` with dgVoodoo chained as `d3d9.chain.dll` | Yes (Horizon's own loader), without TMVS Packs, not tested in the game yet |
 | Trackmania (2020) | No | No |
 
 In ESWC, Sunrise and Original: the look, photos and F12 captures, clips, the MP4 video export with the game's sound, neon trail, headlights, spray, long mesh shadows, Hide car, split times. Not yet: water, the game's materials and light (lamps, real night), resource packs, the minimap.

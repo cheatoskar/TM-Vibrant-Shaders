@@ -14,12 +14,12 @@ Games: TrackMania Nations Forever, United Forever, Nations ESWC, Sunrise and Ori
 | **TM Vibrant Shaders** | `tmvs` | The shaders: presets, sky, light, weather, colour, the photo look. Holds `tmvs-core.dll`, which all four use. | *Settings* (live preview, update check) and the tabs Shaders, Customize, Studio, Maps, Performance, Misc, About |
 | **TMVS Capture** | `tmvs-capture` | Photos (`F12`, hi-res `Shift+F12`, photo mode `F6`), clips of your runs and, new, of each checkpoint's sector, and the video export. Works without the shaders. | *Settings* (photo mode, files) and the tabs Clips, Video |
 | **TMVS Upscaling** | `tmvs-upscaling` | Render scale with AMD FSR 1: the game draws at a lower resolution and FSR brings it back up. Works without the shaders. | *Settings* (render scale, sharpness) |
-| **TMVS Packs** | `tmvs-packs` | Resource packs (texture mods from `Skins\<Environment>\Mod`) on every map, chosen per environment, loaded live. | *Settings* (the packs page) |
+| **TMVS Packs** | `tmvs-packs` | Resource packs (texture mods from `Skins\<Environment>\Mod`) on every map, chosen per environment, loaded live. Nations/United Forever only: the older games have no hook for it yet, so Horizon doesn't offer it there. | *Settings* (the packs page) |
 
 What each one does without the others:
 
 - **Shaders off, Capture on**: photos, clips and the video export show the game's own picture.
-- **Shaders off, Upscaling on**: the game is drawn smaller and FSR scales it up, nothing else is changed (no colour, no TAA).
+- **Shaders off, Upscaling on** (or the effects switched off with the effects key): the game is drawn smaller and FSR scales it up, nothing else is changed (no colour, no TAA). *Render scale* 1.00 is the full size: Upscaling does nothing then. It needs *Game HDR* (on by default).
 - **Shaders on, Upscaling off**: render scale stays at 1.0 even if `settings.ini` says otherwise; the setting is kept for later.
 - **Capture off**: no photo keys, no clips (the recorder stops and frees its memory), no MP4 video export (the game's own export still works).
 - **Packs off**: maps load with their own mod or none, as without TMVS.

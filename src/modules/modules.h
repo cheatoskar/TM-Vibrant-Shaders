@@ -45,8 +45,9 @@ bool enabled(Id id);
 // What the core's features ask. Standalone: always true. Hosted: attached and enabled.
 bool on(Id id);
 
-// Hosted only: Upscaling runs while Shaders is off (the game's own image, scaled with FSR).
-bool upscaleOnly(float renderScale);
+// Hosted only: Upscaling runs while the shaders don't (the Shaders module off, or its effects switched
+// off with the effects key: effectsOn false): the game's own image, scaled with FSR.
+bool upscaleOnly(float renderScale, bool effectsOn = true);
 
 // Changes of the module states since the last call (bit per Id), for the core's Present to react on
 // (the look's block, clips' recording). Clears them.

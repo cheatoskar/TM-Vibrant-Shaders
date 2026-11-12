@@ -47,6 +47,7 @@ void testModules() {
     modules::setAttached(modules::kShaders, true);
     modules::setEnabled(modules::kShaders, true);
     check(!modules::upscaleOnly(0.67f), "with Shaders the pipeline scales as before");
+    check(modules::upscaleOnly(0.67f, false), "with Shaders but the effects off (effects key): upscale-only");
     modules::setEnabled(modules::kShaders, false);
     check(!modules::on(modules::kShaders) && modules::attached(modules::kShaders), "switched off: attached, not on");
     const uint32_t changes = modules::takeChanges();

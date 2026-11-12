@@ -3,7 +3,7 @@
   "name": "TMVS Packs",
   "version": "@TMVS_MODULES_VERSION@",
   "dll": "tmvs-packs.dll",
-  "games": ["tmnf", "tmuf", "eswc", "sunrise", "original"],
+  "games": ["tmnf", "tmuf"],
   "online": "online-ok",
   "abi": 1,
   "description": "Texture mods (resource packs) on every map, chosen per environment.",

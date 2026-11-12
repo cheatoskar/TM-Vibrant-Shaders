@@ -1617,7 +1617,7 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_gbufLightActive = false;
     g_rs.active = false;
     const Settings& s = Config::get().settings;
-    if ((!s.enabled && !modules::upscaleOnly(s.renderScale)) || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
+    if ((!s.enabled && !modules::upscaleOnly(s.renderScale, s.enabled)) || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
     // VR: the VR mod draws the eyes into its own targets. The float target took the camera's image
     // away from them and the headset showed black (jiink's test with Game HDR on); Render scale goes
     // the same way. Both stay off while the VR mod gives eyes.
@@ -2486,8 +2486,9 @@ void processSceneOne(IDirect3DDevice9* device) {
         setUnshadedWhy(why);
         return;
     }
-    // TMVS 2.0 modules: Upscaling without Shaders shades nothing but brings the scaled image up (FSR).
-    const bool upscaleOnly = modules::upscaleOnly(settings.renderScale);
+    // TMVS 2.0 modules: Upscaling without Shaders (or with the effects off) shades nothing but brings
+    // the scaled image up (FSR).
+    const bool upscaleOnly = modules::upscaleOnly(settings.renderScale, settings.enabled);
     if (!settings.enabled && !photo::active() && !g_captureRequested && !upscaleOnly) {
         if (g_pipelineB.ready()) releaseSideB(); // photo mode ended with the shaders off
         return;

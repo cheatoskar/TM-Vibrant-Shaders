@@ -31,11 +31,16 @@ const char* const kDescriptions[] = {
     "Texture mods (resource packs) on every map, chosen per environment.",
 };
 
+// The games each module works in. Packs: the resource pack swap hooks Forever's loader only (the 2006
+// engine has no such hook yet, src/overlay.cpp legacyHost), so Horizon doesn't offer it there.
+const uint32_t kGames[] = {HORIZON_GAME_FOREVER | HORIZON_GAME_LEGACY, HORIZON_GAME_FOREVER | HORIZON_GAME_LEGACY,
+                           HORIZON_GAME_FOREVER | HORIZON_GAME_LEGACY, HORIZON_GAME_FOREVER};
+
 const HorizonPluginInfo kInfo = {HORIZON_ABI,
                                  kIds[kModule],
                                  kNames[kModule],
                                  TMVS_MODULES_VERSION_A,
-                                 HORIZON_GAME_FOREVER | HORIZON_GAME_LEGACY,
+                                 kGames[kModule],
                                  HORIZON_CAP_MENU | HORIZON_CAP_DEVICE,
                                  HORIZON_FLAG_ONLINE_OK | HORIZON_FLAG_LIVE_TOGGLE,
                                  "cheatoskar",

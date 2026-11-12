@@ -2930,7 +2930,7 @@ bool drawUpscalingPage(Config&, Settings& s, const Names&) {
                           l |= drawKey(s, "FsrSharpness");
                           if (s.renderScale >= 0.99f) ImGui::TextDisabled("Off at 1.00: the full resolution.");
                           else if (!s.gameHdr) ImGui::TextWrapped("Needs Game HDR (TM Vibrant Shaders, Settings, Game integration).");
-                          else if (!modules::on(modules::kShaders)) ImGui::TextDisabled("Without the shaders: the game's own image, scaled with FSR.");
+                          else if (!modules::on(modules::kShaders) || !s.enabled) ImGui::TextDisabled("Without the shaders: the game's own image, scaled with FSR.");
                           else ImGui::TextDisabled("The shaders run at the lower resolution too.");
                           ImGui::TextDisabled("Photos, F12 and the video export use the full resolution.");
                           return l;

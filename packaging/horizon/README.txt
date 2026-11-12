@@ -7,7 +7,7 @@ they also load in 0.2.0 and newer):
   tmvs             TM Vibrant Shaders: the shaders, presets, colour looks, the photo look
   tmvs-capture     Photos, clips (also of each checkpoint's sector), the video export
   tmvs-upscaling   Render scale with AMD FSR 1, also without the shaders
-  tmvs-packs       Resource packs on every map
+  tmvs-packs       Resource packs on every map (Nations/United Forever only)
 
 Each one has its own page in the Horizon menu (its tabs), its own switch and its keys in Horizon's
 Hotkeys list. The tmvs folder also holds tmvs-core.dll, which all four use: keep it, even if you

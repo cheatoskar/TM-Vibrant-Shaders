@@ -305,8 +305,8 @@ void drawPage(int page, bool ready, const HorizonHostApi* host) {
     const float room = m && m->page_w > 0.0f ? m->page_w : 0.0f;
     g_lastUiScale = hostScale(host);
     g_lastUiRoom = room;
-    if (!ready || !overlay::drawPageForHorizon(page, hostTitleFont(host), g_lastUiScale, room))
-        ImGui::TextDisabled("Starts with the game's first frame.");
+    if (!ready) ImGui::TextDisabled("Starts with the game's first frame.");
+    else if (!overlay::drawPageForHorizon(page, hostTitleFont(host), g_lastUiScale, room)) ImGui::TextDisabled("Not available in this game.");
 }
 
 void HORIZON_CALL drawPanel(void* user) {

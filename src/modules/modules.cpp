@@ -58,8 +58,8 @@ bool on(Id id) {
     return valid(id) && g_attached[id] && g_enabled[id];
 }
 
-bool upscaleOnly(float renderScale) {
-    return g_hosted && !on(kShaders) && on(kUpscaling) && renderScale < 0.99f;
+bool upscaleOnly(float renderScale, bool effectsOn) {
+    return g_hosted && (!on(kShaders) || !effectsOn) && on(kUpscaling) && renderScale < 0.99f;
 }
 
 uint32_t takeChanges() {
