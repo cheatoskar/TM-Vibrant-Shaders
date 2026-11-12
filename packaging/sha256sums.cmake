@@ -1,5 +1,10 @@
 # Writes SHA256SUMS.txt for the release files in DIR (sha256sum format).
+get_filename_component(DIR "${DIR}" ABSOLUTE)
 set(files TM-Vibrant-Shaders.zip TMVibrantShaders.dll)
+# The Horizon modules' zip (release_zip makes it: TMVS-<modules version>-horizon.zip).
+file(GLOB horizon_zips RELATIVE "${DIR}" "${DIR}/TMVS-*-horizon.zip")
+list(SORT horizon_zips)
+list(APPEND files ${horizon_zips})
 # The standalone clips mod, once clips_zip made it.
 if(EXISTS "${DIR}/TM-Clips.zip")
   list(APPEND files TM-Clips.zip)
