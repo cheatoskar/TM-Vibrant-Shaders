@@ -422,7 +422,7 @@ target_compile_options(tmvs_capwritertest PRIVATE ${TMVS_OPTIONS})
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an
 # embedded DLL looks like a dropper to virus scanners.
 add_executable(tmvs_installer WIN32 tools/installer.cpp tools/installer.manifest)
-target_include_directories(tmvs_installer PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(tmvs_installer PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(tmvs_installer PRIVATE ${TMVS_DEFINITIONS} UNICODE _UNICODE)
 target_compile_options(tmvs_installer PRIVATE ${TMVS_OPTIONS})
 target_link_libraries(tmvs_installer PRIVATE shell32 ole32 comctl32 version advapi32)
