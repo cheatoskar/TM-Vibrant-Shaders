@@ -700,9 +700,15 @@ void present(IDirect3DDevice9* device) {
     syncSettings(now);
     takeResults();
     if (!g_hostKeys) {
-        if (g_settings.enabled && g_saveKey.pressed(g_settings.saveKey)) saveLast();
-        if (g_settings.enabled && g_lastRunKey.pressed(g_settings.lastRunKey)) saveLastRun();
-        if (g_settings.enabled && g_runSoFarKey.pressed(g_settings.runSoFarKey)) saveRunSoFar();
+        const bool save = g_saveKey.pressed(g_settings.saveKey), lastRun = g_lastRunKey.pressed(g_settings.lastRunKey),
+                   soFar = g_runSoFarKey.pressed(g_settings.runSoFarKey);
+        if (!g_settings.enabled) {
+            if (save || lastRun || soFar) showToast("Instant replay is off", false);
+        } else {
+            if (save) saveLast();
+            if (lastRun) saveLastRun();
+            if (soFar) saveRunSoFar();
+        }
     }
     readAuthorTime(now);
     // The race, for the runs' clips (read even before the recorder is ready: a run's start counts).
@@ -956,10 +962,23 @@ void drawSaving() {
         ImGui::TextWrapped("TM Vibrant Shaders records the clips: its menu (Clips page) has these settings.");
         return;
     }
+    if (ImGui::Checkbox("Instant replay", &s.enabled)) edited();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keeps the last seconds in memory, so runs can be saved. Off: nothing is recorded.");
     ImGui::BeginDisabled(!s.enabled);
-    const char* finishItems[] = {"Off", "Personal best", "Every finish"};
-    if (ImGui::Combo("Save on finish", &s.onFinish, finishItems, 3)) edited();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Saves the run from %.0f s before the start to %.0f s after the finish.", s.before, s.after);
+    bool best = s.onFinish > 0;
+    if (ImGui::Checkbox("Save best runs", &best)) {
+        s.onFinish = best ? 1 : 0;
+        edited();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("A personal best is saved from %.0f s before the start to %.0f s after the finish.", s.before, s.after);
+    if (s.onFinish > 0) {
+        ImGui::SameLine();
+        bool every = s.onFinish == 2;
+        if (ImGui::Checkbox("Every finish", &every)) {
+            s.onFinish = every ? 2 : 1;
+            edited();
+        }
+    }
     if (ImGui::SliderFloat("Before start", &s.before, 0.0f, 10.0f, "%.1f s")) edited();
     if (ImGui::SliderFloat("After finish", &s.after, 0.0f, 10.0f, "%.1f s")) edited();
     if (g_host == Host::Tmvs) { // the race's checkpoint times come from TM Vibrant Shaders' engine reads
@@ -1010,8 +1029,7 @@ void drawRecording() {
         ImGui::TextWrapped("TM Vibrant Shaders records the clips: its menu (Clips page) has these settings.");
         return;
     }
-    ImGui::TextDisabled("%s", g_status.c_str());
-    if (ImGui::Checkbox("Record clips", &s.enabled)) edited();
+    ImGui::TextDisabled("%s", s.enabled ? g_status.c_str() : "Off");
     ImGui::BeginDisabled(!s.enabled);
     // The buffer: from the map's author time, or a fixed length; held to what fits the memory limit
     // at the bitrate (the game is 32-bit).
@@ -1125,7 +1143,11 @@ void setHostKeys(bool hostKeys) {
 }
 
 void run(Action action) {
-    if (!g_ready || !g_allowed || !g_settings.enabled) return;
+    if (!g_ready || !g_allowed) return;
+    if (!g_settings.enabled) {
+        showToast("Instant replay is off", false);
+        return;
+    }
     switch (action) {
     case Action::SaveLast: saveLast(); break;
     case Action::SaveLastRun: saveLastRun(); break;

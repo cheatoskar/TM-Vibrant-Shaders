@@ -2,7 +2,9 @@
 
 [Back to the README](../README.md)
 
-Clips save your runs as MP4 videos, without rendering anything again. The game is recorded into memory all the time, and when a run is finished (or when you press a key) the part you want is written to a file. I use it to keep every personal best without thinking about it.
+Clips save your runs as MP4 videos, without rendering anything again. With *Instant replay* on, the game is recorded into memory all the time, and when a run is finished (or when you press a key) the part you want is written to a file. I use it to keep every personal best without thinking about it.
+
+*Instant replay* is off for new players (from 1.6): switch it on at the top of the *Clips* page. Off, nothing is recorded (no picture is copied, nothing is read back from the graphics card) and the clip keys only say "Instant replay is off". If your `clips.ini` already has it on (from 1.5), it stays on.
 
 For TrackMania Nations Forever, United Forever and TrackMania Nations ESWC (1.80 patch). It comes in two forms that share the code and the settings file:
 
@@ -84,8 +86,8 @@ All on the *Clips* page of the menu (panels *Saving* and *Recording*), or in the
 
 | Setting | Default | What it does |
 |---|---|---|
-| Record clips | on | Records into the buffer. Off: nothing is recorded and no key saves |
-| Save on finish | Personal best | Off, Personal best or Every finish |
+| Instant replay | off (from 1.6; your earlier choice stays) | Records into the buffer. Off: nothing is recorded and the keys only say "Instant replay is off" |
+| Save best runs | on | With Instant replay: a personal best is saved after the finish. *Every finish* next to it saves every finish |
 | Checkpoint clips | off | A clip of each checkpoint's sector: from the previous checkpoint (or the start) to 1 s after this one, `<map>_<date>_CP<n>_<time>.mp4` (TM Vibrant Shaders 2.0, not TM Clips) |
 | Before start / After finish | 3 s / 3 s | How much a run's clip takes before the start line and after the finish (0 to 10 s) |
 | Last seconds | 30 s | What the save key takes: 30, 60 or 90 s |

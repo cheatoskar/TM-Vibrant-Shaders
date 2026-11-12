@@ -9,7 +9,9 @@ namespace tmshaders {
 namespace clips {
 
 struct Settings {
-    bool enabled = true;      // record into the buffer
+    // Instant replay: record into the buffer. Off for new players (1.6): no frame is copied or read
+    // back until it is switched on; a clips.ini that has Enabled keeps it (load()).
+    bool enabled = false;
     int onFinish = 1;         // save on finish: 0 off, 1 personal best only, 2 every finish
     int bufferSeconds = 60;   // what the buffer keeps (Adaptive buffer off)
     bool adaptiveBuffer = true; // the buffer from the map's author time (adaptiveBufferSeconds)

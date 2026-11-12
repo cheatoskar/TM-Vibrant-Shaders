@@ -30,6 +30,7 @@ Only the Windows 10 repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 
 
 ### Also
 
+- **Instant replay is off for new players**: switch it on at the top of the *Clips* page for the background recording (`F3`, saved best runs). If you used clips in 1.5, nothing changes for you.
 - **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector.
 
 ---

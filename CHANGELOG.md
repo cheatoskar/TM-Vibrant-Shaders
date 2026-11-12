@@ -24,6 +24,9 @@ The older games: TrackMania Sunrise and TrackMania Original, clips and the MP4 e
 **Changed (TrackMania Nations ESWC)**
 - *Hide car* in photo mode now leaves the cars alone in network races (it writes the game's visible bit, so only in solo races and replays). The engine code for ESWC is now the shared one of the three older games; the log lines are the same.
 
+**Changed (clips, every game)**
+- **Instant replay is off for new players**: the clips' background recording (the buffer behind `F3`, *Save last run* and the saved best runs) starts only once you switch on *Instant replay* at the top of the *Clips* page; then *Save best runs* is on. Off, nothing is copied or read back from the graphics card, and the clip keys only show "Instant replay is off". A `clips.ini` that already has it on keeps it. The replay editor's *Shoot video* doesn't need it.
+
 **New (every game with clips)**
 - **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector, from the previous checkpoint (or the start) to one second after this one, saved as `<map>_<date>_CP<n>_<time>.mp4`. Read from the game only, as the finish clips.
 
