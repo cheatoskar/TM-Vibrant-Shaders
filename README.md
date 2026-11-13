@@ -16,9 +16,9 @@
 
 A mod for Direct3D 9 (TrackMania Nations / United Forever, Nations ESWC, Sunrise and Original) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
-**[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Share a look](#your-own-presets-and-sharing-them) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
+**[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Share a look](#your-own-presets-and-sharing-them) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation) · [TM Horizon family](#tm-horizon-family)
 
-**New in 1.6.0: TrackMania Sunrise and TrackMania Original, and TM Vibrant Shaders as Horizon modules (2.0.0).** The standalone mod now also runs in the Windows 10 repack of Sunrise and the Online Patch v2 of Original (experimental), and the three older games get clips and the MP4 video export. The same features come as four modules for Horizon Client's in-game menu, for the five Direct3D 9 games ([docs/horizon-modules.md](docs/horizon-modules.md)). TrackMania 2 stays standalone. Details in the [changelog](CHANGELOG.md).
+**New in 1.6.0: TrackMania Sunrise and TrackMania Original, and TM Vibrant Shaders as Horizon modules (2.0.0).** The standalone mod now also runs in the Windows 10 repack of Sunrise and the Online Patch v2 of Original (experimental), and the three older games get clips and the MP4 video export. The same features come as four modules for [Horizon Client](https://github.com/cheatoskar/horizon-client)'s in-game menu, for the five Direct3D 9 games ([docs/horizon-modules.md](docs/horizon-modules.md)). TrackMania 2 stays standalone. Details in the [changelog](CHANGELOG.md).
 
 **New in 1.4.2: a new video export** (Nations / United). *Shoot video* in the replay editor renders its frames through the mod (every sample and motion blur sub-frame summed in float, then graded once), encodes them with NVENC directly on NVIDIA cards at a quality I measured with VMAF, can write HDR10, and records the game's own sound. Presets for YouTube, editing, Discord and HDR on the menu's *Video* page. Details in the [changelog](CHANGELOG.md).
 
@@ -69,6 +69,14 @@ New versions then come through the ModLoader's auto update; nothing to download.
 4. Start the game. Press **`F8`** for the menu.
 
 By hand, TrackMania 2 needs only the `d3d11.dll` from the zip, copied next to `ManiaPlanet.exe` (start ManiaPlanet 64-bit). Run the setup again to update or uninstall; your settings stay. Windows SmartScreen may warn because the setup isn't code-signed: *More info → Run anyway*, or install by hand. Manual install, updating and the recommended game settings: **[docs/install.md](docs/install.md)**. Deutsche Anleitung: **[docs/INSTALL_DE.md](docs/INSTALL_DE.md)**.
+
+### With TM Horizon
+
+The [TM Horizon](https://github.com/cheatoskar/tm-horizon) launcher installs and updates the mod for you on Nations/United Forever (through the ModLoader servers, in your TMLoader profile) and on Nations ESWC (`d3d9.dll`, from this repo's release). For the other games use the setup, and for the Horizon modules the zip below ([docs/horizon-modules.md](docs/horizon-modules.md)).
+
+### As Horizon modules
+
+With [Horizon Client](https://github.com/cheatoskar/horizon-client) installed, download `TMVS-2.0.0-horizon.zip` from the [latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest) and copy its four folders into Horizon's `plugins` folder ([docs/horizon-modules.md](docs/horizon-modules.md#install-horizon)). Use either the standalone mod or the modules in one game, not both.
 
 ---
 
@@ -189,8 +197,8 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 
 | Game | Standalone (1.6.0) | Horizon modules (2.0.0) |
 |---|---|---|
-| TrackMania Nations Forever | Yes, ModLoader product or `d3d9.dll` | Yes (Horizon Host through TMLoader) |
-| TrackMania United Forever | Yes (the mod detects the game build and the map's environment) | Yes (Horizon Host through TMLoader) |
+| TrackMania Nations Forever | Yes, ModLoader product or `d3d9.dll` | Yes (Horizon Client through TMLoader) |
+| TrackMania United Forever | Yes (the mod detects the game build and the map's environment) | Yes (Horizon Client through TMLoader) |
 | TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) | No: Horizon runs only in the 32-bit Direct3D 9 games |
 | TrackMania Nations ESWC | Experimental, only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)) | Yes (Horizon's own loader), without TMVS Packs |
 | TrackMania Sunrise | Experimental, only the Windows 10 repack (`TmSunrise.exe`), as `d3d9.dll` with the repack's `d3d9.dll` chained as `d3d9.chain.dll` ([docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original)) | Yes (Horizon's own loader), without TMVS Packs, not tested in the game yet |
@@ -202,7 +210,7 @@ In ESWC, Sunrise and Original: the look, photos and F12 captures, clips, the MP4
 | Together with | |
 |---|---|
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
-| Horizon Client (TM Horizon) | Standalone or modules, not both: with both installed, the one the game loads first runs and the other stays off ([docs/horizon-modules.md](docs/horizon-modules.md)) |
+| [Horizon Client](https://github.com/cheatoskar/horizon-client) | Standalone or modules, not both: with both installed, the one the game loads first runs and the other stays off ([docs/horizon-modules.md](docs/horizon-modules.md)) |
 | CenterSpeed (speedometer) | Yes. With both loaded, this mod's menu opens with `F5` (CenterSpeed uses `F8`) |
 | TrackMania Forever OpenXR (VR) | With the ModLoader install and a VR build that hands over its device: the menu in the headset; the effects with *Effects in VR* (experimental) |
 | Competition Patch | Works (1.5.3 and 2.0). If the menu and the effects don't start, `tmvs.log` says so after 30 s and lists the other mods in the game: turn them off one by one |
@@ -234,6 +242,27 @@ In ESWC, Sunrise and Original: the look, photos and F12 captures, clips, the MP4
 | [Building](docs/building.md) | Build from source, the offline previewer, project layout |
 | [Installation (Deutsch)](docs/INSTALL_DE.md) | Installation und Bedienung auf Deutsch |
 | [Changelog](CHANGELOG.md) | What changed in each version |
+
+---
+
+## TM Horizon family
+
+Six projects, built to work together. TM Horizon installs and updates the others where it can; each one also works without it.
+
+| Project | What it is | Games | How to get it | Repo |
+|---|---|---|---|---|
+| **TM Horizon** | Launcher for every TrackMania game on Windows: library, mods, maps, servers, statistics. Installs and updates Horizon Client, Legacy Essentials and TM Vibrant Shaders. | All, from TrackMania (2003) to Trackmania (2020) | Installer from the releases (0.5.1, Launcher Preview) | [cheatoskar/tm-horizon](https://github.com/cheatoskar/tm-horizon) |
+| **Horizon Client** | In-game menu and mod loader with modules: Legacy Essentials, TMX Browser, TMX Upload, WR Hunter, Input Display, Horizon Performance, Horizon Scripts. | ESWC, Sunrise, Original; TMNF and TMUF through TMLoader (experimental) | TM Horizon (game page), or a zip per game (0.3.1) | [cheatoskar/horizon-client](https://github.com/cheatoskar/horizon-client) |
+| **Legacy Essentials** | Autosave, controller fix, login fix and game settings. A standalone `dinput8.dll` mod with its own menu (`Ctrl+F2`). The same features are the "Legacy Essentials" group in Horizon Client. | ESWC, Sunrise, Original | A zip per game (1.3.1); TM Horizon installs it on ESWC | [cheatoskar/eswc-autosave](https://github.com/cheatoskar/eswc-autosave) |
+| **Legacy Randomizer** | Random Map Challenge with maps from TMX, inside the game. A Horizon Client module. | ESWC, Sunrise, Original (solo) | A zip with Horizon Client, or the plugin alone (0.3.1) | [cheatoskar/legacy-randomizer](https://github.com/cheatoskar/legacy-randomizer) |
+| **TM Vibrant Shaders** (this repo) | Lighting, weather, skies, photos, clips and video export. Standalone, or as four Horizon Client modules. | TMNF, TMUF, TM2; ESWC, Sunrise, Original experimental | Setup or ModLoader server (1.6.0), Horizon modules zip (2.0.0); TM Horizon installs it on TMNF, TMUF and ESWC | [cheatoskar/TM-Vibrant-Shaders](https://github.com/cheatoskar/TM-Vibrant-Shaders) |
+| ***For developers*** | | | | |
+| **trackmania-internals** | Notes for mod developers: addresses, structures, file formats and physics of the games. | TMNF, TMUF, ESWC, Sunrise, Original, ManiaPlanet | Read it on GitHub | [cheatoskar/trackmania-internals](https://github.com/cheatoskar/trackmania-internals) |
+
+TMNF/TMUF = TrackMania Nations/United Forever, ESWC = TrackMania Nations ESWC, TM2 = TrackMania 2 (ManiaPlanet).
+
+- **Legacy Essentials or Horizon Client:** one is enough. Horizon Client has the same features in its "Legacy Essentials" group. With both in one game, the standalone keeps the autosave (the client's Autosave module pauses itself and logs `standalone ESWC Autosave found (eswc_autosave.dll): module paused`), and the login fix, controller fix, game settings and menu are the client's.
+- **TM Vibrant Shaders standalone or as Horizon modules:** one of the two. With both installed, the one the game loads first runs and the other stays off.
 
 ---
 
