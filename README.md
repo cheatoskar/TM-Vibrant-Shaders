@@ -14,7 +14,7 @@
 
 ![Realistic: the start line in the late sun, with haze and soft shadows](docs/images/realistic-start.jpg)
 
-A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
+A mod for Direct3D 9 (TrackMania Nations / United Forever, Nations ESWC, Sunrise and Original) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Share a look](#your-own-presets-and-sharing-them) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
 
@@ -26,9 +26,9 @@ A mod for Direct3D 9 (TrackMania Nations / United Forever) and Direct3D 11 (Trac
 
 ![TrackMania 2 Stadium, photo mode's compare split: left the game, right with the mod and the black hole sky](docs/images/tm2-black-hole-split.jpg)
 
-**New in the 1.5.0 pre-release: Clips** (TrackMania Nations/United). The game is recorded into memory all the time, and after a finish the run is saved as an MP4 with the game's sound, or the last seconds on `F3`. It is the *Clips* page in the menu, and also a mod of its own for the ModLoader (TM Clips). Details in [docs/clips.md](docs/clips.md). The same release brings the car and the race to TrackMania Nations ESWC and photo zoom, hi-res photos, Hide car and the Misc page to TrackMania 2.
+**New in 1.5.0: Clips** (TrackMania Nations/United). The game is recorded into memory all the time, and after a finish the run is saved as an MP4 with the game's sound, or the last seconds on `F3`. It is the *Clips* page in the menu, and also a mod of its own for the ModLoader (TM Clips). Details in [docs/clips.md](docs/clips.md). The same release brings the car and the race to TrackMania Nations ESWC and photo zoom, hi-res photos, Hide car and the Misc page to TrackMania 2.
 
-**New in the 1.4.3 pre-release: TrackMania Nations ESWC** (experimental). The same DLL as `d3d9.dll` next to the unofficial 1.80 patch's `TmNationsESWC.exe`: the look, photo mode and captures. Details in [docs/install.md](docs/install.md#trackmania-nations-eswc).
+**New in 1.4.3: TrackMania Nations ESWC** (experimental). The same DLL as `d3d9.dll` next to the unofficial 1.80 patch's `TmNationsESWC.exe`: the look, photo mode and captures. Details in [docs/install.md](docs/install.md#trackmania-nations-eswc).
 
 ![TrackMania Nations ESWC, photo mode's compare split: left the game, right Golden Hour](docs/images/eswc-golden-hour-split.jpg)
 
