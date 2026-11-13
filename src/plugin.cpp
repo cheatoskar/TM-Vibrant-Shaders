@@ -26,6 +26,8 @@
 #include "maincamera.h"
 #include "photo.h"
 #include "planeread.h"
+#include "perfcpu.h"
+#include "readback.h"
 #include "proxy.h"
 #include "thumbnails.h"
 #include "tracer.h"
@@ -45,6 +47,7 @@
 #include <cstring>
 #include <memory>
 #include <numeric>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -976,13 +979,30 @@ void hdrStats(const std::vector<uint16_t>& half, const char* when) {
              when, above1 / n, above125 / n, above2 / n, brightest, (p999 + 1) / 16.0, negative / n);
 }
 
-void logHdrStats(IDirect3DDevice9* device, const char* when) {
-    std::vector<uint16_t> half;
-    if (!g_pipeline.readHalfColor(device, g_hdrScene.surface, half)) {
-        TMVS_LOG("hdr: readback failed");
-        return;
-    }
-    hdrStats(half, when);
+// Once per map (endHdr): the float image's numbers. Read back without waiting (AsyncReadback: the
+// copy queued now, locked a frame or more later in collectHdrStats) and counted on a thread of its
+// own: read and counted at once it held the game's thread up for the whole copy of the 2560x1440
+// float image (the GPU's frame first) and the count of its 3.7 million pixels, a few seconds into
+// every map. Every other row is kept (half the copy on the game's thread; the numbers are shares).
+AsyncReadback g_hdrStatsRead;
+
+void queueHdrStats(IDirect3DDevice9* device) {
+    if (!g_hdrStatsRead.queue(device, g_hdrScene.surface)) TMVS_LOG("hdr: readback failed");
+}
+
+void collectHdrStats() {
+    if (!g_hdrStatsRead.ready()) return;
+    auto half = std::make_shared<std::vector<uint16_t>>();
+    g_hdrStatsRead.read([&](const AsyncReadback::Data& d) {
+        if (d.format != D3DFMT_A16B16G16R16F) return;
+        const size_t row = static_cast<size_t>(d.width) * 4;
+        half->resize(row * ((d.height + 1) / 2));
+        for (UINT y = 0, out = 0; y < d.height; y += 2, out++)
+            memcpy(&(*half)[row * out], static_cast<const BYTE*>(d.bits) + static_cast<size_t>(d.pitch) * y, row * sizeof(uint16_t));
+    });
+    g_hdrStatsRead.release(); // 29 MB of system memory at 1440p, once per map: not kept
+    if (half->empty()) return;
+    std::thread([half] { hdrStats(*half, "map"); }).detach();
 }
 
 // RenderScale: the main camera draws into GameHdr's float target made smaller, through a viewport
@@ -1956,7 +1976,7 @@ void endHdr(IDirect3DDevice9* device) {
         } else if (GetTickCount() - s_since > 8000) {
             s_map = engine::mapLoads();
             s_since = 0;
-            logHdrStats(device, "map");
+            queueHdrStats(device);
         }
     }
 }
@@ -3850,6 +3870,7 @@ void onPreReset() {
                  since);
     }
     perflog::release();
+    g_hdrStatsRead.release();
     g_pipeline.setProfiling(true, false); // perflog's bracket is gone until the next Present
     g_pipeline.releaseForReset(); // the shaders stay (they live through the reset)
     releaseOwnExport(false);
@@ -4097,6 +4118,7 @@ void onPresent(IDirect3DDevice9* device) {
     }
     relightOnSwitch(settings);
     castersTick();
+    collectHdrStats();
     unbindGBuffer(device);
     gameshaders::tick();
     trackUnshaded(settings);

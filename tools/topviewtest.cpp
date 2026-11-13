@@ -414,7 +414,11 @@ int main(int argc, char** argv) {
     // A device reset (Shoot video): the picture and its heights copied a second after the last
     // drawing, given back after the reset; a lower quad seen afterwards under B stays under it.
     Sleep(1100);
-    topview::render(device); // nothing queued: the copy is made
+    // Nothing queued: the copy is queued (read back without waiting) and taken a few frames later.
+    for (int i = 0; i < 8; i++) {
+        topview::render(device);
+        device->Present(nullptr, nullptr, nullptr, nullptr);
+    }
     topview::releaseDevice();
     device->BeginScene();
     device->SetVertexDeclaration(decl);

@@ -2126,8 +2126,7 @@ PanelDef photoModePanel(Config& config) {
                           const std::string splitKey = keyText(keys::Action::PhotoSplit);
                           if (g_host->photoAutoMode) {
                               switchRow("Auto photo mode", &config.photoAuto,
-                                        ("Photo mode starts with the free camera (cam 7): no HUD, full quality.\n" + photoKey +
-                                         " toggles it anywhere.").c_str());
+                                        ("Starts with the free camera (cam 7), offline only.\n" + photoKey + " toggles it anywhere.").c_str());
                           }
                           if (g_host->photoHideHud)
                               switchRow("Hide HUD", &config.photoHideHud, "Off: the HUD stays visible in photo mode. Photos never include it.");

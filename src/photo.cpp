@@ -4,6 +4,7 @@
 #include "engine.h"
 #include "image.h"
 #include "log.h"
+#include "photoauto.h"
 #include "pipeline.h"
 #include "settings.h"
 #include <cmath>
@@ -18,6 +19,18 @@ namespace {
 
 int g_manual = -1;          // F6: -1 follow the free camera, 0 off, 1 on
 bool g_wasFreeCam = false;
+AutoGate g_gate;            // auto photo mode only offline (photoauto.h)
+bool g_wasOnline = false;
+
+RaceKind gateKind(engine::RaceKind k) {
+    switch (k) {
+    case engine::RaceKind::None: return RaceKind::None;
+    case engine::RaceKind::Solo: return RaceKind::Solo;
+    case engine::RaceKind::Net: return RaceKind::Net;
+    case engine::RaceKind::Other: return RaceKind::Other;
+    default: return RaceKind::Unknown;
+    }
+}
 bool g_panel = true;        // the compact panel (its key hides it)
 bool g_active = false;
 float g_focus[2] = {-1.0f, -1.0f};
@@ -225,15 +238,23 @@ bool viewArea(UINT bufferWidth, UINT bufferHeight, RECT& out) {
 
 void beginFrame() {
     const bool freeCam = engine::freeCamActive();
+    // Auto photo mode only offline: on a server the game switches to the free camera by itself (spectator,
+    // the end of a round). The replay editor, a solo race, a replay watched: yes.
+    const bool autoAllowed = g_gate.update(GetTickCount(), engine::mapOpen(), engine::replayEditorOpen(), gateKind(engine::raceKind()));
+    if (g_gate.online() != g_wasOnline) {
+        g_wasOnline = g_gate.online();
+        TMVS_LOG("photo: %s (race %s): auto photo mode %s", g_wasOnline ? "online" : "offline", engine::raceClassName()[0] ? engine::raceClassName() : "none",
+                 g_wasOnline ? "off, F6 still works" : "with the free camera");
+    }
     if (freeCam != g_wasFreeCam) {
         g_wasFreeCam = freeCam;
         g_manual = -1; // entering or leaving cam 7 hands it back to the automatic
-        TMVS_LOG("photo: free camera %s", freeCam ? "on" : "off");
+        TMVS_LOG("photo: free camera %s%s", freeCam ? "on" : "off", freeCam && !autoAllowed ? " (online or not known offline: photo mode stays off)" : "");
     }
     const Config& config = Config::get();
     // Also with the shaders off (F7): free camera, zoom and photos of the game's own image.
     // TMVS 2.0 as Horizon modules: photo mode belongs to the Capture module.
-    const bool wanted = modules::on(modules::kCapture) && (g_manual >= 0 ? g_manual == 1 : (config.photoAuto && freeCam));
+    const bool wanted = modules::on(modules::kCapture) && photo::wanted(g_manual, config.photoAuto, freeCam, autoAllowed);
     if (wanted != g_active) {
         g_active = wanted;
         TMVS_LOG("photo: mode %s", wanted ? "on" : "off");

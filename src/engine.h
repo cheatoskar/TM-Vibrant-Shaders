@@ -36,6 +36,22 @@ struct Callbacks {
 };
 
 bool install(const Callbacks& callbacks);
+
+// The game's Cpu/Gpu synchro (CSystemConfigDisplay::GpuSync, the launcher's "Cpu/Gpu synchro") as its
+// viewport runs it (CVisionViewportDx9::SyncGpuInit: a ring of event queries, one issued after each
+// Present, docs/performance.md "Cpu/Gpu synchro"): after frame N the game waits until the GPU has
+// finished frame N - frames. half: that wait sits at the next frame's start (RenderFrameBegin) instead
+// of right after Present. "Immediate" (the default) is frames 0, half false: the CPU waits for the frame
+// it just sent, so nothing of the GPU's work overlaps the game's next frame on the CPU.
+struct GpuSync {
+    bool known = false; // read from the viewport (every supported game, once a frame ran)
+    bool none = false;  // "None": no wait
+    int frames = 0;
+    bool half = false;
+};
+GpuSync gpuSync();
+// Its name as the launcher shows it ("Immediate", "1 Frame & Half", "None"; "?" not known).
+const char* gpuSyncName(const GpuSync& sync);
 // Overrides the game's shadow quality (-1 = keep the game's setting).
 void forceShadows(int mode);
 bool active();
@@ -221,6 +237,14 @@ void legacyCensus(bool on);
 
 // The free camera (cam 7 in replays, the editor's) is on. False without the hook.
 bool freeCamActive();
+
+// The race the game runs now (read only): none (menu, loading, a replay watched, the map editor), a solo
+// race, a network race (LAN or internet: also spectating and the podium on a server), another race, or not
+// readable. The class of the app's race (CTrackMania +0x454 on TMNF/TMUF, CurrentRace on the 2006 engine)
+// by its name in the game's own class table, as Horizon Host's isOnline().
+enum class RaceKind { None, Solo, Net, Other, Unknown };
+RaceKind raceKind();
+const char* raceClassName(); // the last race class seen, for the log ("" none)
 
 // Counters of race (re)starts / map loads and of respawns (for the neon trail).
 int raceResets();

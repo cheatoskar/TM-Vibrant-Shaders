@@ -1,14 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(tm_vibrant_shaders VERSION 1.6.0 LANGUAGES CXX RC)
+project(tm_vibrant_shaders VERSION 1.6.1 LANGUAGES CXX RC)
 
-# 1.6.0-dev until the release tag sets it (CI: -DTM_SHADERS_VERSION=<tag>).
+# 1.6.1-dev until the release tag sets it (CI: -DTM_SHADERS_VERSION=<tag>).
 if(NOT DEFINED TM_SHADERS_VERSION)
   set(TM_SHADERS_VERSION "${PROJECT_VERSION}-dev")
 endif()
 # The Horizon Host modules count on their own (2.0 = the first module release); they carry the same
 # core as the standalone of TM_SHADERS_VERSION. A tag's suffix (-rc.1, -dev) goes to both.
-set(TMVS_MODULES_BASE_VERSION "2.0.0")
+set(TMVS_MODULES_BASE_VERSION "2.0.1")
 if(NOT DEFINED TMVS_MODULES_VERSION)
   set(TMVS_MODULES_VERSION "${TMVS_MODULES_BASE_VERSION}")
   string(FIND "${TM_SHADERS_VERSION}" "-" TMVS_SUFFIX_AT)
@@ -130,6 +130,8 @@ configure_file("${CMAKE_CURRENT_BINARY_DIR}/tmvs_bytecode.h.in" "${CMAKE_CURRENT
 add_library(tmvs_core STATIC
   src/pipeline.cpp
   src/planeread.cpp
+  src/readback.cpp
+  src/perfcpu.cpp
   src/gfx.cpp
   src/noise.cpp
   src/framecap.cpp
@@ -510,6 +512,12 @@ add_executable(tmvs_maincameratest tools/maincameratest.cpp)
 target_include_directories(tmvs_maincameratest PRIVATE src)
 target_compile_options(tmvs_maincameratest PRIVATE ${TMVS_OPTIONS})
 
+# Auto photo mode test: never on a server, yes in the replay editor, a solo race and a replay (src/photoauto.h;
+# development tool).
+add_executable(tmvs_photoautotest tools/photoautotest.cpp)
+target_include_directories(tmvs_photoautotest PRIVATE src)
+target_compile_options(tmvs_photoautotest PRIVATE ${TMVS_OPTIONS})
+
 # Share code test: every preset round-trips, garbage is refused, the clipboard (development tool).
 add_executable(tmvs_sharetest tools/sharetest.cpp)
 target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)
@@ -540,6 +548,17 @@ endif()
 add_executable(tmvs_planereadtest tools/planereadtest.cpp)
 target_link_libraries(tmvs_planereadtest PRIVATE tmvs_core)
 target_compile_options(tmvs_planereadtest PRIVATE ${TMVS_OPTIONS})
+
+# AsyncReadback test: render targets read back without stalling, each copy the colour it had when it
+# was queued, with size changes, dropped copies and a device reset in between (development tool).
+add_executable(tmvs_readbacktest tools/readbacktest.cpp)
+target_link_libraries(tmvs_readbacktest PRIVATE tmvs_core)
+target_compile_options(tmvs_readbacktest PRIVATE ${TMVS_OPTIONS})
+
+# Perf line test: the game thread's CPU split (perfcpu.h) from synthetic frame timelines (development tool).
+add_executable(tmvs_perfcputest tools/perfcputest.cpp)
+target_link_libraries(tmvs_perfcputest PRIVATE tmvs_core)
+target_compile_options(tmvs_perfcputest PRIVATE ${TMVS_OPTIONS})
 
 # GameGBuffer test: the game's dumped pixel shaders through the compile patch with the game's own
 # compiler, and (--device) drawn next to the game's on a D3D9 device (development tool).
@@ -585,7 +604,8 @@ target_compile_options(tmvs_modulelogictest PRIVATE ${TMVS_OPTIONS})
 # Documents\TrackMania\TMVS. Not the two that read the player's own files on purpose (packtest: the
 # resource packs, replaytest: the replays).
 set(TMVS_SANDBOXED_TESTS tmvs_aqtest tmvs_keystest tmvs_inlinehooktest tmvs_initest tmvs_sharetest tmvs_clipstest
-  tmvs_capwritertest tmvs_castertest tmvs_planereadtest tmvs_mp4test tmvs_gbuftest tmvs_loopbacktest tmvs_modulelogictest)
+  tmvs_capwritertest tmvs_castertest tmvs_planereadtest tmvs_mp4test tmvs_gbuftest tmvs_loopbacktest tmvs_modulelogictest
+  tmvs_readbacktest tmvs_perfcputest)
 if(TMVS_MISC_TOOLS)
   list(APPEND TMVS_SANDBOXED_TESTS tmvs_topviewtest)
 endif()

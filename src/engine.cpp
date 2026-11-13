@@ -4,6 +4,7 @@
 #include "hook.h"
 #include "inlinehook.h"
 #include "log.h"
+#include "perfcpu.h"
 #include "filehash.h"
 #include "legacygames.h"
 #include <windows.h>
@@ -2498,7 +2499,20 @@ void logDisplayConfig() {
     }
 }
 
+// The engine's RenderFrameBegin itself, outside the mod's scope (the perf line's "frame start": with a
+// "& Half" Cpu/Gpu synchro the game's wait for the GPU is in it). Called inside the detour's ModScope.
+int frameBeginTimed(void* self, void* edx) {
+    perfcpu::tracker().modLeave(perfcpu::now());
+    const int result = g_frameBegin(self, edx);
+    const int64_t now = perfcpu::now();
+    perfcpu::tracker().point(perfcpu::Point::FrameBeginDone, now);
+    perfcpu::tracker().modEnter(now); // the caller's ModScope leaves again
+    return result;
+}
+
 int __fastcall frameBeginDetour(void* self, void* edx) {
+    perfcpu::tracker().point(perfcpu::Point::FrameBeginEnter, perfcpu::now());
+    perfcpu::ModScope mod;
     g_frameViewport = self;
     // CHmsViewport::m_Shadows lives at +0x248 (see CHmsViewport::RenderShadowsSet).
     int mode = *reinterpret_cast<const int*>(static_cast<const BYTE*>(self) + 0x248);
@@ -2514,7 +2528,7 @@ int __fastcall frameBeginDetour(void* self, void* edx) {
     logDisplayConfig();
     g_engineFrames++;
     if (g_callbacks.frameBegin) g_callbacks.frameBegin();
-    return g_frameBegin(self, edx);
+    return frameBeginTimed(self, edx);
 }
 
 void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* clearDesc) {
@@ -2531,7 +2545,10 @@ void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* cle
     if (g_cameraDepth < kCameraDepth) g_cameraStack[g_cameraDepth] = camera;
     g_cameraDepth++;
     g_lastViewSet = g_lastProjectionSet = false;
-    if (g_callbacks.cameraBegin) g_callbacks.cameraBegin(camera);
+    if (g_callbacks.cameraBegin) {
+        perfcpu::ModScope mod;
+        g_callbacks.cameraBegin(camera);
+    }
     g_legacyOutsideProjection = nullptr; // ESWC: one computed before this begin belongs to this camera, not the next
     g_cameraBegin(self, edx, camera, clearDesc);
 }
@@ -2539,7 +2556,10 @@ void __fastcall cameraBeginDetour(void* self, void* edx, void* camera, void* cle
 void __fastcall cameraEndDetour(void* self, void* edx, void* camera) {
     g_cameraEnd(self, edx, camera);
     if (g_cameraDepth > 0) g_cameraDepth--;
-    if (g_callbacks.cameraEnd) g_callbacks.cameraEnd(camera, g_camera);
+    if (g_callbacks.cameraEnd) {
+        perfcpu::ModScope mod;
+        g_callbacks.cameraEnd(camera, g_camera);
+    }
 }
 
 // The camera rendering now (between its begin and end), null between cameras.
@@ -2548,11 +2568,17 @@ const void* renderingCamera() {
 }
 
 void __fastcall overlayZonesDetour(void* self, void* edx, void* zones, int flags) {
-    if (g_callbacks.overlayBegin) g_callbacks.overlayBegin();
+    if (g_callbacks.overlayBegin) {
+        perfcpu::ModScope mod;
+        g_callbacks.overlayBegin();
+    }
     // Always drawn: in some setups (camera effects, the editors) this pass also brings the 3D
     // view to the screen. The photo mode hides only the interface (applyInterfaceVisibility).
     g_overlayZones(self, edx, zones, flags);
-    if (g_callbacks.overlayEnd) g_callbacks.overlayEnd();
+    if (g_callbacks.overlayEnd) {
+        perfcpu::ModScope mod;
+        g_callbacks.overlayEnd();
+    }
 }
 
 // The game's read-back of a video frame (CVisionViewportDx9::RenderFrameEnd, the same code in both
@@ -2590,11 +2616,32 @@ bool skipGameReadback(void* viewport) {
     return true;
 }
 
+// The viewport's Cpu/Gpu synchro (SyncGpuInit, docs/performance.md): its ring of event queries is a
+// CFastBuffer (count, data) whose count is GpuSync's frames + 1 (0: "None"), and 0x14 bytes after it
+// the flag that moves the wait from RenderFrameEnd to the next RenderFrameBegin ("& Half").
+// TMNF/TMUF 0x930 (SyncGpuWaitQuery 0x0098b890, flag read at RenderFrameEnd 0x009a47ff), ESWC 0x844
+// (0x007f1fd0, flag 0x007e482b), Sunrise and Original 0x87c (0x006dcb30 / 0x006dbec0, flag 0x006cf6fb /
+// 0x006cea55).
+const void* g_syncViewport = nullptr; // the viewport of the last RenderFrameEnd
+constexpr size_t kSyncFlagAfterRing = 0x14;
+
+size_t syncRingOffset() {
+    if (g_legacy) return g_legacy->game == legacy::Game::Eswc ? 0x844 : 0x87c;
+    return g_build ? 0x930 : 0;
+}
+
 void __fastcall frameEndDetour(void* self, void* edx) {
-    if (g_callbacks.frameEnd) g_callbacks.frameEnd();
+    perfcpu::tracker().point(perfcpu::Point::FrameEndEnter, perfcpu::now());
+    g_syncViewport = self;
+    if (g_callbacks.frameEnd) {
+        perfcpu::ModScope mod;
+        g_callbacks.frameEnd();
+    }
     // After the plugin's frameEnd: its frame for this write is finished by then.
     const bool skipped = skipGameReadback(self);
+    // EndScene, Present (the mod's Present work in it) and the game's wait for the GPU.
     g_frameEnd(self, edx);
+    perfcpu::tracker().point(perfcpu::Point::FrameEndDone, perfcpu::now());
     if (skipped) {
         *reinterpret_cast<int*>(static_cast<BYTE*>(self) + kViewportVideoAsync) = 0;
         *g_readPhase = 0; // the write wrapped it to 0 already
@@ -2746,12 +2793,14 @@ void legacyCensusSummary();
 const void* g_legacyViewport = nullptr; // the viewport whose frame runs (for the video flags)
 
 int __fastcall legacyFrameBeginDetour(void* self, void* edx) {
+    perfcpu::tracker().point(perfcpu::Point::FrameBeginEnter, perfcpu::now());
+    perfcpu::ModScope mod;
     g_legacyViewport = self;
     g_cameraDepth = 0; // nothing renders between frames
     g_engineFrames++;
     legacyPoll(); // the race, its car and the map, before the plugin's frame begins
     if (g_callbacks.frameBegin) g_callbacks.frameBegin();
-    return g_frameBegin(self, edx);
+    return frameBeginTimed(self, edx);
 }
 
 using ReadInputResultFn = int(__cdecl*)(void*, void*, unsigned long);
@@ -3788,6 +3837,30 @@ bool active() {
     return g_active;
 }
 
+GpuSync gpuSync() {
+    GpuSync sync;
+    const size_t ring = syncRingOffset();
+    const BYTE* v = static_cast<const BYTE*>(g_syncViewport);
+    if (!ring || !v || !readable(v + ring, kSyncFlagAfterRing + sizeof(int))) return sync;
+    const unsigned count = *reinterpret_cast<const unsigned*>(v + ring);
+    const int flag = *reinterpret_cast<const int*>(v + ring + kSyncFlagAfterRing);
+    if (count > 256) return sync; // not a ring (SyncGpuInit allows up to 256)
+    sync.known = true;
+    sync.none = count == 0;
+    sync.frames = count > 0 ? static_cast<int>(count) - 1 : 0;
+    sync.half = flag != 0;
+    return sync;
+}
+
+const char* gpuSyncName(const GpuSync& sync) {
+    if (!sync.known) return "?";
+    if (sync.none) return "None";
+    static const char* const kNames[2][4] = {{"Immediate", "1 Frame", "2 Frames", "3 Frames"},
+                                             {"Half a frame", "1 Frame & Half", "2 Frames & Half", "3 Frames & Half"}};
+    if (sync.frames < 0 || sync.frames > 3) return sync.half ? "more than 3 frames & half" : "more than 3 frames";
+    return kNames[sync.half ? 1 : 0][sync.frames];
+}
+
 void* viewportDevice() {
     if (!g_build || !g_frameViewport) return nullptr;
     void* device = nullptr;
@@ -4609,6 +4682,88 @@ bool raceTimes(RaceTimes& out) {
 bool mapOpen() {
     if (g_legacy) return g_legacyState.challenge != nullptr;
     return currentChallenge() != nullptr;
+}
+
+namespace {
+// CTrackMania's current race (the field CTrackMania::SetRace writes; the same in both Forever builds: Horizon
+// Host's gamectl kSpecs appRace, whose isOnline() reads it the same way).
+constexpr size_t kAppRace = 0x454;
+// The engine's class info (CMwClassInfo): id +0x04, parent +0x08, name +0x14. An object's MwGetClassInfo is
+// `mov eax, <class info>; ret` in slot 2 of its vtable on TMNF/TMUF (slot 1 on the 2006 engine); GetMwClassId
+// next to it has the same shape but returns an id, which fails the checks below.
+constexpr size_t kClassInfoId = 0x04, kClassInfoParent = 0x08, kClassInfoName = 0x14;
+const char* g_raceClass = "";
+
+const char* classInfoName(const BYTE* info) {
+    if (!info || !readable(info + kClassInfoName, sizeof(void*))) return nullptr;
+    const char* name = *reinterpret_cast<const char* const*>(info + kClassInfoName);
+    if (!name || !readable(name, 1)) return nullptr;
+    for (int i = 0; i < 64; i++) {
+        if (!readable(name + i, 1)) return nullptr;
+        if (!name[i]) return i >= 2 && name[0] == 'C' ? name : nullptr;
+    }
+    return nullptr;
+}
+
+const BYTE* classInfoOf(const void* nod) {
+    if (!nod || !readable(nod, sizeof(void*))) return nullptr;
+    const uintptr_t* table = *static_cast<const uintptr_t* const*>(nod);
+    if (!table || !readable(table, 4 * sizeof(void*))) return nullptr;
+    for (int slot = 0; slot < 4; slot++) {
+        const BYTE* fn = reinterpret_cast<const BYTE*>(table[slot]);
+        if (!fn || !readable(fn, 6) || fn[0] != 0xb8 || fn[5] != 0xc3) continue;
+        const BYTE* info = *reinterpret_cast<const BYTE* const*>(fn + 1);
+        if (reinterpret_cast<uintptr_t>(info) < 0x10000 || !readable(info + kClassInfoId, sizeof(DWORD))) continue;
+        const DWORD id = *reinterpret_cast<const DWORD*>(info + kClassInfoId);
+        if (id && (id & 0xfff) == 0 && classInfoName(info)) return info;
+    }
+    return nullptr;
+}
+
+RaceKind kindOfRace(const void* race) {
+    if (!race) return RaceKind::None;
+    const BYTE* info = classInfoOf(race);
+    const char* name = info ? classInfoName(info) : nullptr;
+    if (!name) return RaceKind::Unknown;
+    g_raceClass = name;
+    if (strstr(name, "Net")) return RaceKind::Net;
+    bool race1 = false, isRace = false;
+    for (int depth = 0; info && depth < 32; depth++) {
+        const char* n = classInfoName(info);
+        if (!n) break;
+        if (!strcmp(n, "CTrackManiaRace1P")) race1 = true;
+        if (!strcmp(n, "CTrackManiaRace")) isRace = true;
+        if (!readable(info + kClassInfoParent, sizeof(void*))) break;
+        info = *reinterpret_cast<const BYTE* const*>(info + kClassInfoParent);
+    }
+    if (!isRace) return RaceKind::Unknown; // not a race at all: the field is not where expected
+    return race1 ? RaceKind::Solo : RaceKind::Other;
+}
+} // namespace
+
+RaceKind raceKind() {
+    if (g_legacy) {
+        // The 2006 engine: the race classes are known by id (kLegacyRaces, read with the race every frame).
+        const LegacyState& s = g_legacyState;
+        if (s.raceKind >= 0) {
+            g_raceClass = kLegacyRaces[s.raceKind].c.name;
+            if (strstr(g_raceClass, "Net")) return RaceKind::Net;
+            return kLegacyRaces[s.raceKind].solo ? RaceKind::Solo : RaceKind::Other;
+        }
+        return s.otherRace ? RaceKind::Unknown : RaceKind::None;
+    }
+    if (!g_build || !g_app) return RaceKind::None;
+    __try {
+        const BYTE* app = static_cast<const BYTE*>(g_app);
+        if (!readable(app + kAppRace, sizeof(void*))) return RaceKind::Unknown;
+        return kindOfRace(*reinterpret_cast<void* const*>(app + kAppRace));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return RaceKind::Unknown;
+    }
+}
+
+const char* raceClassName() {
+    return g_raceClass;
 }
 
 bool currentMapComments(std::string& comments) {

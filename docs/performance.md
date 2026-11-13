@@ -126,22 +126,83 @@ frame rate rises less than the GPU time falls. Lower scales help more where the 
 What it costs in the picture: fine detail, text on signs and thin lines get softer (0.77 little, 0.5 clearly); small
 lights far away can lose some of their glow. *FSR sharpening* (`FsrSharpness`) sets how much is sharpened back.
 
+## Cpu/Gpu synchro: the game waits for the GPU
+
+All five games (Nations/United Forever, Nations ESWC, Sunrise, Original) have a setting **Cpu/Gpu synchro** in their
+launcher's advanced display settings (`GpuSync` in the game's system config). After every `Present` the game puts an
+event query into a ring and waits until the GPU has reached the query of some frames ago:
+
+| Cpu/Gpu synchro | Value | The CPU waits after frame N until the GPU has finished ... | Where |
+|---|---|---|---|
+| Immediate (the default) | 7 | frame N | right after Present |
+| Half a frame | 6 | frame N | at the start of frame N + 1, after the game's logic |
+| 1 Frame | 5 | frame N - 1 | right after Present |
+| 1 Frame & Half | 4 | frame N - 1 | at the start of the next frame |
+| 2 Frames | 3 | frame N - 2 | right after Present |
+| 2 Frames & Half | 2 | frame N - 2 | at the start of the next frame |
+| 3 Frames | 1 | frame N - 3 | right after Present |
+| None | 0 | no wait (the driver lets the CPU run up to 3 frames ahead) | |
+
+With **Immediate** the CPU and the GPU take turns: the GPU is idle while the game runs its logic and issues its
+drawing, and the CPU is idle while the GPU finishes the frame. The frame time is then the CPU's time **plus** the GPU's,
+and every millisecond the mod adds on the GPU lands on the frame time in full. With **1 Frame** the game's next frame
+runs on the CPU while the GPU finishes the last one: the frame time comes close to the larger of the two instead of
+their sum, at the cost of one frame more input delay. **Half a frame** overlaps only the game's logic with the GPU (the
+wait sits before the next frame's drawing) and adds less delay.
+
+How much it gives depends on how the frame splits. A Sunrise log at 1440p (GTX 1080 Ti) showed 20.9 ms frames with
+about 8 ms of GPU work (game 3D 1.9 ms, the mod 6.2 ms) and the GPU idle for the rest: under Immediate those 8 ms add to
+the CPU's ~12 ms; with 1 Frame the frame could come down towards the CPU's ~12–13 ms. Not measured yet; the perf line
+below shows the split.
+
+Where it is stored (the game reads it at start):
+
+- **Nations/United Forever**: `Documents\TrackMania\Config\Default.SystemConfig.Gbx`, a binary GBX with a compressed
+  body. Change it with `TmForeverLauncher.exe` (its advanced settings, *Cpu/Gpu synchro*).
+- **Nations ESWC, Sunrise, Original**: `Default.SystemConfig.Gbx` next to the game's exe, a text GBX. Chunk `b013003`
+  holds six values: *DisableShadowBuffer*, **GpuSync**, *EmulateCursorGDI*, *VertexProcess*, *OptimizePartDyna* and one
+  more; a launcher can change the second (`7` to `5` keeps the chunk's byte count right). Their launchers have the same
+  *Cpu/Gpu synchro* setting.
+
+The mod writes the setting into the log (`perf: the game's Cpu/Gpu synchro is ...`) and into every perf line. It
+doesn't change it: that is the game's setting. Under Immediate the mod can't move its work out of the way either: its
+passes depend on the frame's scene, and the game waits for all of the frame anyway.
+
 ## The perf line in the log
 
 Every 2000 frames in a race `tmvs.log` gets a line like
 
-    perf: 80 FPS (12.50 ms a frame) over 2000 shaded frames; GPU ms a frame: game 3D 4.10, mod 6.80 (passes 6.50:
-    LightingEngine 1.43, Reflect 1.41, ...; caster maps 0.05), rest of the GPU frame 1.20; CPU ms a frame: mod 0.40,
-    caster recording 0.45, game 3D drawing calls 3.20
+    perf: 48 FPS (20.86 ms a frame) over 2000 shaded frames, Cpu/Gpu synchro Immediate; CPU ms a frame: game logic 6.10,
+    game rendering 2.40, TMVS 1.50 (pipeline 0.19, caster recording 0.28, at the frame end 0.60; blocked 0.02), frame end
+    10.56 (Present, Horizon Host and the game's wait for the GPU), frame start 0.30; GPU ms a frame: game 3D 1.91, mod 6.23
+    (passes 6.42: LightingEngine 1.35, OcclusionShadow 0.93, ...; caster maps 0.00), rest of the GPU frame 14.68; game 3D
+    drawing calls 1.95
+
+The CPU part splits the game's thread (the game runs logic, physics and rendering on one thread) from frame to frame;
+its parts add up to the frame time:
+
+- **game logic**: the game between two frames (input, physics, game logic, menus).
+- **game rendering**: the game issuing its frame (cameras, shadow maps, HUD), without the mod's own time.
+- **TMVS**: the mod's own time on that thread: **pipeline** (the passes' render calls), **caster recording**,
+  **at the frame end** (its Present work: clips, menu, hotkeys), and **blocked**, the part of it spent waiting for the GPU
+  (a read-back that wasn't done yet). Not in it: the mod's small hooks inside every draw call of the game.
+- **frame end**: the game's EndScene and Present and then its wait for the GPU (Cpu/Gpu synchro, above). Where the mod
+  hooks Present itself the line says how long the driver's Present took; under Horizon Host the host's own work is in
+  here too. A long frame end with *Immediate*: the CPU waits for the GPU's frame.
+- **frame start**: the game's RenderFrameBegin; with a "& Half" synchro the wait for the GPU is here.
+
+The GPU part:
 
 - **game 3D**: the game drawing its scene (with GameHdr and GameGBuffer: into the mod's targets).
 - **mod**: from the end of the scene to the shaded image, the copies around the passes included; **passes**: the
   most expensive passes by name; **caster maps**: drawing the CasterShadows maps.
 - **rest of the GPU frame**: shadow maps of the game, HUD, menus and idle time. Near 0: the GPU is the limit.
-  Large: the CPU is (then GPU times may include waiting for it).
-- **CPU**: the mod's work on the game's render thread; **game 3D drawing calls**: how long the game took to issue its scene's
-  drawing (the mod's hooks in it included). About as long as *game 3D* on the GPU: the GPU was waiting for the calls, a
-  render scale can't make that part faster. With a render scale the line ends with how many frames were drawn scaled.
+  Large: the CPU is, or the GPU waits while the game's CPU work runs (Immediate).
+- **game 3D drawing calls**: how long the game took to issue its scene's drawing (the mod's hooks in it included). About
+  as long as *game 3D* on the GPU: the GPU was waiting for the calls, a render scale can't make that part faster. With a
+  render scale the line ends with how many frames were drawn scaled.
+
+Without the engine hooks (a game build the mod doesn't know) the CPU part is only "game and the rest" and TMVS.
 
 ## Auto quality
 
@@ -156,6 +217,8 @@ effects are off right now. Details: [settings.md](settings.md) (*Auto quality*).
 
 ## Getting FPS back
 
+- In the game's launcher (advanced display settings) set **Cpu/Gpu synchro** to *1 Frame* or *Half a frame* instead
+  of *Immediate* (see above): the GPU's work, the mod's included, then overlaps the game's CPU work.
 - Pick the **Performance** preset, or set **Effect quality** to Low.
 - Set **Render scale** below 1 (0.77, 0.67): the game and the effects at a lower resolution, FSR 1 up to the screen
   (see above). Costs some sharpness, keeps every effect.

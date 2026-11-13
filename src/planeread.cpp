@@ -1,4 +1,5 @@
 #include "planeread.h"
+#include "perfcpu.h"
 #include <algorithm>
 #include <cstring>
 
@@ -82,7 +83,8 @@ bool PlaneReadback::pop(const std::function<void(const Frame&)>& use) {
     if (m_order.empty()) return false;
     Slot& s = m_slots[m_order.front()];
     m_order.pop_front();
-    if (!slotDone(s)) waited++;
+    const bool done = slotDone(s);
+    if (!done) waited++;
     const double start = nowMs();
     D3DLOCKED_RECT y{}, uv{}, f{};
     if (!s.luma || !s.chroma || FAILED(s.luma->LockRect(&y, nullptr, D3DLOCK_READONLY))) return false;
@@ -90,6 +92,8 @@ bool PlaneReadback::pop(const std::function<void(const Frame&)>& use) {
         s.luma->UnlockRect();
         return false;
     }
+    // A copy that wasn't done: the lock waited for the GPU (the perf line's "blocked").
+    if (!done) perfcpu::blocked(nowMs() - start);
     Frame frame;
     if (s.hasFocus && s.focus && SUCCEEDED(s.focus->LockRect(&f, nullptr, D3DLOCK_READONLY))) {
         frame.focus = *static_cast<const float*>(f.pBits);
