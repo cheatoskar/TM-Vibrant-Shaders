@@ -40,9 +40,10 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(minimp3)
 
 # One version for both games (the CI sets it from the tag: -DTM_SHADERS_VERSION=1.4.1-preview). The
-# shared menu shows it and the update check compares it with the newest release.
+# shared menu shows it and the update check compares it with the newest release. Without a tag it is
+# <version>-dev, like the Forever build, so CI's "Verify version" finds the same string in both DLLs.
 if(NOT DEFINED TM_SHADERS_VERSION)
-  set(TM_SHADERS_VERSION "${PROJECT_VERSION}")
+  set(TM_SHADERS_VERSION "${PROJECT_VERSION}-dev")
 endif()
 configure_file("${TMVS_ROOT}/src/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/tm_shaders_version.h" @ONLY)
 string(REGEX MATCHALL "[0-9]+" TMVS_VERSION_PARTS "${TM_SHADERS_VERSION}")
