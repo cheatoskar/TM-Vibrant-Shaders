@@ -4,6 +4,7 @@
 #include "image.h"
 #include "keys.h"
 #include "log.h"
+#include "options.h"
 #include "settings.h"
 #include <atomic>
 #include <cmath>
@@ -23,6 +24,26 @@ using tmshaders::Config;
 std::atomic<bool> g_active{false};
 std::atomic<bool> g_requested{false};
 std::atomic<float> g_focusU{-1.0f}, g_focusV{-1.0f};
+std::atomic<float> g_zoom{1.0f}; // Shift+wheel, 1..8
+
+// A hi-res photo (TMNF's): tiles of the view, each the screen's size with a margin cropped off
+// (screen effects need room at the edges), rendered by the game's camera zoomed in on that part.
+// Render thread only (request, cameraWant, afterRender); the window procedure only reads g_job.
+enum Job : int { kNone = 0, kTiles = 1 };
+std::atomic<int> g_job{kNone};
+int g_tiles = 2;                   // per side
+int g_tile = 0;                    // the tile being taken (row by row, top left first)
+int g_settle = 0;                  // frames rendered with this tile's projection
+int g_waited = 0;                  // frames waiting for the engine to take this tile's projection
+UINT g_width = 0, g_height = 0;    // the screen
+UINT g_marginX = 0, g_marginY = 0; // cropped off every tile
+UINT g_innerW = 0, g_innerH = 0;
+std::vector<unsigned char> g_rgb;  // the whole photo
+gamecamera::Want g_tileWant;       // what the last cameraWant asked for this tile
+// TAA and the bounce light build up over a few frames after the projection changed.
+constexpr int kSettleFrames = 12;
+// The engine takes a FovRect a frame or two later; this long without it the photo is given up.
+constexpr int kWaitFrames = 120;
 
 std::mutex g_statusLock;
 std::string g_status;
@@ -79,8 +100,21 @@ void save(std::vector<unsigned char>&& rgb, int width, int height) {
     else saveThread(job);
 }
 
-// The frame as RGB rows (8-bit formats: the finished image is display values already).
-bool readFrame(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* frame, std::vector<unsigned char>& rgb, UINT& w, UINT& h) {
+// The frame's size (false: not a texture).
+bool frameSize(ID3D11Resource* frame, UINT& w, UINT& h) {
+    ID3D11Texture2D* tex = nullptr;
+    if (!frame || FAILED(frame->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)))) return false;
+    D3D11_TEXTURE2D_DESC d;
+    tex->GetDesc(&d);
+    tex->Release();
+    w = d.Width;
+    h = d.Height;
+    return true;
+}
+
+// `rect` of the frame as RGB rows into dst, `pitch` bytes apart (8-bit formats: the finished image
+// is display values already).
+bool readRect(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* frame, const RECT& rect, unsigned char* dst, size_t pitch) {
     ID3D11Texture2D* tex = nullptr;
     if (!frame || FAILED(frame->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex)))) return false;
     D3D11_TEXTURE2D_DESC d;
@@ -90,8 +124,10 @@ bool readFrame(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* f
                       d.Format == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB || d.Format == DXGI_FORMAT_B8G8R8X8_TYPELESS;
     const bool rgba = d.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS || d.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
                       d.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    const bool inside = rect.left >= 0 && rect.top >= 0 && rect.right <= static_cast<LONG>(d.Width) &&
+                        rect.bottom <= static_cast<LONG>(d.Height) && rect.right > rect.left && rect.bottom > rect.top;
     bool ok = false;
-    if ((bgra || rgba) && d.SampleDesc.Count == 1) {
+    if ((bgra || rgba) && d.SampleDesc.Count == 1 && inside) {
         D3D11_TEXTURE2D_DESC sd = d;
         sd.Usage = D3D11_USAGE_STAGING;
         sd.BindFlags = 0;
@@ -104,17 +140,16 @@ bool readFrame(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* f
             ctx->CopySubresourceRegion(staging, 0, 0, 0, 0, tex, 0, nullptr);
             D3D11_MAPPED_SUBRESOURCE m;
             if (SUCCEEDED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &m))) {
-                w = d.Width;
-                h = d.Height;
-                rgb.resize(static_cast<size_t>(w) * h * 3);
                 const int r = bgra ? 2 : 0, b = bgra ? 0 : 2;
-                for (UINT y = 0; y < h; y++) {
-                    const auto* src = static_cast<const unsigned char*>(m.pData) + static_cast<size_t>(y) * m.RowPitch;
-                    unsigned char* dst = &rgb[static_cast<size_t>(y) * w * 3];
-                    for (UINT x = 0; x < w; x++) {
-                        dst[x * 3 + 0] = src[x * 4 + r];
-                        dst[x * 3 + 1] = src[x * 4 + 1];
-                        dst[x * 3 + 2] = src[x * 4 + b];
+                const LONG w = rect.right - rect.left;
+                for (LONG y = rect.top; y < rect.bottom; y++) {
+                    const auto* src = static_cast<const unsigned char*>(m.pData) + static_cast<size_t>(y) * m.RowPitch +
+                                      static_cast<size_t>(rect.left) * 4;
+                    unsigned char* out = dst + static_cast<size_t>(y - rect.top) * pitch;
+                    for (LONG x = 0; x < w; x++) {
+                        out[x * 3 + 0] = src[x * 4 + r];
+                        out[x * 3 + 1] = src[x * 4 + 1];
+                        out[x * 3 + 2] = src[x * 4 + b];
                     }
                 }
                 ctx->Unmap(staging, 0);
@@ -129,10 +164,70 @@ bool readFrame(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* f
     return ok;
 }
 
+// Render thread.
+void cancel(const char* why) {
+    if (g_job == kNone) return;
+    TMVS_LOG("photo: hi-res photo cancelled (%s)", why);
+    g_job = kNone;
+    g_rgb.clear();
+    g_rgb.shrink_to_fit();
+    setStatus(std::string("Photo cancelled: ") + why, 4);
+}
+
+std::string hint() {
+    namespace keys = tmshaders::keys;
+    const std::string cap = keys::name(keys::get(keys::Action::Capture));
+    char factor[32];
+    snprintf(factor, sizeof(factor), "%.1fx", static_cast<float>(Config::get().photoTiles) * 0.84f);
+    return "Photo mode   " + cap + " photo   Shift+" + cap + " " + factor +
+           " photo   middle click: focus   Ctrl+middle click: no focus   Ctrl+wheel: aperture   Shift+wheel: zoom   " +
+           keys::name(keys::get(keys::Action::Photo)) + "/Esc: off";
+}
+
 } // namespace
 
 bool active() {
     return g_active;
+}
+
+bool hideCars() {
+    return g_active && Config::get().photoHideCar;
+}
+
+float zoom() {
+    return g_zoom;
+}
+
+bool tiling() {
+    return g_active && g_job == kTiles;
+}
+
+gamecamera::Want cameraWant(bool gameCamera) {
+    gamecamera::Want w;
+    if (!g_active) {
+        cancel("photo mode off");
+        return w;
+    }
+    if (g_job == kTiles && !gameCamera) cancel("Game camera is off");
+    const float z = gameCamera ? static_cast<float>(g_zoom) : 1.0f;
+    w.scale[0] = w.scale[1] = z;
+    // The screen size comes with the first frame after the request.
+    if (g_job == kTiles && g_width > 0 && g_height > 0) {
+        // TMNF's tile on top of the zoom: NDC' = s (zoom NDC) + o, the tile's inner part (the
+        // screen without its margins) showing 1 / n of the view.
+        const int n = g_tiles;
+        const int i = g_tile % n, j = g_tile / n;
+        const float sx = static_cast<float>(n) * g_innerW / g_width;
+        const float sy = static_cast<float>(n) * g_innerH / g_height;
+        const float cx = -1.0f + (2.0f * i + 1.0f) / n;
+        const float cy = 1.0f - (2.0f * j + 1.0f) / n;
+        w.scale[0] = z * sx;
+        w.scale[1] = z * sy;
+        w.offset[0] = -sx * cx;
+        w.offset[1] = -sy * cy;
+    }
+    g_tileWant = w;
+    return w;
 }
 
 namespace {
@@ -184,7 +279,8 @@ void toggleSplit() {
 }
 
 bool splitShown() {
-    return g_active && g_splitOn;
+    // Not in hi-res photos: the line would be in every tile.
+    return g_active && g_splitOn && g_job == kNone;
 }
 
 float splitForLook() {
@@ -198,13 +294,12 @@ void toggle() {
     g_active = on;
     TMVS_LOG("photo: mode %s", on ? "on" : "off");
     if (on) {
-        namespace keys = tmshaders::keys;
-        setStatus("Photo mode   " + keys::name(keys::get(keys::Action::Capture)) + " photo   middle click: focus   Ctrl+middle click: no focus   Ctrl+wheel: aperture   " +
-                      keys::name(keys::get(keys::Action::Photo)) + "/Esc: off",
-                  6);
+        setStatus(hint(), 6);
     } else {
+        // A hi-res photo under way is cancelled by the render thread (cameraWant).
         g_requested = false;
         g_focusU = g_focusV = -1.0f;
+        g_zoom = 1.0f;
         setStatus("", 0);
     }
 }
@@ -223,7 +318,14 @@ bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         toggle();
         return true;
     }
+    // While a hi-res photo renders the view must stay as it is.
+    if (g_job != kNone && (msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP || msg == WM_MOUSEWHEEL)) return true;
     if (msg == WM_MBUTTONDOWN) {
+        if (wparam & MK_SHIFT) {
+            g_zoom = 1.0f;
+            setStatus("Zoom off", 2);
+            return true;
+        }
         if (wparam & MK_CONTROL) {
             g_focusU = g_focusV = -1.0f;
             setStatus("Focus off", 2);
@@ -260,11 +362,41 @@ bool handleMessage(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         setStatus(text, 2);
         return true;
     }
+    // Zoom: 10 % per wheel step, up to 8x (TMNF's), through the game's camera.
+    if (msg == WM_MOUSEWHEEL && (GET_KEYSTATE_WPARAM(wparam) & MK_SHIFT)) {
+        if (!options::current().gameCamera) {
+            setStatus("Zoom needs Game camera (Settings page, ManiaPlanet)", 3);
+            return true;
+        }
+        const float steps = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
+        const float z = g_zoom * powf(1.1f, steps);
+        g_zoom = z < 1.0f ? 1.0f : (z > 8.0f ? 8.0f : z);
+        char text[64];
+        snprintf(text, sizeof(text), "Zoom %.1fx", static_cast<float>(g_zoom));
+        setStatus(text, 2);
+        return true;
+    }
     return false;
 }
 
-void request() {
-    if (g_active) g_requested = true;
+void request(bool hiRes) {
+    if (!g_active || g_job != kNone) return;
+    if (!hiRes) {
+        g_requested = true;
+        return;
+    }
+    if (!options::current().gameCamera) {
+        setStatus("Hi-res photos need Game camera (Settings page, ManiaPlanet)", 4);
+        return;
+    }
+    const int n = Config::get().photoTiles;
+    g_tiles = n < 2 ? 2 : (n > 4 ? 4 : n);
+    g_tile = 0;
+    g_settle = 0;
+    g_waited = 0;
+    g_width = 0; // known with the first frame
+    g_job = kTiles;
+    TMVS_LOG("photo: hi-res, %dx%d tiles", g_tiles, g_tiles);
 }
 
 void adjust(tmshaders::Settings& s) {
@@ -279,6 +411,17 @@ void adjust(tmshaders::Settings& s) {
         s.focusDistance = 0.0f;
     } else {
         s.depthOfField = 0.0f;
+    }
+    if (g_job == kTiles) {
+        // Effects of the whole frame would repeat in every tile (TMNF's).
+        s.vignette = 0.0f;
+        s.filmGrain = 0.0f;
+        s.chromaticAberration = 0.0f;
+        s.lensFlare = 0.0f;
+        s.godRays = 0.0f;
+        s.taaJitter = false;
+        // The blur is measured in pixels: the photo has more of them.
+        s.bokehSize *= static_cast<float>(g_tiles) * (g_innerW && g_width ? static_cast<float>(g_innerW) / g_width : 0.84f);
     }
 }
 
@@ -325,12 +468,79 @@ void focusPoint(float out[2]) {
     out[1] = g_focusV;
 }
 
+void afterTile(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* frame); // below
+
 void afterRender(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* frame) {
+    if (g_job == kTiles && g_active) {
+        afterTile(device, ctx, frame);
+        return;
+    }
     if (!g_requested.exchange(false) || !g_active) return;
     std::vector<unsigned char> rgb;
     UINT w = 0, h = 0;
-    if (readFrame(device, ctx, frame, rgb, w, h)) save(std::move(rgb), static_cast<int>(w), static_cast<int>(h));
+    bool ok = frameSize(frame, w, h);
+    if (ok) {
+        rgb.resize(static_cast<size_t>(w) * h * 3);
+        const RECT all{0, 0, static_cast<LONG>(w), static_cast<LONG>(h)};
+        ok = readRect(device, ctx, frame, all, rgb.data(), static_cast<size_t>(w) * 3);
+    }
+    if (ok) save(std::move(rgb), static_cast<int>(w), static_cast<int>(h));
     else setStatus("Could not read the frame", 4);
+}
+
+void afterTile(ID3D11Device* device, ID3D11DeviceContext* ctx, ID3D11Resource* frame) {
+    UINT w = 0, h = 0;
+    if (!frameSize(frame, w, h)) return;
+    if (g_width == 0) {
+        g_width = w;
+        g_height = h;
+        g_marginX = static_cast<UINT>(w * 0.08f);
+        g_marginY = static_cast<UINT>(h * 0.08f);
+        g_innerW = w - 2 * g_marginX;
+        g_innerH = h - 2 * g_marginY;
+        try {
+            g_rgb.assign(static_cast<size_t>(g_innerW) * g_tiles * g_innerH * g_tiles * 3, 0);
+        } catch (...) {
+            cancel("not enough memory");
+            return;
+        }
+        g_settle = 0;
+        g_waited = 0;
+        return; // the tile's projection starts with the next frame
+    }
+    if (w != g_width || h != g_height) {
+        cancel("the window changed size");
+        return;
+    }
+    // The engine takes the camera's new FovRect a frame or two later: only frames with this tile's
+    // projection count (measured from its constants, gamecamera.cpp).
+    if (!gamecamera::matches(g_tileWant)) {
+        g_settle = 0;
+        if (++g_waited > kWaitFrames) cancel("the game's camera didn't take the tile");
+        return;
+    }
+    if (++g_settle < kSettleFrames) return;
+    const int n = g_tiles;
+    const int i = g_tile % n, j = g_tile / n;
+    const size_t pitch = static_cast<size_t>(g_innerW) * n * 3;
+    unsigned char* dst = g_rgb.data() + static_cast<size_t>(j) * g_innerH * pitch + static_cast<size_t>(i) * g_innerW * 3;
+    const RECT inner{static_cast<LONG>(g_marginX), static_cast<LONG>(g_marginY), static_cast<LONG>(g_marginX + g_innerW),
+                     static_cast<LONG>(g_marginY + g_innerH)};
+    if (!readRect(device, ctx, frame, inner, dst, pitch)) {
+        cancel("could not read the frame");
+        return;
+    }
+    g_settle = 0;
+    g_waited = 0;
+    char text[64];
+    snprintf(text, sizeof(text), "Hi-res photo: tile %d of %d (keep still)", g_tile + 1, n * n);
+    setStatus(text, 0);
+    if (++g_tile < n * n) return;
+    TMVS_LOG("photo: hi-res photo of %d tiles put together", n * n);
+    // Still a hi-res job while saving: no compare labels (the split isn't in hi-res photos).
+    save(std::move(g_rgb), static_cast<int>(g_innerW) * n, static_cast<int>(g_innerH) * n);
+    g_rgb.clear();
+    g_job = kNone;
 }
 
 void notify(const char* text, DWORD seconds) {
@@ -350,8 +560,10 @@ const char* status() {
         const float dof = Config::get().photoDof;
         char aperture[32] = "Depth of field off";
         if (dof > 0.0f) snprintf(aperture, sizeof(aperture), "f/%.1f", fNumber(dof));
-        char line[96];
-        snprintf(line, sizeof(line), "Photo mode   %s   Focus %s", aperture, g_focusU >= 0.0f ? "point" : "auto");
+        char zoomText[32] = "";
+        if (g_zoom > 1.001f && options::current().gameCamera) snprintf(zoomText, sizeof(zoomText), "   Zoom %.1fx", static_cast<float>(g_zoom));
+        char line[128];
+        snprintf(line, sizeof(line), "Photo mode   %s%s   Focus %s", aperture, zoomText, g_focusU >= 0.0f ? "point" : "auto");
         text = line;
         if (g_splitOn && !g_splitPreset.empty()) text += "   Compare with " + g_splitPreset;
         if (!g_status.empty()) text += "\n" + g_status;

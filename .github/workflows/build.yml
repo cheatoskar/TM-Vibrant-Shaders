@@ -68,9 +68,17 @@ jobs:
           }
           Write-Host "OK - both DLLs carry $want"
 
-      # dist/: TM-Vibrant-Shaders.zip (TMNF/TMUF and TM2), TMVibrantShaders.dll, SHA256SUMS.txt
+      # dist/: TM-Vibrant-Shaders.zip (TMNF/TMUF and TM2), TMVibrantShaders.dll, TMVS-<version>-horizon.zip
+      # (the four Horizon Host modules, docs/horizon-modules.md), SHA256SUMS.txt
       - name: Package
         run: cmake --build build --config Release --target release_zip
+
+      # dist/TM-Clips.zip: the standalone clips mod's ModLoader folder (after release_zip, which
+      # empties dist/), then the checksums again with it.
+      - name: Package TM Clips
+        run: |
+          cmake --build build --config Release --target clips_zip
+          cmake -DDIR=dist -P packaging/sha256sums.cmake
 
       # Release notes: RELEASE_NOTES.md, then a SHA-256 table (where people actually look).
       - name: Release notes
@@ -105,6 +113,8 @@ jobs:
           files: |
             dist/TM-Vibrant-Shaders.zip
             dist/TMVibrantShaders.dll
+            dist/TM-Clips.zip
+            dist/TMVS-*-horizon.zip
             dist/SHA256SUMS.txt
           body_path: dist/release-notes.md
           fail_on_unmatched_files: true

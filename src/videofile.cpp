@@ -1,7 +1,9 @@
 #include "videofile.h"
+#include "modules/modules.h"
 #include "config.h"
 #include "engine.h"
 #include "log.h"
+#include "loopback.h"
 #include "photo.h"
 #include "soundcapture.h"
 #include "videoencoder.h"
@@ -33,6 +35,14 @@ struct Export {
     int fromPlugin = 0, fromGame = 0;
     bool readbackSkipped = false;   // the game skipped reading this frame back (the mod's goes in)
     int staleFrames = 0;            // ... and the mod's frame failed after all: the last read image went in
+    // The 2006 engine (ESWC, Sunrise, Original): its sound pass records the default recording device
+    // with DirectSound capture (no OpenAL there for soundcapture.cpp). The MP4 gets the game's own sound
+    // instead, from WASAPI loopback started with the game's capture (its AudioOpen), as many frames as
+    // the game writes each time, so the length and the moment stay the game's. The .avi keeps the game's.
+    std::unique_ptr<loopback::Capture> loop;
+    int loopRate = 0, loopChannels = 0;
+    bool loopStarted = false;
+    std::vector<int16_t> loopBuffer;
 };
 std::vector<Export> g_exports;
 FrameSource g_source;
@@ -95,8 +105,10 @@ std::wstring mp4Path(const std::wstring& avi) {
     return dir + name;
 }
 
+// TMVS 2.0 as Horizon modules: the MP4 (and the mod's own frames) belong to the Capture module; without
+// it the game writes its own AVI.
 bool mp4Codec(const Settings& s) {
-    return s.videoCodec >= 1 && s.videoCodec <= 3;
+    return s.videoCodec >= 1 && s.videoCodec <= 3 && modules::on(modules::kCapture);
 }
 
 // VideoAspect: the picture's height for the game's width (multiples of 8, never taller than the
@@ -113,6 +125,15 @@ void opened(void* file, const wchar_t* path, bool ok) {
     e.avi = path;
     TMVS_LOG("video file: the game opens %s%s", narrow(e.avi).c_str(), ok ? "" : " (failed)");
     soundcapture::exportOpened();
+    // The 2006 engine with the dialog's sound on: the loopback is prepared now (activating it takes a
+    // moment), in the format the game usually picks; AudioOpen says the real one.
+    engine::VideoExport v;
+    if (ok && engine::legacy() && engine::videoExport(v) && v.sound && mp4Codec(Config::get().settings) && !e.loop) {
+        e.loop = std::make_unique<loopback::Capture>();
+        e.loopRate = 44100;
+        e.loopChannels = 2;
+        e.loop->prepare(e.loopRate, e.loopChannels);
+    }
 }
 
 // The encoder for this export, opened at the first of the video and the sound (the sound may
@@ -187,7 +208,9 @@ bool videoOpen(void* file, int width, int height, float fps, int bytesPerPixel) 
     e.own.height = croppedHeight(width, height, s.videoAspect);
     e.own.crop[1] = static_cast<float>(height - e.own.height) * 0.5f / height;
     e.own.crop[3] = static_cast<float>(e.own.height) / height;
-    e.ownFrames = s.videoOwnFrames && g_source.deliver;
+    // The 2006 engine: the game's frames (its read-back has the mod's picture). The mod's own frames need
+    // the supersampling's per-sample camera, which isn't read there.
+    e.ownFrames = s.videoOwnFrames && g_source.deliver && !engine::legacy();
     if (!startEncoder(e)) {
         e.refused = true;
         return false;
@@ -237,11 +260,38 @@ void audioOpen(void* file, const void* format) {
     TMVS_LOG("video file: sound %u Hz, %u bits, %u channels (format %u)", e.sound.nSamplesPerSec, e.sound.wBitsPerSample, e.sound.nChannels,
              e.sound.wFormatTag);
     if (e.encoder) e.encoder->openAudio(e.sound);
+    if (e.loop) {
+        const bool pcm16 = e.sound.wFormatTag == WAVE_FORMAT_PCM && e.sound.wBitsPerSample == 16 && e.sound.nChannels >= 1 && e.sound.nChannels <= 2;
+        if (!pcm16) {
+            TMVS_LOG("video file: the game records %u-bit sound: its own recording goes into the MP4, not the loopback", e.sound.wBitsPerSample);
+            e.loop.reset();
+            return;
+        }
+        if (static_cast<int>(e.sound.nSamplesPerSec) != e.loopRate || e.sound.nChannels != e.loopChannels) {
+            e.loop = std::make_unique<loopback::Capture>();
+            e.loopRate = static_cast<int>(e.sound.nSamplesPerSec);
+            e.loopChannels = e.sound.nChannels;
+            e.loop->prepare(e.loopRate, e.loopChannels);
+        }
+        if (e.loop->waitReady(1500) && e.loop->start()) {
+            e.loopStarted = true;
+            TMVS_LOG("video file: the MP4's sound is the game's own (%s), not the game's recording device", e.loop->description().c_str());
+        } else {
+            TMVS_LOG("video file: no loopback (%s): the game's recording device goes into the MP4", e.loop->error().c_str());
+            e.loop.reset();
+        }
+    }
 }
 
 void audioData(void* file, const void* data, unsigned long blocks) {
     Export* e = find(file);
     if (!e || e->refused || !e->hasSound || !e->sound.nBlockAlign) return;
+    if (e->loopStarted && e->loop) {
+        // As many frames of the loopback as the game wrote of its recording (silence where it had none).
+        e->loopBuffer.resize(static_cast<size_t>(blocks) * e->loopChannels);
+        if (blocks) e->loop->read(e->loopBuffer.data(), blocks);
+        data = e->loopBuffer.data();
+    }
     // The sound may come before the video: kept by an encoder that opens with the video (its
     // size is only known then), meanwhile in memory.
     if (!e->encoder) {
@@ -263,6 +313,17 @@ void closed(void* file) {
     for (size_t i = 0; i < g_exports.size(); i++) {
         Export& e = g_exports[i];
         if (e.file != file) continue;
+        if (e.loop) {
+            if (e.loopStarted) {
+                e.loop->stop();
+                const loopback::Stats st = e.loop->stats();
+                const double rate = e.loopRate > 0 ? e.loopRate : 44100.0;
+                TMVS_LOG("video file: the MP4's sound from the loopback: %.2f s handed over (silence put in %.2f s, missing at reads %.2f s, dropped "
+                         "%.2f s, %u glitches); not corrected for the game's output latency",
+                         st.delivered / rate, st.filled / rate, st.underrun / rate, st.dropped / rate, st.glitches);
+            }
+            e.loop.reset();
+        }
         if (e.encoder && e.video) {
             // The plugin's last frames, still on their way, before the encoder closes.
             if (e.ownFrames && g_source.flush) g_source.flush(*e.encoder, e.own);

@@ -40,7 +40,8 @@ static bool isMachine(const Field& f) {
     for (const char* key : kMachine) {
         if (!strcmp(key, f.key)) return true;
     }
-    return false;
+    // The VR settings (VrEffects, VrComfort ...) are the installation's since 1.5 (config.cpp: "Vr" prefix).
+    return !strncmp(f.key, "Vr", 2);
 }
 
 // Look fields added after share code version 1. A new field is safe: a code that doesn't name it gets its

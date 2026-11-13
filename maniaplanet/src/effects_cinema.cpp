@@ -18,7 +18,9 @@ template <typename T> void safeRelease(T*& p) {
     p = nullptr;
 }
 
-const char* const kSupported[] = {"MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "CinematicOnlyInReplays", "TAA", "DofAutofocus"};
+// TAAJitter: through the game's camera (the Game camera option, gamecamera.cpp); off there, it changes nothing.
+const char* const kSupported[] = {"MotionBlur", "DepthOfField", "FocusDistance", "BokehSize", "CinematicOnlyInReplays", "TAA", "DofAutofocus",
+                                  "TAAJitter"};
 
 } // namespace
 
@@ -37,6 +39,7 @@ struct CinemaStage::State {
     Target history[2];     // full res: TAA history (rgb, view z)
     int historyIndex = 0;
     bool historyValid = false;
+    float historyJitter[2] = {}; // the TAA jitter of the history's frame (uv shift)
     double lastTime = -1.0;
     float lastCar[3] = {}; // DofAutofocus: where the car was last seen (photo mode keeps it)
     bool lastCarKnown = false;
@@ -98,8 +101,8 @@ void CinemaStage::run(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
     st.lastTime = frame.time;
     const bool history = fx.historyValid();
 
-    // ManiaPlanet can't tell replays from driving yet: with "only in replays and video export"
-    // on, depth of field and motion blur run in photo mode and in the video export only.
+    // "Only in replays": depth of field and motion blur in the replay editor (watching, editing or
+    // exporting a replay: game.cpp), in the video export and in photo mode, not while driving.
     const bool cinematic = !s.cinematicOnlyInReplays || frame.photo || !frame.driving;
     const bool dof = cinematic && s.depthOfField > 0.0f;
     // Motion blur needs this frame's motion (the engine's vectors, or the previous camera); after
@@ -178,7 +181,16 @@ void CinemaStage::run(ID3D11DeviceContext* ctx, Effects& fx, const SceneFrame& f
         D3D11_VIEWPORT vp = {0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1};
         ctx->RSSetViewports(1, &vp);
         const float p0[4] = {st.historyValid && history ? 1.0f : 0.0f, 0, 0, 0};
-        fx.setPassConstants(ctx, p0, nullptr);
+        // TAA jitter: this frame's and the history's (TMNF's u_Pass0 there); the history is kept without.
+        const float p1[4] = {frame.jitter[0], frame.jitter[1], st.historyJitter[0], st.historyJitter[1]};
+        fx.setPassConstants(ctx, p0, p1);
+        st.historyJitter[0] = frame.jitter[0];
+        st.historyJitter[1] = frame.jitter[1];
+        static bool s_logged = false;
+        if (!s_logged && (frame.jitter[0] != 0.0f || frame.jitter[1] != 0.0f)) {
+            s_logged = true;
+            TMVS_LOG("cinema: TAA takes the projection's jitter (%.2f %.2f px)", frame.jitter[0] * w, frame.jitter[1] * h);
+        }
         ID3D11ShaderResourceView* in[2] = {fx.current(), st.history[previous].srv};
         ctx->PSSetShaderResources(0, 2, in);
         ctx->PSSetShader(st.taa, nullptr, 0);

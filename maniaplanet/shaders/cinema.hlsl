@@ -203,12 +203,16 @@ float4 PS_Cinematic(VSOut i) : SV_Target
 }
 
 // ---------------------------------------------------------------------------------
-// Temporal anti-aliasing on the HDR image (full res). The projection isn't the mod's (no sub-pixel
-// jitter): it calms flicker (thin lines, AO noise, specular sparkle), and camera motion adds
-// sub-pixel samples on its own. Blended and clipped on compressed colour (c / (1 + luma)), so the
-// sun and lamps don't decide the neighbourhood box (HDR fireflies would ghost).
+// Temporal anti-aliasing on the HDR image (full res). It calms flicker (thin lines, AO noise,
+// specular sparkle), and camera motion adds sub-pixel samples on its own. With TAA jitter (the
+// Game camera option: the engine's projection moved by up to half a pixel every frame, as TMNF's)
+// the samples come from a different spot every frame. Blended and clipped on compressed colour
+// (c / (1 + luma)), so the sun and lamps don't decide the neighbourhood box (HDR fireflies would ghost).
 //   t0 = current, t1 = history (rgb, a = view z; bilinear for the Catmull-Rom fetch)
 //   u_Pass0.x = history valid
+//   u_Pass1.xy = this frame's jitter, u_Pass1.zw = the history's frame's jitter (uv shift of the
+//   image; 0 without jitter). The history is kept without jitter: the current frame is read shifted
+//   back (TMNF's PS_TAA).
 //   out0 = the image, out1 = the next history
 // ---------------------------------------------------------------------------------
 float3 toYCoCg(float3 c) { return float3(dot(c, float3(0.25, 0.5, 0.25)), dot(c, float3(0.5, 0.0, -0.5)), dot(c, float3(-0.25, 0.5, -0.25))); }
@@ -248,15 +252,19 @@ struct TaaOut
 TaaOut PS_TAA(VSOut i)
 {
     float2 uv = i.uv;
-    float3 current = t0_tex(uv).rgb;
-    float z = engineZ(uv);
+    bool jittered = any(u_Pass1 != 0.0);
+    // This pixel's content in the jittered frame (the same place without jitter).
+    float2 cuv = uv + u_Pass1.xy;
+    float3 current = jittered ? t0_texL(cuv).rgb : t0_tex(uv).rgb;
+    float z = engineZ(cuv);
     TaaOut o;
     o.colour = float4(current, 1);
     o.history = float4(current, z);
     if (u_Pass0.x < 0.5) return o;
 
     float prevZ;
-    float2 prevUV = previousUV(uv, z, prevZ);
+    // Where it was in the previous (jittered) frame, then in the history (without its jitter).
+    float2 prevUV = previousUV(cuv, z, prevZ) - u_Pass1.zw;
     if (any(prevUV < 0.0) || any(prevUV > 1.0)) return o;
 
     // Neighbourhood statistics of the current frame (variance clipping in YCoCg), 3x3.
@@ -265,7 +273,7 @@ TaaOut PS_TAA(VSOut i)
     {
         [unroll] for (int x = -1; x <= 1; x++)
         {
-            float3 s = toYCoCg(compressHdr(t0_tex(uv + float2(x, y) * u_Screen.zw).rgb));
+            float3 s = toYCoCg(compressHdr(t0_tex(cuv + float2(x, y) * u_Screen.zw).rgb));
             m1 += s;
             m2 += s * s;
         }
@@ -291,7 +299,27 @@ TaaOut PS_TAA(VSOut i)
     // surfaces match the camera reprojection; what moves with the camera (the car, followed by
     // the motion vectors) keeps its depth instead.
     float historyZ = t1_tex(prevUV).a;
-    if (z < SKY_Z)
+    if (jittered && z < SKY_Z)
+    {
+        // TMNF's: the raster moves by up to a pixel from frame to frame, and at every depth edge a
+        // pixel's depth flips between the near and the far surface. The history passes when its
+        // depth lies between the nearest and farthest of the 3x3 around (as far apart as the
+        // jitter moves); checked against the centre alone, edges showed the raw jittered frame.
+        weight = lerp(0.1, 0.04, still);
+        float zNear = z, zFar = z;
+        [unroll] for (int j = 0; j < 9; j++)
+        {
+            float zj = engineZ(cuv + float2(j % 3 - 1, j / 3 - 1) * u_Screen.zw);
+            zNear = min(zNear, zj);
+            zFar = max(zFar, zj);
+        }
+        float k = prevZ / min(z, 20000.0); // the camera's move along its axis
+        float lo = zNear * k, hi = zFar >= SKY_Z ? 1e30 : zFar * k;
+        float errorStatic = max(max(lo - historyZ, historyZ - hi), 0.0) / max(clamp(historyZ, lo, hi), 0.1);
+        float errorMoving = u_Engine.w > 0.5 ? max(max(zNear - historyZ, historyZ - zFar), 0.0) / max(z, 0.1) : errorStatic;
+        weight = lerp(weight, 1.0, smoothstep(0.02, 0.08, min(errorStatic, errorMoving)));
+    }
+    else if (z < SKY_Z)
     {
         float errorStatic = abs(historyZ - prevZ) / max(prevZ, 0.1);
         float errorMoving = u_Engine.w > 0.5 ? abs(historyZ - z) / max(z, 0.1) : errorStatic;

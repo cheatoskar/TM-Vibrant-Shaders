@@ -84,6 +84,16 @@ public:
     // Every change is written to settings.ini a moment later (call tick() once per frame).
     void markDirty();
     void tick();
+    // TMVS 2.0 as Horizon modules (src/modules): the Shaders module is off or not loaded. The effects are
+    // off as with F7 (settings.enabled false) while settings.ini keeps your own Enabled, and they come
+    // back as they were when the block ends. Never set by the standalone DLL.
+    void setShadersBlocked(bool blocked);
+    bool shadersBlocked() const { return m_shadersBlocked; }
+    // [General] SettingsVersion of the file read: 1 = written by 1.5 or older (no key), 2 = by 2.0.
+    // The 2.0 files keep every 1.5 key with the same meaning (1.5 reads them as before; keys it doesn't
+    // know are left alone), so taking a 1.5 file over is reading it. load() logs the first take-over.
+    static constexpr int kSettingsVersion = 2;
+    int settingsVersionRead() const { return m_settingsVersionRead; }
 
     Settings settings;
     std::string preset = "Vibrant"; // active preset name, kCustomPreset after manual changes
@@ -104,6 +114,7 @@ public:
     bool hoverPreview = true;  // F8 menu: pointing at a preset shows it in the game
     bool menuFull = false;     // F8 menu over the whole screen (else the game stays in view on the right)
     bool checkUpdates = true;  // ask GitHub for a newer release when the game starts
+    bool hideForHorizon = true; // F8 menu and its windows hidden while Horizon Host's menu is open
     // Photo mode (not in presets): on by itself with the free camera (cam 7), tiles per side
     // of a hi-res photo (2..4, ~0.84x the screen each), depth of field on the clicked point.
     bool photoAuto = true;
@@ -223,6 +234,9 @@ private:
     Settings m_ownBaseline;       // yours while a map look is shown
     std::string m_ownBasePreset;
     bool m_dirty = false;
+    bool m_shadersBlocked = false; // setShadersBlocked
+    bool m_enabledKept = true;     // your Enabled while blocked
+    int m_settingsVersionRead = kSettingsVersion;
     unsigned long m_dirtySince = 0;
     std::string m_pictureRequest;
     unsigned long m_pictureRequestTick = 0;

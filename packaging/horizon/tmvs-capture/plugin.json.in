@@ -1,0 +1,13 @@
+{
+  "id": "tmvs-capture",
+  "name": "TMVS Capture",
+  "version": "@TMVS_MODULES_VERSION@",
+  "dll": "tmvs-capture.dll",
+  "games": ["tmnf", "tmuf", "eswc", "sunrise", "original"],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Photos, instant clips of your runs and checkpoints, and the video export. Works without the shaders.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "ui": { "min_w": 480, "min_h": 340, "pref_w": 820, "pref_h": 600 }
+}

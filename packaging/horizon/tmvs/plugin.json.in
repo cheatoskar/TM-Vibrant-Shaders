@@ -1,0 +1,13 @@
+{
+  "id": "tmvs",
+  "name": "TM Vibrant Shaders",
+  "version": "@TMVS_MODULES_VERSION@",
+  "dll": "tmvs.dll",
+  "games": ["tmnf", "tmuf", "eswc", "sunrise", "original"],
+  "online": "online-ok",
+  "abi": 1,
+  "description": "Light, shadows, sky, weather and colour, with presets per map type.",
+  "author": "cheatoskar",
+  "icon": "icon.png",
+  "ui": { "min_w": 520, "min_h": 380, "pref_w": 960, "pref_h": 660 }
+}

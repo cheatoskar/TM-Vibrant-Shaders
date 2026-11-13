@@ -4,6 +4,9 @@
 // plugin inside itself - for:
 //   ModLoader:   "TM Vibrant Shaders" folder -> %LOCALAPPDATA%\TMLoader\database\TmForever\products
 //   TM Forever:  TMVibrantShaders.dll -> <TrackMania>\d3d9.dll (no ModLoader needed)
+//   TM Nations ESWC, TM Sunrise, TM Original: the same, <game>\d3d9.dll; Sunrise's and Original's own
+//                d3d9.dll (the repack's proxy, dgVoodoo) is renamed to d3d9.chain.dll, which the mod
+//                forwards to (src/proxy.cpp), and renamed back at the uninstall.
 //   ManiaPlanet: d3d11.dll -> <ManiaPlanet>\d3d11.dll
 // Running it again offers an update or a clean uninstall. Settings and presets in
 // Documents\TrackMania\TMVS and Documents\ManiaPlanet\TMVS are never touched.
@@ -21,6 +24,8 @@
 #include <algorithm>
 
 #include "tm_shaders_version.h"
+#include "filehash.h"
+#include "legacygames.h"
 
 namespace {
 
@@ -108,6 +113,8 @@ bool gameRunning() {
     for (BOOL ok = Process32FirstW(snapshot, &entry); ok && !found; ok = Process32NextW(snapshot, &entry)) {
         if (_wcsicmp(entry.szExeFile, L"TmForever.exe") == 0 ||
             _wcsicmp(entry.szExeFile, L"TmNationsESWC.exe") == 0 ||
+            _wcsicmp(entry.szExeFile, L"TmSunrise.exe") == 0 ||
+            _wcsicmp(entry.szExeFile, L"TMORIGINAL.EXE") == 0 ||
             _wcsicmp(entry.szExeFile, L"ManiaPlanet.exe") == 0 ||
             _wcsicmp(entry.szExeFile, L"ManiaPlanet32.exe") == 0) {
             found = true;
@@ -195,6 +202,26 @@ bool hasEswcExe(const std::wstring& dir) {
     return exists(dir + L"\\TmNationsESWC.exe");
 }
 
+// TrackMania Sunrise and TrackMania Original: only the community exes of src/legacygames.h, by their
+// SHA-256 (other builds of the same name are copy-protected or untested: never offered).
+const tmshaders::legacy::Exe* legacyOf(const std::wstring& dir, bool* otherBuild = nullptr) {
+    if (otherBuild) *otherBuild = false;
+    for (const tmshaders::legacy::Exe& e : tmshaders::legacy::kExes) {
+        if (!e.needsChain) continue; // ESWC: isEswcGame, as before
+        const std::wstring exe = dir + L"\\" + e.file;
+        if (!exists(exe)) continue;
+        tmshaders::filehash::Sha256 hash;
+        if (tmshaders::filehash::ofFile(exe.c_str(), hash) && hash == tmshaders::filehash::fromHex(e.sha256)) return &e;
+        if (otherBuild) *otherBuild = true;
+    }
+    return nullptr;
+}
+
+// Where the game folder's own d3d9.dll goes while the mod is installed (Sunrise, Original).
+std::wstring chainPath(const std::wstring& dir) {
+    return dir + L"\\d3d9.chain.dll";
+}
+
 // --- Finding games -----------------------------------------------------------
 
 std::wstring regString(HKEY root, const std::wstring& key, const wchar_t* value, REGSAM view = 0) {
@@ -207,6 +234,7 @@ std::wstring regString(HKEY root, const std::wstring& key, const wchar_t* value,
 std::wstring gameName(const std::wstring& dir) {
     if (isMpGame(dir)) return L"TrackMania 2 (ManiaPlanet)";
     if (hasEswcExe(dir) && !exists(dir + L"\\TmForever.exe")) return L"TrackMania Nations ESWC";
+    if (const tmshaders::legacy::Exe* e = legacyOf(dir)) return e->wideName;
     wchar_t title[128] = {};
     GetPrivateProfileStringW(L"TmForever", L"WindowTitle", L"", title, 128, (dir + L"\\Nadeo.ini").c_str());
     if (title[0]) return title;
@@ -222,7 +250,7 @@ void addGameDir(std::vector<FoundGame>& dirs, std::wstring dir) {
     GameKind kind;
     if (exists(dir + L"\\ManiaPlanet.exe")) {
         kind = GameKind::ManiaPlanet;
-    } else if (exists(dir + L"\\TmForever.exe") || isEswcGame(dir)) {
+    } else if (exists(dir + L"\\TmForever.exe") || isEswcGame(dir) || legacyOf(dir)) {
         kind = GameKind::Forever; // the same d3d9.dll
     } else {
         return;
@@ -240,6 +268,8 @@ std::vector<FoundGame> findGameDirs() {
     addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder"));
     addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ManiaPlanet"));
     addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ESWC"));
+    addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_Sunrise"));
+    addGameDir(dirs, regString(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_Original"));
 
     // Installers register an uninstall entry with the location.
     const HKEY roots[] = {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER};
@@ -311,7 +341,8 @@ std::vector<FoundGame> findGameDirs() {
     const std::wstring prog64 = knownFolder(FOLDERID_ProgramFiles);
     for (const wchar_t* folder : {L"\\TmNationsForever", L"\\TmUnitedForever", L"\\Nadeo\\TmNationsForever", L"\\Nadeo\\TmUnitedForever",
                                   L"\\TrackMania Nations Forever", L"\\TrackMania United Forever",
-                                  L"\\ManiaPlanet", L"\\Ubisoft\\ManiaPlanet"}) {
+                                  L"\\ManiaPlanet", L"\\Ubisoft\\ManiaPlanet", L"\\TmSunrise", L"\\TrackMania Sunrise",
+                                  L"\\Nadeo\\TmSunrise", L"\\TmOriginal", L"\\TrackMania Original", L"\\Nadeo\\TmOriginal"}) {
         if (!prog32.empty()) addGameDir(dirs, prog32 + folder);
         if (!prog64.empty()) addGameDir(dirs, prog64 + folder);
     }
@@ -325,7 +356,7 @@ std::wstring pickGameDir(const std::wstring& suggestion) {
     DWORD options = 0;
     dialog->GetOptions(&options);
     dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-    dialog->SetTitle(L"Select your game folder (with TmForever.exe or ManiaPlanet.exe)");
+    dialog->SetTitle(L"Select your game folder (with TmForever.exe, TmNationsESWC.exe, TmSunrise.exe, TMORIGINAL.EXE or ManiaPlanet.exe)");
     if (!suggestion.empty()) {
         IShellItem* folder = nullptr;
         if (SUCCEEDED(SHCreateItemFromParsingName(suggestion.c_str(), nullptr, IID_PPV_ARGS(&folder)))) {
@@ -374,12 +405,21 @@ int gameInstall(const std::wstring& dir) {
 
     const std::wstring target = dir + dllName;
     const std::wstring backup = dir + dllName + L".tmvs-backup";
+    const tmshaders::legacy::Exe* legacy = isMp ? nullptr : legacyOf(dir);
+    if (legacy && exists(target) && !isOurDll(target)) {
+        // Sunrise, Original: the game's own d3d9.dll is needed (dgVoodoo, the repack's proxy). It
+        // becomes d3d9.chain.dll; one already there (an older one) is kept as d3d9.chain.dll.tmvs-backup.
+        const std::wstring chain = chainPath(dir);
+        if (exists(chain) && !MoveFileExW(chain.c_str(), (chain + L".tmvs-backup").c_str(), MOVEFILE_REPLACE_EXISTING)) return kFailed;
+        if (!MoveFileExW(target.c_str(), chain.c_str(), 0)) return kFailed;
+    }
     if (exists(target) && !isOurDll(target) && !MoveFileExW(target.c_str(), backup.c_str(), MOVEFILE_REPLACE_EXISTING)) return kFailed;
     if (!CopyFileW(src.c_str(), target.c_str(), FALSE)) return kFailed;
 
     HKEY key = nullptr;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryKey, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
-        const wchar_t* valName = isMp ? L"GameFolder_ManiaPlanet" : (exists(dir + L"\\TmForever.exe") ? L"GameFolder" : L"GameFolder_ESWC");
+        const wchar_t* valName = isMp ? L"GameFolder_ManiaPlanet"
+                                      : (exists(dir + L"\\TmForever.exe") ? L"GameFolder" : (legacy ? legacy->registryValue : L"GameFolder_ESWC"));
         RegSetValueExW(key, valName, 0, REG_SZ, reinterpret_cast<const BYTE*>(dir.c_str()),
                        static_cast<DWORD>((dir.size() + 1) * sizeof(wchar_t)));
         RegCloseKey(key);
@@ -393,6 +433,10 @@ int gameRemove(const std::wstring& dir) {
     const std::wstring target = dir + dllName;
     const std::wstring backup = dir + dllName + L".tmvs-backup";
     if (exists(target) && isOurDll(target) && !DeleteFileW(target.c_str())) return kFailed;
+    // Sunrise, Original: the game's own d3d9.dll back under its name.
+    const std::wstring chain = chainPath(dir);
+    if (!isMp && exists(chain) && !exists(target)) MoveFileW(chain.c_str(), target.c_str());
+    if (!isMp && exists(chain + L".tmvs-backup") && !exists(chain)) MoveFileW((chain + L".tmvs-backup").c_str(), chain.c_str());
     if (exists(backup) && !exists(target)) MoveFileW(backup.c_str(), target.c_str());
     return kOk;
 }
@@ -453,19 +497,33 @@ void doGameInstall(std::wstring dir) {
     if (dir.empty()) return;
 
     const bool isMp = isMpGame(dir);
-    const bool isForever = exists(dir + L"\\TmForever.exe") || isEswcGame(dir);
+    bool otherLegacy = false;
+    const tmshaders::legacy::Exe* legacy = isMp ? nullptr : legacyOf(dir, &otherLegacy);
+    const bool isForever = exists(dir + L"\\TmForever.exe") || isEswcGame(dir) || legacy;
     if (!isMp && !isForever && hasEswcExe(dir)) {
         message(L"This TmNationsESWC.exe is not supported.\n\nOnly TrackMania Nations ESWC with the unofficial 1.80 patch works.", MB_OK | MB_ICONWARNING);
         return;
     }
+    if (!isMp && !isForever && otherLegacy) {
+        message(L"This TmSunrise.exe or TMORIGINAL.EXE is not supported.\n\nOnly the Windows 10 community repack of TrackMania Sunrise and "
+                L"the Online Patch v2 of TrackMania Original work.", MB_OK | MB_ICONWARNING);
+        return;
+    }
     if (!isMp && !isForever) {
-        message(L"Neither TmForever.exe nor ManiaPlanet.exe was found in\n" + dir + L"\n\nPlease select the TrackMania or ManiaPlanet folder itself.", MB_OK | MB_ICONWARNING);
+        message(L"No supported game was found in\n" + dir + L"\n\nPlease select the TrackMania or ManiaPlanet folder itself.", MB_OK | MB_ICONWARNING);
         return;
     }
 
     const std::wstring dllName = isMp ? L"d3d11.dll" : L"d3d9.dll";
     const std::wstring existing = dir + L"\\" + dllName;
-    if (exists(existing) && !isOurDll(existing) &&
+    if (exists(existing) && !isOurDll(existing) && legacy &&
+        message(L"This game's own d3d9.dll (" + std::wstring(legacy->game == tmshaders::legacy::Game::Original ? L"dgVoodoo" : L"the repack's Direct3D proxy") +
+                L") stays in use: it is renamed to d3d9.chain.dll and TM Vibrant Shaders passes everything on to it. "
+                L"The uninstall puts it back. Continue?",
+                MB_YESNO | MB_ICONINFORMATION) != IDYES) {
+        return;
+    }
+    if (exists(existing) && !isOurDll(existing) && !legacy &&
         message(L"There already is a " + dllName + L" in this folder (ReShade or another mod?).\n\n"
                 L"It will be kept as " + dllName + L".tmvs-backup and restored when you uninstall. Continue?",
                 MB_YESNO | MB_ICONWARNING) != IDYES) {
@@ -501,6 +559,8 @@ void doUninstall() {
         RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder");
         RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ManiaPlanet");
         RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_ESWC");
+        RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_Sunrise");
+        RegDeleteKeyValueW(HKEY_CURRENT_USER, kRegistryKey, L"GameFolder_Original");
         RegDeleteKeyW(HKEY_CURRENT_USER, kRegistryKey);
     }
     message(ok ? L"TM Vibrant Shaders was removed.\n\nYour settings and presets are kept in Documents\\TrackMania\\TMVS and Documents\\ManiaPlanet\\TMVS "
@@ -589,8 +649,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         buttons.push_back({200 + static_cast<int>(i), buttonTexts.back().c_str()});
     }
 
-    buttonTexts.push_back(games.empty() ? L"Install into a game folder\nChoose the folder with TmForever.exe or ManiaPlanet.exe yourself."
-                                        : L"Install into another game folder\nChoose the folder with TmForever.exe or ManiaPlanet.exe yourself.");
+    buttonTexts.push_back(games.empty() ? L"Install into a game folder\nChoose the folder with TmForever.exe, TmNationsESWC.exe, TmSunrise.exe, TMORIGINAL.EXE or ManiaPlanet.exe yourself."
+                                        : L"Install into another game folder\nChoose the folder with TmForever.exe, TmNationsESWC.exe, TmSunrise.exe, TMORIGINAL.EXE or ManiaPlanet.exe yourself.");
     buttons.push_back({102, buttonTexts.back().c_str()});
 
     if (inLoader || inGame) {

@@ -2,3 +2,5 @@
 
 #define TM_SHADERS_VERSION L"@TM_SHADERS_VERSION@"
 #define TM_SHADERS_VERSION_A "@TM_SHADERS_VERSION@"
+// The Horizon Host modules' own version (2.x), around the same core.
+#define TMVS_MODULES_VERSION_A "@TMVS_MODULES_VERSION@"

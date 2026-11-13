@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.21)
 # Separate project from the TMNF plugin (that one is 32-bit D3D9):
 #   cmake -S maniaplanet -B build-mp -A x64
 #   cmake --build build-mp --config Release
-project(tmvs_maniaplanet VERSION 1.4.3 LANGUAGES CXX RC ASM_MASM)
+project(tmvs_maniaplanet VERSION 1.6.0 LANGUAGES CXX RC ASM_MASM)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "Build the ManiaPlanet proxy for ManiaPlanet.exe (64-bit): configure with -A x64.")
@@ -40,9 +40,10 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(minimp3)
 
 # One version for both games (the CI sets it from the tag: -DTM_SHADERS_VERSION=1.4.1-preview). The
-# shared menu shows it and the update check compares it with the newest release.
+# shared menu shows it and the update check compares it with the newest release. Without a tag it is
+# <version>-dev, like the Forever build, so CI's "Verify version" finds the same string in both DLLs.
 if(NOT DEFINED TM_SHADERS_VERSION)
-  set(TM_SHADERS_VERSION "${PROJECT_VERSION}")
+  set(TM_SHADERS_VERSION "${PROJECT_VERSION}-dev")
 endif()
 configure_file("${TMVS_ROOT}/src/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/tm_shaders_version.h" @ONLY)
 string(REGEX MATCHALL "[0-9]+" TMVS_VERSION_PARTS "${TM_SHADERS_VERSION}")
@@ -115,6 +116,9 @@ add_library(tmvs_mp_core STATIC
   src/effects_water.cpp
   src/water11.cpp
   src/maplook.cpp
+  src/game.cpp
+  src/gamecamera.cpp
+  src/splits11.cpp
   src/autoquality11.cpp
   src/photo11.cpp
   src/overlay.cpp
@@ -128,6 +132,8 @@ add_library(tmvs_mp_core STATIC
   ${TMVS_ROOT}/src/keys.cpp
   ${TMVS_ROOT}/src/inifile.cpp
   ${TMVS_ROOT}/src/menu.cpp
+  # TMVS 2.0: the Horizon module state the shared menu and settings ask (never hosted on ManiaPlanet).
+  ${TMVS_ROOT}/src/modules/modules.cpp
   ${TMVS_ROOT}/src/image.cpp
   ${TMVS_ROOT}/src/update.cpp
   ${TMVS_ROOT}/src/weather.cpp

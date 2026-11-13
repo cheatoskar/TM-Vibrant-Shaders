@@ -129,6 +129,7 @@ const char* sourceName(Source source) {
     switch (source) {
     case Source::Process: return "the game's own sound (process loopback)";
     case Source::System: return "everything the PC plays (loopback of the default playback device)";
+    case Source::Microphone: return "the microphone (the default recording device)";
     default: return "none";
     }
 }
@@ -161,7 +162,7 @@ struct Capture::Impl {
 
     void run();
     bool initProcess(IAudioClient*& client, std::string& why);
-    bool initSystem(IAudioClient*& client, std::string& why);
+    bool initSystem(IAudioClient*& client, std::string& why, bool microphone = false);
     bool setFormat(const WAVEFORMATEX& f, std::string& why);
     void take(IAudioCaptureClient* capture);
     void convert(const BYTE* data, UINT32 frames, bool silent);
@@ -345,17 +346,20 @@ bool Capture::Impl::initProcess(IAudioClient*& client, std::string& why) {
     return setFormat(format, why);
 }
 
-bool Capture::Impl::initSystem(IAudioClient*& client, std::string& why) {
+// The default playback device's loopback, or (microphone) the default recording device itself.
+bool Capture::Impl::initSystem(IAudioClient*& client, std::string& why, bool microphone) {
     IMMDeviceEnumerator* enumerator = nullptr;
     IMMDevice* device = nullptr;
+    const char* what = microphone ? "microphone" : "playback device loopback";
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&enumerator));
-    if (SUCCEEDED(hr)) hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+    if (SUCCEEDED(hr)) hr = enumerator->GetDefaultAudioEndpoint(microphone ? eCapture : eRender, eConsole, &device);
     if (enumerator) enumerator->Release();
     if (FAILED(hr) || !device) {
-        why = "playback device loopback: no default playback device (" + hex(hr) + ")";
+        why = std::string(what) + ": no default " + (microphone ? "recording" : "playback") + " device (" + hex(hr) + ")";
         return false;
     }
-    const DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+    const Source deviceSource = microphone ? Source::Microphone : Source::System;
+    const DWORD flags = (microphone ? 0 : AUDCLNT_STREAMFLAGS_LOOPBACK) | AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
     // First the caller's format, converted by the audio engine; where it refuses, the mix format
     // and the converter here.
     WAVEFORMATEX wanted{};
@@ -371,7 +375,7 @@ bool Capture::Impl::initSystem(IAudioClient*& client, std::string& why) {
                                 0, &wanted, nullptr);
         if (SUCCEEDED(hr)) {
             device->Release();
-            source = Source::System;
+            source = deviceSource;
             return setFormat(wanted, why);
         }
         client->Release();
@@ -383,13 +387,13 @@ bool Capture::Impl::initSystem(IAudioClient*& client, std::string& why) {
     if (SUCCEEDED(hr)) hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 2000000, 0, mix, nullptr);
     device->Release();
     if (FAILED(hr)) {
-        why = "playback device loopback: Initialize " + hex(hr);
+        why = std::string(what) + ": Initialize " + hex(hr);
         if (mix) CoTaskMemFree(mix);
         if (client) client->Release();
         client = nullptr;
         return false;
     }
-    source = Source::System;
+    source = deviceSource;
     const bool ok = setFormat(*mix, why);
     CoTaskMemFree(mix);
     if (!ok) {
@@ -532,9 +536,10 @@ void Capture::Impl::run() {
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     std::string whyProcess, whySystem;
     bool ok = false;
+    const bool microphone = mode == Mode::Microphone;
     if (mode == Mode::Auto || mode == Mode::ProcessOnly) ok = initProcess(client, whyProcess);
     const bool viaProcess = ok;
-    if (!ok && mode != Mode::ProcessOnly) ok = initSystem(client, whySystem);
+    if (!ok && mode != Mode::ProcessOnly) ok = initSystem(client, whySystem, microphone);
     if (ok) ok = SUCCEEDED(client->SetEventHandle(event)) && SUCCEEDED(client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(&capture)));
     {
         std::lock_guard<std::mutex> l(lock);
@@ -579,7 +584,7 @@ void Capture::Impl::run() {
         client->Release();
         client = nullptr;
         std::string why;
-        bool again = viaProcess ? initProcess(client, why) : initSystem(client, why);
+        bool again = viaProcess ? initProcess(client, why) : initSystem(client, why, microphone);
         if (again) again = SUCCEEDED(client->SetEventHandle(event)) && SUCCEEDED(client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<void**>(&capture)));
         {
             std::lock_guard<std::mutex> l(lock);

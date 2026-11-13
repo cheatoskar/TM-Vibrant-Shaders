@@ -1,6 +1,88 @@
 # Changelog
 
-## 1.4.3 (in testing)
+## 1.6.0 and modules 2.0.0 (2026-11-13)
+
+One release, two forms from the same code: the standalone mod **1.6.0** for six games (TrackMania Nations Forever, United Forever, Nations ESWC, Sunrise, Original and TrackMania 2), and the same features as four **Horizon Client modules 2.0.0** for the five Direct3D 9 games. TrackMania 2 stays standalone: Horizon runs only in the 32-bit Direct3D 9 games. Which game has what: the compatibility table in the [README](README.md#compatibility).
+
+### 1.6.0 (standalone)
+
+The older games: TrackMania Sunrise and TrackMania Original, clips and the MP4 export on all three 2006-engine games.
+
+**New (TrackMania Sunrise, TrackMania Original)**
+- **TrackMania Sunrise and TrackMania Original** (experimental): the same DLL as `d3d9.dll`, for the Windows 10 community repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 of Original (`TMORIGINAL.EXE`), each told by its SHA-256. Everything TrackMania Nations ESWC has: the look, photo mode, F12 captures, the car and the race (neon trail, headlights, spray, long mesh shadows, Hide car, split times, the Session panel, finish effects), clips and the MP4 export. The engine is ESWC's generation; its hooks and reads were ported from ESWC (other addresses, a smaller race and player info, no race counters: a start and a respawn are read from your player's info). Not yet: water, the game's materials and light, the minimap (1.7, after a census run in each game). Details in [docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original).
+- **The game's own `d3d9.dll` stays in use** (dgVoodoo in Original, the repack's proxy in Sunrise): the setup renames it to `d3d9.chain.dll` and the mod passes Direct3D on to it; without one, Windows' own. The uninstall puts it back. `tmvs-*.log` says which one runs (`d3d9: ...`).
+- **Other builds are refused cleanly**: an unknown `TmSunrise.exe` or `TMORIGINAL.EXE` gets no hook at all, the mod only passes Direct3D on and the log says why (`passive: ...`).
+
+**New (all three older games)**
+- **The game's video export is known:** the replay's *Shoot video* is read from the game (its settings, the frames being written, the game's fixed clock). *Best export quality* works there: full quality, no auto quality, TAA off when the game supersamples, rain, clouds and the other effects on the video's clock; the clips pause meanwhile.
+- **MP4 export**: the game's AVI writer is hooked as on Forever, so *Shoot video* writes an MP4 with the mod's encoder (*Video format* on the *Video* page: H.264, HEVC or AV1, or the game's AVI), without the codec dialog. Its sound is the game's own, taken with WASAPI process loopback while the game's sound pass runs (the game itself records the default recording device, often a microphone). The game's frames go in, so the settings that need the mod's own frames (HDR blend, HDR10, shutter, lens depth of field, grain) are not shown there ([docs/engine-video-export.md](docs/engine-video-export.md#the-2006-engine-trackmania-nations-eswc-sunrise-original-16)).
+- **Census mode** for the materials and light work in 1.7 (development, off by default: `LegacyCensus=1` under `[dev]` in `Documents\TrackMania\TMVS\dev.ini`): logs once per map each shader the game draws with (class, file, textures), the classes of its per-pass shading, and what the map object offers (blocks, their infos, the coordinates), also when an editor opens. Without the key neither draw hook is installed; in Nations/United Forever the key is ignored.
+
+**New (TrackMania Nations ESWC)**
+- **Clips.** The *Clips* page, `F4`, `Ctrl+F4` and `Ctrl+Shift+F4` and *Save on finish* now work on TrackMania Nations ESWC (1.80 patch), and on Sunrise and Original. The race (start, finish, race time), the map's name and its author time are read from the game's own objects, the same reads as the split times; nothing is hooked or written for it. These maps have no UID: the personal best of a clip is kept by the map's name. Details in [docs/clips.md](docs/clips.md#trackmania-nations-eswc).
+
+**Changed (TrackMania Nations ESWC)**
+- *Hide car* in photo mode now leaves the cars alone in network races (it writes the game's visible bit, so only in solo races and replays). The engine code for ESWC is now the shared one of the three older games; the log lines are the same.
+
+**Fixed (all three older games)**
+- **Crash at start** when the mod's DLL was loaded at another address than usual: the older games' exes have no import name table, and the mod read the addresses of the imported functions as names. It now finds `Direct3DCreate9` by its address.
+- **Low frame rate in Sunrise with the shaders on** (about 15 FPS at 1440p, Upscaling slower than without): Sunrise renders a second, small view into a texture every frame (512x512 with a depth buffer of its own, before the main camera). The mod took it for a second main camera, shaded it and made all its render targets again twice a frame. Such views are now left as the game draws them, and on the older games a camera smaller than the main camera of the last frames never resizes the effects. Temporal effects (TAA, motion blur, exposure) were paused there for the same reason and run again. `tmvs.log` names the view once (`scene: a camera into 512x512 ... is a view into a texture`).
+
+**Changed (clips, every game)**
+- **Instant replay is off for new players**: the clips' background recording (the buffer behind `F3`, *Save last run* and the saved best runs) starts only once you switch on *Instant replay* at the top of the *Clips* page; then *Save best runs* is on. Off, nothing is copied or read back from the graphics card, and the clip keys only show "Instant replay is off". A `clips.ini` that already has it on keeps it. The replay editor's *Shoot video* doesn't need it.
+
+- **The clip keys moved from F3 to F4** (`F4` last seconds, `Ctrl+F4` last run, `Ctrl+Shift+F4` run so far, `Shift+F4` TM Clips' window): Twinkie shows or hides its interface on F3 with any modifier. Keys still on the old defaults move by themselves (`clips: keys moved off F3` in the log); a key you chose stays.
+
+**New (every game with clips)**
+- **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector, from the previous checkpoint (or the start) to one second after this one, saved as `<map>_<date>_CP<n>_<time>.mp4`. Read from the game only, as the finish clips.
+
+**Rules check (TMX moderators)**
+- Checked against the moderators' rules for this release: no checkpoint or trigger display, no ideal or brake line, no camera or MediaTracker change (the old *Skip map clips* has been gone since 1.4.0), the minimap only in the replay editor and the video export, split times allowed online. Nothing new is active online beyond what 1.5 had.
+
+### Horizon modules 2.0.0
+
+TM Vibrant Shaders also as four modules for Horizon Client (TM Horizon's in-game menu, Horizon Host 0.3.1 / plugin ABI 1.4) ([docs/horizon-modules.md](docs/horizon-modules.md)). They carry the 1.6.0 core: the same settings, the same features.
+
+**New**
+- **Horizon modules** (TrackMania Nations/United Forever, Nations ESWC, Sunrise, Original): *TM Vibrant Shaders* (the shaders), *TMVS Capture* (photos, clips, video export), *TMVS Upscaling* (FSR render scale) and *TMVS Packs* (resource packs), each with its own page, switch and keys in the Horizon menu. Capture and Upscaling also work with the shaders off. They come as `TMVS-<version>-horizon.zip`; all four use `tmvs-core.dll` in the `tmvs` folder.
+- **Only one copy runs**: with the standalone mod and the modules both installed, the one the game loads first runs and the other stays passive; `tmvs.log`, Horizon's log and the module pages say which.
+- **Horizon's sizes** (plugin ABI 1.4): the pages follow Horizon's menu size and content scale (80-125 %, `Ctrl`+wheel in the menu), and put their panels in fewer columns in a narrow window (a popped-out tab, the module's own window from the top bar). Each module tells Horizon the smallest and the preferred size of its window (`plugin.json`). An older Horizon (ABI 1.2, 1.3) still loads them, at Horizon's 1080p scale.
+- **TMVS Packs** is offered in Nations/United Forever only (the older games have no resource pack hook yet). **TMVS Upscaling** also scales with the effects switched off (effects key), not only with the Shaders module off. A page a game doesn't have says "Not available in this game".
+- **Crash guard**: if a TMVS page fails inside Horizon's menu, Horizon switches the module off (Horizon 0.3); TMVS then gives its own menu and windows their drawing state back, so the game keeps running.
+- In Horizon, photos, clips and the video export never show Horizon's interface (Horizon's capture flag).
+
+**Changed**
+- Same settings in both forms (`Documents\TrackMania\TMVS`, `Documents\TrackMania\TMClips\clips.ini`); the modules add `SettingsVersion=2` to `settings.ini`, 1.5 reads the file as before.
+- In Horizon the keys are Horizon's: the modules put theirs into Horizon's *Hotkeys* list (defaults from your settings files); the menu is Horizon's (`Insert`); with ABI 1.3 or newer your old menu key (`F8`) opens the TMVS page there.
+- `tmvs.log` says which form starts (`starting (standalone (d3d9.dll))`, `(standalone (ModLoader))` or `(Horizon modules (tmvs-core.dll))`); Horizon's log names the modules' and the core's version.
+
+## 1.5.0 (not released on its own, in 1.6.0)
+
+
+TrackMania Nations ESWC gets the car and the race, and TrackMania 2 catches up with TrackMania Nations/United: photo zoom, hi-res photos, TAA jitter, "only in replays", Hide car and the Misc page.
+
+**New (TrackMania Nations ESWC)**
+- **TrackMania Nations ESWC: the car and the race.** I read the race, your car and its speed from the game's own objects once a frame (only *Hide car* changes something there) and hook its map loads. That brings the *Neon trail*, *Car headlights* (also *Horror*), *Spray*, *Long mesh shadows*, *Hide car* in photo mode (the game's own visible bit of each car, and its shadow), and on the *Misc* page the split times, the Session panel and the finish effects (compared with your best; ESWC maps aren't on TMX). The trail starts over on a new map, starts a new run at the start line and a new line after a respawn. Motion blur and *Cinematic in replays only* are back: a replay you watch (or shoot as a video) and the replay editor count as watching, driving doesn't. Still not there: the video export (the game has its own, not hooked yet), water (its Stadium has none), the game's materials and light, the minimap. `tmvs-eswc.log` says what was found (`engine (eswc): ...`).
+
+**New (TrackMania 2)**
+- **Game camera** (Settings page, panel *ManiaPlanet*, off by default): photo zoom (`Shift`+wheel), hi-res photos (`Shift+F12`, tiles put together) and *TAA jitter*. I change the FovRect of the game's main camera, the engine's own way of zooming into a part of the view, so its projection, culling and shadows follow by themselves. This writes into the game's memory: not tested against ManiaPlanet's anti-cheat, so it stays off unless you switch it on. What the engine did is measured from its constants every frame (`gamecamera:` in `tmvs-mp.log`).
+- **Only in replays** now knows replays: depth of field and motion blur run in the replay editor (watching, editing, *Shoot video*) and in photo mode, not while driving.
+- **Hide car** in photo mode: the cars' draws are skipped, also their shadow-map draws.
+- **Misc page**: split times at each checkpoint against your best run on the map, the Session panel and finish effects (confetti, fireworks for a new best). Read from the game only, so fine online. Your best runs are kept in `Documents\ManiaPlanet\TMVS\splits.ini`. No minimap in TrackMania 2.
+- The photo panel has no *Auto photo mode* in TrackMania 2 (its free camera isn't hooked); the Misc tab says what it holds in each game.
+
+**New (Clips, TrackMania Nations/United)**
+- **Clips** ([docs/clips.md](docs/clips.md); TrackMania Nations/United Forever, in testing): the game is recorded into memory all the time (60 s by default), and after a finish with a personal best the run is saved as an MP4 with the game's sound: 3 s before the start to 3 s after the finish, within about a second, without saving a replay or rendering anything. `F3` saves the last 30 s. *Save on finish* can be off, personal best only or every finish; a restart starts a new run, a respawn at a checkpoint doesn't. Clips go to `Documents\TrackMania\Clips` as `<map>_<date>_<race time>.mp4`, a short "Clip saved 0:42.37" shows in the game (never in the clip). The settings are on the *Clips* page: buffer length with its memory, size (1080p or the game's own by default), 30 or 60 fps, bitrate (12 Mbit/s), encoder, sound, *Without HUD* (the picture before the HUD; the menu and the mod's windows are never recorded) and the last clips. The encoder is NVIDIA's NVENC driven directly, else the graphics card's H.264 encoder through Windows (AMD, Intel); the sound is only the game's own on Windows 10 2004 and newer. I read the race from the game's memory and write nothing (online and TMX rules), so the mod adds no hook to the game for this. `tmvs.log` says what records and with what (`clips: recording ...`), each finish and each saved clip, and every minute what it costs (`clips: last 60 s: ...`).
+- **Clips page** in the menu (its own tab, next to *Misc*; the video export keeps the *Video* page): *Saving* (save on finish, the keys, the last runs, the last clips) and *Recording* (buffer, size, frame rate, bitrate, encoder, sound).
+- **Save last run** (`Ctrl+F3`): saves the last finished run (3 s before its start to 3 s after its finish) also after you restarted, respawned or left the finish screen, as long as the buffer still holds it. The page lists the last five finished runs (time, PB, how long ago) with *Save* for each; a run the buffer no longer holds is greyed. **Save run so far** (`Ctrl+Shift+F3`): the run you drive now, from its start to now. `F3` still saves the last seconds, now 30, 60 or 90 s. All three keys can be changed on the page.
+- **Adaptive buffer** (on): the buffer's length follows the map, the author time x 1.5 + 10 s, at least 60 s (and at least what `F3` saves), within the memory limit; the page shows the length for the loaded map. A new map's author time records again with its length (the previous map's runs are gone then).
+- **Sound** for clips: *Game* (the game's own sound, as before), *Game + mic* (your default microphone mixed into the same track), *All sound* (everything the PC plays), or *Off*.
+- **TM Clips**, the same clips as a mod of their own for the ModLoader (`TM-Clips.zip`, `TMClips.dll`), with a small window (`Shift+F3`) for the settings and the last clips and its own log (`Documents\TrackMania\TMClips\tmclips.log`). Both installed: TM Vibrant Shaders records and TM Clips stays idle, in either load order. They share `Documents\TrackMania\TMClips\clips.ini`, so the settings carry over.
+
+**Fixed**
+- With CenterSpeed loaded the menu and the effects never started ("no game device 30 s after the start" in `tmvs.log`): the game's Direct3D device was made past the mod's hook. The slot the mod hooks (`IDirect3D9::CreateDevice` in Direct3D's method table) does not always stay its own: in my test program Windows' compatibility layer wrote its own hook there again on every `Direct3DCreate9`, and CenterSpeed's own Direct3D start-up changes the order of these calls (the exact cause in the game is still to be confirmed by the log). The mod now checks the slot after every `Direct3DCreate9` of the game and every 50 ms until the device is there, and puts its hook in front again; should the device still go past, the mod takes it from the game's viewport after 60 frames and hooks it then. `tmvs.log` says who called `Direct3DCreate9` and `CreateDevice` and when (`hook: ...`).
+
+## 1.4.3 (not released on its own, in 1.6.0)
 
 Fixes for dirt, the car with TAA, water and maps where the effects stayed off, the mod works next to the VR mod TrackMania Forever OpenXR (TrackMania Nations/United), and it runs in TrackMania Nations ESWC.
 

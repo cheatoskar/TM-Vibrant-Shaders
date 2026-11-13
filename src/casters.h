@@ -53,6 +53,10 @@ void frameDone();
 // While no pipeline uses the maps (long shadows and volumetric light off, no sun), the draws
 // aren't checked at all: what is kept stays, recording goes on where it was when they're used again.
 void pauseRecording(bool paused);
+// TM Nations ESWC, where no draw's material is known: a mesh placed within `radius` metres of
+// `point` (the car) is not kept for now and looked at again later, so the car standing at the start
+// doesn't leave its shadow there. null: none. Set once a frame.
+void excludeAround(const float* point, float radius);
 // CPU time of the recording and of drawing the maps since the start, ms (the perf log).
 double cpuMs();
 

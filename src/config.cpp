@@ -1817,6 +1817,7 @@ void Config::load() {
     hoverPreview = GetPrivateProfileIntW(L"General", L"HoverPreview", 1, ini) != 0;
     menuFull = GetPrivateProfileIntW(L"General", L"MenuFull", 0, ini) != 0;
     checkUpdates = GetPrivateProfileIntW(L"General", L"CheckForUpdates", 1, ini) != 0;
+    hideForHorizon = GetPrivateProfileIntW(L"General", L"HideForHorizon", 1, ini) != 0;
     photoAuto = GetPrivateProfileIntW(L"General", L"PhotoAuto", 1, ini) != 0;
     photoHideHud = GetPrivateProfileIntW(L"General", L"PhotoHideHud", 1, ini) != 0;
     photoHideEditor = GetPrivateProfileIntW(L"General", L"PhotoHideEditor", 0, ini) != 0;
@@ -1949,7 +1950,30 @@ void Config::load() {
         preset = "Vibrant";
         applyNamed(preset);
     }
+    // 1.5 and older wrote no version: their file is read as it is (2.0 changed no key's meaning).
+    m_settingsVersionRead = static_cast<int>(GetPrivateProfileIntW(L"General", L"SettingsVersion", 1, ini));
+    if (m_settingsVersionRead < kSettingsVersion && GetFileAttributesW(ini) != INVALID_FILE_ATTRIBUTES) {
+        TMVS_LOG("config: settings.ini from 1.5 or older (no SettingsVersion): taken over as it is, version %d written with the next save",
+                 kSettingsVersion);
+    }
+    if (m_shadersBlocked) {
+        m_enabledKept = settings.enabled;
+        settings.enabled = false;
+    }
     m_dirty = false;
+}
+
+void Config::setShadersBlocked(bool blocked) {
+    if (blocked == m_shadersBlocked) return;
+    m_shadersBlocked = blocked;
+    if (blocked) {
+        m_enabledKept = settings.enabled;
+        settings.enabled = false;
+    } else {
+        settings.enabled = m_enabledKept;
+    }
+    TMVS_LOG("config: effects %s (the TMVS module %s; settings.ini keeps Enabled=%d)", blocked ? "off" : "back", blocked ? "is off" : "is on",
+             m_enabledKept ? 1 : 0);
 }
 
 void Config::save() {
@@ -1962,7 +1986,12 @@ void Config::save() {
     const Settings own = ownSettings();
     ini.set(L"General", L"Preset", widen(m_mapLook ? m_ownPreset : preset).c_str());
     ini.set(L"General", L"BasePreset", widen(m_mapLook ? m_ownBasePreset : m_basePreset).c_str());
-    ini.set(L"General", L"Enabled", settings.enabled ? L"1" : L"0");
+    ini.set(L"General", L"Enabled", (m_shadersBlocked ? m_enabledKept : settings.enabled) ? L"1" : L"0");
+    {
+        wchar_t version[8];
+        swprintf(version, 8, L"%d", kSettingsVersion);
+        ini.set(L"General", L"SettingsVersion", version);
+    }
     ini.set(L"General", L"AutoMoodPresets", autoMood ? L"1" : L"0");
     ini.set(L"General", L"UseMapLooks", useMapLooks ? L"1" : L"0");
     wchar_t page[16];
@@ -1978,6 +2007,7 @@ void Config::save() {
     ini.set(L"General", L"HoverPreview", hoverPreview ? L"1" : L"0");
     ini.set(L"General", L"MenuFull", menuFull ? L"1" : L"0");
     ini.set(L"General", L"CheckForUpdates", checkUpdates ? L"1" : L"0");
+    ini.set(L"General", L"HideForHorizon", hideForHorizon ? L"1" : L"0");
     ini.set(L"General", L"PhotoAuto", photoAuto ? L"1" : L"0");
     ini.set(L"General", L"PhotoHideHud", photoHideHud ? L"1" : L"0");
     ini.set(L"General", L"PhotoHideEditor", photoHideEditor ? L"1" : L"0");

@@ -1,34 +1,37 @@
-## TM Vibrant Shaders 1.4.3 (pre-release)
+## TM Vibrant Shaders 1.6.0 and Horizon modules 2.0.0
 
-Fixes for **TrackMania Nations & United Forever**, the mod now works next to the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR), and it runs in **TrackMania Nations ESWC** (experimental). TrackMania 2 is unchanged.
+New: **TrackMania Sunrise** and **TrackMania Original** (experimental), **clips and the MP4 video export** on the three older games, and the whole mod as four **Horizon Client modules** (2.0.0).
 
-Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`).
+Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`; ESWC `tmvs-eswc.log`, Sunrise `tmvs-sunrise.log`, Original `tmvs-original.log`; TrackMania 2 `Documents\ManiaPlanet\TMVS\tmvs-mp.log`).
 
 ---
 
-### Fixed
+### Which file
 
-- **Dirt no longer mirrors walls** after you were in the replay editor (also online): the mod kept the old materials' kinds for new ones the game put at the same place in memory.
-- **Your car stays smooth with TAA**, driving and standing still. It used to look grainy while driving, more so with *Sharpening*.
-- **No foam on the water above a sunken car.**
-- **The effects run on maps where `F7` changed nothing** (a TMUnlimiter map of mine set no camera view of its own). On such maps the image also shook; it doesn't any more.
-- When the effects are on but nothing is shaded for 2 seconds, `tmvs.log` now says why.
-- **Opening the menu (`F8`) right after the game started could close it** (in the first 10 seconds, while the version badge shows). Competition Patch works, 1.5.3 and 2.0.
-- When another mod keeps this one from starting (no menu, no effects), `tmvs.log` now says so after 30 seconds and lists the other mods in the game.
+| You play | Download |
+|---|---|
+| Nations/United Forever, Nations ESWC, Sunrise, Original, TrackMania 2, without Horizon Client | `TM-Vibrant-Shaders.zip` (setup), or `TMVibrantShaders.dll` alone |
+| Nations/United Forever, Nations ESWC, Sunrise, Original, with Horizon Client | `TMVS-2.0.0-horizon.zip` (four modules for Horizon's plugins folder) |
 
-### VR (experimental)
+Not both in the same game: with the standalone mod and the modules installed, only one runs.
 
-![In the headset: the TM Vibrant Shaders menu next to the cockpit, Golden Hour on the start of A06 (wial663's test)](https://raw.githubusercontent.com/cheatoskar/TM-Vibrant-Shaders/{{TAG}}/docs/images/vr-golden-hour.jpg)
+### TrackMania Sunrise and TrackMania Original (experimental)
 
-With the VR mod [TrackMania Forever OpenXR](https://github.com/jiink/TrackManiaForeverOpenXR) both mods now run together (both from the ModLoader). The mod's menu (`F8`) shows in the headset. *Effects in VR* (page *Misc & VR*, off; restart the game after switching it) shades both eyes, with *Comfort*, *Quality in VR*, *TAA in VR* and *Rain on the windshield*. Both eyes get the same exposure, sky and rain; without *TAA in VR* the eyes are shaded without a history over frames, which stopped lamps and the Rain sky from flickering in an earlier test build. Tell me if anything still flickers (with `tmvs.log`: it now says every 10 s what was shaded in the headset).
+Only the Windows 10 repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 of Original (`TMORIGINAL.EXE`); other builds are refused cleanly. The game's own `d3d9.dll` (the repack's proxy, dgVoodoo) stays in use as `d3d9.chain.dll`; the setup does that for you. The look, photo mode, the car and the race (neon trail, headlights, spray, long mesh shadows, Hide car, split times), clips and the MP4 export. Not yet: water, the game's materials and light, resource packs, the minimap.
 
-New in rc.2: with *Game HDR* on the headset no longer goes black (*Game HDR* and *Render scale* stay off while the VR mod draws the eyes), no false "Depth buffer unavailable" message with *Effects in VR* off, and the effects no longer switch size every other frame at a race's start.
+### Nations ESWC, Sunrise, Original: clips and MP4 export
 
-This needs a VR mod build that hands its device to this mod. That change is a [pull request to the VR mod](https://github.com/jiink/TrackManiaForeverOpenXR/pull/27); until it is merged, use the build from [my fork](https://github.com/cheatoskar/TrackManiaForeverOpenXR-TMVS). The hand-over is by @wial663, who also tested it in the headset. Thanks!
+- **Clips**: the *Clips* page, `F4`, `Ctrl+F4`, `Ctrl+Shift+F4` and *Save on finish*, as on Forever.
+- **Shoot video** writes an MP4 with the mod's encoder (H.264, HEVC or AV1) and the game's own sound (no more microphone in the video). *Game's AVI* on the *Video* page gives the game's file as before.
 
-### TrackMania Nations ESWC (experimental)
+### Horizon modules 2.0.0
 
-The same DLL runs in **TrackMania Nations ESWC**, but only with the unofficial community patch 1.80 (`TmNationsESWC.exe` 0.1.7.9), not the StarForce original. Put `TMVibrantShaders.dll` next to `TmNationsESWC.exe` as `d3d9.dll` (or use the setup's *Install into another game folder*). You get the menu (`F8`), the look, photo mode and captures, with the HUD left out of the effects. The car, map, replay and video features need more of the old game than I found so far: the menu doesn't show them there. The log is `Documents\TrackMania\TMVS\tmvs-eswc.log`.
+*TM Vibrant Shaders*, *TMVS Capture*, *TMVS Upscaling* and *TMVS Packs*: the same features as the standalone 1.6.0, each with its own page, switch and keys in Horizon's menu. For Horizon Client 0.3.1 (the pages follow Horizon's menu size and content scale); they also load in older Horizon versions. TrackMania 2 has no Horizon and keeps the standalone mod. [docs/horizon-modules.md](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/horizon-modules.md)
+
+### Also
+
+- **Instant replay is off for new players**: switch it on at the top of the *Clips* page for the background recording (`F4`, saved best runs). If you used clips in 1.5, nothing changes for you.
+- **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector.
 
 ---
 
@@ -40,10 +43,10 @@ The same DLL runs in **TrackMania Nations ESWC**, but only with the unofficial c
   - 'https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/'
 ```
 
-Then tick *TM Vibrant Shaders* in your profile. New versions arrive on their own from then on. This is a pre-release: that server keeps 1.4.2. To get the pre-releases through the ModLoader, use `https://cheatoskar.github.io/TM-Vibrant-Shaders/modloader/beta/` instead.
+Then tick *TM Vibrant Shaders* in your profile. New versions arrive on their own from then on.
 
-**With the setup:** download `TM-Vibrant-Shaders.zip`, extract it and run `TM-Vibrant-Shaders-Setup.exe`.
+**With the setup:** download `TM-Vibrant-Shaders.zip`, extract it and run `TM-Vibrant-Shaders-Setup.exe`. It also installs into TrackMania 2, Nations ESWC, Sunrise and Original (*Install into another game folder*).
 
-In the game `F8` opens the menu and `F7` turns the effects on and off. Step by step: [installation guide](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/docs/install.md) ([Deutsch](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/main/docs/INSTALL_DE.md)). TrackMania 2 players: the same zip, see 1.4.1's notes.
+In the game `F8` opens the menu and `F7` turns the effects on and off. Step by step: [installation guide](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/install.md) ([Deutsch](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/INSTALL_DE.md)).
 
 All changes: [changelog](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/CHANGELOG.md).

@@ -1,11 +1,23 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(tm_vibrant_shaders VERSION 1.4.3 LANGUAGES CXX RC)
+project(tm_vibrant_shaders VERSION 1.6.0 LANGUAGES CXX RC)
 
+# 1.6.0-dev until the release tag sets it (CI: -DTM_SHADERS_VERSION=<tag>).
 if(NOT DEFINED TM_SHADERS_VERSION)
-  set(TM_SHADERS_VERSION "${PROJECT_VERSION}")
+  set(TM_SHADERS_VERSION "${PROJECT_VERSION}-dev")
 endif()
-message(STATUS "TM Vibrant Shaders version: ${TM_SHADERS_VERSION}")
+# The Horizon Host modules count on their own (2.0 = the first module release); they carry the same
+# core as the standalone of TM_SHADERS_VERSION. A tag's suffix (-rc.1, -dev) goes to both.
+set(TMVS_MODULES_BASE_VERSION "2.0.0")
+if(NOT DEFINED TMVS_MODULES_VERSION)
+  set(TMVS_MODULES_VERSION "${TMVS_MODULES_BASE_VERSION}")
+  string(FIND "${TM_SHADERS_VERSION}" "-" TMVS_SUFFIX_AT)
+  if(TMVS_SUFFIX_AT GREATER -1)
+    string(SUBSTRING "${TM_SHADERS_VERSION}" ${TMVS_SUFFIX_AT} -1 TMVS_SUFFIX)
+    string(APPEND TMVS_MODULES_VERSION "${TMVS_SUFFIX}")
+  endif()
+endif()
+message(STATUS "TM Vibrant Shaders version: ${TM_SHADERS_VERSION} (Horizon modules ${TMVS_MODULES_VERSION})")
 
 # TrackMania Forever is 32-bit (DirectX 9)
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -137,6 +149,8 @@ add_library(tmvs_core STATIC
   src/nvenc.cpp
   src/loopback.cpp
   src/gbufpatch.cpp
+  src/horizon.cpp
+  src/modules/modules.cpp
   ${TMVS_SHADER_HEADERS}
 )
 target_include_directories(tmvs_core PUBLIC src ${CMAKE_CURRENT_BINARY_DIR})
@@ -148,8 +162,13 @@ set(TMVS_OPTIONS /W4 /EHsc /permissive- /utf-8)
 target_compile_definitions(tmvs_core PUBLIC ${TMVS_DEFINITIONS})
 target_compile_options(tmvs_core PRIVATE ${TMVS_OPTIONS})
 
-add_library(tm_vibrant_shaders SHARED
-  src/dllmain.cpp
+# One version, two outputs (docs/horizon-modules.md): everything the game DLL runs is compiled once
+# into tmvs_runtime, linked into
+#   - TMVibrantShaders.dll, the standalone (ModLoader product, or d3d9.dll in the game folder), and
+#   - tmvs-core.dll, the shared core of the four Horizon Host modules (tmvs, tmvs-capture,
+#     tmvs-upscaling, tmvs-packs: small plugins that load it, src/modules/module.cpp).
+# The standalone's DllMain and d3d9 exports and the core's TMVS_Core_* exports are the only differences.
+add_library(tmvs_runtime OBJECT
   src/plugin.cpp
   src/casters.cpp
   src/blockorder.cpp
@@ -170,10 +189,7 @@ add_library(tm_vibrant_shaders SHARED
   src/proxy.cpp
   src/videofile.cpp
   src/soundcapture.cpp
-  src/exports.def
-  "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
-  sounds/sounds.rc
-  thumbnails/thumbnails.rc
+  src/modules/hostbridge.cpp
 
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -182,13 +198,123 @@ add_library(tm_vibrant_shaders SHARED
   ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
 )
-target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_core winmm shell32 winhttp)
+target_link_libraries(tmvs_runtime PUBLIC tmvs_core)
+target_include_directories(tmvs_runtime PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR} third_party/horizon)
+target_compile_options(tmvs_runtime PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
+
+add_library(tm_vibrant_shaders SHARED
+  src/dllmain.cpp
+  src/exports.def
+  "${CMAKE_CURRENT_BINARY_DIR}/plugin_version.rc"
+  sounds/sounds.rc
+  thumbnails/thumbnails.rc)
+target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_runtime tmvs_core winmm shell32 winhttp)
+
+# The 2006-engine dev.ini key (LegacyCensus) never acts on another game: the dev.ini is
+# shared with Forever's TMVS. tools/check_legacy_dev_keys.py runs with every build and fails it on a
+# use of those flags outside the 2006-engine-only code.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  set(TMVS_DEVKEYS_STAMP "${CMAKE_CURRENT_BINARY_DIR}/check_legacy_dev_keys.stamp")
+  file(GLOB_RECURSE TMVS_DEVKEYS_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
+  add_custom_command(
+    OUTPUT "${TMVS_DEVKEYS_STAMP}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_legacy_dev_keys.py"
+    COMMAND "${CMAKE_COMMAND}" -E touch "${TMVS_DEVKEYS_STAMP}"
+    DEPENDS ${TMVS_DEVKEYS_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_legacy_dev_keys.py"
+    COMMENT "check_legacy_dev_keys"
+    VERBATIM)
+  add_custom_target(check_legacy_dev_keys ALL DEPENDS "${TMVS_DEVKEYS_STAMP}")
+  add_dependencies(tm_vibrant_shaders check_legacy_dev_keys)
+else()
+  message(WARNING "Python 3 not found: tools/check_legacy_dev_keys.py does not run with the build")
+endif()
+
+# Instant replay clips (src/clips, see clips.h): built into TM Vibrant Shaders and into the standalone
+# TM Clips (TMClips.dll, below). Its two NV12 passes are compiled at build time like the pipeline's.
+set(TMCLIPS_VERSION "0.1.0")
+set(TMCLIPS_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/clips.hlsl")
+set(TMCLIPS_SHADER_HEADERS)
+foreach(entry PS_ClipLuma PS_ClipChroma)
+  set(out "${TMVS_SHADER_OUT}/${entry}.h")
+  add_custom_command(
+    OUTPUT "${out}"
+    COMMAND "${TMVS_FXC}" /nologo /O3 /T ps_3_0 /E ${entry} /Vn g_${entry} /Fh "${out}" "${TMCLIPS_SHADER}"
+    DEPENDS "${TMCLIPS_SHADER}"
+    COMMENT "fxc ${entry}"
+    VERBATIM)
+  list(APPEND TMCLIPS_SHADER_HEADERS "${out}")
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/clips_shaders.h.in"
+  "#pragma once\n#include <windows.h>\n#include \"shaders/PS_ClipLuma.h\"\n#include \"shaders/PS_ClipChroma.h\"\n")
+configure_file("${CMAKE_CURRENT_BINARY_DIR}/clips_shaders.h.in" "${CMAKE_CURRENT_BINARY_DIR}/clips_shaders.h" COPYONLY)
+add_library(tmvs_clips STATIC
+  src/clips/settings.cpp
+  src/clips/race.cpp
+  src/clips/ring.cpp
+  src/clips/encoder.cpp
+  src/clips/mftencoder.cpp
+  src/clips/recorder.cpp
+  src/clips/grabber.cpp
+  src/clips/clips.cpp
+  ${TMCLIPS_SHADER_HEADERS})
+target_include_directories(tmvs_clips PRIVATE ${imgui_SOURCE_DIR})
+target_link_libraries(tmvs_clips PUBLIC tmvs_core)
+target_compile_options(tmvs_clips PRIVATE ${TMVS_OPTIONS})
+target_link_libraries(tmvs_runtime PUBLIC tmvs_clips)
+target_link_libraries(tm_vibrant_shaders PRIVATE tmvs_clips)
+
+# TM Clips, the standalone mod for the ModLoader (TMClips.dll): the clips with a Present hook and a
+# small window of its own; idle when TM Vibrant Shaders runs in the same game.
+string(REGEX MATCHALL "[0-9]+" TMCLIPS_VERSION_PARTS "${TMCLIPS_VERSION}")
+list(GET TMCLIPS_VERSION_PARTS 0 TMCLIPS_V0)
+list(GET TMCLIPS_VERSION_PARTS 1 TMCLIPS_V1)
+list(GET TMCLIPS_VERSION_PARTS 2 TMCLIPS_V2)
+configure_file(src/clips/standalone/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/clips_version.rc" @ONLY)
+add_library(tm_clips SHARED
+  src/clips/standalone/standalone.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/clips_version.rc"
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp)
+target_include_directories(tm_clips PRIVATE ${imgui_SOURCE_DIR})
+target_compile_definitions(tm_clips PRIVATE TMCLIPS_VERSION="${TMCLIPS_VERSION}")
+target_compile_options(tm_clips PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
+target_link_libraries(tm_clips PRIVATE tmvs_clips tmvs_core shell32)
+set_target_properties(tm_clips PROPERTIES OUTPUT_NAME "TMClips" PREFIX "")
+
+# Clips test: the run tracker, the buffer's cuts, the encoders (NVENC, Media Foundation) and the MP4
+# of a synthetic run with a tone; --device: the NV12 passes on a D3D9 device (development tool).
+add_executable(tmvs_clipstest tools/clipstest.cpp)
+target_link_libraries(tmvs_clipstest PRIVATE tmvs_clips tmvs_core winmm)
+target_compile_options(tmvs_clipstest PRIVATE ${TMVS_OPTIONS})
+
+# The standalone's ModLoader folder: cmake --build build --config Release --target clips_zip
+#   dist/TM-Clips.zip: TM Clips/description.yaml, TM Clips/<version>/description.yaml + TMClips.dll, README.txt
+set(TMCLIPS_STAGE "${CMAKE_CURRENT_BINARY_DIR}/package-clips")
+set(TMCLIPS_STAGE_PRODUCT "${TMCLIPS_STAGE}/TM Clips")
+add_custom_target(clips_zip
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${TMCLIPS_STAGE}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${TMCLIPS_STAGE_PRODUCT}/${TMCLIPS_VERSION}" "${CMAKE_CURRENT_SOURCE_DIR}/dist"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/clips/description.yaml" "${TMCLIPS_STAGE_PRODUCT}/description.yaml"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/clips/version.yaml" "${TMCLIPS_STAGE_PRODUCT}/${TMCLIPS_VERSION}/description.yaml"
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tm_clips> "${TMCLIPS_STAGE_PRODUCT}/${TMCLIPS_VERSION}/"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/clips/README.txt" "${TMCLIPS_STAGE}/README.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${TMCLIPS_STAGE}/LICENSE.txt"
+  COMMAND ${CMAKE_COMMAND} -E chdir "${TMCLIPS_STAGE}"
+          ${CMAKE_COMMAND} -E tar cf "${CMAKE_CURRENT_SOURCE_DIR}/dist/TM-Clips.zip" --format=zip "TM Clips" "README.txt" "LICENSE.txt"
+  DEPENDS tm_clips
+  COMMENT "Packaging dist/TM-Clips.zip"
+  VERBATIM)
 
 # The Misc page's tools (src/misc, see its README.md): the minimap, split times against your best and
 # a replay, finish effects. OFF removes them all: no page, no overlays, no downloads.
 option(TMVS_MISC_TOOLS "Build the Misc page (minimap, split times, finish effects)" ON)
 if(TMVS_MISC_TOOLS)
-  target_sources(tm_vibrant_shaders PRIVATE
+  target_sources(tmvs_runtime PRIVATE
     src/misc/misc.cpp
     src/misc/mapview.cpp
     src/misc/splits.cpp
@@ -197,7 +323,7 @@ if(TMVS_MISC_TOOLS)
     src/misc/confetti.cpp
     src/misc/topview.cpp
     src/misc/blockmesh.cpp)
-  target_compile_definitions(tm_vibrant_shaders PRIVATE TMVS_MISC_TOOLS=1)
+  target_compile_definitions(tmvs_runtime PRIVATE TMVS_MISC_TOOLS=1)
 endif()
 target_include_directories(tm_vibrant_shaders PRIVATE ${imgui_SOURCE_DIR} ${minimp3_SOURCE_DIR})
 target_compile_options(tm_vibrant_shaders PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc /permissive- /utf-8>)
@@ -206,6 +332,95 @@ set_target_properties(tm_vibrant_shaders PROPERTIES
   OUTPUT_NAME "TMVibrantShaders"
   PREFIX ""
 )
+
+# --- Horizon Host modules (docs/horizon-modules.md) --------------------------------------------
+# tmvs-core.dll: the same runtime, its TMVS_Core_* exports instead of the d3d9 ones.
+set(TMVS_FILE_DESCRIPTION "TM Vibrant Shaders core for Horizon Host")
+set(TMVS_INTERNAL_NAME "tmvs-core")
+set(TMVS_ORIGINAL_FILENAME "tmvs-core.dll")
+configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/core_version.rc" @ONLY)
+add_library(tmvs_core_module SHARED
+  src/modules/coreexports.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/core_version.rc"
+  sounds/sounds.rc
+  thumbnails/thumbnails.rc)
+target_link_libraries(tmvs_core_module PRIVATE tmvs_runtime tmvs_clips tmvs_core winmm shell32 winhttp)
+target_include_directories(tmvs_core_module PRIVATE third_party/horizon)
+target_compile_options(tmvs_core_module PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /EHsc /permissive- /utf-8>)
+set_target_properties(tmvs_core_module PROPERTIES OUTPUT_NAME "tmvs-core" PREFIX "")
+# A map file next to it: a crash address from Horizon's log (tmvs-core.dll+0x...) can be looked up.
+target_link_options(tmvs_core_module PRIVATE "/MAP:$<TARGET_FILE_DIR:tmvs_core_module>/tmvs-core.map")
+
+# The four plugins Horizon loads (horizon\plugins\<id>\<id>.dll): no code of their own, they load
+# tmvs-core.dll and attach. packaging/horizon/<id>/ has each one's plugin.json and icon.png.
+set(TMVS_MODULE_IDS tmvs tmvs-capture tmvs-upscaling tmvs-packs)
+set(TMVS_MODULE_TARGETS)
+set(TMVS_MODULE_INDEX 0)
+foreach(id ${TMVS_MODULE_IDS})
+  string(REPLACE "-" "_" target "tmvs_module_${id}")
+  set(TMVS_FILE_DESCRIPTION "TM Vibrant Shaders module ${id} for Horizon Host")
+  set(TMVS_INTERNAL_NAME "${id}")
+  set(TMVS_ORIGINAL_FILENAME "${id}.dll")
+  # The module DLLs carry the modules' version (the core keeps the standalone's).
+  set(TMVS_SAVED_VERSION "${TM_SHADERS_VERSION}")
+  set(TMVS_SAVED_PARTS ${TMVS_V0} ${TMVS_V1} ${TMVS_V2})
+  set(TM_SHADERS_VERSION "${TMVS_MODULES_VERSION}")
+  string(REGEX MATCHALL "[0-9]+" TMVS_MODULE_PARTS "${TMVS_MODULES_VERSION}")
+  list(GET TMVS_MODULE_PARTS 0 TMVS_V0)
+  list(GET TMVS_MODULE_PARTS 1 TMVS_V1)
+  list(GET TMVS_MODULE_PARTS 2 TMVS_V2)
+  configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/${id}_version.rc" @ONLY)
+  set(TM_SHADERS_VERSION "${TMVS_SAVED_VERSION}")
+  list(GET TMVS_SAVED_PARTS 0 TMVS_V0)
+  list(GET TMVS_SAVED_PARTS 1 TMVS_V1)
+  list(GET TMVS_SAVED_PARTS 2 TMVS_V2)
+  add_library(${target} SHARED src/modules/module.cpp "${CMAKE_CURRENT_BINARY_DIR}/${id}_version.rc")
+  target_include_directories(${target} PRIVATE third_party/horizon ${CMAKE_CURRENT_BINARY_DIR})
+  target_compile_definitions(${target} PRIVATE TMVS_MODULE_INDEX=${TMVS_MODULE_INDEX} ${TMVS_DEFINITIONS})
+  target_compile_options(${target} PRIVATE ${TMVS_OPTIONS})
+  set_target_properties(${target} PROPERTIES OUTPUT_NAME "${id}" PREFIX "")
+  list(APPEND TMVS_MODULE_TARGETS ${target})
+  math(EXPR TMVS_MODULE_INDEX "${TMVS_MODULE_INDEX} + 1")
+endforeach()
+add_custom_target(tmvs_modules DEPENDS tmvs_core_module ${TMVS_MODULE_TARGETS})
+foreach(id ${TMVS_MODULE_IDS})
+  configure_file(packaging/horizon/${id}/plugin.json.in "${CMAKE_CURRENT_BINARY_DIR}/horizon/${id}/plugin.json" @ONLY NEWLINE_STYLE UNIX)
+endforeach()
+
+# The Horizon modules' zip: cmake --build build --config Release --target horizon_zip (release_zip makes it too)
+#   dist/TMVS-<version>-horizon.zip
+#     tmvs/            tmvs.dll, tmvs-core.dll (the shared core), plugin.json, icon.png
+#     tmvs-capture/    tmvs-capture.dll, plugin.json, icon.png
+#     tmvs-upscaling/  ...
+#     tmvs-packs/      ...
+#     README.txt, LICENSE.txt, THIRD_PARTY_NOTICES.txt
+# The folders go into Horizon's plugins folder (packaging/horizon/README.txt), or into horizon-host's
+# extra-plugins\ to ship inside Horizon's own zips.
+set(TMVS_HORIZON_STAGE "${CMAKE_CURRENT_BINARY_DIR}/package-horizon")
+set(TMVS_HORIZON_ZIP "TMVS-${TMVS_MODULES_VERSION}-horizon.zip")
+set(TMVS_HORIZON_COMMANDS
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${TMVS_HORIZON_STAGE}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/dist")
+foreach(id ${TMVS_MODULE_IDS})
+  string(REPLACE "-" "_" target "tmvs_module_${id}")
+  list(APPEND TMVS_HORIZON_COMMANDS
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${TMVS_HORIZON_STAGE}/${id}"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${target}> "${TMVS_HORIZON_STAGE}/${id}/"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_BINARY_DIR}/horizon/${id}/plugin.json" "${TMVS_HORIZON_STAGE}/${id}/plugin.json"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/horizon/${id}/icon.png" "${TMVS_HORIZON_STAGE}/${id}/icon.png")
+endforeach()
+list(APPEND TMVS_HORIZON_COMMANDS
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tmvs_core_module> "${TMVS_HORIZON_STAGE}/tmvs/"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/packaging/horizon/README.txt" "${TMVS_HORIZON_STAGE}/README.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" "${TMVS_HORIZON_STAGE}/LICENSE.txt"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" "${TMVS_HORIZON_STAGE}/THIRD_PARTY_NOTICES.txt"
+  COMMAND ${CMAKE_COMMAND} -E chdir "${TMVS_HORIZON_STAGE}"
+          ${CMAKE_COMMAND} -E tar cf "${CMAKE_CURRENT_SOURCE_DIR}/dist/${TMVS_HORIZON_ZIP}" --format=zip
+          ${TMVS_MODULE_IDS} "README.txt" "LICENSE.txt" "THIRD_PARTY_NOTICES.txt")
+add_custom_target(horizon_zip ${TMVS_HORIZON_COMMANDS}
+  DEPENDS tmvs_modules
+  COMMENT "Packaging dist/${TMVS_HORIZON_ZIP}"
+  VERBATIM)
 
 # Offline previewer: runs the pipeline on recorded .tmcap frames (development tool).
 add_executable(tmvs_preview tools/preview.cpp src/audio.cpp "${CMAKE_CURRENT_SOURCE_DIR}/sounds/sounds.rc")
@@ -249,6 +464,36 @@ add_executable(tmvs_inlinehooktest tools/inlinehooktest.cpp)
 target_link_libraries(tmvs_inlinehooktest PRIVATE tmvs_core)
 target_compile_options(tmvs_inlinehooktest PRIVATE ${TMVS_OPTIONS})
 
+# Horizon Host handshake test: finding the host late, the old host without exports, the UI state and the
+# capture calls, against a fake host.dll (and an old HorizonHost.dll) built next to it (development tool).
+# --real <host.dll>: against horizon-host's own build.
+add_library(tmvs_fakehorizonhost SHARED tools/fakehorizonhost.cpp)
+set_target_properties(tmvs_fakehorizonhost PROPERTIES OUTPUT_NAME "host" PREFIX "")
+target_compile_options(tmvs_fakehorizonhost PRIVATE ${TMVS_OPTIONS})
+add_library(tmvs_fakehorizonhost_old SHARED tools/fakehorizonhost.cpp)
+set_target_properties(tmvs_fakehorizonhost_old PROPERTIES OUTPUT_NAME "HorizonHost" PREFIX "")
+target_compile_definitions(tmvs_fakehorizonhost_old PRIVATE FAKE_HORIZON_OLD)
+target_compile_options(tmvs_fakehorizonhost_old PRIVATE ${TMVS_OPTIONS})
+add_executable(tmvs_horizontest tools/horizontest.cpp)
+target_link_libraries(tmvs_horizontest PRIVATE tmvs_core)
+target_compile_options(tmvs_horizontest PRIVATE ${TMVS_OPTIONS})
+add_dependencies(tmvs_horizontest tmvs_fakehorizonhost tmvs_fakehorizonhost_old)
+
+# Menu preview: the F8 menu rendered outside the game into PNGs, every page at a screen size (the menu's
+# scale follows the height), on a hidden window's device (development tool).
+add_executable(tmvs_menupreview tools/menupreview.cpp src/menu.cpp src/update.cpp
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp)
+target_include_directories(tmvs_menupreview PRIVATE ${imgui_SOURCE_DIR})
+target_link_libraries(tmvs_menupreview PRIVATE tmvs_clips tmvs_core winhttp shell32)
+# The menu and ImGui as the plugin builds them; the tool itself at /W4.
+target_compile_options(tmvs_menupreview PRIVATE /EHsc /permissive- /utf-8)
+set_source_files_properties(tools/menupreview.cpp PROPERTIES COMPILE_OPTIONS /W4)
+
 # settings.ini writer test: the same bytes as WritePrivateProfileString, in one write (development tool).
 add_executable(tmvs_initest tools/initest.cpp)
 target_link_libraries(tmvs_initest PRIVATE tmvs_core)
@@ -258,6 +503,12 @@ target_compile_options(tmvs_initest PRIVATE ${TMVS_OPTIONS})
 add_executable(tmvs_aqtest tools/aqtest.cpp src/autoquality.cpp)
 target_link_libraries(tmvs_aqtest PRIVATE tmvs_core)
 target_compile_options(tmvs_aqtest PRIVATE ${TMVS_OPTIONS})
+
+# Main camera test: Sunrise's view into a texture is not the main camera, the pipeline keeps one size
+# (src/maincamera.h; development tool).
+add_executable(tmvs_maincameratest tools/maincameratest.cpp)
+target_include_directories(tmvs_maincameratest PRIVATE src)
+target_compile_options(tmvs_maincameratest PRIVATE ${TMVS_OPTIONS})
 
 # Share code test: every preset round-trips, garbage is refused, the clipboard (development tool).
 add_executable(tmvs_sharetest tools/sharetest.cpp)
@@ -308,17 +559,87 @@ add_executable(tmvs_capwritertest tools/capwritertest.cpp src/capture.cpp)
 target_link_libraries(tmvs_capwritertest PRIVATE tmvs_core)
 target_compile_options(tmvs_capwritertest PRIVATE ${TMVS_OPTIONS})
 
+# --- TMVS 2.0 tests ------------------------------------------------------------------------------
+# Module test: the four plugins and tmvs-core.dll loaded by a fake Horizon Host on a D3D9 device in a
+# hidden window, one child process per scenario (load/unload, panels, hotkeys, settings, Reset, Capture
+# without TMVS, exclusivity with the standalone DLL). Writes only under its own folder (development tool).
+add_executable(tmvs_moduletest tools/moduletest.cpp
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp)
+target_include_directories(tmvs_moduletest PRIVATE ${imgui_SOURCE_DIR} third_party/horizon)
+target_compile_definitions(tmvs_moduletest PRIVATE ${TMVS_DEFINITIONS})
+target_compile_options(tmvs_moduletest PRIVATE /EHsc /permissive- /utf-8)
+target_link_libraries(tmvs_moduletest PRIVATE d3d9 shell32)
+set_source_files_properties(tools/moduletest.cpp PROPERTIES COMPILE_OPTIONS /W4)
+add_dependencies(tmvs_moduletest tmvs_modules tm_vibrant_shaders)
+
+# Module logic test: the module states, the settings shared with the standalone, the checkpoint clips'
+# sectors (development tool).
+add_executable(tmvs_modulelogictest tools/modulelogictest.cpp)
+target_link_libraries(tmvs_modulelogictest PRIVATE tmvs_clips tmvs_core)
+target_compile_options(tmvs_modulelogictest PRIVATE ${TMVS_OPTIONS})
+
+# The test tools write their log and data next to them (tools/testenv.cpp), never into the player's
+# Documents\TrackMania\TMVS. Not the two that read the player's own files on purpose (packtest: the
+# resource packs, replaytest: the replays).
+set(TMVS_SANDBOXED_TESTS tmvs_aqtest tmvs_keystest tmvs_inlinehooktest tmvs_initest tmvs_sharetest tmvs_clipstest
+  tmvs_capwritertest tmvs_castertest tmvs_planereadtest tmvs_mp4test tmvs_gbuftest tmvs_loopbacktest tmvs_modulelogictest)
+if(TMVS_MISC_TOOLS)
+  list(APPEND TMVS_SANDBOXED_TESTS tmvs_topviewtest)
+endif()
+foreach(t ${TMVS_SANDBOXED_TESTS})
+  target_sources(${t} PRIVATE tools/testenv.cpp)
+endforeach()
+
+# Horizon menu preview: Horizon Host's own menu (its UI sources from a horizon-host checkout) with the four
+# modules' pages, rendered into PNGs (tools/hzpreview.cpp; development tool). Only with a checkout:
+# HORIZON_HOST_DIR, by default the tmvs-modules worktree (ABI 1.3: opens a page on a given tab) or horizon-host.
+if(NOT DEFINED HORIZON_HOST_DIR)
+  foreach(dir "${CMAKE_CURRENT_SOURCE_DIR}/../../horizon-host-wt-tmvs" "${CMAKE_CURRENT_SOURCE_DIR}/../../horizon-host")
+    if(NOT HORIZON_HOST_DIR AND EXISTS "${dir}/src/host/ui/ui_menu.cpp")
+      get_filename_component(HORIZON_HOST_DIR "${dir}" ABSOLUTE)
+    endif()
+  endforeach()
+endif()
+if(HORIZON_HOST_DIR AND EXISTS "${HORIZON_HOST_DIR}/src/host/ui/ui_menu.cpp")
+  message(STATUS "Horizon menu preview: ${HORIZON_HOST_DIR}")
+  add_executable(tmvs_hzpreview tools/hzpreview.cpp
+    "${HORIZON_HOST_DIR}/src/host/ui/ui_style.cpp"
+    "${HORIZON_HOST_DIR}/src/host/ui/ui_menu.cpp"
+    "${HORIZON_HOST_DIR}/src/host/ui/ui_bar.cpp"
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_dx9.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp)
+  # This repo's ABI header copy first (the fake host's table), Horizon's sources for its UI.
+  target_include_directories(tmvs_hzpreview PRIVATE third_party/horizon ${imgui_SOURCE_DIR} "${HORIZON_HOST_DIR}/src")
+  target_compile_definitions(tmvs_hzpreview PRIVATE ${TMVS_DEFINITIONS} UNICODE _UNICODE HZ_ASSETS="${HORIZON_HOST_DIR}/assets"
+    TMVS_PACKAGING="${CMAKE_CURRENT_SOURCE_DIR}/packaging")
+  file(STRINGS "${HORIZON_HOST_DIR}/src/host/ui/ui.h" TMVS_HZ_SELECT REGEX "selectPanelTab")
+  if(TMVS_HZ_SELECT)
+    target_compile_definitions(tmvs_hzpreview PRIVATE HZ_HAS_SELECT_TAB=1)
+  endif()
+  target_compile_options(tmvs_hzpreview PRIVATE /EHsc /permissive- /utf-8)
+  target_link_libraries(tmvs_hzpreview PRIVATE d3d9 windowscodecs ole32)
+  add_dependencies(tmvs_hzpreview tmvs_modules)
+endif()
+
 # Setup.exe: installs the files next to it (from the release zip) for the ModLoader or into
 # the game folder as d3d9.dll. It deliberately carries no plugin inside itself: a setup with an
 # embedded DLL looks like a dropper to virus scanners.
 add_executable(tmvs_installer WIN32 tools/installer.cpp tools/installer.manifest)
-target_include_directories(tmvs_installer PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(tmvs_installer PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(tmvs_installer PRIVATE ${TMVS_DEFINITIONS} UNICODE _UNICODE)
 target_compile_options(tmvs_installer PRIVATE ${TMVS_OPTIONS})
 target_link_libraries(tmvs_installer PRIVATE shell32 ole32 comctl32 version advapi32)
 set_target_properties(tmvs_installer PROPERTIES OUTPUT_NAME "TM-Vibrant-Shaders-Setup")
 
-# Release: cmake --build build --config Release --target release_zip
+# Release: cmake --build build --config Release --target release_zip (both products of this version)
+#   dist/TMVS-<modules version>-horizon.zip  the four Horizon modules (horizon_zip above)
 #   dist/TM-Vibrant-Shaders.zip
 #     TM Vibrant Shaders/                 the ModLoader product folder (also the setup's source)
 #       description.yaml
@@ -345,7 +666,9 @@ add_custom_target(release_zip
           ${CMAKE_COMMAND} -E tar cf "${TMVS_DIST}/TM-Vibrant-Shaders.zip" --format=zip
           "TM Vibrant Shaders" "TM-Vibrant-Shaders-Setup.exe" "d3d11.dll" "README.txt" "LICENSE.txt" "THIRD_PARTY_NOTICES.txt"
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tm_vibrant_shaders> "${TMVS_DIST}/"
+  # The same core as Horizon modules: dist/TMVS-<modules version>-horizon.zip (horizon_zip's steps)
+  ${TMVS_HORIZON_COMMANDS}
   COMMAND ${CMAKE_COMMAND} -DDIR=${TMVS_DIST} -P "${CMAKE_CURRENT_SOURCE_DIR}/packaging/sha256sums.cmake"
-  DEPENDS tm_vibrant_shaders tmvs_installer
+  DEPENDS tm_vibrant_shaders tmvs_installer tmvs_modules
   COMMENT "Packaging dist/TM-Vibrant-Shaders.zip"
   VERBATIM)

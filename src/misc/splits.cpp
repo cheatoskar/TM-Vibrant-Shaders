@@ -279,9 +279,15 @@ Reference fromReplay(const Replay& replay, const char* label) {
     return r;
 }
 
+// The comparison in use: TM Nations ESWC has only your best (its maps are not on TMX, its ghosts'
+// checkpoint times are not read, and the replay files found are Nations Forever's).
+int compareMode() {
+    return engine::legacy() ? static_cast<int>(kCompareBest) : settings().splitCompare;
+}
+
 // What the run is compared with now.
 Reference reference() {
-    switch (settings().splitCompare) {
+    switch (compareMode()) {
     case kCompareRecord:
         if (!g.record.checkpoints.empty()) return fromReplay(g.record, "record");
         return fromBest(tmx::knownMissing(g.uid) ? "not on TMX" : (tmx::status().state == tmx::State::Busy ? "fetching the record" : (g.recordNote.empty() ? "no record yet" : "record not readable")));
@@ -470,7 +476,7 @@ void update() {
     const void* map = engine::currentMap();
     if (map != g.map) newMap(map);
     // The record: fetched by itself (once per map, never twice; tmx.cpp throttles), loaded when there.
-    if (settings().splits && settings().splitCompare == kCompareRecord && !g.uid.empty() && g.record.checkpoints.empty()) {
+    if (settings().splits && compareMode() == kCompareRecord && !g.uid.empty() && g.record.checkpoints.empty()) {
         tmx::want(g.uid);
         const tmx::Status t = tmx::status();
         if (t.state == tmx::State::Done && t.uid == g.uid && !t.file.empty() && t.file != g.triedRecord) {
@@ -478,8 +484,9 @@ void update() {
             loadReplay(t.file, true);
         }
     }
-    // Your replays of this map: their sectors count for your best sectors (once per map).
-    if (settings().splits && !g.uid.empty()) {
+    // Your replays of this map: their sectors count for your best sectors (once per map). Not in TM
+    // Nations ESWC (the replays read are Nations Forever's).
+    if (settings().splits && !g.uid.empty() && !engine::legacy()) {
         if (!g_scanned) startScan();
         startSectorsJob();
         SectorsJob job;
@@ -955,10 +962,14 @@ void drawPage() {
     Settings& s = settings();
     bool changed = false;
     static const char* const kCompare[] = {"Record (TMX, auto)", "Ghost in the race", "My best", "Replay file"};
-    changed |= ImGui::Combo("Compare with", &s.splitCompare, kCompare, 4);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Record: the map's world record from TMX, downloaded once per map.\n"
-                          "Ghost: the fastest ghost you race against.\nWithout one: your best.");
+    if (engine::legacy()) {
+        ImGui::TextDisabled("Compare with: my best");
+    } else {
+        changed |= ImGui::Combo("Compare with", &s.splitCompare, kCompare, 4);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Record: the map's world record from TMX, downloaded once per map.\n"
+                              "Ghost: the fastest ghost you race against.\nWithout one: your best.");
+        }
     }
     if (g.uid.empty()) {
         ImGui::TextDisabled("Open a map.");
@@ -979,13 +990,13 @@ void drawPage() {
         }
     }
     const tmx::Status t = tmx::status();
-    if (s.splitCompare == kCompareRecord) {
+    if (compareMode() == kCompareRecord) {
         if (!g.record.checkpoints.empty()) ImGui::TextDisabled("Record: %s", g.recordNote.c_str());
         else if (!g.recordNote.empty()) ImGui::TextDisabled("Record: %s", g.recordNote.c_str()); // downloaded, but not readable
         else if (tmx::knownMissing(g.uid)) ImGui::TextDisabled("Record: not on TMX");
         else if (t.uid == g.uid && !t.message.empty()) ImGui::TextDisabled("Record: %s", t.message.c_str());
     }
-    if (s.splitCompare == kCompareReplay) {
+    if (compareMode() == kCompareReplay) {
         if (!g.fileNote.empty()) ImGui::TextDisabled("Replay: %s", g.fileNote.c_str());
         // Your replays of this map.
         if (!g_scanned) startScan();

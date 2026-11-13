@@ -143,9 +143,11 @@ int bits(unsigned m) {
     return (m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1);
 }
 
+bool g_hostOwned = false;
+
 Action resolveWith(unsigned vk, unsigned held, bool typing) {
     ensure();
-    if (!vk || (typing && !isF(vk))) return Action::Count;
+    if (!vk || (typing && !isF(vk)) || g_hostOwned) return Action::Count;
     Action best = Action::Count;
     int bestBits = -1;
     for (int i = 0; i < kCount; i++) {
@@ -408,6 +410,14 @@ void push(Action a) {
     g_lastPress = GetTickCount();
 }
 
+void setHostOwned(bool owned) {
+    g_hostOwned = owned;
+}
+
+bool hostOwned() {
+    return g_hostOwned;
+}
+
 DWORD polledAt(unsigned vk) {
     return vk < 256 ? g_polledAt[vk] : 0;
 }
@@ -427,7 +437,18 @@ bool used(unsigned vk) {
     return false;
 }
 
+bool g_shiftOnce = false; // pushShifted: the next shiftHeld() says yes
+
+void pushShifted(Action a) {
+    g_shiftOnce = true;
+    push(a);
+}
+
 bool shiftHeld() {
+    if (g_shiftOnce) {
+        g_shiftOnce = false;
+        return true;
+    }
     return gameHasFocus() && GetAsyncKeyState(VK_SHIFT) < 0;
 }
 

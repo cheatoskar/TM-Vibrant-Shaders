@@ -110,6 +110,26 @@ the surface's, which must equal what `VideoStreamOpen` returns (rounded to 8), s
 always has the video's size. A size that isn't a multiple of 8 on the first frame would fail the
 open (inferred from the compare).
 
+## The 2006 engine: TrackMania Nations ESWC, Sunrise, Original (1.6)
+
+Static analysis of the three community exes (2026-11-12); the same code in all three, other offsets. What
+TMVS 1.6 uses is read only, once a frame (`engine.cpp`, `legacyVideoExport`): no hook on the export, the
+game writes its own AVI.
+
+| | ESWC | Sunrise | Original |
+|---|---|---|---|
+| the shooter (one per export, from the dialog's OK to its final message) | app +0x12c, vtable 0x00af5570 | app +0x11c, vtable 0x00a4ff00 | app +0x11c, vtable 0x00a4bbc0 |
+| its fiber (resumed once per game update) | 0x007bd060 | 0x008b7860 | 0x008b4330 |
+| viewport: video output requested / stream open / write this frame / close | +0x4a8 / +0x4b4 / +0x4ac / +0x4b0 | +0x4f4 / +0x500 / +0x4f8 / +0x4fc | as Sunrise |
+| the core (its fixed tick) | 0x00c961a8 | 0x00b8b4f8 | 0x00b86758 |
+
+- **Settings** (ints the shooter copied from the dialog): sound +0x20, clip start / now / end +0x24 / +0x28 / +0x2c (ms), fps +0x40, width +0x44, height +0x48 (rounded up to 16), high quality +0x4c, its AA level +0x50, motion blur +0x54. Supersampling: n = AA + 1 samples a side, at most 5 (TMNF 11); motion blur makes them sub-frames when n n >= 9, otherwise the n n samples are rendered inside one frame.
+- **The clock**: during the frames the core's fixed tick steps the game, +0x40 ms and +0x44 / 2^31 ms per update (TMNF +0x38 / +0x3c), its tick at +0x80; 0 when off. The clip's time is the shooter's +0x28, advanced by the update's delta.
+- **The write**: `RenderFrameEnd` (the mod's frame end callback runs first) reads the viewport's colour surface back when the write flag is set, converts it to bottom-up 24-bit BGR and hands it to the AVI stream object (viewport +0x134; VideoOpen / VideoWrite: ESWC 0x007d2340 / 0x007d2650, Sunrise 0x0075ba30 / 0x0075bd40, Original 0x0075a8d0 / 0x0075abe0). So the AVI holds the mod's picture. Present only for written frames, as in TMNF.
+- **The sound**: no OpenAL in these games: the sound pass records the default recording device with DirectSound capture (the audio port's SetIsCapturing, ESWC 0x009551d0), in real time after the frames; skipped when the dialog's sound is off.
+
+What 1.6 does with it: *Best export quality* works there (full quality, no auto quality, TAA off with the game's samples, the effects on the video's clock), the clips pause during the export. The mod's own MP4 (1.6; *Video format* on the *Video* page, *Game's AVI* gives the game's file): the stream object is TMNF's `CVisionVideoAvi` (the same eight bytes, the same 0x64-byte state with the BITMAPINFOHEADER at +0x0c and the frame index at +0x40), so TMNF's six detours are inline hooks on the six methods (create the file, VideoOpen, VideoWrite, AudioOpen, AudioWrite, Close; all six or none, each behind its first bytes) and `src/videofile.cpp` writes the MP4 as on Forever. Differences: VideoOpen rounds the size up to 16 (TMNF 8), so the detour hands back the 16-rounded size; the game's frames go in (VideoOwnFrames is not used there: the per-sample lens and camera reads of the supersampling, the CSceneFxSuperSample fields, were not mapped); and the sound. The sound pass records the default recording device with DirectSound capture (no OpenAL, so `src/soundcapture.cpp` has nothing to redirect): the export prepares WASAPI process loopback (`src/loopback.cpp`) when the file is made, starts it at the game's AudioOpen (right after the game starts its capture, 1 s into the replayed clip) and puts, for each AudioWrite, as many frames of the loopback as the game wrote of its recording into the MP4. So the length and the start stay the game's; the game's output latency is not measured there (TMNF's test tone runs through OpenAL), the sound may lag the picture by it (tens of ms). The .avi keeps the game's recording and is deleted when the MP4 is complete. Open: a PC without any recording device. The game's capture fails there; whether it still calls AudioOpen and AudioWrite (then the MP4 has the loopback's sound anyway) is not known. If not, DirectSoundCaptureCreate8 would need a stand-in device as TMNF's OpenAL capture has.
+
 ## The sound pass
 
 After the stepped frames (state 0x162) DoShoot disables the high quality, restores the size and, when

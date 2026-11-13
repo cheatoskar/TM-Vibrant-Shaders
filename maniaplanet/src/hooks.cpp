@@ -19,6 +19,9 @@
 #include "thumbnails11.h"
 #include "photo11.h"
 #include "maplook.h"
+#include "game.h"
+#include "gamecamera.h"
+#include "splits11.h"
 #include "shaderdb.h"
 #include "softshadow.h"
 #include "water11.h"
@@ -753,6 +756,8 @@ void takeCamera(ID3D11DeviceContext* ctx) {
     const bool was = g_camera.valid;
     decodeCamera(g_camera);
     g_cameraThisFrame = g_camera.valid;
+    // What the game camera's FovRect did to this frame's projection (zoom, tiles, TAA jitter).
+    if (g_camera.valid) gamecamera::observe(g_camera.projection);
     // The lighting pass's own constants (pixel slot 13): the sun exactly as the engine lights with it.
     ID3D11Buffer* pcb = nullptr;
     ctx->PSGetConstantBuffers(13, 1, &pcb);
@@ -930,6 +935,8 @@ bool replaceToneMap(ID3D11DeviceContext* ctx) {
     view.time = effectTime();
     view.photo = photo::active();
     view.video = videoExporting();
+    view.replay = game::replayEditor();
+    if (view.camera) gamecamera::jitterUv(g_camera.projection, view.jitter);
     photo::focusPoint(view.focus);
     // Compare split with a preset: its side first (only its half of the target), then yours on
     // the other half. If the preset's renderer can't run, yours draws all of it with the game's
@@ -982,6 +989,99 @@ bool hideInterfaceDraw(ID3D11DeviceContext* ctx) {
     return !readsResource(ctx, f.postImage);
 }
 
+// Hide car (photo mode, TMNF's switch): the cars' own draws, by their shaders (Tech3/CarSkin_*,
+// CarDetails_*, CarGlass_*, PeelDepthDiffuse_Car and the Techno3 car materials: the G-buffer, the
+// second lighting pass, the glass, the reflection renders), and the shadow-map draws (Engines/ZOnly)
+// that bind a car's vertex constants (its ObjectV at b0, learnt from its own draws). Every car:
+// ghosts and other players' too, as in TMNF. Skipping draws changes nothing in the game's memory.
+std::unordered_map<ID3D11Buffer*, int> g_carVsBuffers; // b0 of the cars' draws (value unused)
+
+bool hiddenCarDraw(ID3D11DeviceContext* ctx, const char* name) {
+    if (!name) return false;
+    const bool car = !strncmp(name, "Tech3/Car", 9) || !strncmp(name, "Techno3/Tech3 Car", 17) ||
+                     !strcmp(name, "Tech3/PeelDepthDiffuse_Car_p");
+    const bool zOnly = !strncmp(name, "Engines/ZOnly", 13);
+    if (!car && !zOnly) return false;
+    ID3D11Buffer* cb = nullptr;
+    ctx->VSGetConstantBuffers(0, 1, &cb);
+    // Only a buffer of a skinned car's size (its bones: the game's is 2368 bytes): a buffer the
+    // engine shared with every object would take every shadow away.
+    if (cb) {
+        D3D11_BUFFER_DESC d;
+        cb->GetDesc(&d);
+        if (d.ByteWidth <= kScenePSize || d.ByteWidth > kObjectVCarSize) {
+            cb->Release();
+            cb = nullptr;
+        }
+    }
+    bool skip = car;
+    if (car && cb) {
+        if (g_carVsBuffers.size() > 256) g_carVsBuffers.clear();
+        g_carVsBuffers[cb] = 1;
+    } else if (zOnly && cb) {
+        skip = g_carVsBuffers.count(cb) != 0;
+    }
+    if (cb) cb->Release();
+    static int logged[2] = {};
+    if (skip && logged[zOnly ? 1 : 0]++ == 0)
+        TMVS_LOG("hooks: Hide car: %s skipped (%s)", zOnly ? "a shadow draw with a car's vertex constants" : "the cars' draws", name);
+    return skip;
+}
+
+// Photo mode's hi-res photo: the engine's exposure (the tone map's 2x2 t1) frozen at the first tile,
+// so every tile is exposed the same (the engine adapts it to what each tile shows). Bound in its
+// place for the engine's tone map and the mod's HDR stage alike.
+struct FrozenExposure {
+    ID3D11Texture2D* tex = nullptr;
+    ID3D11ShaderResourceView* srv = nullptr;
+    void release() {
+        if (srv) srv->Release();
+        if (tex) tex->Release();
+        srv = nullptr;
+        tex = nullptr;
+    }
+};
+FrozenExposure g_frozenExposure;
+
+void freezeExposure(ID3D11DeviceContext* ctx) {
+    if (!photo::tiling()) {
+        g_frozenExposure.release();
+        return;
+    }
+    if (!g_frozenExposure.srv) {
+        ID3D11ShaderResourceView* in = nullptr;
+        ctx->PSGetShaderResources(1, 1, &in);
+        if (!in) return;
+        ID3D11Resource* res = nullptr;
+        in->GetResource(&res);
+        ID3D11Texture2D* src = nullptr;
+        if (res) res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&src));
+        if (src) {
+            D3D11_TEXTURE2D_DESC d;
+            src->GetDesc(&d);
+            D3D11_SHADER_RESOURCE_VIEW_DESC sv;
+            in->GetDesc(&sv);
+            d.Usage = D3D11_USAGE_DEFAULT;
+            d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            d.CPUAccessFlags = 0;
+            d.MiscFlags = 0;
+            Inside own;
+            if (d.Width <= 16 && d.Height <= 16 && SUCCEEDED(g_device->CreateTexture2D(&d, nullptr, &g_frozenExposure.tex)) &&
+                SUCCEEDED(g_device->CreateShaderResourceView(g_frozenExposure.tex, &sv, &g_frozenExposure.srv))) {
+                ctx->CopyResource(g_frozenExposure.tex, src);
+                TMVS_LOG("hooks: hi-res photo: the engine's exposure frozen (%ux%u, format %d)", d.Width, d.Height, d.Format);
+            } else {
+                g_frozenExposure.release();
+                TMVS_LOG("hooks: hi-res photo: the engine's exposure can't be frozen (%ux%u, format %d)", d.Width, d.Height, d.Format);
+            }
+            src->Release();
+        }
+        if (res) res->Release();
+        in->Release();
+    }
+    if (g_frozenExposure.srv) ctx->PSSetShaderResources(1, 1, &g_frozenExposure.srv);
+}
+
 // Before a draw of the game on the main context. True: skip the game's draw.
 bool onDraw(ID3D11DeviceContext* ctx) {
     Frame& f = g_frame;
@@ -1008,12 +1108,16 @@ bool onDraw(ID3D11DeviceContext* ctx) {
     }
     if (f.phase == Phase::Scene && f.ps.name && !strcmp(f.ps.name, "Tech3/CarSkin_DefWrite_p") && f.rt && screenSized(f.rtW, f.rtH))
         takeCar(ctx);
+    // Photo mode's Hide car: the cars' draws are skipped (after the car's place was taken above).
+    if (photo::hideCars() && f.phase == Phase::Scene && hiddenCarDraw(ctx, f.ps.name)) return true;
 
     if (role == Role::ToneMap && f.rt && screenSized(f.rtW, f.rtH)) {
         if (capture::active() && !f.toneMapSeen) {
             Inside own; // its read-backs are the mod's, not the game's (VideoWatch)
             capture::onToneMap(g_device, ctx);
         }
+        // A hi-res photo: the exposure of its first tile for every tile (bound at t1).
+        freezeExposure(ctx);
         // The tone map reads the HDR image (t0) and the exposure (t1).
         ID3D11ShaderResourceView* in[2] = {};
         ctx->PSGetShaderResources(0, 2, in);
@@ -1554,6 +1658,36 @@ void logPerf(const Profiler& profiler) {
     since = now;
 }
 
+float halton(int index, int base) {
+    float f = 1.0f, r = 0.0f;
+    for (int i = index; i > 0; i /= base) {
+        f /= static_cast<float>(base);
+        r += f * static_cast<float>(i % base);
+    }
+    return r;
+}
+
+// The game camera for the next frame (gamecamera.cpp, the Game camera option): photo mode's zoom and
+// hi-res tile, and TAA jitter (TMNF's: a different sub-pixel spot every frame, +-half a pixel, from
+// Halton 2, 3). Jitter only while the mod's TAA runs on the whole image: not in a hi-res photo (the
+// tiles must line up), not with the compare split or a check view (the game's side has no TAA to
+// take it out again), not with the effects off. TAA takes the jitter the projection really got.
+void applyGameCamera() {
+    const Options& o = options::current();
+    gamecamera::Want want = photo::cameraWant(o.gameCamera);
+    const tmshaders::Settings& s = g_lookSettings;
+    const bool jitter = o.gameCamera && o.hdrStage && s.enabled && s.taa && s.taaJitter && s.debugView == 0 && g_stats.effectsRan &&
+                        !photo::tiling() && !photo::splitShown() && o.view == View::Normal && g_stats.width > 0 && g_stats.height > 0;
+    if (jitter) {
+        static int s_index = 0;
+        s_index = s_index % 8 + 1;
+        want.offset[0] += (halton(s_index, 2) - 0.5f) * 2.0f / static_cast<float>(g_stats.width);
+        want.offset[1] += (halton(s_index, 3) - 0.5f) * 2.0f / static_cast<float>(g_stats.height);
+        want.jitter = true;
+    }
+    gamecamera::apply(want, o.gameCamera);
+}
+
 // True: the frame isn't shown (its draws went past the mod: the engine's own look, a flash).
 bool onPresent(IDXGISwapChain* sc) {
     if (!g_swapChain) beginWith(sc);
@@ -1667,6 +1801,10 @@ bool onPresent(IDXGISwapChain* sc) {
     }
     // The map's own look (the Author's Shader in its comments), before the next frame's look.
     maplook::tick();
+    // Replays (the replay editor open) for "only in replays"; the game camera for the next frame.
+    game::tick();
+    splits::tick();
+    applyGameCamera();
     prepareLook();
 
     // Next frame. The bound targets stay as the game left them.
@@ -1728,6 +1866,7 @@ HRESULT STDMETHODCALLTYPE resizeBuffersDetour(IDXGISwapChain* sc, UINT count, UI
         releaseShadow();
         lights::release();
         water::release();
+        g_frozenExposure.release();
         g_isSceneV.clear();
         g_frame = Frame{};
         TMVS_LOG("hooks: ResizeBuffers %ux%u", w, h);
@@ -1798,6 +1937,10 @@ Effects* effects() {
 
 const char* autoQualityReduced() {
     return g_autoQuality.reducedCount() ? g_autoQuality.summary() : nullptr;
+}
+
+bool videoExport() {
+    return videoExporting();
 }
 
 void onDevice(ID3D11Device* device) {

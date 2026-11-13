@@ -1,9 +1,12 @@
 #include "overlay.h"
+#include "modules/modules.h"
 #include "menu.h"
 #include "autoquality.h"
+#include "clips/clips.h"
 #include "config.h"
 #include "engine.h"
 #include "hook.h"
+#include "horizon.h"
 #include "keys.h"
 #include "pipeline.h"
 #include "log.h"
@@ -45,6 +48,10 @@ Status g_status;
 // frame: it takes the mouse over it, also with the menu closed.
 bool g_splitBar = false;
 bool g_photoPanel = false; // photo mode's panel is on screen this frame (it takes the mouse over itself)
+// Horizon Host's menu is open (and the switch says to give way): nothing of ours is drawn, our ImGui
+// takes no input, and only the effects key works. The menu's own state (open, page, windows) stays as
+// it is and comes back when Horizon's menu closes. Set once a frame by draw().
+bool g_horizonHides = false;
 
 // Sharing the mouse with the other mod that hooks this window (100% TMX + Bingo). The property's
 // value is the HMODULE of the mod that wants the mouse right now; whoever finds it taken by a mod
@@ -246,10 +253,9 @@ void drawPhotoPanel() {
     ImGui::PopItemWidth();
     if (ImGui::Button("Clear focus")) photo::clearFocus();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to automatic focus. Middle click in the picture sets it.");
-    // TM Nations ESWC: no hooks for the car's draws, the editor or the interface (photos never
-    // include the HUD anyway).
-    if (!engine::eswc()) {
-        if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
+    if (ImGui::Checkbox("Hide car", &config.photoHideCar)) config.markDirty();
+    // The 2006 engine: no hooks for the editor or the interface (photos never include the HUD anyway).
+    if (!engine::legacy()) {
         if (ImGui::Checkbox("Hide editor", &config.photoHideEditor)) config.markDirty();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The replay editor's panels (the game's Tab key); the 3D view fills the screen.");
         if (ImGui::Checkbox("Hide HUD", &config.photoHideHud)) config.markDirty();
@@ -285,7 +291,15 @@ void handleHotkeys() {
     Config& config = Config::get();
     const bool typing = g_initialized && config.showOverlay && ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput;
     keys::poll(typing);
-    if (keys::take(keys::Action::Menu)) {
+    if (g_horizonHides) {
+        // The keys of things that would draw over Horizon's menu, or that only make sense with ours,
+        // wait until it closes (dropped, not kept for later). Capture, Reload and Trace too: plugin.cpp
+        // takes them after this.
+        for (keys::Action a : {keys::Action::Menu, keys::Action::Photo, keys::Action::PhotoSplit, keys::Action::PhotoPanel,
+                               keys::Action::Capture, keys::Action::Reload, keys::Action::Trace})
+            keys::take(a);
+    }
+    if (keys::take(keys::Action::Menu) && !modules::hosted()) { // TMVS 2.0 as Horizon modules: Horizon's menu only
         config.showOverlay = !config.showOverlay;
         g_menuWhy = "its key";
     }
@@ -317,7 +331,15 @@ bool ours(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         return false;
     }
-    if (keys::capturing() && !config.showOverlay) keys::cancelCapture(); // the menu was closed meanwhile
+    if (keys::capturing() && (!config.showOverlay || g_horizonHides)) keys::cancelCapture(); // the menu was closed or hidden meanwhile
+    if (g_horizonHides) {
+        if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && !(lparam & (1 << 30)) &&
+            keys::resolve(static_cast<unsigned>(wparam), false) == keys::Action::Effects) {
+            hotkeyMessage(static_cast<unsigned>(wparam), keys::Action::Effects, lparam);
+            return true;
+        }
+        return false;
+    }
     // The menu's "Change" button waits for the next key: nothing else sees it (not the hotkeys,
     // not the menu, not the game's window procedure). Esc cancels; the game's Esc is held back
     // the way it is for closing the menu.
@@ -608,23 +630,21 @@ void drawStatusLine(IDirect3DDevice9* device) {
     ImGui::PopStyleVar(4);
 }
 
-// TrackMania Nations ESWC (engine::eswc): the 2006 engine, hooked for its frame and cameras only.
-// What needs the map, the race, the car, replays, the video export, the game's materials or its
-// light is not shown (nothing there would happen); the rest works as in Nations Forever.
-static bool eswcSupports(const Field& f) {
+// The 2006 engine (engine::legacy: TrackMania Nations ESWC, Sunrise, Original), hooked for its frame
+// and cameras, its map loads, and its race and local car read once a frame. What needs the video
+// export, the game's materials or its light is not shown (nothing there would happen); the rest works
+// as in Nations Forever.
+static bool legacySupports(const Field& f) {
     static const char* const kHidden[] = {
-        // the car (position, axes, speed): no race hook
-        "NeonTrail", "TrailColor", "TrailWidth", "TrailTyres", "TrailDuration", "TrailKeepRuns", "Spray", "WaterSplash", "CarHeadlights",
-        "CarHeadlightRange", "CarHeadlightBeam",
-        // replays and the video export: no clip player, no export
-        "MotionBlur", "CinematicOnlyInReplays", "VideoCodec", "VideoQuality", "Video10Bit", "VideoBitrate", "VideoEncoder", "VideoFfmpegPreset",
-        "VideoExportBest", "VideoOwnFrames", "VideoShutter", "VideoLensDof", "VideoGrain", "VideoAspect", "VideoHdr", "VideoHdrPeak",
-        "VideoHdrWhite",
-        // the map's light and weather, the game's FX, its materials and shaders, the block order, map loads
-        "GameNight", "EngineMoon", "GameSkyClouds", "DisableGameFX", "GameMaterials", "GameGBuffer", "GameLight", "CasterShadows",
-        "CasterAlphaTest", "OverlapFix", "ToneCurve",
-        // no water in its Stadium; without the game's materials grey road was taken for water
-        "WaterSurfaces", "WaterClarity", "CleanWater", "WaterFarReflections"};
+        // the video export: the MP4 gets the game's frames (with the mod's picture), not the mod's own float
+        // frames (those need the supersampling's per-sample camera, not read there): no HDR blend, HDR10,
+        // shutter, lens depth of field or grain
+        "VideoOwnFrames", "VideoShutter", "VideoLensDof", "VideoGrain", "VideoHdr", "VideoHdrPeak", "VideoHdrWhite",
+        // the map's light and weather, the game's FX, its materials and shaders, the block order
+        "GameNight", "EngineMoon", "GameSkyClouds", "DisableGameFX", "GameMaterials", "GameGBuffer", "GameLight", "OverlapFix", "ToneCurve",
+        // no water in its Stadium (no water blocks, only the grass zone); without the game's materials
+        // grey road was taken for water
+        "WaterSurfaces", "WaterClarity", "CleanWater", "WaterFarReflections", "WaterSplash"};
     if (!strncmp(f.key, "Vr", 2)) return false; // the VR mod is TMNF's
     for (const char* key : kHidden) {
         if (!strcmp(f.key, key)) return false;
@@ -632,14 +652,15 @@ static bool eswcSupports(const Field& f) {
     return true;
 }
 
-static void eswcHost(menu::Host& host) {
+static void legacyHost(menu::Host& host) {
     host.resourcePacks = nullptr; // no mod packs hook
-    host.miscPage = nullptr;      // minimap, splits, finish effects: no race hooks
     host.vrState = nullptr;
-    host.photoHideCar = false;
-    host.photoGameHooks = false;
-    host.supports = eswcSupports;
-    host.tips.push_back({"DepthOfField", "Blurs what is in front of and behind the point in focus. In TM Nations ESWC only in photo mode."});
+    host.photoHideCar = true;     // the game's own visible bit of each car (engine.cpp, legacyHideCars)
+    host.photoHideEditor = false; // no hook on the replay editor's panels
+    host.photoAutoMode = false;   // no hook on its free camera
+    host.photoHideHud = false;    // nor on its interface (photos never include the HUD anyway)
+    host.miscMinimap = false;     // split times and finish effects only (misc.cpp)
+    host.supports = legacySupports;
 }
 
 static ExternalTarget* g_ext = nullptr;
@@ -657,10 +678,105 @@ bool takeExternalFrame() {
 }
 void pollHotkeys() { handleHotkeys(); }
 
+// The pipeline's GPU timings for the Performance page.
+struct Timings : menu::PassTimings {
+    const Pipeline* p = nullptr;
+    int count() const override { return p->passCount(); }
+    const char* name(int pass) const override { return Pipeline::passName(pass); }
+    float time(int pass) const override { return p->passTime(pass); }
+    float total() const override { return p->totalTime(); }
+} g_timings;
+
+// What the menu's pages get from this game (the F8 menu, and a page shown in Horizon's menu).
+void fillHost(menu::Host& host, IDirect3DDevice9* device, bool capturing) {
+    g_timings.p = g_status.pipeline;
+    host.depthAvailable = g_status.depthAvailable;
+    host.engineHooks = g_status.engineHooks;
+    host.sunKnown = g_status.sunKnown;
+    memcpy(host.sunDirection, g_status.sunDirection, sizeof(host.sunDirection));
+    host.shaderError = g_status.shaderError;
+    host.timings = g_status.pipeline ? &g_timings : nullptr;
+    host.picture = [device](const std::string& preset) {
+        return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::get(device, preset)));
+    };
+    host.icon = [device](int size) { return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::icon(device, size))); };
+    const AutoQuality* aq = g_status.autoQuality;
+    host.autoQualityReduced = [aq]() -> const char* { return aq && aq->reducedCount() ? aq->summary() : nullptr; };
+    host.mapComments = [](std::string& comments) { return engine::currentMapComments(comments); };
+    host.setMapComments = [](const std::string& comments) { return engine::setCurrentMapComments(comments); };
+    host.fNumber = [](float dof) { return photo::fNumber(dof); };
+    host.splitOn = &photo::splitOn();
+    host.splitPosition = &photo::splitPosition();
+    host.splitSwapped = &photo::splitSwapped();
+    host.splitPreset = &photo::splitPreset();
+    host.photoHideCar = true;
+    host.photoOn = [] {
+        if (!photo::active()) photo::toggle();
+    };
+    host.supports = [](const Field& f) {
+        if (!strncmp(f.key, "Vr", 2)) return hook::handedOver(); // only with the VR mod
+        return strcmp(f.key, "ToneCurve") != 0;                    // ManiaPlanet only
+    };
+    g_packs.device = device;
+    host.resourcePacks = &g_packs;
+    if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
+    host.clipsPanel = [] { clips::drawRecording(); };
+    host.clipsSaving = [] { clips::drawSaving(); };
+    host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
+    if (engine::legacy()) legacyHost(host);
+    host.hideDetached = capturing;
+    host.horizon = horizon::found();
+}
+
+IDirect3DDevice9* g_drawDevice = nullptr; // the device draw() last ran on
+
+// Before a page is drawn in Horizon's context: our font atlas (the title font the pages push) must be
+// built and on the GPU. Our own frames build it, but only once something of ours was on screen; a
+// page drawn before that pushed a font of an atlas never built (no ContainerAtlas: a crash in
+// SetCurrentFont, the Horizon menu preview found it). The backend's NewFrame builds it and makes its
+// texture; no frame is begun. Our own context must be current.
+bool readyForHorizon() {
+    if (!g_initialized || !g_drawDevice || !ImGui::GetCurrentContext()) return false;
+    ImGui_ImplDX9_NewFrame();
+    return ImGui::GetIO().Fonts->IsBuilt();
+}
+
+bool drawPageForHorizon(int page, ImFont* titleFont, float uiScale, float room) {
+    if (!g_initialized || !g_drawDevice) return false;
+    menu::Host host;
+    fillHost(host, g_drawDevice, false);
+    host.uiScale = uiScale;
+    host.uiRoom = room;
+    return menu::drawPageForHost(page, host, titleFont);
+}
+
+void abortPageForHorizon() {
+    menu::abortHostDraw();
+}
+
 void draw(IDirect3DDevice9* device) {
     g_drawFrame++;
+    g_drawDevice = device;
     if (!g_initialized) init(device);
+    {
+        const bool hides = Config::get().hideForHorizon && horizon::menuOpen();
+        if (hides != g_horizonHides) {
+            static int s_lines = 0;
+            if (s_lines++ < 100) TMVS_LOG("menu: %s", hides ? "hidden while the Horizon menu is open" : "back (the Horizon menu closed)");
+            // What our ImGui held when it stopped getting messages (a button, a key) is let go, so
+            // nothing sticks when it is back.
+            if (ImGui::GetCurrentContext()) {
+                ImGuiIO& io = ImGui::GetIO();
+                for (int b = 0; b < ImGuiMouseButton_COUNT; b++) io.AddMouseButtonEvent(b, false);
+                io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+                io.ClearInputKeys();
+            }
+        }
+        g_horizonHides = hides;
+    }
     handleHotkeys(); // also without the overlay (Capture, Reload and Trace)
+    // TMVS 2.0 as Horizon modules: the pages are Horizon's panels; the F8 menu and its windows never show.
+    if (modules::hosted()) Config::get().showOverlay = false;
     if (!g_initialized) return;
     {
         // The menu opening and closing, for the log (my report: it closed by itself).
@@ -680,17 +796,27 @@ void draw(IDirect3DDevice9* device) {
     misc::Frame tools;
     tools.device = device;
     tools.menuOpen = menu;
-    tools.hide = g_status.hideTools || photo::active();
+    tools.hide = g_status.hideTools || photo::active() || g_horizonHides;
     const bool toolsWanted = misc::wantsOverlay(tools); // once a frame: it also follows the race
+    if (g_horizonHides) {
+        // Nothing of ours over Horizon's menu: not the menu, its windows, photo mode's line and panel,
+        // the split's bar, the Misc page's windows, the welcome badge or the clip message.
+        g_splitBar = false;
+        g_photoPanel = false;
+        g_pinned = false;
+        publishMouseOwner(false);
+        removeTop();
+        return;
+    }
     const bool statusLine = statusLineWanted();
     // Detached windows: never in a hi-res photo's tiles or the video export's frames.
     engine::VideoExport exporting;
     const bool capturing = photo::tiling() || engine::videoExport(exporting);
-    const bool pinned = !capturing && menu::pinnedWindows();
+    const bool pinned = !capturing && !modules::hosted() && menu::pinnedWindows();
     g_pinned = pinned && !menu;
     if (!menu) {
         Config::get().previewPreset.clear();
-        if (!*photoHint && !pinned && !toolsWanted && !statusLine) {
+        if (!*photoHint && !pinned && !toolsWanted && !statusLine && !clips::toastActive()) {
             g_splitBar = false;
             g_photoPanel = false;
             publishMouseOwner(false);
@@ -707,51 +833,11 @@ void draw(IDirect3DDevice9* device) {
     ImGui::GetIO().MouseDrawCursor = (menu || pinned || g_splitBar || g_photoPanel) && ImGui::GetIO().WantCaptureMouse && !foreignOwnsMouse(g_hwnd);
     ImGui::NewFrame();
     if (statusLine) drawStatusLine(device);
+    if (clips::toastActive()) clips::drawToast(); // never in a clip: the clip's picture was taken before
     if (toolsWanted) misc::drawOverlay(tools); // before the menu: it stays on top
     if (menu || pinned) {
-        // The pipeline's GPU timings for the Performance page.
-        struct Timings : menu::PassTimings {
-            const Pipeline* p;
-            explicit Timings(const Pipeline* pipeline) : p(pipeline) {}
-            int count() const override { return p->passCount(); }
-            const char* name(int pass) const override { return Pipeline::passName(pass); }
-            float time(int pass) const override { return p->passTime(pass); }
-            float total() const override { return p->totalTime(); }
-        } timings(g_status.pipeline);
         menu::Host host;
-        host.depthAvailable = g_status.depthAvailable;
-        host.engineHooks = g_status.engineHooks;
-        host.sunKnown = g_status.sunKnown;
-        memcpy(host.sunDirection, g_status.sunDirection, sizeof(host.sunDirection));
-        host.shaderError = g_status.shaderError;
-        host.timings = g_status.pipeline ? &timings : nullptr;
-        host.picture = [device](const std::string& preset) {
-            return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::get(device, preset)));
-        };
-        host.icon = [device](int size) { return static_cast<ImTextureID>(reinterpret_cast<intptr_t>(thumbnails::icon(device, size))); };
-        const AutoQuality* aq = g_status.autoQuality;
-        host.autoQualityReduced = [aq]() -> const char* { return aq && aq->reducedCount() ? aq->summary() : nullptr; };
-        host.mapComments = [](std::string& comments) { return engine::currentMapComments(comments); };
-        host.setMapComments = [](const std::string& comments) { return engine::setCurrentMapComments(comments); };
-        host.fNumber = [](float dof) { return photo::fNumber(dof); };
-        host.splitOn = &photo::splitOn();
-        host.splitPosition = &photo::splitPosition();
-        host.splitSwapped = &photo::splitSwapped();
-        host.splitPreset = &photo::splitPreset();
-        host.photoHideCar = true;
-        host.photoOn = [] {
-            if (!photo::active()) photo::toggle();
-        };
-        host.supports = [](const Field& f) {
-            if (!strncmp(f.key, "Vr", 2)) return hook::handedOver(); // only with the VR mod
-            return strcmp(f.key, "ToneCurve") != 0;                    // ManiaPlanet only
-        };
-        g_packs.device = device;
-        host.resourcePacks = &g_packs;
-        if (misc::kAvailable) host.miscPage = [] { misc::drawPage(); };
-        host.vrState = [] { return !hook::handedOver() ? 0 : (hook::observeOnly() ? 1 : 2); };
-        if (engine::eswc()) eswcHost(host);
-        host.hideDetached = capturing;
+        fillHost(host, device, capturing);
         menu::draw(host);
     }
     if (*photoHint) {

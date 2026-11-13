@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 // The video export's encoder: frames in, an MP4 (or whatever the path's extension says for the
 // ffmpeg backend) out, with the sound muxed in at the end.
@@ -78,6 +79,7 @@ struct Options {
     double nvencMaxRate = -1.0; // constant quality: the cap in Mbit/s, 0 = none
     double encoderQ = 0.0;      // > 0: the encoder's own number instead of `quality` (NVENC CQ, x264 / x265 / SVT-AV1 CRF)
     std::wstring ffmpegExtra;   // Backend::Ffmpeg: more encoder options after the mod's own (they win), e.g. L"-preset slow"
+    double gopSeconds = 2.0;    // NVENC direct: a key frame (IDR) this often (the clips cut at key frames: 1 s there)
 };
 
 // Times in milliseconds, summed over all frames (divide by frames for the average).
@@ -169,6 +171,26 @@ struct FfmpegInfo {
     std::string version;
 };
 FfmpegInfo findFfmpeg(const std::wstring& hint = std::wstring());
+
+// An MP4 from pictures encoded already (the clips' ring buffer, src/clips): H.264 or HEVC in Annex B,
+// decode order = display order (no B-frames), each with its own time and length (100 ns units: the
+// frame rate may vary), the first one a key frame. `header`: the parameter sets (SPS / PPS, HEVC: VPS
+// too). The sound (optional): 16-bit PCM from `time` on, encoded to AAC here. Written to a temporary
+// file first, so `path` is either complete or not there. False: `error` says why.
+struct Mp4Picture {
+    const uint8_t* data = nullptr;
+    uint32_t size = 0;
+    int64_t time = 0, duration = 0;
+    bool key = false;
+};
+struct Mp4Sound {
+    WAVEFORMATEX format{};
+    const int16_t* samples = nullptr;
+    size_t frames = 0;
+    int64_t time = 0;
+};
+bool writeMp4(const std::wstring& path, Codec codec, int width, int height, double fps, const std::vector<uint8_t>& header,
+              const std::vector<Mp4Picture>& pictures, const Mp4Sound* sound, std::string& error);
 
 } // namespace venc
 } // namespace tmshaders

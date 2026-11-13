@@ -3,6 +3,7 @@
 #include "capture.h"
 #include "capwriter.h"
 #include "casters.h"
+#include "clips/clips.h"
 #include "perflog.h"
 #include "config.h"
 #include "depth.h"
@@ -11,17 +12,21 @@
 #include "gameshaders.h"
 #include "gfx.h"
 #include "hook.h"
+#include "horizon.h"
 #include "keys.h"
 #include "log.h"
 #include "lut.h"
 #include "misc/misc.h"
 #include "modpack.h"
+#include "modules/modules.h"
 #include "overlay.h"
 #include "pipeline.h"
 #include "autoquality.h"
 #include "blockorder.h"
+#include "maincamera.h"
 #include "photo.h"
 #include "planeread.h"
+#include "proxy.h"
 #include "thumbnails.h"
 #include "tracer.h"
 #include "videofile.h"
@@ -49,6 +54,13 @@ namespace {
 
 HMODULE g_module = nullptr;
 std::wstring g_moduleDir;
+bool g_moduleIsD3d9 = false; // loaded as the game folder's d3d9.dll
+
+// Which product this copy is, for the log and the other copy's (claimInstance).
+const char* ownKind() {
+    if (modules::hosted()) return "Horizon modules (tmvs-core.dll)";
+    return g_moduleIsD3d9 ? "standalone (d3d9.dll)" : "standalone (ModLoader)";
+}
 IDirect3DDevice9* g_device = nullptr;
 unsigned g_frame = 0;
 int g_cameraIndex = 0;
@@ -640,6 +652,7 @@ void loadDevOptions() {
     g_nextCaptureAt = g_dev.captureAt;
     engine::forceShadows(GetPrivateProfileIntW(L"dev", L"ForceShadows", -1, ini));
     engine::shaderCensus(GetPrivateProfileIntW(L"dev", L"LogShaders", 0, ini) != 0);
+    engine::legacyCensus(GetPrivateProfileIntW(L"dev", L"LegacyCensus", 0, ini) != 0);
 }
 
 void runDevAutomation(IDirect3DDevice9* device) {
@@ -698,6 +711,13 @@ void traceMatrix(const char* label, const float* m) {
 // The main 3D camera renders at full back-buffer size with the shadowed depth buffer bound.
 // In races that target is the back buffer; with the engine's own camera effects (menus,
 // replays) it is an offscreen texture that is composited afterwards.
+// TrackMania Sunrise also renders a view into a texture with a depth buffer of its own (512x512
+// every frame, before the main camera; most likely its planar water/mirror reflection, not
+// confirmed in the engine). On the 2006-engine games (ESWC, Sunrise, Original) such views, and any
+// camera smaller than a main camera of the last frames, are not the main camera (maincamera.h).
+// Forever keeps the rule as it was.
+maincamera::SizeHistory g_mainSizes;
+
 bool isMainTarget(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     if (!rt) return false;
     IDirect3DSurface9* ds = nullptr;
@@ -710,7 +730,56 @@ bool isMainTarget(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     }
     if (!readable) return false;
     rt->GetDesc(&rtDesc);
-    return rtDesc.Width == depthDesc.Width && rtDesc.Height == depthDesc.Height && rtDesc.Width >= 320;
+    maincamera::Target t;
+    t.width = rtDesc.Width;
+    t.height = rtDesc.Height;
+    t.depthWidth = depthDesc.Width;
+    t.depthHeight = depthDesc.Height;
+    t.depthReadable = true;
+    t.depthIsScreens = ds != nullptr && ds == depth::surface();
+    if (!maincamera::sameSizeAsDepth(t)) return false;
+    // Forever, and the VR mod's eyes (its own targets, its own switching: processScene): as before.
+    if (!engine::legacy() || hook::eyeProvider()) return true;
+    // The size the views are measured against: the screen, or the video export's frame while it runs.
+    // The export starting, ending or changing its size sets the main camera's size anew.
+    static bool s_exporting = false;
+    static int s_exportWidth = 0, s_exportHeight = 0;
+    if (g_exporting != s_exporting || (g_exporting && (g_export.width != s_exportWidth || g_export.height != s_exportHeight))) {
+        s_exporting = g_exporting;
+        s_exportWidth = g_export.width;
+        s_exportHeight = g_export.height;
+        g_mainSizes.reset();
+    }
+    UINT refWidth = 0, refHeight = 0;
+    if (g_exporting && g_export.width > 0 && g_export.height > 0) {
+        refWidth = static_cast<UINT>(g_export.width);
+        refHeight = static_cast<UINT>(g_export.height);
+    } else if (IDirect3DSurface9* screen = depth::surface()) {
+        D3DSURFACE_DESC screenDesc{};
+        if (SUCCEEDED(screen->GetDesc(&screenDesc))) {
+            refWidth = screenDesc.Width;
+            refHeight = screenDesc.Height;
+        }
+    }
+    const bool view = maincamera::isTextureView(t, refWidth, refHeight);
+    // The export's frames are its own (sub-frames, the sound pass): only the views stay out there.
+    const bool smaller = !view && !g_exporting && !g_mainSizes.accept(t.width, t.height, g_frame);
+    if (!view && !smaller) return true;
+    // Each kind once (a handful of lines: the views keep their size for the map).
+    static std::vector<std::array<UINT, 3>> s_logged;
+    const std::array<UINT, 3> kind = {t.width, t.height, view ? 1u : 0u};
+    if (s_logged.size() < 8 && std::find(s_logged.begin(), s_logged.end(), kind) == s_logged.end()) {
+        s_logged.push_back(kind);
+        if (view)
+            TMVS_LOG("scene: a camera into %ux%u with a depth buffer of its own is a view into a texture (smaller than the %ux%u %s), "
+                     "not the main camera: left as the game draws it",
+                     t.width, t.height, refWidth, refHeight, g_exporting ? "video frame" : "screen");
+        else
+            TMVS_LOG("scene: a camera into %ux%u right after one into %ux%u: the smaller one is not the main camera (the effects stay "
+                     "at %ux%u instead of making their targets again for each)",
+                     t.width, t.height, g_mainSizes.width(), g_mainSizes.height(), g_mainSizes.width(), g_mainSizes.height());
+    }
+    return false;
 }
 
 // World-space direction towards the sun: the look's own (SunElevation) or the game's light.
@@ -966,6 +1035,7 @@ struct RenderScaleState {
 float renderScaleNow(const Settings& s, const char** why) {
     *why = nullptr;
     if (s.renderScale >= 0.99f) return 1.0f;
+    if (!modules::on(modules::kUpscaling)) return 1.0f; // TMVS 2.0 modules: Upscaling off or not loaded
     if (photo::active()) *why = "photo mode";
     else if (g_exporting) *why = "the video export";
     else if (g_captureRequested) *why = "a capture (F12)";
@@ -1604,7 +1674,7 @@ void beginHdr(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     g_gbufLightActive = false;
     g_rs.active = false;
     const Settings& s = Config::get().settings;
-    if (!s.enabled || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
+    if ((!s.enabled && !modules::upscaleOnly(s.renderScale, s.enabled)) || !s.gameHdr || g_hdrGame || !rt || !g_pipeline.ready() || !hdrSupported(device)) return;
     // VR: the VR mod draws the eyes into its own targets. The float target took the camera's image
     // away from them and the headset showed black (jiink's test with Game HDR on); Render scale goes
     // the same way. Both stay off while the VR mod gives eyes.
@@ -2473,7 +2543,10 @@ void processSceneOne(IDirect3DDevice9* device) {
         setUnshadedWhy(why);
         return;
     }
-    if (!settings.enabled && !photo::active() && !g_captureRequested) {
+    // TMVS 2.0 modules: Upscaling without Shaders (or with the effects off) shades nothing but brings
+    // the scaled image up (FSR).
+    const bool upscaleOnly = modules::upscaleOnly(settings.renderScale, settings.enabled);
+    if (!settings.enabled && !photo::active() && !g_captureRequested && !upscaleOnly) {
         if (g_pipelineB.ready()) releaseSideB(); // photo mode ended with the shaders off
         return;
     }
@@ -2908,7 +2981,7 @@ void processSceneOne(IDirect3DDevice9* device) {
     const bool capture = g_captureRequested && (idFrame || !inputs.materials || part) && !scaledPath;
     if (capture) g_captureRequested = false;
     if (capture && !settings.enabled && !inputs.photo) writeCapture(device, inputs, false);
-    if (settings.enabled || inputs.photo) {
+    if (settings.enabled || inputs.photo || (upscaleOnly && scaledPath)) {
         // Auto quality renders a reduced copy; your settings stay untouched.
         Settings effective = settings;
         // The menu points at a preset: show it (it glides in like a chosen one).
@@ -2916,9 +2989,10 @@ void processSceneOne(IDirect3DDevice9* device) {
         smoothLook(effective, effectTime());
         // Photo mode and the video export: full quality, whatever the frame rate.
         if (!inputs.photo && !inputs.video) g_autoQuality.apply(effective);
-        // TM Nations ESWC: its Stadium has no water, and with no material known the water was
-        // guessed from the colour: grey road turned into mirroring water (my test, 2026-11-09).
-        if (engine::eswc()) {
+        // The 2006 engine (ESWC, Sunrise, Original): no material known, so the water was guessed from
+        // the colour: grey road turned into mirroring water (my ESWC test, 2026-11-09; its Stadium has
+        // no water at all, Sunrise's and Original's water isn't known either).
+        if (engine::legacy()) {
             effective.waterSurfaces = 0.0f;
             effective.waterClarity = 0.0f;
         }
@@ -3190,6 +3264,16 @@ void updateJitter() {
 
 void onFrameBegin() {
     tracer::event("## RenderFrameBegin");
+    // The game draws but our CreateDevice hook never saw its device (another mod's or Windows'
+    // hook in the factory's slot when it was made): taken from the game's viewport after 60 frames
+    // (a mod that hands its device over, the VR mod, does so right after creating it).
+    static int s_framesWithoutDevice = 0;
+    if (!hook::hasGameDevice() && !hook::handedOver() && ++s_framesWithoutDevice == 60) {
+        if (void* device = engine::viewportDevice())
+            hook::attachMissedDevice(static_cast<IDirect3DDevice9*>(device), "the game's viewport, 60 frames after the first");
+        else
+            TMVS_LOG("hook: the game draws (60 frames) without a device we know of, and its viewport holds none either");
+    }
     hook::diagFrame();
     photo::beginFrame();
     {
@@ -3294,8 +3378,8 @@ bool g_gameStencil = false;
 
 bool materialsWanted() {
     const Settings& s = Config::get().settings;
-    // TM Nations ESWC: no draw hooks, no material is ever known (the pixels are guessed from, as without the setting).
-    return s.enabled && s.gameMaterials && !g_gameStencil && !engine::eswc();
+    // The 2006 engine: no draw hooks, no material is ever known (the pixels are guessed from, as without the setting).
+    return s.enabled && s.gameMaterials && !g_gameStencil && !engine::legacy();
 }
 
 // The stencil states the tagging changes, as the game had them (given back when it stops).
@@ -3586,8 +3670,14 @@ void castersTick() {
     const Settings& s = Config::get().settings;
     // Not with the effects (F7): switched off to compare, the meshes stay (the recording pauses
     // below, nothing uses the maps) and the shadows are back at once, not rebuilt over seconds.
-    // Not in TM Nations ESWC: no map loads seen, the meshes of the last map would keep casting.
-    const bool on = s.casterShadows && engine::active() && !engine::eswc();
+    const bool on = s.casterShadows && engine::active();
+    // The 2006 engine: no draw's material is known, so the car is told by its place (a car standing
+    // at the start or in a pause would be kept as a static mesh).
+    if (engine::legacy()) {
+        float car[3];
+        if (engine::legacyCarPosition(car)) casters::excludeAround(car, 4.0f);
+        else casters::excludeAround(nullptr, 0.0f);
+    }
     static int s_loads = -1, s_closes = -1, s_removed = -1;
     if (engine::mapLoads() != s_loads || engine::mapCloses() != s_closes) {
         s_loads = engine::mapLoads();
@@ -3638,6 +3728,13 @@ void onCameraEnd(void* camera, const engine::CameraInfo&) {
             fillFromScaled(g_device, target);
             if (target) target->Release();
         }
+        // Clips "Without HUD": the shaded scene, before the game draws its HUD over it.
+        if (clips::wantsScene()) {
+            IDirect3DSurface9* target = nullptr;
+            g_device->GetRenderTarget(0, &target);
+            clips::sceneDone(g_device, target);
+            if (target) target->Release();
+        }
         perflog::mark(g_device, perflog::Mark::ModEnd);
     }
     g_scene.inMainCamera = false;
@@ -3651,8 +3748,69 @@ void onOverlayEnd() {
     tracer::event("## RenderOverlayZones end");
 }
 
+// The F12 capture's screen_NNN.bmp: the final frame (effects + HUD) read back now, written by the
+// capture's writer after the capture's own files.
+void writeScreenshot(IDirect3DDevice9* device, IDirect3DSurface9* backBuffer) {
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+    auto pixels = std::make_shared<capture::Pixels>();
+    bool read = false;
+    try {
+        read = capture::readSurface(device, backBuffer, *pixels);
+    } catch (const std::bad_alloc&) {
+        TMVS_LOG("capture: not enough memory for the screenshot");
+    }
+    QueryPerformanceCounter(&end);
+    // The replay editor: only the 3D view (between its panels), as the capture's own images are.
+    RECT view{};
+    if (read && pixels->pitch == pixels->width * 4 && photo::viewArea(pixels->width, pixels->height, view)) {
+        const size_t w = static_cast<size_t>(view.right - view.left) * 4;
+        std::vector<unsigned char> cut(w * (view.bottom - view.top));
+        for (LONG y = view.top; y < view.bottom; y++)
+            memcpy(&cut[w * (y - view.top)], &pixels->bytes[pixels->pitch * y + static_cast<size_t>(view.left) * 4], w);
+        pixels->bytes.swap(cut);
+        pixels->width = static_cast<UINT>(view.right - view.left);
+        pixels->height = static_cast<UINT>(view.bottom - view.top);
+        pixels->pitch = static_cast<UINT>(w);
+    }
+    if (read) {
+        wchar_t name[64];
+        swprintf(name, 64, L"screen_%03d.bmp", g_screenshotNumber);
+        const std::wstring file = name;
+        const double readMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
+        capwriter::post([pixels, file, readMs] {
+            LARGE_INTEGER writeStart, writeEnd;
+            QueryPerformanceCounter(&writeStart);
+            const bool ok = capwriter::writeVia(log::dataDir() + L"\\" + file,
+                                                [&pixels](const std::wstring& path) { return capture::writeBmp(*pixels, path); });
+            QueryPerformanceCounter(&writeEnd);
+            TMVS_LOG("capture: %s %ls in %.0f ms on the writer thread (read back in %.0f ms on the game's thread)", ok ? "wrote" : "could not write",
+                     file.c_str(), static_cast<double>(writeEnd.QuadPart - writeStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart),
+                     readMs);
+        });
+    }
+}
+
+// The game's frame is finished (HUD included) and about to be presented through its viewport. What
+// reads the whole back buffer reads it here: another mod's Present hook in front of ours (Horizon
+// Host's menu and bar) has drawn nothing yet, nor has our own menu.
+bool g_frameEndThisFrame = false; // this frame's back buffer was read here (until the next Present)
+
 void onFrameEnd() {
     tracer::event("## RenderFrameEnd");
+    // The VR mod draws into its own targets: its frames stay with the Present.
+    if (!g_device || hook::handedOver() || g_device->TestCooperativeLevel() != D3D_OK) return;
+    g_frameEndThisFrame = true;
+    clips::frameEnd(g_device);
+    if (g_screenshotNumber >= 0) {
+        hook::InternalScope internal;
+        IDirect3DSurface9* backBuffer = nullptr;
+        if (SUCCEEDED(g_device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) && backBuffer) {
+            writeScreenshot(g_device, backBuffer);
+            backBuffer->Release();
+        }
+        g_screenshotNumber = -1;
+    }
 }
 
 // --- Device callbacks -------------------------------------------------------
@@ -3721,6 +3879,7 @@ void onPreReset() {
     casters::releaseDevice();
     misc::releaseDevice(); // the minimap's picture from above (default pool)
     depth::onPreReset();
+    clips::preReset();
     overlay::preReset();
 }
 
@@ -3728,6 +3887,7 @@ DWORD g_resetAt = 0; // a device reset, until the first shaded frame after it (t
 
 void onPostReset(IDirect3DDevice9* device) {
     g_resetAt = GetTickCount();
+    g_mainSizes.reset(); // the screen may have another size now
     if (!hook::observeOnly()) depth::onDeviceReady(device); // watch-only: the VR mod's depth buffer stays as it is
     overlay::postReset();
 }
@@ -3845,6 +4005,11 @@ void logDeviceLost(HRESULT coop) {
 void onPresent(IDirect3DDevice9* device) {
     g_device = device;
     g_frame++;
+    // This frame's back buffer was read at the frame end (else everything reads it here, after
+    // Horizon Host drew its interface on it).
+    const bool frameEndRead = g_frameEndThisFrame;
+    g_frameEndThisFrame = false;
+    horizon::tick(GetTickCount());
     // CenterSpeed's menu key is F8 too (keys::centerSpeed). The ModLoader has loaded it by the first
     // frame; once more some seconds later, should it come late.
     if (g_frame == 1 || g_frame == 600) keys::centerSpeed(GetModuleHandleW(L"CenterSpeed.dll") != nullptr);
@@ -3939,6 +4104,23 @@ void onPresent(IDirect3DDevice9* device) {
     g_gameplayLastFrame = g_gameplayThisFrame;
     g_gameplayThisFrame = false;
 
+    // Clips: the picture as the player sees it, before the menu and the mod's windows are drawn
+    // (taken at the frame end when there is one, clips::frameEnd).
+    clips::setPaused(g_exporting || photo::tiling()); // the export's frames, a hi-res photo's tiles
+    // Hosted by Horizon (TMVS 2.0 modules) this runs before Horizon draws: its interface is never on it.
+    clips::setPresentCovered(!modules::hosted() && horizon::uiState() != 0);
+    if (clips::wantsCheckpoints()) {
+        // Checkpoint clips: the race's checkpoint times, read as the Misc page's split times read them.
+        engine::RaceTimes race;
+        if (engine::raceTimes(race)) {
+            clips::raceProgress(race.race, race.passed, race.finished,
+                                race.passed > 0 && race.passed <= race.count ? race.times[race.passed - 1] : -1);
+        } else {
+            clips::raceProgress(nullptr, 0, false, -1);
+        }
+    }
+    clips::present(device);
+
     overlay::Status status;
     status.pipeline = &g_pipeline;
     status.autoQuality = &g_autoQuality;
@@ -3968,50 +4150,13 @@ void onPresent(IDirect3DDevice9* device) {
     }
 
     if (tracer::tracing() || g_screenshotNumber >= 0) {
-        // Screenshot of the final frame (effects + HUD), for checking results in game.
+        // Screenshot of the final frame (effects + HUD), for checking results in game. Taken at the
+        // frame end when there is one (onFrameEnd); here only without it.
         hook::InternalScope internal;
         IDirect3DSurface9* backBuffer = nullptr;
         if (SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer)) && backBuffer) {
             if (g_screenshotNumber >= 0) {
-                // The capture's: read back here, written after the capture's files by its writer.
-                LARGE_INTEGER start, end;
-                QueryPerformanceCounter(&start);
-                auto pixels = std::make_shared<capture::Pixels>();
-                bool read = false;
-                try {
-                    read = capture::readSurface(device, backBuffer, *pixels);
-                } catch (const std::bad_alloc&) {
-                    TMVS_LOG("capture: not enough memory for the screenshot");
-                }
-                QueryPerformanceCounter(&end);
-                // The replay editor: only the 3D view (between its panels), as the capture's own images are.
-                RECT view{};
-                if (read && pixels->pitch == pixels->width * 4 && photo::viewArea(pixels->width, pixels->height, view)) {
-                    const size_t w = static_cast<size_t>(view.right - view.left) * 4;
-                    std::vector<unsigned char> cut(w * (view.bottom - view.top));
-                    for (LONG y = view.top; y < view.bottom; y++)
-                        memcpy(&cut[w * (y - view.top)], &pixels->bytes[pixels->pitch * y + static_cast<size_t>(view.left) * 4], w);
-                    pixels->bytes.swap(cut);
-                    pixels->width = static_cast<UINT>(view.right - view.left);
-                    pixels->height = static_cast<UINT>(view.bottom - view.top);
-                    pixels->pitch = static_cast<UINT>(w);
-                }
-                if (read) {
-                    wchar_t name[64];
-                    swprintf(name, 64, L"screen_%03d.bmp", g_screenshotNumber);
-                    const std::wstring file = name;
-                    const double readMs = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart);
-                    capwriter::post([pixels, file, readMs] {
-                        LARGE_INTEGER writeStart, writeEnd;
-                        QueryPerformanceCounter(&writeStart);
-                        const bool ok = capwriter::writeVia(log::dataDir() + L"\\" + file,
-                                                            [&pixels](const std::wstring& path) { return capture::writeBmp(*pixels, path); });
-                        QueryPerformanceCounter(&writeEnd);
-                        TMVS_LOG("capture: %s %ls in %.0f ms on the writer thread (read back in %.0f ms on the game's thread)", ok ? "wrote" : "could not write",
-                                 file.c_str(), static_cast<double>(writeEnd.QuadPart - writeStart.QuadPart) * 1000.0 / static_cast<double>(g_frequency.QuadPart),
-                                 readMs);
-                    });
-                }
+                writeScreenshot(device, backBuffer);
             } else {
                 capture::saveSurface(device, backBuffer, log::dataDir() + L"\\present.bmp");
             }
@@ -4044,7 +4189,7 @@ void onPresent(IDirect3DDevice9* device) {
     }
     Config::get().tick();
     if (keys::take(keys::Action::Trace)) tracer::arm();
-    if (keys::take(keys::Action::Capture)) {
+    if (keys::take(keys::Action::Capture) && modules::on(modules::kCapture)) {
         // Photo mode: a photo without the HUD (Shift: hi-res) instead of a .tmcap capture.
         if (photo::active()) photo::request(keys::shiftHeld());
         else g_capturePending = true;
@@ -4062,6 +4207,16 @@ void onPresent(IDirect3DDevice9* device) {
             TMVS_LOG("capture: F12 waits until the last capture is written");
         }
     }
+    // Horizon Host: a capture that will read the back buffer at the Present (no frame end here: the
+    // game without engine hooks, the VR mod) would find Horizon's interface on it. The host is asked to
+    // draw nothing from the request on, every frame until it is done. Photos and the F12 screenshot
+    // with the frame end, the clips and the video export never need it (read before Horizon draws).
+    const bool presentCapture = g_captureRequested || g_screenshotNumber >= 0 || photo::pending() || photo::tiling();
+    // Hosted by Horizon (TMVS 2.0 modules): every capture reads before Horizon draws, so its interface is
+    // never in one. Its capture flag still goes on for photo mode and the video export: its bar and the
+    // windows set to "Hide in photos and videos" leave the screen while a photo or video is made.
+    if (modules::hosted()) horizon::capture(presentCapture || photo::active() || g_exporting);
+    else horizon::capture(!frameEndRead && presentCapture);
 }
 
 } // namespace
@@ -4072,7 +4227,10 @@ void setModule(HMODULE module) {
     GetModuleFileNameW(module, path, MAX_PATH);
     g_moduleDir = path;
     size_t slash = g_moduleDir.find_last_of(L"\\/");
-    if (slash != std::wstring::npos) g_moduleDir.resize(slash);
+    if (slash != std::wstring::npos) {
+        g_moduleIsD3d9 = _wcsicmp(g_moduleDir.c_str() + slash + 1, L"d3d9.dll") == 0;
+        g_moduleDir.resize(slash);
+    }
 }
 
 const std::wstring& moduleDir() {
@@ -4155,6 +4313,7 @@ bool nightAtLoad(float dayTime) {
 // game's own texture swap.
 engine::ModPackAnswer modPackAnswer(const engine::ModPackAsk& ask) {
     engine::ModPackAnswer answer;
+    if (!modules::on(modules::kPacks)) return answer; // TMVS 2.0 modules: Packs off or not loaded, the maps' own mods
     const Config& config = Config::get();
     const std::string choice = modpack::choiceFor(config, ask.environment, ask.decoration, answer.note);
     if (choice.empty()) return answer;
@@ -4239,10 +4398,12 @@ void relightOnSwitch(const Settings& s) {
 void bootOnce() {
     QueryPerformanceFrequency(&g_frequency);
     QueryPerformanceCounter(&g_startTime);
-    // TrackMania Nations ESWC: its own log, so a TMNF start doesn't move it to *.prev.log (the
-    // settings and presets in the same folder are shared).
-    if (engine::eswcExecutable()) log::setFileName(L"tmvs-eswc.log");
-    TMVS_LOG("TM Vibrant Shaders %s starting", TM_SHADERS_VERSION_A);
+    // The older games (TrackMania Nations ESWC, Sunrise, Original): each its own log, so a TMNF start
+    // doesn't move it to *.prev.log (the settings and presets in the same folder are shared).
+    if (const wchar_t* name = engine::legacyLogName()) log::setFileName(name);
+    TMVS_LOG("TM Vibrant Shaders %s starting (%s)", TM_SHADERS_VERSION_A, ownKind());
+    TMVS_LOG("exclusive: this copy runs (%s); another copy of TM Vibrant Shaders in this game (the Horizon modules or the "
+             "standalone DLL) stays passive", ownKind());
     loadDevOptions();
     Config::get().load();
     misc::boot();
@@ -4257,6 +4418,14 @@ void bootOnce() {
     engineCallbacks.overlayEnd = onOverlayEnd;
     engineCallbacks.frameEnd = onFrameEnd;
     engine::install(engineCallbacks);
+    // One of the older games, but not its supported exe: nothing is hooked, Direct3D is only passed
+    // on (src/proxy.cpp), the game runs as without the mod.
+    const char* refusal = nullptr;
+    if (engine::exeRefused(&refusal)) {
+        proxy::systemD3D9(); // decides what is passed on to
+        TMVS_LOG("passive: %s; Direct3D is passed on to %s", refusal, proxy::d3d9Source()[0] ? proxy::d3d9Source() : "the system's d3d9.dll");
+        return;
+    }
     engine::setNightAtLoad(nightAtLoad);
     videofile::install();
     videofile::FrameSource frames;
@@ -4293,12 +4462,24 @@ void bootOnce() {
     deviceCallbacks.stretchRects = onStretchRects;
     deviceCallbacks.otherModRenderTarget = onOtherModRenderTarget;
     g_deviceCallbacks = deviceCallbacks;
+    if (modules::hosted()) {
+        // TMVS 2.0 as Horizon modules: Horizon Host's Direct3D hook hands over the device, its Present and
+        // Reset (src/modules/hostbridge.cpp). The clips start with the Capture module (startClips).
+        hook::installHosted(deviceCallbacks);
+        if (HANDLE watch = CreateThread(nullptr, 0, watchForDevice, nullptr, 0, nullptr)) CloseHandle(watch);
+        return;
+    }
     // Never block the caller (possibly the game's main thread) on retries.
     if (!hook::install(deviceCallbacks)) {
         HANDLE thread = CreateThread(nullptr, 0, retryHooks, nullptr, 0, nullptr);
         if (thread) CloseHandle(thread);
     }
     if (HANDLE watch = CreateThread(nullptr, 0, watchForDevice, nullptr, 0, nullptr)) CloseHandle(watch);
+    TMVS_LOG("d3d9: the mod creates its Direct3D 9 with %s", proxy::d3d9Source()[0] ? proxy::d3d9Source() : "nothing yet");
+    // Clips after the device hook: its settings file and the folder scan took 20-30 ms that the
+    // device hook waited for (1.4.3 had none of it before the hook).
+    clips::boot(clips::Host::Tmvs);
+    clips::setInternalCalls(hook::beginInternal, hook::endInternal);
 }
 
 } // namespace
@@ -4311,15 +4492,56 @@ bool claimInstance() {
         CloseHandle(mutex);
         g_passive = true;
     }
+    // Which copy won, for the other one's log (TMVS 2.0: the Horizon modules' tmvs-core.dll and the
+    // standalone DLL are both TM Vibrant Shaders; only one may run): a small named mapping with its kind.
+    if (!g_passive) {
+        swprintf(name, 64, L"Local\\TMVibrantShaders_Owner_%lu", GetCurrentProcessId());
+        if (HANDLE owner = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, 64, name)) { // kept open
+            if (char* text = static_cast<char*>(MapViewOfFile(owner, FILE_MAP_WRITE, 0, 0, 64))) {
+                strncpy_s(text, 64, ownKind(), _TRUNCATE);
+                UnmapViewOfFile(text);
+            }
+        }
+    }
     return !g_passive;
+}
+
+std::string activeOwner() {
+    wchar_t name[64];
+    swprintf(name, 64, L"Local\\TMVibrantShaders_Owner_%lu", GetCurrentProcessId());
+    std::string kind;
+    if (HANDLE owner = OpenFileMappingW(FILE_MAP_READ, FALSE, name)) {
+        if (const char* text = static_cast<const char*>(MapViewOfFile(owner, FILE_MAP_READ, 0, 0, 64))) {
+            kind.assign(text, strnlen(text, 63));
+            UnmapViewOfFile(text);
+        }
+        CloseHandle(owner);
+    }
+    return kind.empty() ? std::string("another copy of TM Vibrant Shaders (1.5 or older)") : kind;
+}
+
+void startClips() {
+    static bool s_started = false;
+    if (s_started || g_passive) return;
+    s_started = true;
+    clips::boot(clips::Host::Tmvs);
+    clips::setInternalCalls(hook::beginInternal, hook::endInternal);
 }
 
 bool active() {
     return !g_passive;
 }
 
+namespace {
+volatile LONG g_bootState = 0; // 0 not started, 1 booting, 2 done
+} // namespace
+
+bool booted() {
+    return g_bootState == 2;
+}
+
 void ensureBooted() {
-    static volatile LONG state = 0; // 0 not started, 1 booting, 2 done
+    volatile LONG& state = g_bootState;
     static DWORD bootThread = 0;
     if (g_passive || state == 2) return;
     if (InterlockedCompareExchange(&state, 1, 0) == 0) {
@@ -4351,6 +4573,8 @@ void boot() {
 }
 
 void shutdown() {
+    horizon::release();
+    clips::shutdown();
     capwriter::shutdown();
     overlay::shutdown();
     audio::shutdown();

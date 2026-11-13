@@ -41,6 +41,11 @@ void load() {
     GetPrivateProfileStringW(L"ManiaPlanet", L"VideoFps", L"30", text, 32, ini.c_str());
     const float fps = static_cast<float>(_wtof(text));
     o.videoFps = fps >= 10.0f && fps <= 240.0f ? fps : 30.0f;
+    o.gameCamera = GetPrivateProfileIntW(L"ManiaPlanet", L"GameCamera", 0, ini.c_str()) != 0;
+    o.splits = GetPrivateProfileIntW(L"Misc", L"Splits", 0, ini.c_str()) != 0;
+    o.session = GetPrivateProfileIntW(L"Misc", L"Session", 1, ini.c_str()) != 0;
+    const int effect = static_cast<int>(GetPrivateProfileIntW(L"Misc", L"FinishEffect", 0, ini.c_str()));
+    o.finishEffect = effect >= 0 && effect <= 2 ? effect : 0;
 }
 
 void save() {
@@ -57,6 +62,11 @@ void save() {
     WritePrivateProfileStringW(L"ManiaPlanet", L"BlackHoleMoon", text, ini.c_str());
     swprintf(text, 32, L"%.0f", o.videoFps);
     WritePrivateProfileStringW(L"ManiaPlanet", L"VideoFps", text, ini.c_str());
+    WritePrivateProfileStringW(L"ManiaPlanet", L"GameCamera", o.gameCamera ? L"1" : L"0", ini.c_str());
+    WritePrivateProfileStringW(L"Misc", L"Splits", o.splits ? L"1" : L"0", ini.c_str());
+    WritePrivateProfileStringW(L"Misc", L"Session", o.session ? L"1" : L"0", ini.c_str());
+    swprintf(text, 32, L"%d", o.finishEffect);
+    WritePrivateProfileStringW(L"Misc", L"FinishEffect", text, ini.c_str());
 }
 
 } // namespace options
@@ -76,6 +86,12 @@ bool setValue(const std::string& key, const std::string& value) {
     else if (!_stricmp(k, "SoftShadows")) o.softShadows = static_cast<float>(atof(value.c_str()));
     else if (!_stricmp(k, "BlackHoleMoon")) o.blackHoleMoon = static_cast<float>(atof(value.c_str()));
     else if (!_stricmp(k, "VideoFps")) o.videoFps = static_cast<float>(atof(value.c_str()));
+    else if (!_stricmp(k, "GameCamera")) o.gameCamera = atoi(value.c_str()) != 0;
+    else if (!_stricmp(k, "PhotoHiRes")) photo::request(true); // Shift+F12 in photo mode, for the test
+    else if (!_stricmp(k, "PhotoHideCar")) config.photoHideCar = atoi(value.c_str()) != 0;
+    else if (!_stricmp(k, "Splits")) o.splits = atoi(value.c_str()) != 0;
+    else if (!_stricmp(k, "Session")) o.session = atoi(value.c_str()) != 0;
+    else if (!_stricmp(k, "FinishEffect")) o.finishEffect = atoi(value.c_str());
     else if (!_stricmp(k, "Enabled")) s.enabled = atoi(value.c_str()) != 0;
     else if (!_stricmp(k, "ShowMenu")) config.showOverlay = atoi(value.c_str()) != 0; // F8, for the test
     else if (!_stricmp(k, "MenuPage")) config.menuPage = atoi(value.c_str());

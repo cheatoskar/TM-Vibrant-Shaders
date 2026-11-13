@@ -54,9 +54,16 @@ struct ResourcePacks {
 struct Host {
     // The Resource packs page (null: no such page, TrackMania 2).
     ResourcePacks* resourcePacks = nullptr;
-    // The Misc page: minimap, split times, finish effects (null: no such page, TrackMania 2 or a build
-    // without TMVS_MISC_TOOLS). Draws the page's content.
+    // The Misc page: minimap, split times, finish effects (null: no such page, a build without
+    // TMVS_MISC_TOOLS). Draws the page's content.
     std::function<void()> miscPage;
+    // ... with the minimap (false: TM Nations ESWC and TrackMania 2, whose Misc page has only the
+    // split times, the Session panel and the finish effects; its tab says so).
+    bool miscMinimap = true;
+    // The instant replay clips (src/clips), the Clips page (null: no such page, TrackMania 2): its
+    // recording settings, and its saving (keys, the last runs, the last clips).
+    std::function<void()> clipsPanel;
+    std::function<void()> clipsSaving;
     // The VR mod (TrackMania Forever OpenXR): 0 not running, 1 running with only the menu in the
     // headset, 2 with the effects in both eyes. Null: this game has none.
     std::function<int()> vrState;
@@ -89,11 +96,20 @@ struct Host {
     std::function<void()> photoOn;
     // TrackMania Nations/United: photo mode can leave the cars out (the *Hide car* switch).
     bool photoHideCar = false;
-    // Photo mode starts with the game's free camera and hides the game's HUD (false: TM Nations
-    // ESWC, which has neither hook: no *Auto photo mode* and *Hide HUD* switches).
-    bool photoGameHooks = true;
+    // ... and its replay editor's panels (the *Hide editor* switch; false: TM Nations ESWC and
+    // TrackMania 2, whose replay editor the mod doesn't hide).
+    bool photoHideEditor = true;
+    // Photo mode can start by itself with the game's free camera (the *Auto photo mode* switch;
+    // false: TM Nations ESWC and TrackMania 2, where that camera isn't hooked).
+    bool photoAutoMode = true;
+    // Photo mode can hide the game's HUD (the *Hide HUD* switch; false: TM Nations ESWC, no hook on
+    // its interface).
+    bool photoHideHud = true;
     // A photo, a capture or the video export is running: no detached windows this frame.
     bool hideDetached = false;
+    // Horizon Host (TM Horizon's in-game menu) runs: the Menu panel shows the switch that hides this
+    // menu while Horizon's is open.
+    bool horizon = false;
     // The settings this game can do (null: all); the others are not shown.
     std::function<bool(const Field&)> supports;
     // Whether shaders can be reloaded (TMNF only). The hotkeys themselves are in keys.h.
@@ -109,6 +125,11 @@ struct Host {
     // The game's own options, a panel first on the Settings page (null: none).
     const char* gamePanelTitle = nullptr;
     std::function<void()> gamePanel;
+    // Horizon Host (plugin ABI 1.4, ui_metrics): its UI scale (screen height / 1080 times the player's
+    // content scale) and the width of the container the page is drawn in right now (the menu page, a
+    // popped-out panel or a free plugin window). 0: not given (our own menu, an older host).
+    float uiScale = 0.0f;
+    float uiRoom = 0.0f;
 };
 
 // Colours, sizes and fonts (after ImGui::CreateContext, before the renderer backend).
@@ -123,6 +144,21 @@ void lookEdited(Config& config, Settings& s);
 // into windows of their own (those with "Keep open when the menu closes" also while it is closed).
 // Host::hideDetached: a photo or a capture is being taken, no detached windows.
 void draw(const Host& host);
+// Page ids (menu.cpp's Page enum), and the pages only Horizon's menu shows (TMVS 2.0 as Horizon modules).
+namespace pages {
+enum : int {
+    kShaders = 0, kCustomize = 1, kStudio = 2, kMaps = 3, kPerformance = 4, kSettings = 5, kAbout = 6, kVideo = 7, kPacks = 8,
+    kMisc = 9, kClips = 10,
+    kCaptureSettings = 100, // photo mode and the folders (the Capture module's Settings tab)
+    kUpscaling = 101        // Render scale and FSR (the Upscaling module's Settings tab)
+};
+} // namespace pages
+// One page's body (Page ids as in menu.cpp: 4 Performance, 5 Settings, ...) inside a window someone else
+// made: Horizon Host's panel (src/horizonplugin.cpp). False: no such page in this game.
+bool drawPageForHost(int id, const Host& host, ImFont* titleFont = nullptr);
+// A page drawn for the host stopped in the middle (the host's crash guard caught an exception in it):
+// what drawPageForHost changed for the draw is put back. Nothing when no such draw runs.
+void abortHostDraw();
 // A detached window wants to stay on screen with the menu closed: the host must keep calling draw
 // and let the mouse reach it the way it does for the compare split's bar.
 bool pinnedWindows();

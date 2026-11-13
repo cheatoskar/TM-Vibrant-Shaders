@@ -14,8 +14,19 @@ FILE* g_file = nullptr;
 
 } // namespace
 
+// setDataDir: the standalone clips mod's own folder, the tests' (a function's static: set safely from
+// another file's static initializer, tools/testenv.cpp).
+std::wstring& dataDirOverride() {
+    static std::wstring s_dir;
+    return s_dir;
+}
+
 const std::wstring& dataDir() {
     static std::wstring dir = [] {
+        if (!dataDirOverride().empty()) {
+            CreateDirectoryW(dataDirOverride().c_str(), nullptr);
+            return dataDirOverride();
+        }
         WCHAR docs[MAX_PATH] = {};
         std::wstring path;
         if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, 0, docs))) {
@@ -32,6 +43,10 @@ const std::wstring& dataDir() {
 }
 
 std::wstring g_fileName = L"tmvs.log";
+
+void setDataDir(const std::wstring& dir) {
+    dataDirOverride() = dir;
+}
 
 void setFileName(const wchar_t* name) {
     std::lock_guard<std::mutex> lock(g_mutex);

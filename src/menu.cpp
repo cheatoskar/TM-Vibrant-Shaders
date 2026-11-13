@@ -7,6 +7,7 @@
 #include "keys.h"
 #include "log.h"
 #include "lut.h"
+#include "modules/modules.h"
 #include "update.h"
 #include "imgui_internal.h"
 #include "tm_shaders_version.h"
@@ -30,6 +31,14 @@ const Host* g_host = nullptr;
 bool g_reloadRequested = false;
 ImFont* g_fontTitle = nullptr; // headings, preset names
 float g_scale = 1.0f;          // 1 at 1080p, more on larger screens
+float g_room = 0.0f;           // Horizon (ABI 1.4): the width of the container a page is drawn in, 0 unknown
+
+// The width there is for columns: the content region, or less when the host says its container is
+// narrower (a popped-out panel, a free plugin window; its page_w is never wider than the region).
+float roomWidth() {
+    const float avail = ImGui::GetContentRegionAvail().x;
+    return g_room > 0.0f && g_room < avail ? g_room : avail;
+}
 
 const char* kSkyModes[] = {"Game sky", "Clear sky + clouds", "Starry night", "Black hole", "Aurora", "Ring world"};
 const char* kPlanetChoices[] = {"None", "Saturn", "Jupiter", "Ice giant", "Exotic"};
@@ -626,8 +635,13 @@ bool drawField(const Field& f, Settings& s, const char* label = nullptr) {
             changed |= ImGui::ColorEdit3(label, reinterpret_cast<float*>(base + f.offset), ImGuiColorEditFlags_NoInputs);
             break;
         default:
-            changed |= ImGui::SliderFloat(label, reinterpret_cast<float*>(base + f.offset), f.min, f.max,
-                                          !strcmp(f.key, "TargetFPS") ? "%.0f" : "%.2f");
+        {
+            const float value = *reinterpret_cast<const float*>(base + f.offset);
+            const char* format = !strcmp(f.key, "TargetFPS") || !strcmp(f.key, "VideoShutter") ? "%.0f"
+                                 : !strcmp(f.key, "VideoBitrate")                                ? (value <= 0.0f ? "Auto" : "%.1f")
+                                                                                                 : "%.2f";
+            changed |= ImGui::SliderFloat(label, reinterpret_cast<float*>(base + f.offset), f.min, f.max, format);
+        }
             break;
     }
     if (f.kind != Field::Bool || !strcmp(f.key, "VideoHdr")) hovered = ImGui::IsItemHovered();
@@ -658,7 +672,11 @@ bool containsNoCase(const char* text, const char* query) {
 
 // New pages last: the page's number is saved (MenuPage); the bar shows Video and Resource packs
 // before Settings.
-enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPacks, kMisc, kPageCount };
+enum Page { kShaders, kCustomize, kStudio, kMaps, kPerformance, kSettings, kAbout, kVideo, kPacks, kMisc, kClips, kPageCount };
+static_assert(kShaders == pages::kShaders && kCustomize == pages::kCustomize && kStudio == pages::kStudio && kMaps == pages::kMaps &&
+                  kPerformance == pages::kPerformance && kSettings == pages::kSettings && kAbout == pages::kAbout && kVideo == pages::kVideo &&
+                  kPacks == pages::kPacks && kMisc == pages::kMisc && kClips == pages::kClips && pages::kCaptureSettings >= kPageCount,
+              "menu.h pages:: must match Page");
 
 const ImVec4 kAccent(1.00f, 0.62f, 0.22f, 1.0f);
 
@@ -706,6 +724,10 @@ bool g_keysShown = false;
 // The Hotkeys panel: one row per action, Change waits for the next key press (Esc cancels).
 void drawHotkeys() {
     g_keysShown = true;
+    if (keys::hostOwned()) {
+        ImGui::TextDisabled("Set in the Horizon menu (Hotkeys).");
+        return;
+    }
     ImGui::TextDisabled("Press the new key (Esc cancels). Letters need Ctrl or Alt.");
     if (ImGui::BeginTable("hotkeys", 3, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("a", ImGuiTableColumnFlags_WidthStretch, 3.0f);
@@ -725,7 +747,13 @@ void drawHotkeys() {
             if (mine) ImGui::TextColored(kAccent, "Press a key...");
             else ImGui::TextUnformatted(keyText(a).c_str());
             ImGui::TableNextColumn();
-            if (ImGui::Button(mine ? "Cancel" : "Change", ImVec2(-FLT_MIN, 0.0f))) {
+            if (!mine) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.17f, 0.21f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.23f, 0.28f, 1.0f));
+            }
+            const bool pressed = ImGui::Button(mine ? "Cancel" : "Change", ImVec2(-FLT_MIN, 0.0f));
+            if (!mine) ImGui::PopStyleColor(2);
+            if (pressed) {
                 if (mine) keys::cancelCapture();
                 else keys::beginCapture(a);
             }
@@ -741,21 +769,35 @@ void drawHotkeys() {
 
 bool switchRow(const char* label, bool* value, const char* tooltip) {
     ImGui::PushID(label);
+    resetButton(false, ""); // the reset column of the settings' rows (empty): the switches line up
+    const bool flipped = toggle("switch", value);
+    bool hovered = ImGui::IsItemHovered();
+    ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - ImGui::GetFrameHeight() * 1.8f));
-    const bool flipped = toggle("switch", value);
-    if (tooltip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+    hovered |= ImGui::IsItemHovered();
+    if (tooltip && hovered) ImGui::SetTooltip("%s", tooltip);
     ImGui::PopID();
     if (flipped) Config::get().markDirty();
     return flipped;
 }
 
-// A page title with a line of explanation under it.
+// A slider or list in a panel of switch rows: behind the same empty reset column, as wide as a setting's.
+void rowIndent() {
+    resetButton(false, "");
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() - ImGui::GetFrameHeight() - 4.0f);
+}
+
+// A page drawn in a window of its own: the window's title bar names it already.
+bool g_inWindow = false;
+
+// A page title with a line of explanation under it (in a window of its own: the line only).
 void pageTitle(const char* title, const char* hint) {
-    ImGui::PushFont(g_fontTitle);
-    ImGui::TextUnformatted(title);
-    ImGui::PopFont();
+    if (!g_inWindow) {
+        ImGui::PushFont(g_fontTitle);
+        ImGui::TextUnformatted(title);
+        ImGui::PopFont();
+    }
     ImGui::TextDisabled("%s", hint);
     ImGui::Spacing();
 }
@@ -1065,7 +1107,7 @@ void addCard(float width) {
 template <typename Draw>
 void cardGrid(int count, Draw drawCard) {
     const float spacing = 12.0f * g_scale;
-    const float avail = ImGui::GetContentRegionAvail().x;
+    const float avail = roomWidth();
     const int columns = std::max(1, static_cast<int>((avail + spacing) / (215.0f * g_scale + spacing)));
     const float width = std::floor((avail - spacing * (columns - 1)) / columns);
     for (int i = 0; i < count; i++) {
@@ -1268,7 +1310,7 @@ bool panel(const PanelDef& def) {
 bool panelColumns(const std::vector<PanelDef>& panels, float minWidth) {
     if (panels.empty()) return false;
     const float spacing = 12.0f * g_scale;
-    const float avail = ImGui::GetContentRegionAvail().x;
+    const float avail = roomWidth();
     const int columns = std::clamp(static_cast<int>((avail + spacing) / (minWidth * g_scale + spacing)), 1, static_cast<int>(panels.size()));
     std::vector<std::vector<int>> stacks(columns);
     std::vector<float> heights(columns, 0.0f);
@@ -1592,7 +1634,7 @@ void drawMaps(Config& config, const std::vector<std::string>& names) {
     ImGui::BeginDisabled(!config.autoMood);
     static const char* const kLabels[] = {"Day maps", "Sunset maps", "Night maps"};
     const float spacing = 12.0f * g_scale;
-    const int columns = ImGui::GetContentRegionAvail().x >= 3.0f * 230.0f * g_scale ? 3 : 1;
+    const int columns = roomWidth() >= 3.0f * 230.0f * g_scale ? 3 : 1;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(spacing * 0.5f, spacing * 0.5f));
     if (ImGui::BeginTable("moods", columns, ImGuiTableFlags_SizingStretchSame)) {
         for (int m = 0; m < static_cast<int>(Mood::Count); m++) {
@@ -1687,8 +1729,10 @@ bool drawPerformancePage(Settings& s) {
                           bool l = drawKey(s, "AutoQuality");
                           l |= drawKey(s, "TargetFPS");
                           l |= drawKey(s, "Quality");
-                          l |= drawKey(s, "RenderScale");
-                          l |= drawKey(s, "FsrSharpness");
+                          if (!modules::hosted()) { // TMVS 2.0 as Horizon modules: on the Upscaling module's page
+                              l |= drawKey(s, "RenderScale");
+                              l |= drawKey(s, "FsrSharpness");
+                          }
                           if (s.autoQuality && g_host->autoQualityReduced) {
                               if (const char* reduced = g_host->autoQualityReduced()) {
                                   ImGui::TextWrapped("Turned off by auto quality: %s", reduced);
@@ -1921,6 +1965,7 @@ struct VideoPreset {
     const char* tip;
     void (*apply)(Settings& s);
     bool (*matches)(const Settings& s);
+    const char* needs = nullptr; // a setting this preset is about; not shown where the game has none (the 2006 engine: no HDR10)
 };
 
 const VideoPreset kVideoPresets[] = {
@@ -1990,7 +2035,7 @@ const VideoPreset kVideoPresets[] = {
          s.videoHdr = true;
          s.videoEncoder = 0;
      },
-     [](const Settings& s) { return s.videoCodec >= 2 && s.video10Bit && s.videoHdr && s.videoOwnFrames; }},
+     [](const Settings& s) { return s.videoCodec >= 2 && s.video10Bit && s.videoHdr && s.videoOwnFrames; }, "VideoHdr"},
 };
 
 const VideoPreset kVideoLooks[] = {
@@ -2012,8 +2057,12 @@ const VideoPreset kVideoLooks[] = {
 
 // A row of preset buttons; the one the settings match is lit.
 void videoPresetRow(Config& config, Settings& s, const VideoPreset* presets, size_t count) {
+    bool first = true;
     for (size_t i = 0; i < count; i++) {
-        if (i) ImGui::SameLine();
+        const Field* needs = presets[i].needs ? findField(presets[i].needs) : nullptr;
+        if (needs && !supported(*needs)) continue;
+        if (!first) ImGui::SameLine();
+        first = false;
         if (chip(presets[i].name, presets[i].matches(s))) {
             presets[i].apply(s);
             config.markDirty();
@@ -2027,9 +2076,13 @@ bool drawVideoPage(Config& config, Settings& s) {
     std::vector<PanelDef> panels;
     panels.push_back({"For", 4.0f, [&config, &s] {
                           videoPresetRow(config, s, kVideoPresets, sizeof(kVideoPresets) / sizeof(kVideoPresets[0]));
-                          ImGui::Spacing();
-                          ImGui::TextDisabled("Look");
-                          videoPresetRow(config, s, kVideoLooks, sizeof(kVideoLooks) / sizeof(kVideoLooks[0]));
+                          // The looks are the mod's own frames (shutter, lens depth of field): not on the 2006 engine.
+                          const Field* shutter = findField("VideoShutter");
+                          if (!shutter || supported(*shutter)) {
+                              ImGui::Spacing();
+                              ImGui::TextDisabled("Look");
+                              videoPresetRow(config, s, kVideoLooks, sizeof(kVideoLooks) / sizeof(kVideoLooks[0]));
+                          }
                           return false;
                       }});
     panels.push_back({"Recommended dialog settings", 3.0f, [] {
@@ -2045,6 +2098,93 @@ bool drawVideoPage(Config& config, Settings& s) {
                                    {{"VideoExportBest", nullptr}, {"VideoShutter", nullptr}, {"VideoLensDof", nullptr},
                                     {"VideoGrain", nullptr}, {"VideoAspect", nullptr}}));
     return panelColumns(panels, 380.0f);
+}
+
+// Instant replays (src/clips): the game is recorded into memory all the time, a run or the last
+// seconds are saved as an MP4. Its own page, apart from the replay editor's video export.
+bool drawClipsPage() {
+    pageTitle("Clips", "Your runs saved as MP4 videos, right after the finish or on a key.");
+    std::vector<PanelDef> panels;
+    panels.push_back({"Saving", 18.0f, [] {
+                          if (g_host->clipsSaving) g_host->clipsSaving();
+                          return false;
+                      }});
+    panels.push_back({"Recording", 15.0f, [] {
+                          g_host->clipsPanel();
+                          return false;
+                      }});
+    return panelColumns(panels, 380.0f);
+}
+
+// The Photo mode panel: on the Settings page, and (TMVS 2.0 as Horizon modules) on the Capture module's page.
+PanelDef photoModePanel(Config& config) {
+    return PanelDef{"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) +
+                                        (g_host->photoHideCar ? (g_host->photoHideEditor ? 2.0f : 1.0f) : 0.0f) - (g_host->photoAutoMode ? 0.0f : 1.0f) -
+                                        (g_host->photoHideHud ? 0.0f : 1.0f),
+                      [&config] {
+                          const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
+                          const std::string splitKey = keyText(keys::Action::PhotoSplit);
+                          if (g_host->photoAutoMode) {
+                              switchRow("Auto photo mode", &config.photoAuto,
+                                        ("Photo mode starts with the free camera (cam 7): no HUD, full quality.\n" + photoKey +
+                                         " toggles it anywhere.").c_str());
+                          }
+                          if (g_host->photoHideHud)
+                              switchRow("Hide HUD", &config.photoHideHud, "Off: the HUD stays visible in photo mode. Photos never include it.");
+                          if (g_host->photoHideCar && g_host->photoHideEditor)
+                              switchRow("Hide editor", &config.photoHideEditor, "In the replay editor (MediaTracker): photo mode hides the editor's panels, as its Tab key does, and the 3D view fills the screen. They are back when photo mode ends.");
+                          if (g_host->photoHideCar)
+                              switchRow("Hide car", &config.photoHideCar, "Hides cars and their shadows in photo mode and photos. Smoke and tyre marks stay.");
+                          rowIndent();
+                          char factor[48];
+                          snprintf(factor, sizeof(factor), "%d x %d tiles = %.1fx", config.photoTiles, config.photoTiles, config.photoTiles * 0.84f);
+                          if (ImGui::SliderInt("Hi-res photo", &config.photoTiles, 2, 4, factor)) config.markDirty();
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+%s takes a photo this many times the screen size. Pause the replay while it renders.", capKey.c_str());
+                          rowIndent();
+                          char aperture[32];
+                          snprintf(aperture, sizeof(aperture), "f/%.1f", (g_host->fNumber ? g_host->fNumber(config.photoDof) : 0.0f));
+                          if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("f/1.4 blurs most around the focus point, f/16 keeps everything sharp. Ctrl+wheel in the game.");
+                          if (g_host->splitOn) {
+                              bool& split = *g_host->splitOn;
+                              if (switchRow("Compare split", &split,
+                                            ("The game's image (or another preset) on one side of a line, your look on the other (" + splitKey +
+                                             ").\n" +
+                                             (g_host->splitNote ? std::string(g_host->splitNote)
+                                                                // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
+                                                                : std::string(g_host->splitPreset ? "Also in photos, hi-res ones too. The aperture applies to both sides."
+                                                                                                  : "Also in photos, not in hi-res ones.") +
+                                                                      " Game bloom off and real night apply to both sides.")).c_str())) {
+                                  if (split && g_host->photoOn) g_host->photoOn();
+                              }
+                              ImGui::BeginDisabled(!split);
+                              if (std::string* other = g_host->splitPreset) {
+                                  // The other side: the game's image or a preset (your look stays on the mod's side;
+                                  // to compare two presets, pick one as your look and the other here).
+                                  rowIndent();
+                                  if (ImGui::BeginCombo("Other side", other->empty() ? "The game's image" : other->c_str())) {
+                                      if (ImGui::Selectable("The game's image", other->empty())) other->clear();
+                                      for (const std::string& name : config.presetNames()) {
+                                          if (ImGui::Selectable(name.c_str(), *other == name)) *other = name;
+                                      }
+                                      ImGui::EndCombo();
+                                  }
+                                  if (ImGui::IsItemHovered())
+                                      ImGui::SetTooltip("The game's image or a preset on the other side.\n"
+                                                        "A preset runs the effects twice (photo mode only).");
+                                  switchRow("Photo labels", &config.splitPhotoLabels, tooltipFor("SplitPhotoLabels"));
+                              }
+                              rowIndent();
+                              ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");
+                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Line position from the left. Ctrl+Shift+wheel in the game.");
+                              switchRow("Swap sides", g_host->splitSwapped, "Shows the game's image on the right.");
+                              ImGui::EndDisabled();
+                          }
+                          ImGui::TextDisabled("%s photo  |  Shift+%s hi-res  |  middle click: focus", capKey.c_str(), capKey.c_str());
+                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  %s: on/off", photoKey.c_str());
+                          if (g_host->splitOn) ImGui::TextDisabled("%s: compare split  |  Ctrl+Shift+wheel: move its line", splitKey.c_str());
+                          return false;
+                      }};
 }
 
 // How the mod behaves: switches that aren't part of a look.
@@ -2073,10 +2213,14 @@ bool drawSettings(Config& config, Settings& s) {
                           }
                           return false;
                       }});
-    panels.push_back({"Menu", 3.0f, [&config] {
+    const bool hosted = modules::hosted(); // TMVS 2.0 as Horizon modules: no F8 menu of ours
+    panels.push_back({"Menu", hosted ? 2.0f : (g_host->horizon ? 4.0f : 3.0f), [&config, hosted] {
                           switchRow("Live preview", &config.hoverPreview, "Hovering over a preset shows it in the game.");
-                          switchRow("Full-screen menu", &config.menuFull, "Off: the right part of the game stays visible.");
+                          if (!hosted) switchRow("Full-screen menu", &config.menuFull, "Off: the right part of the game stays visible.");
                           switchRow("Check for updates", &config.checkUpdates, "Checks GitHub for a new version when the game starts.");
+                          if (g_host->horizon && !hosted)
+                              switchRow("Hide when Horizon is open", &config.hideForHorizon,
+                                        "Hides this menu and its windows while the Horizon menu is open. They come back when it closes.");
                           return false;
                       }});
     panels.push_back({"Hotkeys", 11.0f, [] {
@@ -2095,71 +2239,7 @@ bool drawSettings(Config& config, Settings& s) {
         if (!strcmp(f.category, "Game integration") && strncmp(f.key, "Vr", 2) != 0) game.push_back({f.key, nullptr}); // VR: on Misc & VR
     }
     panels.push_back(settingsPanel("Game integration", s, game));
-    panels.push_back({"Photo mode", (g_host->splitOn ? (g_host->splitPreset ? 13.0f : 11.0f) : 8.0f) + (g_host->photoHideCar ? 2.0f : 0.0f) -
-                                        (g_host->photoGameHooks ? 0.0f : 2.0f), [&config] {
-                          const std::string capKey = keyText(keys::Action::Capture), photoKey = keyText(keys::Action::Photo);
-                          const std::string splitKey = keyText(keys::Action::PhotoSplit);
-                          if (g_host->photoGameHooks) {
-                              switchRow("Auto photo mode", &config.photoAuto,
-                                        ("Photo mode starts with the free camera (cam 7): no HUD, full quality.\n" + photoKey +
-                                         " toggles it anywhere.").c_str());
-                              switchRow("Hide HUD", &config.photoHideHud, "Off: the HUD stays visible in photo mode. Photos never include it.");
-                          }
-                          if (g_host->photoHideCar)
-                              switchRow("Hide editor", &config.photoHideEditor, "In the replay editor (MediaTracker): photo mode hides the editor's panels, as its Tab key does, and the 3D view fills the screen. They are back when photo mode ends.");
-                          if (g_host->photoHideCar)
-                              switchRow("Hide car", &config.photoHideCar, "Hides cars and their shadows in photo mode and photos. Smoke and tyre marks stay.");
-                          ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
-                          char factor[48];
-                          snprintf(factor, sizeof(factor), "%d x %d tiles = %.1fx", config.photoTiles, config.photoTiles, config.photoTiles * 0.84f);
-                          if (ImGui::SliderInt("Hi-res photo", &config.photoTiles, 2, 4, factor)) config.markDirty();
-                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shift+%s takes a photo this many times the screen size. Pause the replay while it renders.", capKey.c_str());
-                          ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
-                          char aperture[32];
-                          snprintf(aperture, sizeof(aperture), "f/%.1f", (g_host->fNumber ? g_host->fNumber(config.photoDof) : 0.0f));
-                          if (ImGui::SliderFloat("Aperture", &config.photoDof, 0.0f, 1.0f, aperture)) config.markDirty();
-                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("f/1.4 blurs most around the focus point, f/16 keeps everything sharp. Ctrl+wheel in the game.");
-                          if (g_host->splitOn) {
-                              bool& split = *g_host->splitOn;
-                              if (switchRow("Compare split", &split,
-                                            ("The game's image (or another preset) on one side of a line, your look on the other (" + splitKey +
-                                             ").\n" +
-                                             (g_host->splitNote ? std::string(g_host->splitNote)
-                                                                // TMNF (the one with a preset side): hi-res photos and the aperture on both sides too.
-                                                                : std::string(g_host->splitPreset ? "Also in photos, hi-res ones too. The aperture applies to both sides."
-                                                                                                  : "Also in photos, not in hi-res ones.") +
-                                                                      " Game bloom off and real night apply to both sides.")).c_str())) {
-                                  if (split && g_host->photoOn) g_host->photoOn();
-                              }
-                              ImGui::BeginDisabled(!split);
-                              if (std::string* other = g_host->splitPreset) {
-                                  // The other side: the game's image or a preset (your look stays on the mod's side;
-                                  // to compare two presets, pick one as your look and the other here).
-                                  ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
-                                  if (ImGui::BeginCombo("Other side", other->empty() ? "The game's image" : other->c_str())) {
-                                      if (ImGui::Selectable("The game's image", other->empty())) other->clear();
-                                      for (const std::string& name : config.presetNames()) {
-                                          if (ImGui::Selectable(name.c_str(), *other == name)) *other = name;
-                                      }
-                                      ImGui::EndCombo();
-                                  }
-                                  if (ImGui::IsItemHovered())
-                                      ImGui::SetTooltip("The game's image or a preset on the other side.\n"
-                                                        "A preset runs the effects twice (photo mode only).");
-                                  switchRow("Photo labels", &config.splitPhotoLabels, tooltipFor("SplitPhotoLabels"));
-                              }
-                              ImGui::SetNextItemWidth(ImGui::CalcItemWidth());
-                              ImGui::SliderFloat("Line", g_host->splitPosition, 0.0f, 1.0f, "%.2f");
-                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Line position from the left. Ctrl+Shift+wheel in the game.");
-                              ImGui::Checkbox("Swap sides", g_host->splitSwapped);
-                              if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the game's image on the right.");
-                              ImGui::EndDisabled();
-                          }
-                          ImGui::TextDisabled("%s photo  |  Shift+%s hi-res  |  middle click: focus", capKey.c_str(), capKey.c_str());
-                          ImGui::TextDisabled("Ctrl+middle click: no focus  |  Ctrl+wheel: aperture  |  Shift+wheel: zoom  |  %s: on/off", photoKey.c_str());
-                          if (g_host->splitOn) ImGui::TextDisabled("%s: compare split  |  Ctrl+Shift+wheel: move its line", splitKey.c_str());
-                          return false;
-                      }});
+    if (!hosted) panels.push_back(photoModePanel(config)); // hosted: on the Capture module's page
     panels.push_back({"Files", 3.0f, [&config] {
                           if (ImGui::Button("Open TMVS folder")) ShellExecuteW(nullptr, L"open", log::dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                           if (ImGui::IsItemHovered()) ImGui::SetTooltip("settings.ini, tmvs.log, the F12 captures and the photos.");
@@ -2454,6 +2534,7 @@ const PageDef kPageTable[] = {
          drawVrSection(s);
          return false;
      }},
+    {kClips, "clips", "Clips", "Instant replays of your runs", [] { return static_cast<bool>(g_host->clipsPanel); }, [](Config&, Settings&, const Names&) { return drawClipsPage(); }},
     {kSettings, "settings", "Settings", "General options", nullptr, [](Config& c, Settings& s, const Names&) { return drawSettings(c, s); }},
     {kAbout, "about", "About", "Version, updates, help", nullptr, [](Config& c, Settings&, const Names&) { drawAbout(c); return false; }},
 };
@@ -2466,6 +2547,12 @@ bool pageShown(const PageDef& page) {
 const char* pageTitle(const PageDef& page) {
     if (page.id == kMisc && g_host->vrState && g_host->vrState() != 0) return "Misc & VR";
     return page.title;
+}
+
+// The tab's tooltip; Misc names what this game's page has (no minimap in TM Nations ESWC and TrackMania 2).
+const char* pageHint(const PageDef& page) {
+    if (page.id == kMisc && !g_host->miscMinimap) return "Split times, finish effects";
+    return page.hint;
 }
 
 const PageDef* findPage(int id) {
@@ -2557,7 +2644,7 @@ void drawNavigation(Config& config) {
         if (hovered) {
             if (detached) ImGui::SetTooltip("%s is in its own window. Click to bring the window to the front.", pageTitle(page));
             else if (onIcon) ImGui::SetTooltip("Open %s in its own window", pageTitle(page));
-            else ImGui::SetTooltip("%s", page.hint);
+            else ImGui::SetTooltip("%s", pageHint(page));
         }
         if (active || hovered) draw->AddRectFilled(p, ImVec2(p.x + w, p.y + h), active ? colour(kAccent, 0.16f) : IM_COL32(255, 255, 255, 14), 6.0f * g_scale);
         if (active) draw->AddRectFilled(ImVec2(p.x, p.y + h * 0.22f), ImVec2(p.x + 3.0f * g_scale, p.y + h * 0.78f), colour(kAccent, 1.0f), 2.0f);
@@ -2707,7 +2794,9 @@ void drawDetachedWindow(const PageDef& page, Config& config, bool menuOpen) {
         ImGui::Separator();
         // Its own scroll area under the options, like the menu's page area.
         ImGui::BeginChild("body", ImVec2(0.0f, 0.0f));
+        g_inWindow = true;
         drawPageBody(page, config, config.settings, config.presetNames());
+        g_inWindow = false;
         ImGui::EndChild();
     }
     ImGui::End();
@@ -2815,6 +2904,95 @@ void draw(const Host& host) {
     if (!host.hideDetached) drawDetachedWindows(config, menuOpen);
     if (keys::capturing() && !g_keysShown) keys::cancelCapture();
     g_host = nullptr;
+}
+
+// TMVS 2.0 as Horizon modules: the Capture module's own settings (photo mode, the folders).
+bool drawCaptureSettings(Config& config, Settings&, const Names&) {
+    pageTitle("Capture", "Photos, clips and the video export. Photos and clips never show Horizon's interface.");
+    std::vector<PanelDef> panels;
+    panels.push_back(photoModePanel(config));
+    panels.push_back({"Files", 3.0f, [] {
+                          if (ImGui::Button("Open TMVS folder")) ShellExecuteW(nullptr, L"open", log::dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                          if (ImGui::IsItemHovered()) ImGui::SetTooltip("The photos and the F12 captures.");
+                          ImGui::TextDisabled("Clips: the Clips tab. Videos: next to the game's.");
+                          return false;
+                      }});
+    panels.erase(std::remove_if(panels.begin(), panels.end(), [](const PanelDef& p) { return p.rows <= 0.0f; }), panels.end());
+    return panelColumns(panels, 380.0f);
+}
+
+// TMVS 2.0 as Horizon modules: the Upscaling module's page (Render scale and FSR, also without the shaders).
+bool drawUpscalingPage(Config&, Settings& s, const Names&) {
+    pageTitle("Upscaling", "The game drawn at a lower resolution and brought back up with AMD FSR 1.");
+    std::vector<PanelDef> panels;
+    panels.push_back({"Upscaling", 5.0f, [&s] {
+                          bool l = drawKey(s, "RenderScale");
+                          l |= drawKey(s, "FsrSharpness");
+                          if (s.renderScale >= 0.99f) ImGui::TextDisabled("Off at 1.00: the full resolution.");
+                          else if (!s.gameHdr) ImGui::TextWrapped("Needs Game HDR (TM Vibrant Shaders, Settings, Game integration).");
+                          else if (!modules::on(modules::kShaders) || !s.enabled) ImGui::TextDisabled("Without the shaders: the game's own image, scaled with FSR.");
+                          else ImGui::TextDisabled("The shaders run at the lower resolution too.");
+                          ImGui::TextDisabled("Photos, F12 and the video export use the full resolution.");
+                          return l;
+                      }});
+    return panelColumns(panels, 380.0f);
+}
+
+// What drawPageForHost changes for its draw, kept so abortHostDraw can put it back.
+struct HostDraw {
+    bool active = false;
+    ImFont* title = nullptr;
+    float scale = 1.0f;
+} g_hostDraw;
+
+void abortHostDraw() {
+    if (!g_hostDraw.active) return;
+    g_fontTitle = g_hostDraw.title;
+    g_scale = g_hostDraw.scale;
+    g_room = 0.0f;
+    g_inWindow = false;
+    g_host = nullptr;
+    g_hostDraw.active = false;
+}
+
+bool drawPageForHost(int id, const Host& host, ImFont* titleFont) {
+    g_host = &host;
+    // The headings in the host's own title font (or its current one): a font of our atlas can't be drawn
+    // into the host's draw lists by ImDrawList::AddText (it samples the host's font texture: garbled).
+    ImFont* const ownTitle = g_fontTitle;
+    const float ownScale = g_scale;
+    g_hostDraw.active = true;
+    g_hostDraw.title = ownTitle;
+    g_hostDraw.scale = ownScale;
+    g_fontTitle = titleFont ? titleFont : ImGui::GetFont();
+    // Horizon's sizes (ABI 1.4): its scale includes the player's content scale (80-125 %), its fonts
+    // are built for it; our sizes follow so the page matches the menu around it.
+    if (host.uiScale > 0.0f) g_scale = std::clamp(host.uiScale, 0.5f, 3.0f);
+    g_room = host.uiRoom > 0.0f ? host.uiRoom : 0.0f;
+    Config& config = Config::get();
+    bool (*hostPage)(Config&, Settings&, const Names&) = nullptr;
+    if (id == pages::kCaptureSettings) hostPage = drawCaptureSettings;
+    else if (id == pages::kUpscaling) hostPage = drawUpscalingPage;
+    const PageDef* page = hostPage ? nullptr : findPage(id);
+    const bool shown = hostPage || (page && pageShown(*page));
+    if (shown) {
+        g_inWindow = true; // the host's tab names it: no heading of ours
+        if (hostPage) {
+            ImGui::PushItemWidth(std::min(ImGui::GetContentRegionAvail().x * 0.55f, 360.0f * g_scale));
+            const bool look = hostPage(config, config.settings, config.presetNames());
+            ImGui::PopItemWidth();
+            if (look) lookEdited(config, config.settings);
+        } else {
+            drawPageBody(*page, config, config.settings, config.presetNames());
+        }
+        g_inWindow = false;
+    }
+    g_fontTitle = ownTitle;
+    g_scale = ownScale;
+    g_room = 0.0f;
+    g_host = nullptr;
+    g_hostDraw.active = false;
+    return shown;
 }
 
 bool pinnedWindows() {

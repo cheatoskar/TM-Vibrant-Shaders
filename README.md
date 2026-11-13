@@ -1,10 +1,10 @@
 # TM Vibrant Shaders
 
-**Real-time lighting, weather and skies for TrackMania Nations Forever, United Forever, TrackMania Nations ESWC and TrackMania 2 (ManiaPlanet).**
+**Real-time lighting, weather and skies for TrackMania Nations Forever, United Forever, TrackMania 2 (ManiaPlanet), and experimentally Nations ESWC, Sunrise and Original.**
 
 [![Latest release](https://img.shields.io/github/v/release/cheatoskar/TM-Vibrant-Shaders?label=download)](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)
 [![Build](https://github.com/cheatoskar/TM-Vibrant-Shaders/actions/workflows/build.yml/badge.svg)](https://github.com/cheatoskar/TM-Vibrant-Shaders/actions/workflows/build.yml)
-![Game](https://img.shields.io/badge/game-TMNF%20%7C%20TMUF%20%7C%20ESWC%20%7C%20TM2-orange)
+![Game](https://img.shields.io/badge/game-TMNF%20%7C%20TMUF%20%7C%20TM2%20%7C%20ESWC%20%7C%20Sunrise%20%7C%20Original-orange)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -14,15 +14,23 @@
 
 ![Realistic: the start line in the late sun, with haze and soft shadows](docs/images/realistic-start.jpg)
 
-A mod for Direct3D 9 (TrackMania Nations / United Forever, and TrackMania Nations ESWC with the unofficial 1.80 patch, look and photos only) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
+A mod for Direct3D 9 (TrackMania Nations / United Forever, Nations ESWC, Sunrise and Original) and Direct3D 11 (TrackMania 2, ManiaPlanet 4) that lights the game again: shadows, ambient occlusion, light shafts, bounce light, glowing neon, rain with sound and lightning, snow, wet roads with reflections, water, volumetric clouds and new skies. It draws inside the game's renderer, before the HUD, so the interface stays sharp. It works while driving, in replays and in the video export.
 
 **[Download the latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest)** · [Install](#install) · [Features](#features) · [Presets](#presets) · [Share a look](#your-own-presets-and-sharing-them) · [Author's Shader](#authors-shader) · [Controls](#controls) · [Known issues](#known-issues) · [Documentation](#documentation)
+
+**New in 1.6.0: TrackMania Sunrise and TrackMania Original, and TM Vibrant Shaders as Horizon modules (2.0.0).** The standalone mod now also runs in the Windows 10 repack of Sunrise and the Online Patch v2 of Original (experimental), and the three older games get clips and the MP4 video export. The same features come as four modules for Horizon Client's in-game menu, for the five Direct3D 9 games ([docs/horizon-modules.md](docs/horizon-modules.md)). TrackMania 2 stays standalone. Details in the [changelog](CHANGELOG.md).
 
 **New in 1.4.2: a new video export** (Nations / United). *Shoot video* in the replay editor renders its frames through the mod (every sample and motion blur sub-frame summed in float, then graded once), encodes them with NVENC directly on NVIDIA cards at a quality I measured with VMAF, can write HDR10, and records the game's own sound. Presets for YouTube, editing, Discord and HDR on the menu's *Video* page. Details in the [changelog](CHANGELOG.md).
 
 **New in 1.4.1: TrackMania 2 (ManiaPlanet 4).** The same mod for ManiaPlanet's Direct3D 11 renderer: download `TM-Vibrant-Shaders.zip` from the [release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases) (one zip for both games), close the game, run `TM-Vibrant-Shaders-Setup.exe`. `F8` menu, `F5` on/off. Details in [maniaplanet/README.md](maniaplanet/README.md).
 
 ![TrackMania 2 Stadium, photo mode's compare split: left the game, right with the mod and the black hole sky](docs/images/tm2-black-hole-split.jpg)
+
+**New in 1.5.0: Clips** (TrackMania Nations/United). The game is recorded into memory all the time, and after a finish the run is saved as an MP4 with the game's sound, or the last seconds on `F3`. It is the *Clips* page in the menu, and also a mod of its own for the ModLoader (TM Clips). Details in [docs/clips.md](docs/clips.md). The same release brings the car and the race to TrackMania Nations ESWC and photo zoom, hi-res photos, Hide car and the Misc page to TrackMania 2.
+
+**New in 1.4.3: TrackMania Nations ESWC** (experimental). The same DLL as `d3d9.dll` next to the unofficial 1.80 patch's `TmNationsESWC.exe`: the look, photo mode and captures. Details in [docs/install.md](docs/install.md#trackmania-nations-eswc).
+
+![TrackMania Nations ESWC, photo mode's compare split: left the game, right Golden Hour](docs/images/eswc-golden-hour-split.jpg)
 
 ---
 
@@ -154,6 +162,9 @@ Default keys; every one can be changed in the menu (*Settings* → *Hotkeys*, [d
 | `F12` | Save a screenshot and a frame capture (attach both to bug reports) |
 | `Ctrl+F9` | Reload the shaders (development). Not `F9`: that opens the menu of the 100% TMX mod. Hotkeys only react while the game window is in front |
 | `F11` | Trace the next frame (development) |
+| `F4` | Save the last 30 s as a clip (TrackMania Nations/United; 30, 60 or 90 s; the keys are on the *Clips* page, not under *Hotkeys*; [details](docs/clips.md)) |
+| `Ctrl+F4` | Save the last finished run as a clip, also after a restart |
+| `Ctrl+Shift+F4` | Save the run you drive now, from its start |
 | `F6` | [Photo mode](docs/settings.md#photo-mode) on or off (on by itself with the free camera, cam 7): no HUD, full quality. `F12` saves a photo without the HUD, `Shift+F12` a larger one, middle click sets the focus, `Shift`+wheel zooms, `Shift+F6` splits the screen: the game without and with the mod |
 
 ![The F8 menu: every preset as a card with a picture](docs/images/menu.jpg)
@@ -176,14 +187,22 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 
 ## Compatibility
 
-| | |
+| Game | Standalone (1.6.0) | Horizon modules (2.0.0) |
+|---|---|---|
+| TrackMania Nations Forever | Yes, ModLoader product or `d3d9.dll` | Yes (Horizon Host through TMLoader) |
+| TrackMania United Forever | Yes (the mod detects the game build and the map's environment) | Yes (Horizon Host through TMLoader) |
+| TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) | No: Horizon runs only in the 32-bit Direct3D 9 games |
+| TrackMania Nations ESWC | Experimental, only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)) | Yes (Horizon's own loader), without TMVS Packs |
+| TrackMania Sunrise | Experimental, only the Windows 10 repack (`TmSunrise.exe`), as `d3d9.dll` with the repack's `d3d9.dll` chained as `d3d9.chain.dll` ([docs/install.md](docs/install.md#trackmania-sunrise-and-trackmania-original)) | Yes (Horizon's own loader), without TMVS Packs, not tested in the game yet |
+| TrackMania Original | Experimental, only the Online Patch v2 (`TMORIGINAL.EXE`), as `d3d9.dll` with dgVoodoo chained as `d3d9.chain.dll` | Yes (Horizon's own loader), without TMVS Packs, not tested in the game yet |
+| Trackmania (2020) | No | No |
+
+In ESWC, Sunrise and Original: the look, photos and F12 captures, clips, the MP4 video export with the game's sound, neon trail, headlights, spray, long mesh shadows, Hide car, split times. Not yet: water, the game's materials and light (lamps, real night), resource packs, the minimap.
+
+| Together with | |
 |---|---|
-| TrackMania Nations Forever | Yes |
-| TrackMania United Forever | Yes (the mod detects the game build and the map's environment) |
-| TrackMania 2 (ManiaPlanet 4) | Yes, as `d3d11.dll` ([maniaplanet/README.md](maniaplanet/README.md)) |
-| TrackMania Nations ESWC | Only the unofficial 1.80 patch (`TmNationsESWC.exe` 0.1.7.9), as `d3d9.dll` ([docs/install.md](docs/install.md#trackmania-nations-eswc)). The look, photos and F12 captures; no car, map, replay or video features |
-| Trackmania (2020) | No |
 | TrackMania ModLoader (TMLoader) | Yes, or without it as `d3d9.dll` |
+| Horizon Client (TM Horizon) | Standalone or modules, not both: with both installed, the one the game loads first runs and the other stays off ([docs/horizon-modules.md](docs/horizon-modules.md)) |
 | CenterSpeed (speedometer) | Yes. With both loaded, this mod's menu opens with `F5` (CenterSpeed uses `F8`) |
 | TrackMania Forever OpenXR (VR) | With the ModLoader install and a VR build that hands over its device: the menu in the headset; the effects with *Effects in VR* (experimental) |
 | Competition Patch | Works (1.5.3 and 2.0). If the menu and the effects don't start, `tmvs.log` says so after 30 s and lists the other mods in the game: turn them off one by one |
@@ -207,6 +226,8 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 |---|---|
 | [Installation](docs/install.md) | Setup, manual install, ModLoader or game folder, updating, uninstalling, recommended game settings |
 | [Settings](docs/settings.md) | Every setting in the menu, mood presets, your own presets |
+| [Clips](docs/clips.md) | Instant replay clips of your runs as MP4: keys, buffer, sound, settings, the standalone TM Clips |
+| [Horizon modules](docs/horizon-modules.md) | TM Vibrant Shaders in Horizon Client's menu: the four modules, install, keys, sizes |
 | [Performance](docs/performance.md) | Hardware, measured costs, what to turn off for more FPS |
 | [Troubleshooting](docs/troubleshooting.md) | No effects, no sound, low FPS, HUD problems, how to report a bug |
 | [How it works](docs/how-it-works.md) | Hooks, depth buffer, the render passes, the two game builds |
