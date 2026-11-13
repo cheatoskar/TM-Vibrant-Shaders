@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.0 and modules 2.0.0 (release candidate)
+## 1.6.0 and modules 2.0.0 (2026-11-13)
 
 One release, two forms from the same code: the standalone mod **1.6.0** for six games (TrackMania Nations Forever, United Forever, Nations ESWC, Sunrise, Original and TrackMania 2), and the same features as four **Horizon Client modules 2.0.0** for the five Direct3D 9 games. TrackMania 2 stays standalone: Horizon runs only in the 32-bit Direct3D 9 games. Which game has what: the compatibility table in the [README](README.md#compatibility).
 
@@ -55,7 +55,7 @@ TM Vibrant Shaders also as four modules for Horizon Client (TM Horizon's in-game
 - In Horizon the keys are Horizon's: the modules put theirs into Horizon's *Hotkeys* list (defaults from your settings files); the menu is Horizon's (`Insert`); with ABI 1.3 or newer your old menu key (`F8`) opens the TMVS page there.
 - `tmvs.log` says which form starts (`starting (standalone (d3d9.dll))`, `(standalone (ModLoader))` or `(Horizon modules (tmvs-core.dll))`); Horizon's log names the modules' and the core's version.
 
-## 1.5.0 (in testing)
+## 1.5.0 (not released on its own, in 1.6.0)
 
 
 TrackMania Nations ESWC gets the car and the race, and TrackMania 2 catches up with TrackMania Nations/United: photo zoom, hi-res photos, TAA jitter, "only in replays", Hide car and the Misc page.
@@ -81,7 +81,7 @@ TrackMania Nations ESWC gets the car and the race, and TrackMania 2 catches up w
 **Fixed**
 - With CenterSpeed loaded the menu and the effects never started ("no game device 30 s after the start" in `tmvs.log`): the game's Direct3D device was made past the mod's hook. The slot the mod hooks (`IDirect3D9::CreateDevice` in Direct3D's method table) does not always stay its own: in my test program Windows' compatibility layer wrote its own hook there again on every `Direct3DCreate9`, and CenterSpeed's own Direct3D start-up changes the order of these calls (the exact cause in the game is still to be confirmed by the log). The mod now checks the slot after every `Direct3DCreate9` of the game and every 50 ms until the device is there, and puts its hook in front again; should the device still go past, the mod takes it from the game's viewport after 60 frames and hooks it then. `tmvs.log` says who called `Direct3DCreate9` and `CreateDevice` and when (`hook: ...`).
 
-## 1.4.3 (in testing)
+## 1.4.3 (not released on its own, in 1.6.0)
 
 Fixes for dirt, the car with TAA, water and maps where the effects stayed off, the mod works next to the VR mod TrackMania Forever OpenXR (TrackMania Nations/United), and it runs in TrackMania Nations ESWC.
 
