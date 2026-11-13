@@ -512,6 +512,12 @@ add_executable(tmvs_maincameratest tools/maincameratest.cpp)
 target_include_directories(tmvs_maincameratest PRIVATE src)
 target_compile_options(tmvs_maincameratest PRIVATE ${TMVS_OPTIONS})
 
+# Auto photo mode test: never on a server, yes in the replay editor, a solo race and a replay (src/photoauto.h;
+# development tool).
+add_executable(tmvs_photoautotest tools/photoautotest.cpp)
+target_include_directories(tmvs_photoautotest PRIVATE src)
+target_compile_options(tmvs_photoautotest PRIVATE ${TMVS_OPTIONS})
+
 # Share code test: every preset round-trips, garbage is refused, the clipboard (development tool).
 add_executable(tmvs_sharetest tools/sharetest.cpp)
 target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)

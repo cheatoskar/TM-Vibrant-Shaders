@@ -4684,6 +4684,88 @@ bool mapOpen() {
     return currentChallenge() != nullptr;
 }
 
+namespace {
+// CTrackMania's current race (the field CTrackMania::SetRace writes; the same in both Forever builds: Horizon
+// Host's gamectl kSpecs appRace, whose isOnline() reads it the same way).
+constexpr size_t kAppRace = 0x454;
+// The engine's class info (CMwClassInfo): id +0x04, parent +0x08, name +0x14. An object's MwGetClassInfo is
+// `mov eax, <class info>; ret` in slot 2 of its vtable on TMNF/TMUF (slot 1 on the 2006 engine); GetMwClassId
+// next to it has the same shape but returns an id, which fails the checks below.
+constexpr size_t kClassInfoId = 0x04, kClassInfoParent = 0x08, kClassInfoName = 0x14;
+const char* g_raceClass = "";
+
+const char* classInfoName(const BYTE* info) {
+    if (!info || !readable(info + kClassInfoName, sizeof(void*))) return nullptr;
+    const char* name = *reinterpret_cast<const char* const*>(info + kClassInfoName);
+    if (!name || !readable(name, 1)) return nullptr;
+    for (int i = 0; i < 64; i++) {
+        if (!readable(name + i, 1)) return nullptr;
+        if (!name[i]) return i >= 2 && name[0] == 'C' ? name : nullptr;
+    }
+    return nullptr;
+}
+
+const BYTE* classInfoOf(const void* nod) {
+    if (!nod || !readable(nod, sizeof(void*))) return nullptr;
+    const uintptr_t* table = *static_cast<const uintptr_t* const*>(nod);
+    if (!table || !readable(table, 4 * sizeof(void*))) return nullptr;
+    for (int slot = 0; slot < 4; slot++) {
+        const BYTE* fn = reinterpret_cast<const BYTE*>(table[slot]);
+        if (!fn || !readable(fn, 6) || fn[0] != 0xb8 || fn[5] != 0xc3) continue;
+        const BYTE* info = *reinterpret_cast<const BYTE* const*>(fn + 1);
+        if (reinterpret_cast<uintptr_t>(info) < 0x10000 || !readable(info + kClassInfoId, sizeof(DWORD))) continue;
+        const DWORD id = *reinterpret_cast<const DWORD*>(info + kClassInfoId);
+        if (id && (id & 0xfff) == 0 && classInfoName(info)) return info;
+    }
+    return nullptr;
+}
+
+RaceKind kindOfRace(const void* race) {
+    if (!race) return RaceKind::None;
+    const BYTE* info = classInfoOf(race);
+    const char* name = info ? classInfoName(info) : nullptr;
+    if (!name) return RaceKind::Unknown;
+    g_raceClass = name;
+    if (strstr(name, "Net")) return RaceKind::Net;
+    bool race1 = false, isRace = false;
+    for (int depth = 0; info && depth < 32; depth++) {
+        const char* n = classInfoName(info);
+        if (!n) break;
+        if (!strcmp(n, "CTrackManiaRace1P")) race1 = true;
+        if (!strcmp(n, "CTrackManiaRace")) isRace = true;
+        if (!readable(info + kClassInfoParent, sizeof(void*))) break;
+        info = *reinterpret_cast<const BYTE* const*>(info + kClassInfoParent);
+    }
+    if (!isRace) return RaceKind::Unknown; // not a race at all: the field is not where expected
+    return race1 ? RaceKind::Solo : RaceKind::Other;
+}
+} // namespace
+
+RaceKind raceKind() {
+    if (g_legacy) {
+        // The 2006 engine: the race classes are known by id (kLegacyRaces, read with the race every frame).
+        const LegacyState& s = g_legacyState;
+        if (s.raceKind >= 0) {
+            g_raceClass = kLegacyRaces[s.raceKind].c.name;
+            if (strstr(g_raceClass, "Net")) return RaceKind::Net;
+            return kLegacyRaces[s.raceKind].solo ? RaceKind::Solo : RaceKind::Other;
+        }
+        return s.otherRace ? RaceKind::Unknown : RaceKind::None;
+    }
+    if (!g_build || !g_app) return RaceKind::None;
+    __try {
+        const BYTE* app = static_cast<const BYTE*>(g_app);
+        if (!readable(app + kAppRace, sizeof(void*))) return RaceKind::Unknown;
+        return kindOfRace(*reinterpret_cast<void* const*>(app + kAppRace));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return RaceKind::Unknown;
+    }
+}
+
+const char* raceClassName() {
+    return g_raceClass;
+}
+
 bool currentMapComments(std::string& comments) {
     static wchar_t text[16384];
     void* challenge = currentChallenge();

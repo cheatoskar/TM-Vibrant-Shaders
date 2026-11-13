@@ -238,6 +238,14 @@ void legacyCensus(bool on);
 // The free camera (cam 7 in replays, the editor's) is on. False without the hook.
 bool freeCamActive();
 
+// The race the game runs now (read only): none (menu, loading, a replay watched, the map editor), a solo
+// race, a network race (LAN or internet: also spectating and the podium on a server), another race, or not
+// readable. The class of the app's race (CTrackMania +0x454 on TMNF/TMUF, CurrentRace on the 2006 engine)
+// by its name in the game's own class table, as Horizon Host's isOnline().
+enum class RaceKind { None, Solo, Net, Other, Unknown };
+RaceKind raceKind();
+const char* raceClassName(); // the last race class seen, for the log ("" none)
+
 // Counters of race (re)starts / map loads and of respawns (for the neon trail).
 int raceResets();
 int respawns();
