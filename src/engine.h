@@ -36,6 +36,22 @@ struct Callbacks {
 };
 
 bool install(const Callbacks& callbacks);
+
+// The game's Cpu/Gpu synchro (CSystemConfigDisplay::GpuSync, the launcher's "Cpu/Gpu synchro") as its
+// viewport runs it (CVisionViewportDx9::SyncGpuInit: a ring of event queries, one issued after each
+// Present, docs/performance.md "Cpu/Gpu synchro"): after frame N the game waits until the GPU has
+// finished frame N - frames. half: that wait sits at the next frame's start (RenderFrameBegin) instead
+// of right after Present. "Immediate" (the default) is frames 0, half false: the CPU waits for the frame
+// it just sent, so nothing of the GPU's work overlaps the game's next frame on the CPU.
+struct GpuSync {
+    bool known = false; // read from the viewport (every supported game, once a frame ran)
+    bool none = false;  // "None": no wait
+    int frames = 0;
+    bool half = false;
+};
+GpuSync gpuSync();
+// Its name as the launcher shows it ("Immediate", "1 Frame & Half", "None"; "?" not known).
+const char* gpuSyncName(const GpuSync& sync);
 // Overrides the game's shadow quality (-1 = keep the game's setting).
 void forceShadows(int mode);
 bool active();

@@ -1,4 +1,6 @@
 #include "perflog.h"
+#include "engine.h"
+#include "perfcpu.h"
 #include "gfx.h"
 #include "log.h"
 #include "pipeline.h"
@@ -123,6 +125,57 @@ void resolve(QuerySet& s) {
     }
 }
 
+// The game's Cpu/Gpu synchro, logged when it is first known and when it changes: with "Immediate"
+// (the default) the CPU waits after every frame until the GPU has finished it, so every millisecond
+// of GPU work (the mod's passes too) lands on the frame time.
+void checkGpuSync() {
+    static std::string s_logged;
+    const engine::GpuSync sync = engine::gpuSync();
+    if (!sync.known) return;
+    const std::string name = engine::gpuSyncName(sync);
+    if (name == s_logged) return;
+    s_logged = name;
+    if (sync.none) {
+        TMVS_LOG("perf: the game's Cpu/Gpu synchro is None: the CPU never waits for the GPU (the driver lets it run up to 3 frames ahead)");
+    } else if (sync.frames == 0 && !sync.half) {
+        TMVS_LOG("perf: the game's Cpu/Gpu synchro is Immediate: after every frame the CPU waits until the GPU has finished it, so the GPU's "
+                 "time (the mod's passes too) adds to the frame time; \"1 Frame\" (the game's launcher, Advanced) lets the next frame start "
+                 "meanwhile (docs/performance.md, \"Cpu/Gpu synchro\")");
+    } else {
+        TMVS_LOG("perf: the game's Cpu/Gpu synchro is %s: the CPU runs at most %d%s frame%s ahead of the GPU", name.c_str(), sync.frames,
+                 sync.half ? " and a half" : "", sync.frames == 1 && !sync.half ? "" : "s");
+    }
+}
+
+// The CPU side of the line (perfcpu.h): the game's thread from frame to frame.
+std::string cpuSplit(double pipelineMs, double recordingMs) {
+    const perfcpu::Totals& t = perfcpu::tracker().totals();
+    if (t.cycles == 0) return std::string();
+    const double c = static_cast<double>(t.cycles);
+    const auto phase = [&](perfcpu::Phase p) { return t.phase[static_cast<int>(p)] / c; };
+    const auto mod = [&](perfcpu::Phase p) { return t.mod[static_cast<int>(p)] / c; };
+    using perfcpu::Phase;
+    const double tmvs = t.modTotal() / c + recordingMs;
+    const double blocked = t.blocked / c;
+    char out[512];
+    if (!t.marks) {
+        // No engine hooks: Present to Present, the mod's scopes and the rest.
+        snprintf(out, sizeof(out), "CPU ms a frame: game and the rest %.2f, TMVS %.2f (pipeline %.2f, caster recording %.2f; blocked %.2f)",
+                 std::max(0.0, phase(Phase::Logic) - mod(Phase::Logic) - recordingMs), tmvs, pipelineMs, recordingMs, blocked);
+        return out;
+    }
+    char present[96];
+    if (t.presentCalls > 0) snprintf(present, sizeof(present), "Present %.2f, the rest the game's wait for the GPU", t.presentCall / t.presentCalls);
+    else snprintf(present, sizeof(present), "Present, Horizon Host and the game's wait for the GPU");
+    snprintf(out, sizeof(out),
+             "CPU ms a frame: game logic %.2f, game rendering %.2f, TMVS %.2f (pipeline %.2f, caster recording %.2f, at the frame end %.2f; "
+             "blocked %.2f), frame end %.2f (%s), frame start %.2f",
+             std::max(0.0, phase(Phase::Logic) - mod(Phase::Logic)), std::max(0.0, phase(Phase::Render) - mod(Phase::Render) - recordingMs), tmvs,
+             pipelineMs, recordingMs, mod(Phase::End), blocked, std::max(0.0, phase(Phase::End) - mod(Phase::End)), present,
+             std::max(0.0, phase(Phase::Begin) - mod(Phase::Begin)));
+    return out;
+}
+
 void logWindow(const Pipeline& pipeline, double castersCpuMs) {
     Window& w = g_window;
     const double n = w.shaded ? static_cast<double>(w.shaded) : 1.0;
@@ -145,22 +198,32 @@ void logWindow(const Pipeline& pipeline, double castersCpuMs) {
     const double game = w.game ? w.gameMs / w.game : 0.0, mod = w.mod ? w.modMs / w.mod : 0.0;
     const double gpuFrame = w.gpuFrames ? w.gpuFrameMs / w.gpuFrames : 0.0;
     const double recording = w.castersFrom >= 0.0 ? (castersCpuMs - w.castersFrom) / n : 0.0;
+    checkGpuSync();
+    const engine::GpuSync sync = engine::gpuSync();
+    char syncText[64] = "";
+    if (sync.known) snprintf(syncText, sizeof(syncText), ", Cpu/Gpu synchro %s", engine::gpuSyncName(sync));
+    std::string cpu = cpuSplit(w.cpuMs / n, recording);
+    if (cpu.empty()) {
+        char fallback[160];
+        snprintf(fallback, sizeof(fallback), "CPU ms a frame: mod %.2f, caster recording %.2f", w.cpuMs / n, recording);
+        cpu = fallback;
+    }
     // The game's main camera on the CPU, and the frames drawn with a render scale (only then).
     char extra[160];
-    int used = snprintf(extra, sizeof(extra), ", game 3D drawing calls %.2f", w.gameCpu ? w.gameCpuMs / w.gameCpu : 0.0);
+    int used = snprintf(extra, sizeof(extra), "; game 3D drawing calls %.2f", w.gameCpu ? w.gameCpuMs / w.gameCpu : 0.0);
     if (w.scaledFrames > 0 && used > 0 && used < static_cast<int>(sizeof(extra))) {
         snprintf(extra + used, sizeof(extra) - used, "; render scale %.2f on %u of %u frames", w.scaleSum / w.scaledFrames, w.scaledFrames,
                  w.shaded);
     }
     if (w.game == 0 && w.mod == 0) {
-        TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames; no GPU timestamps; CPU ms a frame: mod %.2f, caster recording %.2f%s",
-                 frameMs > 0.0 ? 1000.0 / frameMs : 0.0, frameMs, w.shaded, w.cpuMs / n, recording, extra);
+        TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames%s; %s; no GPU timestamps%s", frameMs > 0.0 ? 1000.0 / frameMs : 0.0,
+                 frameMs, w.shaded, syncText, cpu.c_str(), extra);
         return;
     }
-    TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames; GPU ms a frame: game 3D %.2f, mod %.2f (passes %.2f: %s; "
-             "caster maps %.2f), rest of the GPU frame %.2f; CPU ms a frame: mod %.2f, caster recording %.2f%s",
-             frameMs > 0.0 ? 1000.0 / frameMs : 0.0, frameMs, w.shaded, game, mod, w.pipelineMs / n, top.c_str(), casters,
-             gpuFrame > 0.0 ? std::max(0.0, gpuFrame - game - mod) : 0.0, w.cpuMs / n, recording, extra);
+    TMVS_LOG("perf: %.0f FPS (%.2f ms a frame) over %u shaded frames%s; %s; GPU ms a frame: game 3D %.2f, mod %.2f (passes %.2f: %s; "
+             "caster maps %.2f), rest of the GPU frame %.2f%s",
+             frameMs > 0.0 ? 1000.0 / frameMs : 0.0, frameMs, w.shaded, syncText, cpu.c_str(), game, mod, w.pipelineMs / n, top.c_str(), casters,
+             gpuFrame > 0.0 ? std::max(0.0, gpuFrame - game - mod) : 0.0, extra);
 }
 
 } // namespace
@@ -201,6 +264,9 @@ void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, doub
     QueryPerformanceCounter(&now);
     const double frameMs = g_lastFrame.QuadPart ? static_cast<double>(now.QuadPart - g_lastFrame.QuadPart) * qpcToMs() : 0.0;
     g_lastFrame = now;
+    perfcpu::tracker().present(now.QuadPart, shaded && frameMs > 0.0 && frameMs < 250.0);
+    static unsigned s_syncCheck = 0;
+    if (++s_syncCheck % 600 == 1) checkGpuSync();
 
     // This frame's set: Present closes it.
     if (g_current >= 0) {
@@ -235,6 +301,7 @@ void frame(IDirect3DDevice9* device, const Pipeline& pipeline, bool shaded, doub
         if (w.shaded >= kWindow) {
             logWindow(pipeline, castersCpuMs);
             g_window = Window();
+            perfcpu::tracker().resetTotals();
         }
     }
     g_frameCpu = 0.0;

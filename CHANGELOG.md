@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.1 (in progress)
+
+**Changed**
+- **The perf line in `tmvs.log` shows where the CPU's time goes**: the game's logic between frames, its rendering, the mod's own time (and the part of it blocked waiting for the GPU), the frame end with Present and the game's wait for the GPU, and the frame start, next to the GPU times; plus the game's *Cpu/Gpu synchro* setting. Details in [docs/performance.md](docs/performance.md#the-perf-line-in-the-log).
+- **The game's Cpu/Gpu synchro is logged** (`perf: the game's Cpu/Gpu synchro is ...`). All five Direct3D 9 games default to *Immediate*: after every frame the CPU waits until the GPU has finished it, so the GPU time of the effects adds to the frame time in full. *1 Frame* or *Half a frame* in the game's launcher lets the two overlap ([docs/performance.md](docs/performance.md#cpugpu-synchro-the-game-waits-for-the-gpu)).
+
+**Fixed**
+- **Short stalls on the game's thread from read-backs**: the sea level measured on the water material (4 times a second on maps whose sea the game reports no height for), the minimap's copy of its picture (every few seconds while it fills) and the once-per-map HDR numbers in the log each read a render target back right away, which made the CPU wait for the GPU's whole frame so far. They are now copied behind the GPU's work and read a frame or two later; the HDR numbers are counted on a thread of their own.
+
 ## 1.6.0 and modules 2.0.0 (2026-11-13)
 
 One release, two forms from the same code: the standalone mod **1.6.0** for six games (TrackMania Nations Forever, United Forever, Nations ESWC, Sunrise, Original and TrackMania 2), and the same features as four **Horizon Client modules 2.0.0** for the five Direct3D 9 games. TrackMania 2 stays standalone: Horizon runs only in the 32-bit Direct3D 9 games. Which game has what: the compatibility table in the [README](README.md#compatibility).

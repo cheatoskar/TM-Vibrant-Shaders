@@ -7,6 +7,7 @@
 #include "config.h"
 #include "depth.h"
 #include "log.h"
+#include "perfcpu.h"
 #include <windows.h>
 #include <d3d9.h>
 #include <cstdint>
@@ -376,6 +377,7 @@ HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const 
     InterlockedIncrement(&g_diagPresents);
     g_device = device;
     if (g_callbacks.present) {
+        perfcpu::ModScope mod; // the mod's Present work (the perf line)
         g_internal++;
         g_callbacks.present(device);
         g_internal--;
@@ -383,8 +385,12 @@ HRESULT APIENTRY presentDetour(IDirect3DDevice9* device, const RECT* src, const 
     if (tracingGame(device)) tracer::event("Present");
     tracer::onPresent(device);
     drawStatsFrame();
-    return original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(device, kPresent)(
+    // The driver's Present on its own (the perf line): with the GPU three frames behind it waits here.
+    const int64_t presentStart = perfcpu::now();
+    const HRESULT hr = original<HRESULT(APIENTRY*)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*)>(device, kPresent)(
         device, src, dst, window, dirty);
+    perfcpu::tracker().presentCall(static_cast<double>(perfcpu::now() - presentStart) * perfcpu::msPerTick());
+    return hr;
 }
 
 HRESULT APIENTRY createTextureDetour(IDirect3DDevice9* device, UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT format,
@@ -1347,6 +1353,7 @@ void hostedPresent(IDirect3DDevice9* device) {
     InterlockedIncrement(&g_diagPresents);
     g_device = device;
     if (g_callbacks.present) {
+        perfcpu::ModScope mod; // the mod's Present work (the perf line); Horizon Host calls the driver's Present after
         g_internal++;
         g_callbacks.present(device);
         g_internal--;

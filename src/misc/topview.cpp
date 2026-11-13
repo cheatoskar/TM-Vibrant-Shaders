@@ -4,6 +4,7 @@
 #include "engine.h"
 #include "gfx.h"
 #include "log.h"
+#include "readback.h"
 #include <windows.h>
 #include <algorithm>
 #include <array>
@@ -206,6 +207,13 @@ struct State {
     DWORD changedTick = 0; // the picture last drawn into
     DWORD copyTick = 0;    // the copy made
     bool restore = false;  // after a reset: the copy goes back in before anything else
+    // The next copy on its way to memory (keepCopy): both targets queued in one frame, taken a frame
+    // or two later once the GPU has done them (no wait on the game's thread).
+    AsyncReadback colorRead, heightRead;
+    int readDrawn = -1;              // g.drawn when they were queued (-1: none on the way)
+    unsigned readFrame = 0;          // g.frame then
+    std::vector<uint64_t> readQueued; // the placements still queued then (not in the copy)
+    size_t readSinceFrom = 0;         // g.sinceCopy's size then: what came after is not in it either
     // Placements taken since the copy (drawn or still queued): not in it, so a reset forgets them and
     // they come again (the rest stays known: nothing is drawn twice over the copy, whose heights are gone).
     std::vector<uint64_t> sinceCopy;
@@ -674,6 +682,10 @@ void forget() {
     g.copy.clear();
     g.heightCopy.clear();
     g.copyDrawn = -1;
+    g.colorRead.release();
+    g.heightRead.release();
+    g.readDrawn = -1;
+    g.readQueued.clear();
     g.restore = false;
     g.sinceCopy.clear();
     g.savedDrawn = -1;
@@ -1131,20 +1143,17 @@ unsigned epoch() {
     return g.epoch;
 }
 
-// A render target into memory (4 bytes a pixel: the picture's ARGB, the heights' float), and back.
-bool readTarget(IDirect3DDevice9* device, IDirect3DSurface9* target, D3DFORMAT format, std::vector<uint32_t>& out) {
-    IDirect3DSurface9* memory = nullptr;
-    if (FAILED(device->CreateOffscreenPlainSurface(g.width, g.height, format, D3DPOOL_SYSTEMMEM, &memory, nullptr)) || !memory) return false;
+// A finished read-back of a render target into memory (4 bytes a pixel: the picture's ARGB, the
+// heights' float), and a copy back into a target.
+bool readRows(AsyncReadback& read, std::vector<uint32_t>& out) {
     bool ok = false;
-    D3DLOCKED_RECT locked{};
-    if (SUCCEEDED(device->GetRenderTargetData(target, memory)) && SUCCEEDED(memory->LockRect(&locked, nullptr, D3DLOCK_READONLY))) {
+    read.read([&](const AsyncReadback::Data& d) {
+        if (static_cast<int>(d.width) != g.width || static_cast<int>(d.height) != g.height) return;
         out.resize(static_cast<size_t>(g.width) * g.height);
         for (int y = 0; y < g.height; y++)
-            memcpy(&out[static_cast<size_t>(y) * g.width], static_cast<const BYTE*>(locked.pBits) + static_cast<size_t>(y) * locked.Pitch, g.width * 4);
-        memory->UnlockRect();
+            memcpy(&out[static_cast<size_t>(y) * g.width], static_cast<const BYTE*>(d.bits) + static_cast<size_t>(y) * d.pitch, g.width * 4);
         ok = true;
-    }
-    memory->Release();
+    });
     return ok;
 }
 
@@ -1254,25 +1263,52 @@ void loadFromDisk() {
 }
 
 // The picture and its heights into memory, a second after it was last drawn into or every 5 s while
-// it fills (a read-back: it waits for the card once, a few milliseconds for a 1024 x 1024 picture),
-// so a device reset doesn't lose them. Without the heights target (a card without two render targets)
-// there is no copy: a reset starts over.
+// it fills, so a device reset doesn't lose them. Without the heights target (a card without two
+// render targets) there is no copy: a reset starts over. Both targets are queued for the copy in one
+// frame (AsyncReadback) and taken once the GPU has done them: read back and locked at once, each copy
+// made the game's thread wait for the card (the frame so far, then the copy) every few seconds while
+// the picture filled.
 void keepCopy(IDirect3DDevice9* device) {
+    if (g.readDrawn >= 0) {
+        // Not done after 6 frames (no Present in between, a tool): taken anyway (that waits).
+        if (!(g.colorRead.ready() && g.heightRead.ready()) && g.frame - g.readFrame < 6) return;
+        std::vector<uint32_t> color, heights;
+        const bool ok = readRows(g.colorRead, color) && readRows(g.heightRead, heights);
+        g.colorRead.cancel();
+        g.heightRead.cancel();
+        const int drawn = g.readDrawn;
+        g.readDrawn = -1;
+        if (!ok) {
+            g.copy.clear();
+            g.heightCopy.clear();
+            g.copyDrawn = -1;
+            return;
+        }
+        g.copy.swap(color);
+        g.heightCopy.swap(heights);
+        g.copyDrawn = drawn;
+        // What was still queued then isn't in the copy, nor what came after.
+        std::vector<uint64_t> since(g.readQueued);
+        if (g.readSinceFrom <= g.sinceCopy.size()) since.insert(since.end(), g.sinceCopy.begin() + static_cast<std::ptrdiff_t>(g.readSinceFrom), g.sinceCopy.end());
+        g.sinceCopy.swap(since);
+        g.readQueued.clear();
+        if (g.settled && g.savedDrawn != g.drawn && g.copyDrawn == g.drawn) saveToDisk();
+        return;
+    }
     if (!g.texture || !g.surface || !g.heightSurface || !g.cleared || g.drawn <= 0 || g.copyDrawn == g.drawn) return;
     const DWORD tick = GetTickCount();
     if (tick - g.changedTick < 1000 && tick - g.copyTick < 5000) return;
     g.copyTick = tick;
-    if (!readTarget(device, g.surface, D3DFMT_A8R8G8B8, g.copy) || !readTarget(device, g.heightSurface, D3DFMT_R32F, g.heightCopy)) {
-        g.copy.clear();
-        g.heightCopy.clear();
-        g.copyDrawn = -1;
+    if (!g.colorRead.queue(device, g.surface) || !g.heightRead.queue(device, g.heightSurface)) {
+        g.colorRead.cancel();
+        g.heightRead.cancel();
         return;
     }
-    g.copyDrawn = g.drawn;
-    // What is still queued isn't in the copy.
-    g.sinceCopy.clear();
-    for (const Job& j : g.queue) g.sinceCopy.push_back(j.key);
-    if (g.settled && g.savedDrawn != g.drawn) saveToDisk();
+    g.readDrawn = g.drawn;
+    g.readFrame = g.frame;
+    g.readQueued.clear();
+    for (const Job& j : g.queue) g.readQueued.push_back(j.key);
+    g.readSinceFrom = g.sinceCopy.size();
 }
 
 // After a device reset or from disk: the copy back into a new picture (its mipmaps made again) and
@@ -1527,6 +1563,11 @@ void releaseDevice() {
     // goes back in after the reset; a copy of all that was drawn keeps the placements known (nothing
     // is drawn twice), an older one lets them come again over it. Without one everything starts over.
     clearQueue();
+    // A copy on its way to memory is dropped (the last finished one is used); its memory stays.
+    g.colorRead.releaseQueries();
+    g.heightRead.releaseQueries();
+    g.readDrawn = -1;
+    g.readQueued.clear();
     if (g.copyDrawn > 0 && !g.copy.empty() && g.heightCopy.size() == g.copy.size()) {
         for (uint64_t k : g.sinceCopy) g.keys.erase(k);
         if (!g.sinceCopy.empty()) {

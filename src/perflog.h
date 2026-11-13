@@ -2,10 +2,22 @@
 #include <d3d9.h>
 
 // Where the frame's time goes in game, written to the log every 2000 shaded frames: the frame
-// rate, the GPU time of the game's 3D scene (its main camera), of the mod (from the end of that
-// camera to the shaded image, the copies around the pipeline included) and of the pipeline's
-// most expensive passes, and the mod's CPU time on the render thread. GPU timestamps
-// (results read a few frames later, never waited for).
+// rate, the game's Cpu/Gpu synchro, the game thread's CPU time split up (perfcpu.h: the game's
+// logic between frames, its rendering, the mod's own time and the part of it blocked on the GPU,
+// the frame end with Present and the game's wait for the GPU, the frame start), the GPU time of
+// the game's 3D scene (its main camera), of the mod (from the end of that camera to the shaded
+// image, the copies around the pipeline included) and of the pipeline's most expensive passes.
+// GPU timestamps (results read a few frames later, never waited for).
+//
+//   perf: 48 FPS (20.86 ms a frame) over 2000 shaded frames, Cpu/Gpu synchro Immediate; CPU ms a
+//   frame: game logic 6.10, game rendering 2.40, TMVS 1.50 (pipeline 0.19, caster recording 0.28,
+//   at the frame end 0.60; blocked 0.02), frame end 10.56 (Present 0.30, the rest the game's wait
+//   for the GPU), frame start 0.30; GPU ms a frame: game 3D 1.91, mod 6.23 (passes 6.42: ...;
+//   caster maps 0.00), rest of the GPU frame 14.68; game 3D drawing calls 1.95
+//
+// The CPU parts add up to the frame time. A long "frame end" with "Immediate" is the CPU waiting
+// for the GPU to finish the frame; "Present" shows only where the mod hooks Present itself (not
+// under Horizon Host, which calls the driver's Present after the mod's work).
 //
 // The GPU times are spans on the GPU's clock: while the GPU waits for the CPU (a CPU-bound
 // frame) the game's span includes that wait. "rest" is the GPU frame less both spans: the
