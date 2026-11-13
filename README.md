@@ -247,7 +247,7 @@ In ESWC, Sunrise and Original: the look, photos and F12 captures, clips, the MP4
 
 ## TM Horizon family
 
-Six projects by the same author, made to work together. TM Horizon installs and updates the others where it can; each one also works without it.
+Six projects, built to work together. TM Horizon installs and updates the others where it can; each one also works without it.
 
 | Project | What it is | Games | How to get it | Repo |
 |---|---|---|---|---|
