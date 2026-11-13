@@ -504,6 +504,12 @@ add_executable(tmvs_aqtest tools/aqtest.cpp src/autoquality.cpp)
 target_link_libraries(tmvs_aqtest PRIVATE tmvs_core)
 target_compile_options(tmvs_aqtest PRIVATE ${TMVS_OPTIONS})
 
+# Main camera test: Sunrise's view into a texture is not the main camera, the pipeline keeps one size
+# (src/maincamera.h; development tool).
+add_executable(tmvs_maincameratest tools/maincameratest.cpp)
+target_include_directories(tmvs_maincameratest PRIVATE src)
+target_compile_options(tmvs_maincameratest PRIVATE ${TMVS_OPTIONS})
+
 # Share code test: every preset round-trips, garbage is refused, the clipboard (development tool).
 add_executable(tmvs_sharetest tools/sharetest.cpp)
 target_link_libraries(tmvs_sharetest PRIVATE tmvs_core)

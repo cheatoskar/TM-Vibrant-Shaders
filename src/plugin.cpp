@@ -23,6 +23,7 @@
 #include "pipeline.h"
 #include "autoquality.h"
 #include "blockorder.h"
+#include "maincamera.h"
 #include "photo.h"
 #include "planeread.h"
 #include "proxy.h"
@@ -710,6 +711,13 @@ void traceMatrix(const char* label, const float* m) {
 // The main 3D camera renders at full back-buffer size with the shadowed depth buffer bound.
 // In races that target is the back buffer; with the engine's own camera effects (menus,
 // replays) it is an offscreen texture that is composited afterwards.
+// TrackMania Sunrise also renders a view into a texture with a depth buffer of its own (512x512
+// every frame, before the main camera; most likely its planar water/mirror reflection, not
+// confirmed in the engine). On the 2006-engine games (ESWC, Sunrise, Original) such views, and any
+// camera smaller than a main camera of the last frames, are not the main camera (maincamera.h).
+// Forever keeps the rule as it was.
+maincamera::SizeHistory g_mainSizes;
+
 bool isMainTarget(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     if (!rt) return false;
     IDirect3DSurface9* ds = nullptr;
@@ -722,7 +730,56 @@ bool isMainTarget(IDirect3DDevice9* device, IDirect3DSurface9* rt) {
     }
     if (!readable) return false;
     rt->GetDesc(&rtDesc);
-    return rtDesc.Width == depthDesc.Width && rtDesc.Height == depthDesc.Height && rtDesc.Width >= 320;
+    maincamera::Target t;
+    t.width = rtDesc.Width;
+    t.height = rtDesc.Height;
+    t.depthWidth = depthDesc.Width;
+    t.depthHeight = depthDesc.Height;
+    t.depthReadable = true;
+    t.depthIsScreens = ds != nullptr && ds == depth::surface();
+    if (!maincamera::sameSizeAsDepth(t)) return false;
+    // Forever, and the VR mod's eyes (its own targets, its own switching: processScene): as before.
+    if (!engine::legacy() || hook::eyeProvider()) return true;
+    // The size the views are measured against: the screen, or the video export's frame while it runs.
+    // The export starting, ending or changing its size sets the main camera's size anew.
+    static bool s_exporting = false;
+    static int s_exportWidth = 0, s_exportHeight = 0;
+    if (g_exporting != s_exporting || (g_exporting && (g_export.width != s_exportWidth || g_export.height != s_exportHeight))) {
+        s_exporting = g_exporting;
+        s_exportWidth = g_export.width;
+        s_exportHeight = g_export.height;
+        g_mainSizes.reset();
+    }
+    UINT refWidth = 0, refHeight = 0;
+    if (g_exporting && g_export.width > 0 && g_export.height > 0) {
+        refWidth = static_cast<UINT>(g_export.width);
+        refHeight = static_cast<UINT>(g_export.height);
+    } else if (IDirect3DSurface9* screen = depth::surface()) {
+        D3DSURFACE_DESC screenDesc{};
+        if (SUCCEEDED(screen->GetDesc(&screenDesc))) {
+            refWidth = screenDesc.Width;
+            refHeight = screenDesc.Height;
+        }
+    }
+    const bool view = maincamera::isTextureView(t, refWidth, refHeight);
+    // The export's frames are its own (sub-frames, the sound pass): only the views stay out there.
+    const bool smaller = !view && !g_exporting && !g_mainSizes.accept(t.width, t.height, g_frame);
+    if (!view && !smaller) return true;
+    // Each kind once (a handful of lines: the views keep their size for the map).
+    static std::vector<std::array<UINT, 3>> s_logged;
+    const std::array<UINT, 3> kind = {t.width, t.height, view ? 1u : 0u};
+    if (s_logged.size() < 8 && std::find(s_logged.begin(), s_logged.end(), kind) == s_logged.end()) {
+        s_logged.push_back(kind);
+        if (view)
+            TMVS_LOG("scene: a camera into %ux%u with a depth buffer of its own is a view into a texture (smaller than the %ux%u %s), "
+                     "not the main camera: left as the game draws it",
+                     t.width, t.height, refWidth, refHeight, g_exporting ? "video frame" : "screen");
+        else
+            TMVS_LOG("scene: a camera into %ux%u right after one into %ux%u: the smaller one is not the main camera (the effects stay "
+                     "at %ux%u instead of making their targets again for each)",
+                     t.width, t.height, g_mainSizes.width(), g_mainSizes.height(), g_mainSizes.width(), g_mainSizes.height());
+    }
+    return false;
 }
 
 // World-space direction towards the sun: the look's own (SunElevation) or the game's light.
@@ -3830,6 +3887,7 @@ DWORD g_resetAt = 0; // a device reset, until the first shaded frame after it (t
 
 void onPostReset(IDirect3DDevice9* device) {
     g_resetAt = GetTickCount();
+    g_mainSizes.reset(); // the screen may have another size now
     if (!hook::observeOnly()) depth::onDeviceReady(device); // watch-only: the VR mod's depth buffer stays as it is
     overlay::postReset();
 }
