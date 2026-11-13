@@ -29,7 +29,7 @@ Start the game. The modules are in the Horizon menu (Insert).
 Not together with the standalone TM Vibrant Shaders
 ---------------------------------------------------
 The standalone mod (the "TM Vibrant Shaders" ModLoader product, or d3d9.dll in the game folder) and
-these modules are the same mod (modules 2.0.0 = the standalone 1.6.0 core). If both are installed, only one runs: the one the game loads first,
+these modules are the same mod (modules 2.0.1 = the standalone 1.6.1 core). If both are installed, only one runs: the one the game loads first,
 usually the standalone. The other stays off and says so (tmvs.log, Horizon's log, the module's page).
 Remove one of them.
 

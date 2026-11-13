@@ -195,7 +195,7 @@ The shaders cost real GPU time. Measured on a GTX 1080 Ti at 2560×1440: the gam
 
 ## Compatibility
 
-| Game | Standalone (1.6.0) | Horizon modules (2.0.0) |
+| Game | Standalone (1.6.1) | Horizon modules (2.0.1) |
 |---|---|---|
 | TrackMania Nations Forever | Yes, ModLoader product or `d3d9.dll` | Yes (Horizon Client through TMLoader) |
 | TrackMania United Forever | Yes (the mod detects the game build and the map's environment) | Yes (Horizon Client through TMLoader) |

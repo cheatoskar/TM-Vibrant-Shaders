@@ -1,6 +1,6 @@
-## TM Vibrant Shaders 1.6.0 and Horizon modules 2.0.0
+## TM Vibrant Shaders 1.6.1 and Horizon modules 2.0.1
 
-New: **TrackMania Sunrise** and **TrackMania Original** (experimental), **clips and the MP4 video export** on the three older games, and the whole mod as four **Horizon Client modules** (2.0.0).
+A fix release for 1.6.0 and the Horizon modules 2.0.0.
 
 Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`; ESWC `tmvs-eswc.log`, Sunrise `tmvs-sunrise.log`, Original `tmvs-original.log`; TrackMania 2 `Documents\ManiaPlanet\TMVS\tmvs-mp.log`).
 
@@ -11,27 +11,21 @@ Tell me what breaks (with `Documents\TrackMania\TMVS\tmvs.log`; ESWC `tmvs-eswc.
 | You play | Download |
 |---|---|
 | Nations/United Forever, Nations ESWC, Sunrise, Original, TrackMania 2, without Horizon Client | `TM-Vibrant-Shaders.zip` (setup), or `TMVibrantShaders.dll` alone |
-| Nations/United Forever, Nations ESWC, Sunrise, Original, with Horizon Client | `TMVS-2.0.0-horizon.zip` (four modules for Horizon's plugins folder) |
+| Nations/United Forever, Nations ESWC, Sunrise, Original, with Horizon Client | `TMVS-2.0.1-horizon.zip` (four modules for Horizon's plugins folder) |
 
 Not both in the same game: with the standalone mod and the modules installed, only one runs.
 
-### TrackMania Sunrise and TrackMania Original (experimental)
+### Fixed
 
-Only the Windows 10 repack of Sunrise (`TmSunrise.exe`) and the Online Patch v2 of Original (`TMORIGINAL.EXE`); other builds are refused cleanly. The game's own `d3d9.dll` (the repack's proxy, dgVoodoo) stays in use as `d3d9.chain.dll`; the setup does that for you. The look, photo mode, the car and the race (neon trail, headlights, spray, long mesh shadows, Hide car, split times), clips and the MP4 export. Not yet: water, the game's materials and light, resource packs, the minimap.
+- **Photo mode no longer switches itself on online.** On a server the game puts you into the free camera at the end of every round and while spectating, and *Auto photo mode* turned photo mode on each time. It now follows the free camera only offline (replay editor, solo race, map editor test drive, a replay from the menu). `F6` works everywhere as before.
+- **Fewer short stutters.** The sea level measurement on the water, the minimap's picture copy and the HDR numbers in the log read the GPU's picture back at once, which made the CPU wait for the whole frame. They are now read a frame or two later, without waiting.
 
-### Nations ESWC, Sunrise, Original: clips and MP4 export
+### Changed
 
-- **Clips**: the *Clips* page, `F4`, `Ctrl+F4`, `Ctrl+Shift+F4` and *Save on finish*, as on Forever.
-- **Shoot video** writes an MP4 with the mod's encoder (H.264, HEVC or AV1) and the game's own sound (no more microphone in the video). *Game's AVI* on the *Video* page gives the game's file as before.
+- **The game's Cpu/Gpu synchro is in the log, with advice.** All five Direct3D 9 games default to *Immediate*: the CPU waits for the GPU after every frame, so the effects' GPU time adds to the frame time in full. *1 Frame* in the game's launcher (Advanced) lets the two overlap; Horizon Client 0.3.2 can switch it in the game. Details: [docs/performance.md](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/performance.md#cpugpu-synchro-the-game-waits-for-the-gpu).
+- **The perf line in `tmvs.log` shows where the CPU's time goes**: the game's logic, its rendering, the mod's own time, Present and the wait for the GPU.
 
-### Horizon modules 2.0.0
-
-*TM Vibrant Shaders*, *TMVS Capture*, *TMVS Upscaling* and *TMVS Packs*: the same features as the standalone 1.6.0, each with its own page, switch and keys in Horizon's menu. For Horizon Client 0.3.1 (the pages follow Horizon's menu size and content scale); they also load in older Horizon versions. TrackMania 2 has no Horizon and keeps the standalone mod. [docs/horizon-modules.md](https://github.com/cheatoskar/TM-Vibrant-Shaders/blob/{{TAG}}/docs/horizon-modules.md)
-
-### Also
-
-- **Instant replay is off for new players**: switch it on at the top of the *Clips* page for the background recording (`F4`, saved best runs). If you used clips in 1.5, nothing changes for you.
-- **Checkpoint clips** (*Clips* page, off by default): a clip of each checkpoint's sector.
+Both fixes are covered by tests without the game; in the game they have only been tried in parts so far.
 
 ---
 

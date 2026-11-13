@@ -1,14 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(tm_vibrant_shaders VERSION 1.6.0 LANGUAGES CXX RC)
+project(tm_vibrant_shaders VERSION 1.6.1 LANGUAGES CXX RC)
 
-# 1.6.0-dev until the release tag sets it (CI: -DTM_SHADERS_VERSION=<tag>).
+# 1.6.1-dev until the release tag sets it (CI: -DTM_SHADERS_VERSION=<tag>).
 if(NOT DEFINED TM_SHADERS_VERSION)
   set(TM_SHADERS_VERSION "${PROJECT_VERSION}-dev")
 endif()
 # The Horizon Host modules count on their own (2.0 = the first module release); they carry the same
 # core as the standalone of TM_SHADERS_VERSION. A tag's suffix (-rc.1, -dev) goes to both.
-set(TMVS_MODULES_BASE_VERSION "2.0.0")
+set(TMVS_MODULES_BASE_VERSION "2.0.1")
 if(NOT DEFINED TMVS_MODULES_VERSION)
   set(TMVS_MODULES_VERSION "${TMVS_MODULES_BASE_VERSION}")
   string(FIND "${TM_SHADERS_VERSION}" "-" TMVS_SUFFIX_AT)

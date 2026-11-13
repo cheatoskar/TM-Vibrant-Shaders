@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.6.1 (in progress)
+## 1.6.1 and modules 2.0.1 (2026-11-14)
+
+The standalone mod 1.6.1 and the Horizon modules 2.0.1 (the 1.6.1 core).
 
 **Changed**
 - **The perf line in `tmvs.log` shows where the CPU's time goes**: the game's logic between frames, its rendering, the mod's own time (and the part of it blocked waiting for the GPU), the frame end with Present and the game's wait for the GPU, and the frame start, next to the GPU times; plus the game's *Cpu/Gpu synchro* setting. Details in [docs/performance.md](docs/performance.md#the-perf-line-in-the-log).
