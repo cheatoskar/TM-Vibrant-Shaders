@@ -3,7 +3,7 @@
 TM Vibrant Shaders comes in two forms, built from the same code and released together:
 
 - **Standalone 1.6**: `TMVibrantShaders.dll` as a ModLoader product, or `d3d9.dll` in the game folder (TrackMania 2: `d3d11.dll`). Its own menu (`F8`), its own keys.
-- **Horizon modules 2.0**: four plugins for Horizon Client's in-game menu (Horizon Host 0.3.1, plugin ABI 1.4; they also load in 0.2.0 and newer, ABI 1.2). Each module has its own page in the Horizon menu, its own switch and its keys in Horizon's *Hotkeys* list. `TMVS-<version>-horizon.zip` holds them. They carry the core of the standalone release they come with (2.0.0 = the 1.6.0 core): the same settings and features.
+- **Horizon modules 2.0**: four plugins for [Horizon Client](https://github.com/cheatoskar/horizon-client)'s in-game menu (Horizon Client 0.3.1, plugin ABI 1.4; they also load in 0.2.0 and newer, ABI 1.2). Each module has its own page in the Horizon menu, its own switch and its keys in Horizon's *Hotkeys* list. `TMVS-<version>-horizon.zip` holds them. They carry the core of the standalone release they come with (2.0.0 = the 1.6.0 core): the same settings and features.
 
 Games: TrackMania Nations Forever, United Forever, Nations ESWC, Sunrise and Original (the 32-bit Direct3D 9 games; Sunrise and Original only in the builds the standalone supports, [install.md](install.md#trackmania-sunrise-and-trackmania-original)). TrackMania 2 (ManiaPlanet) stays standalone only: Horizon Host is a 32-bit Direct3D 9 host and doesn't run there.
 
@@ -28,7 +28,7 @@ Switching a module off in Horizon's list takes effect at once (live toggle); not
 
 ## Install (Horizon)
 
-Copy the four folders from the zip into Horizon's plugins folder:
+Download `TMVS-<version>-horizon.zip` from the [latest release](https://github.com/cheatoskar/TM-Vibrant-Shaders/releases/latest) and copy the four folders into Horizon's plugins folder (the [TM Horizon](https://github.com/cheatoskar/tm-horizon) launcher 0.5.1 installs Horizon Client, but not these modules yet):
 
 - TrackMania Nations/United Forever (TMLoader): `%LOCALAPPDATA%\TMLoader\database\TmForever\products\Horizon Host\<version>\plugins`
 - TrackMania Nations ESWC, Sunrise, Original (Horizon's own loader): `<game folder>\horizon\plugins`
@@ -39,7 +39,7 @@ In Sunrise and Original the game's own `d3d9.dll` (the repack's proxy, dgVoodoo)
 
 ## Sizes in Horizon's menu (ABI 1.4)
 
-With Horizon Host 0.3 the pages follow Horizon's menu size and content scale (80-125 %, `Ctrl`+wheel in the menu) and lay out their panels in as many columns as the room has: a tab popped out into its own window, or a module's own window (left click on its icon in the top bar), gets one column when narrow. Each module's `plugin.json` gives Horizon the smallest and the preferred size of that window:
+With Horizon Client 0.3 the pages follow Horizon's menu size and content scale (80-125 %, `Ctrl`+wheel in the menu) and lay out their panels in as many columns as the room has: a tab popped out into its own window, or a module's own window (left click on its icon in the top bar), gets one column when narrow. Each module's `plugin.json` gives Horizon the smallest and the preferred size of that window:
 
 | Module | Smallest | Preferred |
 |---|---|---|
