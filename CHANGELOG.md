@@ -26,6 +26,7 @@ The older games: TrackMania Sunrise and TrackMania Original, clips and the MP4 e
 
 **Fixed (all three older games)**
 - **Crash at start** when the mod's DLL was loaded at another address than usual: the older games' exes have no import name table, and the mod read the addresses of the imported functions as names. It now finds `Direct3DCreate9` by its address.
+- **Low frame rate in Sunrise with the shaders on** (about 15 FPS at 1440p, Upscaling slower than without): Sunrise renders a second, small view into a texture every frame (512x512 with a depth buffer of its own, before the main camera). The mod took it for a second main camera, shaded it and made all its render targets again twice a frame. Such views are now left as the game draws them, and on the older games a camera smaller than the main camera of the last frames never resizes the effects. Temporal effects (TAA, motion blur, exposure) were paused there for the same reason and run again. `tmvs.log` names the view once (`scene: a camera into 512x512 ... is a view into a texture`).
 
 **Changed (clips, every game)**
 - **Instant replay is off for new players**: the clips' background recording (the buffer behind `F3`, *Save last run* and the saved best runs) starts only once you switch on *Instant replay* at the top of the *Clips* page; then *Save best runs* is on. Off, nothing is copied or read back from the graphics card, and the clip keys only show "Instant replay is off". A `clips.ini` that already has it on keeps it. The replay editor's *Shoot video* doesn't need it.
